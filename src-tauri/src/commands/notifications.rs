@@ -49,6 +49,16 @@ pub async fn send_email_notification(
 
 /// Show an OS desktop toast notification via `tauri-plugin-notification`.
 #[tauri::command]
-pub async fn send_os_notification(_title: String, _body: String) -> Result<(), String> {
-    Err("Not implemented".into())
+pub async fn send_os_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(&title)
+        .body(&body)
+        .show()
+        .map_err(|e| e.to_string())
 }

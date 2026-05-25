@@ -59,8 +59,13 @@ export function DisableContextMenu() {
     const text = menu?.selectedText ?? "";
     setMenu(null);
     if (!text) return;
-    // Use the Tauri clipboard plugin — this writes to the real OS clipboard.
-    writeText(text).catch(() => {});
+    // navigator.clipboard is the most reliable path in Tauri's WebView on all
+    // platforms. Fall back to the Tauri plugin if the browser API isn't available.
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => writeText(text).catch(() => {}));
+    } else {
+      writeText(text).catch(() => {});
+    }
   }, [menu]);
 
   const handlePaste = useCallback(() => {

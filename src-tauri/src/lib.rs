@@ -19,13 +19,27 @@ struct TrayMenuState {
 /// Show, un-minimize, and focus the main window. Updates tray menu to reflect visible state.
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        // Unminimize first — show() is a no-op when the window is already
-        // visible but minimised, so we must call unminimize() explicitly.
-        if w.is_minimized().unwrap_or(false) {
+        let is_min = w.is_minimized().unwrap_or(false);
+        if is_min {
             let _ = w.unminimize();
         }
         let _ = w.show();
-        let _ = w.set_focus();
+
+        // set_focus() alone is blocked by focus-stealing prevention on X11 and
+        // most Wayland compositors (Cinnamon, GNOME, KDE, etc.).
+        // Workaround: briefly set always-on-top so the WM is forced to raise and
+        // present the window, then immediately restore normal z-order.
+        // The 50 ms pre-delay gives the WM time to finish processing unminimize/show
+        // before we try to raise. The 50 ms post-delay keeps the window pinned
+        // long enough for focus to land before we clear the flag.
+        let w2 = w.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = w2.set_always_on_top(true);
+            let _ = w2.set_focus();
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = w2.set_always_on_top(false);
+        });
     }
     if let Some(tray_state) = app.try_state::<TrayMenuState>() {
         let _ = tray_state.show_item.set_text("Bring to Front");
