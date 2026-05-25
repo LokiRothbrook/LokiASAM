@@ -18,6 +18,7 @@ import { SetupWizard } from "@/components/wizard/SetupWizard";
 import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
 import { useAppStore } from "@/store/useAppStore";
 import { getAppSetting } from "@/lib/db";
+import { tauriCmd } from "@/lib/tauri-commands";
 
 interface SetupGuardProps {
   children: React.ReactNode;
@@ -45,6 +46,8 @@ export function SetupGuard({ children }: SetupGuardProps) {
         const complete = value === "true";
         setSetupComplete(complete);
         setSetupChecked(true);
+        // Let the backend know so close-to-tray activates correctly.
+        if (complete) tauriCmd.setSetupComplete(true).catch(() => {});
       })
       .catch(() => {
         // DB error — treat as not setup to allow recovery
@@ -55,6 +58,7 @@ export function SetupGuard({ children }: SetupGuardProps) {
 
   const handleSetupComplete = () => {
     setSetupComplete(true);
+    tauriCmd.setSetupComplete(true).catch(() => {});
   };
 
   // Still checking

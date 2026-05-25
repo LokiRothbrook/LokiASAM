@@ -47,6 +47,10 @@ pub struct StartServerParams {
     pub admin_password: String,
     /// Additional command-line flags, e.g. ["-NoBattlEye", "-servergamelog"].
     pub extra_args: Vec<String>,
+    /// Linux only: path to the Proton-GE installation directory (must contain `proton` script).
+    pub proton_path: Option<String>,
+    /// Linux only: path to the Steam compatibility prefix (WINEPREFIX). Created if absent.
+    pub prefix_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -116,18 +120,6 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     params: StartServerParams,
 ) -> Result<u32, String> {
-    // Resolve the executable path for the current platform.
-    #[cfg(target_os = "windows")]
-    let exe = format!(
-        "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
-        params.install_path
-    );
-    #[cfg(not(target_os = "windows"))]
-    let exe = format!(
-        "{}/ShooterGame/Binaries/Linux/ArkAscendedServer",
-        params.install_path
-    );
-
     // Build the ?-delimited query string that follows the map name.
     let mut query_string = format!(
         "{}?listen?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?MaxPlayers={}?ServerAdminPassword={}",
@@ -144,10 +136,47 @@ pub async fn start_server(
         }
     }
 
-    // Assemble the command.
-    // stdout/stderr are sent to null for now; Phase 4 will redirect them to
-    // a log file that the live log viewer streams via a file watcher.
-    let mut cmd = tokio::process::Command::new(&exe);
+    // Build the platform-specific Command.
+    // Windows: run the Win64 exe directly.
+    // Linux:   run via Proton-GE (`{proton}/proton run {Win64 exe}`).
+    //          The Win64 binary is the only shipping binary for ASA — there is no native Linux exe.
+    #[cfg(target_os = "windows")]
+    let mut cmd = tokio::process::Command::new(format!(
+        "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
+        params.install_path
+    ));
+
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let proton_path = params
+            .proton_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                "proton_not_configured: Linux requires Proton-GE. Configure it in the setup wizard or Settings.".to_string()
+            })?;
+
+        let prefix_path = params.prefix_path.clone().unwrap_or_default();
+        if !prefix_path.is_empty() {
+            let _ = tokio::fs::create_dir_all(&prefix_path).await;
+        }
+
+        let exe_path = format!(
+            "{}/ShooterGame/Binaries/Win64/ArkAscendedServer.exe",
+            params.install_path
+        );
+        let proton_script = format!("{}/proton", proton_path);
+
+        let mut c = tokio::process::Command::new(&proton_script);
+        c.arg("run");
+        c.arg(&exe_path);
+        if !prefix_path.is_empty() {
+            c.env("STEAM_COMPAT_DATA_PATH", &prefix_path);
+        }
+        c.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &params.install_path);
+        c
+    };
+
     cmd.arg(&query_string);
     cmd.args(["-server", "-log"]);
     for arg in &params.extra_args {

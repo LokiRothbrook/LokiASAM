@@ -2,8 +2,21 @@ mod commands;
 mod events;
 mod state;
 
-use tauri::{Emitter, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+/// Show, un-minimize, and focus the main window.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,6 +55,58 @@ pub fn run() {
             }
 
             app.manage(state::AppState::new());
+
+            // ── System tray ───────────────────────────────────────────────
+            let show_i = MenuItem::with_id(app, "show", "Show LokiASAM", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit LokiASAM", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+            let tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("LokiASAM")
+                .menu(&tray_menu)
+                .menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            // Keep the TrayIcon alive for the duration of the app.
+            app.manage(tray);
+
+            // ── Close-to-tray handler ─────────────────────────────────────
+            // If setup is complete, intercept the close button and hide the
+            // window instead of exiting. During the setup wizard the close
+            // button behaves normally (process exits).
+            let handle_for_close = app.handle().clone();
+            app.get_webview_window("main")
+                .unwrap()
+                .on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let app_state = handle_for_close.state::<state::AppState>();
+                        if app_state
+                            .setup_complete
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            api.prevent_close();
+                            if let Some(w) = handle_for_close.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                        }
+                    }
+                });
 
             // ── Crash-monitor background task ──────────────────────────────
             // Polls every 30 s for any PID in `running_servers` that has exited
@@ -128,6 +193,7 @@ pub fn run() {
                 .add_migrations("sqlite:lokiasam.db", migrations)
                 .build(),
         )
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -170,9 +236,16 @@ pub fn run() {
             // System stats
             commands::system::check_dir,
             commands::system::check_file_exists,
+            commands::system::delete_directory,
             commands::system::get_process_stats,
+            commands::system::get_platform,
+            commands::system::set_setup_complete,
             commands::system::query_server,
             commands::system::check_port_available,
+            // Proton-GE (Linux)
+            commands::proton::scan_for_proton,
+            commands::proton::validate_proton_path,
+            commands::proton::download_proton_ge,
             // Notifications (Phase 8)
             commands::notifications::send_discord_notification,
             commands::notifications::send_email_notification,

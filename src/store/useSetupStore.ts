@@ -28,6 +28,10 @@ interface SetupState {
   steamcmdPath: string;       // resolved path to steamcmd exe after install/manual selection
   steamcmdValidated: boolean; // true after validate_steamcmd returns true
 
+  // Step 4 (Linux only) — Proton-GE
+  protonPath: string;
+  protonValidated: boolean;
+
   // Step 5 — Notification defaults (all optional)
   discordWebhook: string;
 
@@ -46,6 +50,8 @@ interface SetupState {
   setSteamcmdMode: (mode: SteamCmdMode) => void;
   setSteamcmdPath: (path: string) => void;
   setSteamcmdValidated: (ok: boolean) => void;
+  setProtonPath: (path: string) => void;
+  setProtonValidated: (ok: boolean) => void;
   setDiscordWebhook: (url: string) => void;
   setLoading: (loading: boolean, message?: string) => void;
   reset: () => void;
@@ -60,6 +66,8 @@ const initialState = {
   steamcmdMode: "auto" as SteamCmdMode,
   steamcmdPath: "",
   steamcmdValidated: false,
+  protonPath: "",
+  protonValidated: false,
   discordWebhook: "",
   isLoading: false,
   loadingMessage: "",
@@ -78,6 +86,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setSteamcmdMode: (steamcmdMode) => set({ steamcmdMode }),
   setSteamcmdPath: (steamcmdPath) => set({ steamcmdPath }),
   setSteamcmdValidated: (steamcmdValidated) => set({ steamcmdValidated }),
+  setProtonPath: (protonPath) => set({ protonPath }),
+  setProtonValidated: (protonValidated) => set({ protonValidated }),
   setDiscordWebhook: (discordWebhook) => set({ discordWebhook }),
   setLoading: (isLoading, message = "") =>
     set({ isLoading, loadingMessage: message }),

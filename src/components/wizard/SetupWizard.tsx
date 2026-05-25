@@ -16,13 +16,13 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft, Loader2, AlertCircle, HardDrive as DiskIcon } from "lucide-react";
+import { Zap, FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft, Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
-import { tauriCmd, type DirCheckResult } from "@/lib/tauri-commands";
+import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { setAppSetting } from "@/lib/db";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
@@ -31,9 +31,11 @@ interface SetupWizardProps {
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 6;
+// Detect Linux at module load time (same heuristic used elsewhere in this file).
+const IS_LINUX =
+  typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
-const STEPS = [
+const STEPS_WIN = [
   { label: "Welcome",       icon: Zap },
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
@@ -41,6 +43,19 @@ const STEPS = [
   { label: "Notifications", icon: Bell },
   { label: "Complete",      icon: CheckCircle2 },
 ];
+
+const STEPS_LINUX = [
+  { label: "Welcome",       icon: Zap },
+  { label: "Install Dir",   icon: HardDrive },
+  { label: "Backup Dir",    icon: FolderOpen },
+  { label: "SteamCMD",      icon: Terminal },
+  { label: "Proton-GE",     icon: Cpu },
+  { label: "Notifications", icon: Bell },
+  { label: "Complete",      icon: CheckCircle2 },
+];
+
+const STEPS = IS_LINUX ? STEPS_LINUX : STEPS_WIN;
+const TOTAL_STEPS = STEPS.length;
 
 // ---------------------------------------------------------------------------
 // Step variants for Framer Motion slide animation
@@ -573,6 +588,257 @@ function SteamCmdStep() {
   );
 }
 
+function ProtonGEStep() {
+  const {
+    baseDir,
+    protonPath, setProtonPath,
+    protonValidated, setProtonValidated,
+    isLoading, setLoading,
+  } = useSetupStore();
+
+  const [scanning, setScanning] = useState(false);
+  const [found, setFound] = useState<ProtonEntry[]>([]);
+  const [selected, setSelected] = useState("");
+  const [manualPath, setManualPath] = useState("");
+  const [showDownload, setShowDownload] = useState(false);
+  const [error, setError] = useState("");
+
+  const scan = useCallback(async () => {
+    setScanning(true);
+    setFound([]);
+    try {
+      const results = await tauriCmd.scanForProton(baseDir);
+      setFound(results);
+      if (results.length > 0 && !selected) {
+        setSelected(results[0].path);
+      }
+    } catch { /* ignore */ } finally {
+      setScanning(false);
+    }
+  }, [baseDir, selected]);
+
+  useEffect(() => { scan(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleUseSelected = async () => {
+    if (!selected) return;
+    setError("");
+    try {
+      const ok = await tauriCmd.validateProtonPath(selected);
+      if (ok) {
+        setProtonPath(selected);
+        setProtonValidated(true);
+      } else {
+        setError("Validation failed — this does not appear to be a valid Proton-GE installation.");
+      }
+    } catch (e) { setError(String(e)); }
+  };
+
+  const handleDownload = async () => {
+    const targetDir = baseDir.replace(/[/\\]$/, "") + "/proton";
+    setError("");
+    setShowDownload(true);
+    setLoading(true, "Downloading Proton-GE…");
+    try {
+      const path = await tauriCmd.downloadProtonGe(targetDir);
+      setProtonPath(path);
+      setProtonValidated(true);
+      // Refresh scan list so the new install appears
+      scan();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleManualValidate = async () => {
+    if (!manualPath.trim()) { setError("Enter the path to your Proton-GE directory."); return; }
+    setError("");
+    try {
+      const ok = await tauriCmd.validateProtonPath(manualPath.trim());
+      if (ok) {
+        setProtonPath(manualPath.trim());
+        setProtonValidated(true);
+      } else {
+        setError("Validation failed — check the path contains a `proton` script and `files/bin/wine64`.");
+      }
+    } catch (e) { setError(String(e)); }
+  };
+
+  const pickDir = async () => {
+    const selected = await open({ directory: true, multiple: false, title: "Select Proton-GE Directory" });
+    if (typeof selected === "string" && selected) {
+      setManualPath(selected);
+      setProtonValidated(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+          Proton-GE Setup
+        </h2>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          ASA only ships a Windows binary. On Linux, Proton-GE runs it seamlessly.
+        </p>
+      </div>
+
+      {/* Found installations */}
+      {(scanning || found.length > 0) && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label style={{ color: "var(--text-primary)" }}>Detected Installations</Label>
+            <button
+              onClick={scan}
+              disabled={scanning}
+              className="flex items-center gap-1 text-xs"
+              style={{ color: "var(--text-muted)" }}
+            >
+              <RefreshCw className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`} />
+              Rescan
+            </button>
+          </div>
+          {scanning ? (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+              <Loader2 className="w-3 h-3 animate-spin" /> Scanning…
+            </p>
+          ) : (
+            <div className="space-y-1.5 max-h-36 overflow-y-auto">
+              {found.map((entry) => (
+                <button
+                  key={entry.path}
+                  onClick={() => { setSelected(entry.path); setProtonValidated(false); }}
+                  className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all"
+                  style={{
+                    background: selected === entry.path ? "rgba(191,0,255,0.12)" : "rgba(10,10,30,0.5)",
+                    border: `1px solid ${selected === entry.path ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.12)"}`,
+                  }}
+                >
+                  <span className="font-semibold" style={{ color: selected === entry.path ? "var(--neon-purple)" : "var(--text-primary)" }}>
+                    {entry.version}
+                  </span>
+                  <span className="block font-mono mt-0.5 truncate" style={{ color: "var(--text-muted)", fontSize: "10px" }}>
+                    {entry.path}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {found.length > 0 && !protonValidated && (
+            <Button
+              onClick={handleUseSelected}
+              disabled={!selected}
+              size="sm"
+              className="gap-2"
+              style={{
+                background: "rgba(191,0,255,0.12)",
+                border: "1px solid rgba(191,0,255,0.4)",
+                color: "var(--neon-purple)",
+              }}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Use Selected
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Validated badge */}
+      {protonValidated && (
+        <div
+          className="rounded-lg px-4 py-3 flex items-center gap-2"
+          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.3)" }}
+        >
+          <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
+          <div>
+            <p className="text-xs font-semibold" style={{ color: "var(--neon-green)" }}>Proton-GE Ready</p>
+            <p className="text-[10px] font-mono mt-0.5 truncate" style={{ color: "var(--text-muted)" }}>{protonPath}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Download latest */}
+      {!protonValidated && (
+        <Button
+          onClick={handleDownload}
+          disabled={isLoading || !baseDir}
+          className="w-full gap-2"
+          style={{
+            background: "rgba(191,0,255,0.1)",
+            border: "1px solid rgba(191,0,255,0.35)",
+            color: "var(--neon-purple)",
+          }}
+        >
+          {isLoading && showDownload ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
+          ) : (
+            <><Cpu className="w-4 h-4" /> Download Latest Proton-GE</>
+          )}
+        </Button>
+      )}
+
+      {/* Download output */}
+      {showDownload && (
+        <CommandOutputPanel
+          eventChannel="proton://output/download"
+          label="Proton-GE Download"
+          className="mt-1"
+        />
+      )}
+
+      {/* Manual path */}
+      {!protonValidated && (
+        <div className="space-y-2">
+          <Label style={{ color: "var(--text-primary)" }}>
+            Manual Path
+            <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>(optional)</span>
+          </Label>
+          <div className="flex gap-2">
+            <Input
+              value={manualPath}
+              onChange={(e) => { setManualPath(e.target.value); setProtonValidated(false); }}
+              placeholder="/home/user/.steam/root/compatibilitytools.d/GE-Proton9-27"
+              className="flex-1 font-mono text-sm"
+              style={{
+                background: "rgba(10,10,30,0.8)",
+                borderColor: "rgba(191,0,255,0.2)",
+                color: "var(--text-primary)",
+              }}
+            />
+            <Button
+              onClick={pickDir}
+              variant="outline"
+              className="gap-2 shrink-0"
+              style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+            >
+              <FolderOpen className="w-4 h-4" />
+            </Button>
+          </div>
+          <Button
+            onClick={handleManualValidate}
+            disabled={!manualPath.trim()}
+            size="sm"
+            className="gap-2"
+            style={{
+              background: "rgba(191,0,255,0.08)",
+              border: "1px solid rgba(191,0,255,0.3)",
+              color: "var(--neon-purple)",
+            }}
+          >
+            Validate Path
+          </Button>
+        </div>
+      )}
+
+      {error && (
+        <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}>
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function NotificationsStep() {
   const { discordWebhook, setDiscordWebhook } = useSetupStore();
 
@@ -628,7 +894,14 @@ function NotificationsStep() {
 }
 
 function CompleteStep({ onComplete }: { onComplete: () => void }) {
-  const { baseDir, backupDir, steamcmdPath } = useSetupStore();
+  const { baseDir, backupDir, steamcmdPath, protonPath } = useSetupStore();
+
+  const summaryRows = [
+    { label: "Servers Directory", value: baseDir },
+    { label: "Backup Directory",  value: backupDir },
+    { label: "SteamCMD",          value: steamcmdPath },
+    ...(IS_LINUX ? [{ label: "Proton-GE", value: protonPath }] : []),
+  ];
 
   return (
     <div className="flex flex-col items-center text-center gap-6">
@@ -653,11 +926,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
       </div>
 
       <div className="w-full space-y-2 text-left">
-        {[
-          { label: "Servers Directory", value: baseDir },
-          { label: "Backup Directory",  value: backupDir },
-          { label: "SteamCMD",          value: steamcmdPath },
-        ].map(({ label, value }) => (
+        {summaryRows.map(({ label, value }) => (
           <div
             key={label}
             className="rounded-lg px-4 py-3 flex items-center justify-between gap-4"
@@ -692,7 +961,13 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
 // ---------------------------------------------------------------------------
 
 export function SetupWizard({ onComplete }: SetupWizardProps) {
-  const { step, nextStep, prevStep, baseDir, backupDir, baseDirWritable, backupDirWritable, steamcmdPath, steamcmdValidated, discordWebhook, isLoading } = useSetupStore();
+  const {
+    step, nextStep, prevStep,
+    baseDir, backupDir, baseDirWritable, backupDirWritable,
+    steamcmdPath, steamcmdValidated,
+    protonPath, protonValidated,
+    discordWebhook, isLoading,
+  } = useSetupStore();
   const [direction, setDirection] = useState(1);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -716,7 +991,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case 1: return baseDirWritable;
       case 2: return backupDirWritable;
       case 3: return steamcmdValidated;
-      case 4: return true;
+      // Step 4: ProtonGE on Linux, Notifications on Windows (always ok)
+      case 4: return IS_LINUX ? protonValidated : true;
+      // Step 5: Notifications on Linux (always ok) — doesn't exist on Windows
+      case 5: return IS_LINUX ? true : false;
       default: return false;
     }
   };
@@ -730,6 +1008,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("base_dir", baseDir);
         await setAppSetting("backup_dir", backupDir);
         await setAppSetting("steamcmd_path", steamcmdPath);
+        if (IS_LINUX && protonPath) {
+          await setAppSetting("proton_path", protonPath);
+          // Derive the shared Proton prefix from the base directory.
+          const sep = baseDir.includes("\\") ? "\\" : "/";
+          const prefix = baseDir.replace(/[/\\]$/, "") + sep + ".proton-prefix";
+          await setAppSetting("proton_prefix_path", prefix);
+        }
         if (discordWebhook) {
           await setAppSetting("discord_webhook", discordWebhook);
         }
@@ -756,14 +1041,24 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     onComplete();
   };
 
-  const stepComponents = [
-    <WelcomeStep key="welcome" />,
-    <BaseDirStep key="basedir" />,
-    <BackupDirStep key="backupdir" />,
-    <SteamCmdStep key="steamcmd" />,
-    <NotificationsStep key="notifications" />,
-    <CompleteStep key="complete" onComplete={handleComplete} />,
-  ];
+  const stepComponents = IS_LINUX
+    ? [
+        <WelcomeStep key="welcome" />,
+        <BaseDirStep key="basedir" />,
+        <BackupDirStep key="backupdir" />,
+        <SteamCmdStep key="steamcmd" />,
+        <ProtonGEStep key="proton" />,
+        <NotificationsStep key="notifications" />,
+        <CompleteStep key="complete" onComplete={handleComplete} />,
+      ]
+    : [
+        <WelcomeStep key="welcome" />,
+        <BaseDirStep key="basedir" />,
+        <BackupDirStep key="backupdir" />,
+        <SteamCmdStep key="steamcmd" />,
+        <NotificationsStep key="notifications" />,
+        <CompleteStep key="complete" onComplete={handleComplete} />,
+      ];
 
   return (
     <div

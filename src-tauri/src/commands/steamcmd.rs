@@ -263,9 +263,39 @@ pub async fn install_server(
 
     if exit_code == 0 {
         emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
+        return Ok(());
+    }
+
+    // On Windows, SteamCMD can exit with code 7 (self-update) or 8 (missing config)
+    // on its first real app_update call while it finishes initializing. Retry once.
+    emit_line(
+        &app_handle,
+        &channel,
+        "stdout",
+        &format!(
+            "SteamCMD exited with code {exit_code} (first-run initialization on Windows is normal). Retrying…"
+        ),
+    )?;
+
+    let mut child2 = build_steamcmd_cmd(
+        &steamcmd_path,
+        &[
+            "+force_install_dir", &install_path,
+            "+login", "anonymous",
+            "+app_update", ASA_SERVER_APP_ID,
+            "+quit",
+        ],
+    )
+    .spawn()
+    .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
+
+    let exit_code2 = stream_process(&app_handle, &mut child2, &channel).await?;
+
+    if exit_code2 == 0 {
+        emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
         Ok(())
     } else {
-        let msg = format!("SteamCMD install exited with code {exit_code}. Installation may have failed.");
+        let msg = format!("SteamCMD install exited with code {exit_code2} after retry. Installation may have failed.");
         emit_line(&app_handle, &channel, "stderr", &msg)?;
         Err(msg)
     }

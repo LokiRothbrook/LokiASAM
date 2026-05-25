@@ -174,6 +174,44 @@ pub async fn query_server(ip: String, port: u16) -> Result<ServerQueryResult, St
     }
 }
 
+/// Recursively delete a directory and all its contents.
+/// Returns Ok(()) if the path does not exist (idempotent).
+/// Used to clean up partial server installs after a failed wizard.
+#[tauri::command]
+pub async fn delete_directory(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Ok(());
+    }
+    tokio::fs::remove_dir_all(p)
+        .await
+        .map_err(|e| format!("Failed to delete directory: {e}"))
+}
+
+/// Tell the backend whether first-time setup has been completed.
+/// Controls close-to-tray: if setup is not done, the X button exits the process normally.
+#[tauri::command]
+pub fn set_setup_complete(
+    state: tauri::State<'_, crate::state::AppState>,
+    complete: bool,
+) {
+    state
+        .setup_complete
+        .store(complete, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Return the current OS platform identifier: "windows", "linux", or "macos".
+#[tauri::command]
+pub fn get_platform() -> String {
+    if cfg!(target_os = "windows") {
+        "windows".into()
+    } else if cfg!(target_os = "linux") {
+        "linux".into()
+    } else {
+        "macos".into()
+    }
+}
+
 /// Check whether a given TCP port is available (not currently bound) on localhost.
 #[tauri::command]
 pub async fn check_port_available(port: u16) -> Result<bool, String> {

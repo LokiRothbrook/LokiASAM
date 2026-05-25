@@ -13,7 +13,7 @@
  *   6 - Install          (summary + SteamCMD install)
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Server, Map, Network, GitBranch, Clock, Package,
@@ -35,6 +35,7 @@ import {
 import {
   getAppSetting,
   createServer,
+  deleteServerRecord,
   saveServerConfig,
   createSchedule,
   getClusters,
@@ -138,23 +139,41 @@ function humanCron(cron: string): string {
 // Step 0 — Basic Info
 // ---------------------------------------------------------------------------
 
-function BasicInfoStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+function BasicInfoStep({
+  data,
+  onChange,
+  onNameValidated,
+}: {
+  data: WizardData;
+  onChange: (patch: Partial<WizardData>) => void;
+  onNameValidated: (valid: boolean) => void;
+}) {
   const maps = getReleasedMaps();
   const [nameError, setNameError] = useState("");
   const [checkingName, setCheckingName] = useState(false);
+  const [nameChecked, setNameChecked] = useState(false);
 
   const checkName = useCallback(async (name: string) => {
-    if (!name.trim()) { setNameError("Server name is required."); return; }
+    if (!name.trim()) {
+      setNameError("Server name is required.");
+      setNameChecked(true);
+      onNameValidated(false);
+      return;
+    }
     setCheckingName(true);
     try {
       const taken = await isServerNameTaken(name.trim());
       setNameError(taken ? "A server with this name already exists." : "");
+      setNameChecked(true);
+      onNameValidated(!taken);
     } catch {
       setNameError("");
+      setNameChecked(true);
+      onNameValidated(true);
     } finally {
       setCheckingName(false);
     }
-  }, []);
+  }, [onNameValidated]);
 
   return (
     <div className="space-y-5">
@@ -163,7 +182,7 @@ function BasicInfoStep({ data, onChange }: { data: WizardData; onChange: (patch:
         <Label style={{ color: "var(--text-primary)" }}>Server Name <span style={{ color: "var(--neon-red)" }}>*</span></Label>
         <Input
           value={data.name}
-          onChange={(e) => onChange({ name: e.target.value })}
+          onChange={(e) => { onChange({ name: e.target.value }); onNameValidated(false); setNameChecked(false); }}
           onBlur={(e) => checkName(e.target.value)}
           placeholder="My ASA Server"
           style={{
@@ -172,10 +191,24 @@ function BasicInfoStep({ data, onChange }: { data: WizardData; onChange: (patch:
             color: "var(--text-primary)",
           }}
         />
-        {nameError && (
+        {checkingName && (
+          <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
+            <Loader2 className="w-3 h-3 animate-spin" /> Checking availability…
+          </p>
+        )}
+        {!checkingName && nameError && (
           <p className="text-xs flex items-center gap-1" style={{ color: "var(--neon-red)" }}>
             <AlertCircle className="w-3 h-3" /> {nameError}
-            {checkingName && <Loader2 className="w-3 h-3 animate-spin ml-1" />}
+          </p>
+        )}
+        {!checkingName && !nameError && nameChecked && data.name.trim() && (
+          <p className="text-xs flex items-center gap-1" style={{ color: "var(--neon-green)" }}>
+            <CheckCircle2 className="w-3 h-3" /> Name available
+          </p>
+        )}
+        {!checkingName && !nameChecked && data.name.trim() && (
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Click away to check if this name is available.
           </p>
         )}
       </div>
@@ -655,13 +688,33 @@ function InstallStep({
   data,
   serverId,
   onInstallComplete,
+  onStatusChange,
+  onCleanupReady,
 }: {
   data: WizardData;
   serverId: string;
   onInstallComplete: () => void;
+  onStatusChange: (status: string) => void;
+  onCleanupReady: (fn: () => Promise<void>) => void;
 }) {
   const [status, setStatus] = useState<"idle" | "installing" | "done" | "error">("idle");
   const [error, setError] = useState("");
+  const dbSavedRef = useRef(false);
+  const installPathRef = useRef("");
+  const steamcmdPathRef = useRef("");
+  const terminalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onStatusChange(status);
+  }, [status, onStatusChange]);
+
+  useEffect(() => {
+    if (status === "installing" && terminalRef.current) {
+      setTimeout(() => {
+        terminalRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 80);
+    }
+  }, [status]);
   const selectedPreset = SERVER_PRESETS.find((p) => p.id === data.presetId);
   const maps = getReleasedMaps();
   const selectedMap = maps.find((m: ArkMap) => m.id === data.mapId);
@@ -683,57 +736,81 @@ function InstallStep({
     setError("");
 
     try {
-      // Fetch stored settings from SQLite
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
+      let installPath: string;
+      let steamcmdPath: string;
 
-      if (!baseDir) throw new Error("Base directory not configured. Please run Setup first.");
-      if (!steamcmdPath) throw new Error("SteamCMD path not configured. Please run Setup first.");
+      if (!dbSavedRef.current) {
+        // Fetch stored settings from SQLite
+        const [baseDir, scmdPath] = await Promise.all([
+          getAppSetting("base_dir"),
+          getAppSetting("steamcmd_path"),
+        ]);
 
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const installPath = `${baseDir}${sep}servers${sep}${data.name}`;
+        if (!baseDir) throw new Error("Base directory not configured. Please run Setup first.");
+        if (!scmdPath) throw new Error("SteamCMD path not configured. Please run Setup first.");
 
-      // Persist server record to SQLite
-      await createServer({
-        id: serverId,
-        name: data.name,
-        mapId: data.mapId,
-        installPath,
-        port: data.port,
-        queryPort: data.queryPort,
-        rconPort: data.rconPort,
-        rconPassword: data.adminPassword,
-        maxPlayers: data.maxPlayers,
-        serverPassword: data.serverPassword || undefined,
-        adminPassword: data.adminPassword,
-        clusterId: data.clusterId || undefined,
-        presetId: data.presetId,
-      });
+        const sep = baseDir.includes("\\") ? "\\" : "/";
+        installPath = `${baseDir}${sep}servers${sep}${data.name}`;
+        steamcmdPath = scmdPath;
 
-      // Persist empty config record (will be written to disk after install)
-      await saveServerConfig(serverId, "{}", "{}", "{}");
+        // Persist server record to SQLite
+        await createServer({
+          id: serverId,
+          name: data.name,
+          mapId: data.mapId,
+          installPath,
+          port: data.port,
+          queryPort: data.queryPort,
+          rconPort: data.rconPort,
+          rconPassword: data.adminPassword,
+          maxPlayers: data.maxPlayers,
+          serverPassword: data.serverPassword || undefined,
+          adminPassword: data.adminPassword,
+          clusterId: data.clusterId || undefined,
+          presetId: data.presetId,
+        });
 
-      // Create schedule records
-      const scheduleEntries = [
-        { enabled: data.autoUpdate,  cron: data.autoUpdateCron,  type: "update" },
-        { enabled: data.autoRestart, cron: data.autoRestartCron, type: "restart" },
-        { enabled: data.autoBackup,  cron: data.autoBackupCron,  type: "backup" },
-      ];
-      for (const s of scheduleEntries) {
-        if (s.enabled) {
-          await createSchedule({
-            id: generateUUID(),
-            serverId,
-            scheduleType: s.type,
-            cronExpression: s.cron,
-            enabled: true,
-            configJson: s.type === "backup"
-              ? JSON.stringify({ retention: data.backupRetention })
-              : "{}",
-          });
+        // Persist empty config record (will be written to disk after install)
+        await saveServerConfig(serverId, "{}", "{}", "{}");
+
+        // Create schedule records
+        const scheduleEntries = [
+          { enabled: data.autoUpdate,  cron: data.autoUpdateCron,  type: "update" },
+          { enabled: data.autoRestart, cron: data.autoRestartCron, type: "restart" },
+          { enabled: data.autoBackup,  cron: data.autoBackupCron,  type: "backup" },
+        ];
+        for (const s of scheduleEntries) {
+          if (s.enabled) {
+            await createSchedule({
+              id: generateUUID(),
+              serverId,
+              scheduleType: s.type,
+              cronExpression: s.cron,
+              enabled: true,
+              configJson: s.type === "backup"
+                ? JSON.stringify({ retention: data.backupRetention })
+                : "{}",
+            });
+          }
         }
+
+        installPathRef.current = installPath;
+        steamcmdPathRef.current = steamcmdPath;
+        dbSavedRef.current = true;
+
+        // Register the cleanup function so the wizard can call it on cancel/close after failure
+        onCleanupReady(async () => {
+          if (dbSavedRef.current) {
+            await deleteServerRecord(serverId).catch(() => {});
+            dbSavedRef.current = false;
+          }
+          if (installPathRef.current) {
+            await tauriCmd.deleteDirectory(installPathRef.current).catch(() => {});
+          }
+        });
+      } else {
+        installPath = installPathRef.current;
+        steamcmdPath = steamcmdPathRef.current;
       }
 
       // Run SteamCMD install (streams live output)
@@ -814,10 +891,12 @@ function InstallStep({
       )}
 
       {(status === "installing" || status === "done" || status === "error") && (
-        <CommandOutputPanel
-          eventChannel={`steamcmd://output/${serverId}`}
-          label="SteamCMD — Installing ASA Server"
-        />
+        <div ref={terminalRef}>
+          <CommandOutputPanel
+            eventChannel={`steamcmd://output/${serverId}`}
+            label="SteamCMD — Installing ASA Server"
+          />
+        </div>
       )}
 
       {status === "installing" && (
@@ -881,6 +960,10 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const [direction, setDirection] = useState(1);
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [serverId] = useState(() => generateUUID());
+  const [nameValid, setNameValid] = useState(false);
+  const [installStatus, setInstallStatus] = useState("idle");
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const cleanupFnRef = useRef<(() => Promise<void>) | null>(null);
 
   const onChange = useCallback((patch: Partial<WizardData>) => {
     setData((prev) => ({ ...prev, ...patch }));
@@ -888,7 +971,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
 
   const canAdvance = (): boolean => {
     switch (step) {
-      case 0: return !!data.name.trim() && !!data.adminPassword.trim();
+      case 0: return !!data.name.trim() && !!data.adminPassword.trim() && nameValid;
       case 1: return !!data.presetId;
       case 2: return true;
       case 3: return true;
@@ -901,14 +984,34 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const next = () => { setDirection(1); setStep((s) => Math.min(s + 1, STEPS.length - 1)); };
   const prev = () => { setDirection(-1); setStep((s) => Math.max(s - 1, 0)); };
 
+  const handleClose = () => {
+    const onInstallStep = step === STEPS.length - 1;
+    if (onInstallStep && installStatus === "installing") return; // disabled during download
+    if (onInstallStep && installStatus === "error") { setShowCancelConfirm(true); return; }
+    onClose();
+  };
+
+  const handleConfirmCancel = async () => {
+    setShowCancelConfirm(false);
+    await cleanupFnRef.current?.().catch(() => {});
+    onClose();
+  };
+
   const stepComponents: React.ReactNode[] = [
-    <BasicInfoStep  key="basic"      data={data} onChange={onChange} />,
+    <BasicInfoStep  key="basic"      data={data} onChange={onChange} onNameValidated={setNameValid} />,
     <PresetStep     key="preset"     data={data} onChange={onChange} />,
     <NetworkStep    key="network"    data={data} onChange={onChange} />,
     <ClusterStep    key="cluster"    data={data} onChange={onChange} />,
     <AutomationStep key="automation" data={data} onChange={onChange} />,
     <ModsStep       key="mods"       data={data} onChange={onChange} />,
-    <InstallStep    key="install"    data={data} serverId={serverId} onInstallComplete={onClose} />,
+    <InstallStep
+      key="install"
+      data={data}
+      serverId={serverId}
+      onInstallComplete={onClose}
+      onStatusChange={setInstallStatus}
+      onCleanupReady={(fn) => { cleanupFnRef.current = fn; }}
+    />,
   ];
 
   return (
@@ -939,10 +1042,11 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={onClose}
+          onClick={handleClose}
+          disabled={step === STEPS.length - 1 && installStatus === "installing"}
           className="h-8 w-8 p-0"
           style={{ color: "var(--text-muted)" }}
-          title="Close"
+          title={step === STEPS.length - 1 && installStatus === "installing" ? "Installation in progress…" : "Close"}
         >
           <X className="w-4 h-4" />
         </Button>
@@ -1074,6 +1178,59 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
           </div>
         </div>
       </div>
+
+      {/* Cancel confirmation overlay */}
+      {showCancelConfirm && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)" }}
+        >
+          <div
+            className="rounded-xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4"
+            style={{
+              background: "rgba(8,8,25,0.98)",
+              border: "1px solid rgba(255,0,85,0.35)",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
+            }}
+          >
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: "var(--neon-red)" }} />
+              <div>
+                <p className="text-sm font-semibold mb-1" style={{ color: "var(--text-primary)" }}>
+                  Cancel Server Setup?
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  The server record and any partially downloaded files will be permanently deleted.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <Button
+                onClick={handleConfirmCancel}
+                className="flex-1 text-sm"
+                style={{
+                  background: "rgba(255,0,85,0.1)",
+                  border: "1px solid rgba(255,0,85,0.4)",
+                  color: "var(--neon-red)",
+                }}
+              >
+                Yes, Cancel
+              </Button>
+              <Button
+                onClick={() => setShowCancelConfirm(false)}
+                className="flex-1 text-sm"
+                style={{
+                  background: "rgba(191,0,255,0.08)",
+                  border: "1px solid rgba(191,0,255,0.3)",
+                  color: "var(--neon-purple)",
+                }}
+              >
+                Keep Going
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

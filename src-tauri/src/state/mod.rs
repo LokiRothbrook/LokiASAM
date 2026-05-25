@@ -2,7 +2,7 @@ pub mod rcon_pool;
 pub mod server_registry;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{atomic::AtomicBool, Mutex};
 use std::time::Instant;
 
 /// A server process currently tracked by this app session.
@@ -23,6 +23,9 @@ pub struct AppState {
     pub stopping_servers: Mutex<HashSet<String>>,
     /// Maps server_id → active RCON connection state (Phase 4).
     pub rcon_connections: Mutex<HashMap<String, rcon_pool::RconConnection>>,
+    /// True once the frontend has confirmed first-time setup is complete.
+    /// Controls whether the close button hides to tray or exits the process.
+    pub setup_complete: AtomicBool,
 }
 
 impl AppState {
@@ -31,6 +34,7 @@ impl AppState {
             running_servers: Mutex::new(HashMap::new()),
             stopping_servers: Mutex::new(HashSet::new()),
             rcon_connections: Mutex::new(HashMap::new()),
+            setup_complete: AtomicBool::new(false),
         }
     }
 }

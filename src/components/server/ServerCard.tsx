@@ -27,6 +27,7 @@ import {
   getServerModCount,
   getLastBackupTime,
   getNextScheduledRestart,
+  getAppSetting,
 } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
@@ -111,6 +112,9 @@ export function ServerCard({ server }: Props) {
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
+  const isLinux =
+    typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
+
   const buildStartParams = async (): Promise<StartServerParams> => {
     const config = await getServerConfig(server.id);
     const launchArgs: Record<string, string> = config
@@ -123,7 +127,7 @@ export function ServerCard({ server }: Props) {
 
     const map = ARK_MAPS.find((m) => m.id === server.map_id);
 
-    return {
+    const params: StartServerParams = {
       serverId: server.id,
       installPath: server.install_path,
       mapPath: map?.mapPath ?? "TheIsland_WP",
@@ -135,6 +139,13 @@ export function ServerCard({ server }: Props) {
       adminPassword: server.admin_password,
       extraArgs,
     };
+
+    if (isLinux) {
+      params.protonPath = (await getAppSetting("proton_path")) ?? undefined;
+      params.prefixPath = (await getAppSetting("proton_prefix_path")) ?? undefined;
+    }
+
+    return params;
   };
 
   const handleStart = async () => {

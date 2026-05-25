@@ -55,6 +55,15 @@ export interface StartServerParams {
   adminPassword: string;
   /** Additional CLI flags like ["-NoBattlEye", "-servergamelog"]. */
   extraArgs: string[];
+  /** Linux only: path to the Proton-GE installation directory. */
+  protonPath?: string;
+  /** Linux only: path to the Steam compatibility prefix (WINEPREFIX). */
+  prefixPath?: string;
+}
+
+export interface ProtonEntry {
+  path: string;
+  version: string;
 }
 
 export interface ProcessStats {
@@ -228,9 +237,26 @@ export const tauriCmd = {
    */
   checkDir: (path: string) => invoke<DirCheckResult>("check_dir", { path }),
   checkFileExists: (path: string) => invoke<boolean>("check_file_exists", { path }),
+  /** Recursively delete a directory. Idempotent — returns Ok if path doesn't exist. */
+  deleteDirectory: (path: string) => invoke<void>("delete_directory", { path }),
   getProcessStats:    (pid: number) => invoke<ProcessStats>("get_process_stats", { pid }),
+  getPlatform:        () => invoke<string>("get_platform"),
+  /** Tell the backend whether first-time setup is complete.
+   *  Controls close-to-tray: if not done, the X button exits the process. */
+  setSetupComplete:   (complete: boolean) => invoke<void>("set_setup_complete", { complete }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),
+
+  // Proton-GE (Linux)
+  /** Scan well-known Steam locations and {baseDir}/proton/ for GE-Proton installs. */
+  scanForProton: (baseDir: string) => invoke<ProtonEntry[]>("scan_for_proton", { baseDir }),
+  /** Validate that a directory contains a usable Proton-GE install. */
+  validateProtonPath: (path: string) => invoke<boolean>("validate_proton_path", { path }),
+  /**
+   * Download the latest GE-Proton release to {targetDir} and return the
+   * extracted path. Streams progress to `proton://output/download`.
+   */
+  downloadProtonGe: (targetDir: string) => invoke<string>("download_proton_ge", { targetDir }),
 
   // Notifications
   sendDiscordNotification: (webhookUrl: string, payload: DiscordPayload) =>
