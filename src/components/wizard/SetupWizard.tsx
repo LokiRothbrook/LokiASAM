@@ -575,6 +575,7 @@ function SteamCmdStep() {
         <CommandOutputPanel
           eventChannel={outputChannel === "install" ? "steamcmd://output/setup" : "steamcmd://output/validate"}
           label={outputChannel === "install" ? "Downloading SteamCMD" : "Validating SteamCMD"}
+          completed={!isLoading}
           className="mt-2"
         />
       )}
@@ -591,6 +592,7 @@ function SteamCmdStep() {
 function ProtonGEStep() {
   const {
     baseDir,
+    protonMode, setProtonMode,
     protonPath, setProtonPath,
     protonValidated, setProtonValidated,
     isLoading, setLoading,
@@ -598,39 +600,46 @@ function ProtonGEStep() {
 
   const [scanning, setScanning] = useState(false);
   const [found, setFound] = useState<ProtonEntry[]>([]);
-  const [selected, setSelected] = useState("");
+  const [validating, setValidating] = useState<string | null>(null); // path currently being validated
   const [manualPath, setManualPath] = useState("");
   const [showDownload, setShowDownload] = useState(false);
   const [error, setError] = useState("");
 
   const scan = useCallback(async () => {
     setScanning(true);
-    setFound([]);
     try {
       const results = await tauriCmd.scanForProton(baseDir);
       setFound(results);
-      if (results.length > 0 && !selected) {
-        setSelected(results[0].path);
-      }
     } catch { /* ignore */ } finally {
       setScanning(false);
     }
-  }, [baseDir, selected]);
+  }, [baseDir]);
 
-  useEffect(() => { scan(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Scan on mount and whenever the user switches to the "existing" mode.
+  useEffect(() => {
+    if (protonMode === "existing") scan();
+  }, [protonMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleUseSelected = async () => {
-    if (!selected) return;
+  const handleSelectDetected = async (entry: ProtonEntry) => {
+    if (validating) return;
     setError("");
+    // Clear any previous validation so the Next button unlocks only on success.
+    setProtonValidated(false);
+    setProtonPath("");
+    setValidating(entry.path);
     try {
-      const ok = await tauriCmd.validateProtonPath(selected);
+      const ok = await tauriCmd.validateProtonPath(entry.path);
       if (ok) {
-        setProtonPath(selected);
+        setProtonPath(entry.path);
         setProtonValidated(true);
       } else {
-        setError("Validation failed — this does not appear to be a valid Proton-GE installation.");
+        setError(`${entry.version} does not appear to be a valid Proton-GE installation.`);
       }
-    } catch (e) { setError(String(e)); }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setValidating(null);
+    }
   };
 
   const handleDownload = async () => {
@@ -642,8 +651,6 @@ function ProtonGEStep() {
       const path = await tauriCmd.downloadProtonGe(targetDir);
       setProtonPath(path);
       setProtonValidated(true);
-      // Refresh scan list so the new install appears
-      scan();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -654,10 +661,17 @@ function ProtonGEStep() {
   const handleManualValidate = async () => {
     if (!manualPath.trim()) { setError("Enter the path to your Proton-GE directory."); return; }
     setError("");
+    setProtonValidated(false);
+    setProtonPath("");
+    const path = manualPath.trim();
+    const versionName = path.split("/").pop() || path;
     try {
-      const ok = await tauriCmd.validateProtonPath(manualPath.trim());
+      const ok = await tauriCmd.validateProtonPath(path);
       if (ok) {
-        setProtonPath(manualPath.trim());
+        // Add to (or update in) the detected list so it shows with a validated highlight.
+        const newEntry: ProtonEntry = { path, version: versionName };
+        setFound(prev => [...prev.filter(e => e.path !== path), newEntry]);
+        setProtonPath(path);
         setProtonValidated(true);
       } else {
         setError("Validation failed — check the path contains a `proton` script and `files/bin/wine64`.");
@@ -666,12 +680,15 @@ function ProtonGEStep() {
   };
 
   const pickDir = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "Select Proton-GE Directory" });
-    if (typeof selected === "string" && selected) {
-      setManualPath(selected);
-      setProtonValidated(false);
+    const picked = await open({ directory: true, multiple: false, title: "Select Proton-GE Directory" });
+    if (typeof picked === "string" && picked) {
+      setManualPath(picked);
     }
   };
+
+  const managedTarget = baseDir
+    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/proton"
+    : "/your/base/dir/proton";
 
   return (
     <div className="space-y-5">
@@ -680,70 +697,198 @@ function ProtonGEStep() {
           Proton-GE Setup
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          ASA only ships a Windows binary. On Linux, Proton-GE runs it seamlessly.
+          ASA only ships a Windows binary. Proton-GE lets it run natively on Linux.
         </p>
       </div>
 
-      {/* Found installations */}
-      {(scanning || found.length > 0) && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label style={{ color: "var(--text-primary)" }}>Detected Installations</Label>
-            <button
-              onClick={scan}
-              disabled={scanning}
-              className="flex items-center gap-1 text-xs"
-              style={{ color: "var(--text-muted)" }}
-            >
-              <RefreshCw className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`} />
-              Rescan
-            </button>
-          </div>
-          {scanning ? (
-            <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-              <Loader2 className="w-3 h-3 animate-spin" /> Scanning…
+      {/* Mode selector */}
+      <div className="grid grid-cols-2 gap-3">
+        {([
+          {
+            mode: "managed" as const,
+            label: "Managed by LokiASAM",
+            desc: `Download & update automatically into ${managedTarget}`,
+          },
+          {
+            mode: "existing" as const,
+            label: "Use existing installation",
+            desc: "Point to a Proton-GE you already have",
+          },
+        ]).map(({ mode, label, desc }) => (
+          <button
+            key={mode}
+            onClick={() => {
+              if (!isLoading && !protonValidated) {
+                setProtonMode(mode);
+                setError("");
+              }
+            }}
+            disabled={isLoading || protonValidated}
+            className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              background: protonMode === mode ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${protonMode === mode ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+              boxShadow: protonMode === mode ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+            }}
+          >
+            <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
+              {label}
             </p>
+            <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* ── Managed mode ── */}
+      {protonMode === "managed" && (
+        <Button
+          onClick={handleDownload}
+          disabled={isLoading || !baseDir || protonValidated}
+          className="w-full gap-2"
+          style={{
+            background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
+            border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+            color: protonValidated ? "var(--neon-green)" : "var(--neon-purple)",
+          }}
+        >
+          {isLoading ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
+          ) : protonValidated ? (
+            <><CheckCircle2 className="w-4 h-4" /> Proton-GE Ready</>
           ) : (
-            <div className="space-y-1.5 max-h-36 overflow-y-auto">
-              {found.map((entry) => (
-                <button
-                  key={entry.path}
-                  onClick={() => { setSelected(entry.path); setProtonValidated(false); }}
-                  className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all"
-                  style={{
-                    background: selected === entry.path ? "rgba(191,0,255,0.12)" : "rgba(10,10,30,0.5)",
-                    border: `1px solid ${selected === entry.path ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.12)"}`,
-                  }}
-                >
-                  <span className="font-semibold" style={{ color: selected === entry.path ? "var(--neon-purple)" : "var(--text-primary)" }}>
-                    {entry.version}
-                  </span>
-                  <span className="block font-mono mt-0.5 truncate" style={{ color: "var(--text-muted)", fontSize: "10px" }}>
-                    {entry.path}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <><Cpu className="w-4 h-4" /> Download &amp; Install Proton-GE</>
           )}
-          {found.length > 0 && !protonValidated && (
+        </Button>
+      )}
+
+      {protonMode === "managed" && showDownload && (
+        <CommandOutputPanel
+          eventChannel="proton://output/download"
+          label="Proton-GE Download"
+          completed={!isLoading}
+          className="mt-1"
+        />
+      )}
+
+      {/* ── Existing mode ── always visible so the user can change their selection */}
+      {protonMode === "existing" && (
+        <div className="space-y-4">
+          {/* Detected installations */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label style={{ color: "var(--text-primary)" }}>Detected Installations</Label>
+              <button
+                onClick={scan}
+                disabled={scanning}
+                className="flex items-center gap-1 text-xs"
+                style={{ color: "var(--text-muted)" }}
+              >
+                <RefreshCw className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`} />
+                Rescan
+              </button>
+            </div>
+
+            {scanning ? (
+              <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Scanning…
+              </p>
+            ) : found.length === 0 ? (
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                No Proton-GE installations detected. Enter a path manually below or switch to Managed mode.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {found.map((entry) => {
+                  const isValidating = validating === entry.path;
+                  const isSelected = protonValidated && protonPath === entry.path;
+                  return (
+                    <button
+                      key={entry.path}
+                      onClick={() => handleSelectDetected(entry)}
+                      disabled={!!validating}
+                      className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all disabled:opacity-60"
+                      style={{
+                        background: isSelected
+                          ? "rgba(0,255,136,0.07)"
+                          : isValidating
+                          ? "rgba(191,0,255,0.1)"
+                          : "rgba(10,10,30,0.5)",
+                        border: `1px solid ${
+                          isSelected
+                            ? "rgba(0,255,136,0.4)"
+                            : isValidating
+                            ? "rgba(191,0,255,0.4)"
+                            : "rgba(191,0,255,0.15)"
+                        }`,
+                      }}
+                    >
+                      <span className="flex items-center gap-2">
+                        {isSelected ? (
+                          <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: "var(--neon-green)" }} />
+                        ) : isValidating ? (
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0" style={{ color: "var(--neon-purple)" }} />
+                        ) : (
+                          <Cpu className="w-3 h-3 shrink-0" style={{ color: "var(--neon-purple)" }} />
+                        )}
+                        <span className="font-semibold" style={{ color: isSelected ? "var(--neon-green)" : "var(--text-primary)" }}>
+                          {entry.version}
+                        </span>
+                      </span>
+                      <span className="block font-mono mt-0.5 truncate pl-5" style={{ color: "var(--text-muted)", fontSize: "10px" }}>
+                        {entry.path}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Manual path */}
+          <div className="space-y-2">
+            <Label style={{ color: "var(--text-primary)" }}>
+              Manual Path
+              <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>(optional)</span>
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                value={manualPath}
+                onChange={(e) => setManualPath(e.target.value)}
+                placeholder="/home/user/.steam/root/compatibilitytools.d/GE-Proton9-27"
+                className="flex-1 font-mono text-sm"
+                style={{
+                  background: "rgba(10,10,30,0.8)",
+                  borderColor: "rgba(191,0,255,0.2)",
+                  color: "var(--text-primary)",
+                }}
+              />
+              <Button
+                onClick={pickDir}
+                variant="outline"
+                className="shrink-0"
+                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+              >
+                <FolderOpen className="w-4 h-4" />
+              </Button>
+            </div>
             <Button
-              onClick={handleUseSelected}
-              disabled={!selected}
+              onClick={handleManualValidate}
+              disabled={!manualPath.trim()}
               size="sm"
               className="gap-2"
               style={{
-                background: "rgba(191,0,255,0.12)",
-                border: "1px solid rgba(191,0,255,0.4)",
+                background: "rgba(191,0,255,0.08)",
+                border: "1px solid rgba(191,0,255,0.3)",
                 color: "var(--neon-purple)",
               }}
             >
-              <CheckCircle2 className="w-3.5 h-3.5" /> Use Selected
+              Validate Path
             </Button>
-          )}
+          </div>
         </div>
       )}
 
-      {/* Validated badge */}
+      {/* Validated badge (both modes) */}
       {protonValidated && (
         <div
           className="rounded-lg px-4 py-3 flex items-center gap-2"
@@ -754,79 +899,6 @@ function ProtonGEStep() {
             <p className="text-xs font-semibold" style={{ color: "var(--neon-green)" }}>Proton-GE Ready</p>
             <p className="text-[10px] font-mono mt-0.5 truncate" style={{ color: "var(--text-muted)" }}>{protonPath}</p>
           </div>
-        </div>
-      )}
-
-      {/* Download latest */}
-      {!protonValidated && (
-        <Button
-          onClick={handleDownload}
-          disabled={isLoading || !baseDir}
-          className="w-full gap-2"
-          style={{
-            background: "rgba(191,0,255,0.1)",
-            border: "1px solid rgba(191,0,255,0.35)",
-            color: "var(--neon-purple)",
-          }}
-        >
-          {isLoading && showDownload ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
-          ) : (
-            <><Cpu className="w-4 h-4" /> Download Latest Proton-GE</>
-          )}
-        </Button>
-      )}
-
-      {/* Download output */}
-      {showDownload && (
-        <CommandOutputPanel
-          eventChannel="proton://output/download"
-          label="Proton-GE Download"
-          className="mt-1"
-        />
-      )}
-
-      {/* Manual path */}
-      {!protonValidated && (
-        <div className="space-y-2">
-          <Label style={{ color: "var(--text-primary)" }}>
-            Manual Path
-            <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>(optional)</span>
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              value={manualPath}
-              onChange={(e) => { setManualPath(e.target.value); setProtonValidated(false); }}
-              placeholder="/home/user/.steam/root/compatibilitytools.d/GE-Proton9-27"
-              className="flex-1 font-mono text-sm"
-              style={{
-                background: "rgba(10,10,30,0.8)",
-                borderColor: "rgba(191,0,255,0.2)",
-                color: "var(--text-primary)",
-              }}
-            />
-            <Button
-              onClick={pickDir}
-              variant="outline"
-              className="gap-2 shrink-0"
-              style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
-            >
-              <FolderOpen className="w-4 h-4" />
-            </Button>
-          </div>
-          <Button
-            onClick={handleManualValidate}
-            disabled={!manualPath.trim()}
-            size="sm"
-            className="gap-2"
-            style={{
-              background: "rgba(191,0,255,0.08)",
-              border: "1px solid rgba(191,0,255,0.3)",
-              color: "var(--neon-purple)",
-            }}
-          >
-            Validate Path
-          </Button>
         </div>
       )}
 
@@ -1010,9 +1082,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("steamcmd_path", steamcmdPath);
         if (IS_LINUX && protonPath) {
           await setAppSetting("proton_path", protonPath);
-          // Derive the shared Proton prefix from the base directory.
+          // Prefix lives alongside the runtime: {baseDir}/proton/prefix/
+          // This keeps the fake C: drive co-located with the Proton binaries.
           const sep = baseDir.includes("\\") ? "\\" : "/";
-          const prefix = baseDir.replace(/[/\\]$/, "") + sep + ".proton-prefix";
+          const prefix = baseDir.replace(/[/\\]$/, "") + sep + "proton" + sep + "prefix";
           await setAppSetting("proton_prefix_path", prefix);
         }
         if (discordWebhook) {

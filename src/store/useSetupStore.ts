@@ -11,6 +11,7 @@
 import { create } from "zustand";
 
 export type SteamCmdMode = "auto" | "manual";
+export type ProtonMode = "managed" | "existing";
 
 interface SetupState {
   step: number;
@@ -29,6 +30,7 @@ interface SetupState {
   steamcmdValidated: boolean; // true after validate_steamcmd returns true
 
   // Step 4 (Linux only) — Proton-GE
+  protonMode: ProtonMode;
   protonPath: string;
   protonValidated: boolean;
 
@@ -50,6 +52,7 @@ interface SetupState {
   setSteamcmdMode: (mode: SteamCmdMode) => void;
   setSteamcmdPath: (path: string) => void;
   setSteamcmdValidated: (ok: boolean) => void;
+  setProtonMode: (mode: ProtonMode) => void;
   setProtonPath: (path: string) => void;
   setProtonValidated: (ok: boolean) => void;
   setDiscordWebhook: (url: string) => void;
@@ -66,6 +69,7 @@ const initialState = {
   steamcmdMode: "auto" as SteamCmdMode,
   steamcmdPath: "",
   steamcmdValidated: false,
+  protonMode: "managed" as ProtonMode,
   protonPath: "",
   protonValidated: false,
   discordWebhook: "",
@@ -86,6 +90,7 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setSteamcmdMode: (steamcmdMode) => set({ steamcmdMode }),
   setSteamcmdPath: (steamcmdPath) => set({ steamcmdPath }),
   setSteamcmdValidated: (steamcmdValidated) => set({ steamcmdValidated }),
+  setProtonMode: (protonMode) => set({ protonMode }),
   setProtonPath: (protonPath) => set({ protonPath }),
   setProtonValidated: (protonValidated) => set({ protonValidated }),
   setDiscordWebhook: (discordWebhook) => set({ discordWebhook }),

@@ -40,6 +40,8 @@ export interface CommandOutputPanelProps {
   className?: string;
   /** Tailwind height class for the scrollable output body. Default: "h-64". */
   bodyClassName?: string;
+  /** Set to true once the process finishes. Stops the timer and shows "Completed in: Xs". */
+  completed?: boolean;
 }
 
 let lineIdCounter = 0;
@@ -51,6 +53,7 @@ export function CommandOutputPanel({
   defaultCollapsed = false,
   className,
   bodyClassName,
+  completed = false,
 }: CommandOutputPanelProps) {
   const [lines, setLines] = useState<OutputLine[]>([]);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -59,6 +62,8 @@ export function CommandOutputPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const startTimeRef = useRef<Date>(new Date());
   const [elapsed, setElapsed] = useState("0s");
+  const [finalElapsed, setFinalElapsed] = useState<string | null>(null);
+  const completedRef = useRef(false);
 
   // Subscribe to the Tauri event channel
   const handleLine = useCallback((payload: SteamCmdLinePayload) => {
@@ -85,16 +90,33 @@ export function CommandOutputPanel({
     }
   }, [lines, autoScroll]);
 
-  // Elapsed time counter
+  // Elapsed time counter — resets when the event channel changes.
   useEffect(() => {
     startTimeRef.current = new Date();
+    completedRef.current = false;
+    setFinalElapsed(null);
+    setElapsed("0s");
+
     const interval = setInterval(() => {
+      if (completedRef.current) {
+        clearInterval(interval);
+        return;
+      }
       const secs = Math.floor((Date.now() - startTimeRef.current.getTime()) / 1000);
-      if (secs < 60) setElapsed(`${secs}s`);
-      else setElapsed(`${Math.floor(secs / 60)}m ${secs % 60}s`);
+      setElapsed(secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`);
     }, 1000);
+
     return () => clearInterval(interval);
   }, [eventChannel]);
+
+  // Stop the timer when the parent signals the process is done.
+  useEffect(() => {
+    if (completed && !completedRef.current) {
+      completedRef.current = true;
+      const secs = Math.floor((Date.now() - startTimeRef.current.getTime()) / 1000);
+      setFinalElapsed(secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`);
+    }
+  }, [completed]);
 
   const copyAll = async () => {
     const text = lines.map((l) => l.text).join("\n");
@@ -127,8 +149,8 @@ export function CommandOutputPanel({
           <span className="text-xs font-mono font-semibold" style={{ color: "var(--neon-purple)" }}>
             {label}
           </span>
-          <span className="text-xs font-mono" style={{ color: "var(--text-subtle)" }}>
-            {lines.length} lines · {elapsed}
+          <span className="text-xs font-mono" style={{ color: finalElapsed ? "var(--neon-green)" : "var(--text-subtle)" }}>
+            {lines.length} lines · {finalElapsed ? `Completed in: ${finalElapsed}` : elapsed}
           </span>
         </div>
 

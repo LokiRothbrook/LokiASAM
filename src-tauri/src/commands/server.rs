@@ -48,8 +48,10 @@ pub struct StartServerParams {
     /// Additional command-line flags, e.g. ["-NoBattlEye", "-servergamelog"].
     pub extra_args: Vec<String>,
     /// Linux only: path to the Proton-GE installation directory (must contain `proton` script).
+    /// Typically {base_dir}/proton/GE-ProtonX-Y/
     pub proton_path: Option<String>,
-    /// Linux only: path to the Steam compatibility prefix (WINEPREFIX). Created if absent.
+    /// Linux only: WINEPREFIX path where Proton creates its fake C: drive.
+    /// Stored at {base_dir}/proton/prefix/ so everything Proton-related is co-located.
     pub prefix_path: Option<String>,
 }
 

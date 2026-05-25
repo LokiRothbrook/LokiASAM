@@ -895,6 +895,7 @@ function InstallStep({
           <CommandOutputPanel
             eventChannel={`steamcmd://output/${serverId}`}
             label="SteamCMD — Installing ASA Server"
+            completed={status === "done" || status === "error"}
           />
         </div>
       )}
