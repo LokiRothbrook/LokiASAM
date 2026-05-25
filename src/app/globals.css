@@ -1,0 +1,231 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   LokiASAM Neon Glow Theme
+   Matches the aesthetic of lokisoft.xyz — deep space dark background with
+   vibrant neon cyan, purple, and green accents and glass-morphism card surfaces.
+   --------------------------------------------------------------------------- */
+
+@theme inline {
+  /* Base colors */
+  --color-background:       var(--background);
+  --color-foreground:       var(--foreground);
+  --color-surface:          var(--surface);
+  --color-border:           var(--border);
+
+  /* Neon accent colors */
+  --color-neon-cyan:        var(--neon-cyan);
+  --color-neon-purple:      var(--neon-purple);
+  --color-neon-green:       var(--neon-green);
+  --color-neon-red:         var(--neon-red);
+  --color-neon-orange:      var(--neon-orange);
+
+  /* Text */
+  --color-text-primary:     var(--text-primary);
+  --color-text-muted:       var(--text-muted);
+
+  /* Fonts */
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono), "JetBrains Mono", "Fira Code", monospace;
+
+  /* Animation */
+  --animate-pulse-glow: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-flicker:    flicker 4s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   CSS Custom Properties (design tokens)
+   --------------------------------------------------------------------------- */
+:root {
+  /* Backgrounds */
+  --background:       #050510;
+  --surface:          rgba(10, 10, 30, 0.75);
+  --surface-elevated: rgba(15, 15, 40, 0.9);
+  --terminal-bg:      #000008;
+
+  /* Borders */
+  --border:           rgba(0, 255, 255, 0.15);
+  --border-hover:     rgba(0, 255, 255, 0.4);
+
+  /* Neon colors */
+  --neon-cyan:        #00ffff;
+  --neon-purple:      #bf00ff;
+  --neon-green:       #00ff88;
+  --neon-red:         #ff0055;
+  --neon-orange:      #ff8800;
+
+  /* Text */
+  --foreground:       #e0e0ff;
+  --text-primary:     #e0e0ff;
+  --text-muted:       #5858a0;
+  --text-subtle:      #3a3a70;
+
+  /* Glow shadows (used in box-shadow) */
+  --glow-cyan:        0 0 8px rgba(0,255,255,0.6), 0 0 24px rgba(0,255,255,0.2);
+  --glow-purple:      0 0 8px rgba(191,0,255,0.6), 0 0 24px rgba(191,0,255,0.2);
+  --glow-green:       0 0 8px rgba(0,255,136,0.6), 0 0 24px rgba(0,255,136,0.2);
+  --glow-red:         0 0 8px rgba(255,0,85,0.6),  0 0 24px rgba(255,0,85,0.2);
+
+  /* Card glass */
+  --glass-bg:        rgba(10, 10, 35, 0.6);
+  --glass-border:    rgba(0, 255, 255, 0.12);
+  --glass-blur:      12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Base styles
+   --------------------------------------------------------------------------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color:  var(--background);
+  color:             var(--text-primary);
+  font-family:       var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  min-height:        100vh;
+  /* Subtle scanline/grid background texture */
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,255,255,0.06) 0%, transparent 60%),
+    linear-gradient(rgba(0,255,255,0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,255,0.015) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+}
+
+/* Terminal / log viewer areas */
+.terminal {
+  background-color:  var(--terminal-bg);
+  color:             var(--neon-green);
+  font-family:       "JetBrains Mono", "Fira Code", var(--font-geist-mono), monospace;
+  font-size:         0.8125rem;
+  line-height:       1.6;
+}
+
+/* ---------------------------------------------------------------------------
+   Glass card base
+   --------------------------------------------------------------------------- */
+.glass-card {
+  background:        var(--glass-bg);
+  border:            1px solid var(--glass-border);
+  backdrop-filter:   blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-radius:     0.75rem;
+  transition:        border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.glass-card:hover {
+  border-color:      rgba(0, 255, 255, 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   Neon glow utilities (usable as className="glow-cyan" etc.)
+   --------------------------------------------------------------------------- */
+.glow-cyan   { box-shadow: var(--glow-cyan);   }
+.glow-purple { box-shadow: var(--glow-purple); }
+.glow-green  { box-shadow: var(--glow-green);  }
+.glow-red    { box-shadow: var(--glow-red);    }
+
+.text-glow-cyan   { text-shadow: 0 0 10px rgba(0,255,255,0.8); }
+.text-glow-purple { text-shadow: 0 0 10px rgba(191,0,255,0.8); }
+.text-glow-green  { text-shadow: 0 0 10px rgba(0,255,136,0.8); }
+.text-glow-red    { text-shadow: 0 0 10px rgba(255,0,85,0.8);  }
+
+/* ---------------------------------------------------------------------------
+   Neon border utilities
+   --------------------------------------------------------------------------- */
+.border-neon-cyan   { border-color: var(--neon-cyan);   }
+.border-neon-purple { border-color: var(--neon-purple); }
+.border-neon-green  { border-color: var(--neon-green);  }
+.border-neon-red    { border-color: var(--neon-red);    }
+
+/* Running server card — pulsing cyan border */
+.server-card-running {
+  border-color: var(--neon-green);
+  box-shadow: 0 0 12px rgba(0,255,136,0.3), 0 0 0 1px rgba(0,255,136,0.1);
+  animation: pulse-border-green 3s ease-in-out infinite;
+}
+
+.server-card-error {
+  border-color: var(--neon-red);
+  box-shadow: var(--glow-red);
+}
+
+/* ---------------------------------------------------------------------------
+   Keyframe animations
+   --------------------------------------------------------------------------- */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+@keyframes pulse-border-green {
+  0%, 100% { box-shadow: 0 0 12px rgba(0,255,136,0.3), 0 0 0 1px rgba(0,255,136,0.1); }
+  50%       { box-shadow: 0 0 24px rgba(0,255,136,0.5), 0 0 0 1px rgba(0,255,136,0.3); }
+}
+
+@keyframes pulse-border-cyan {
+  0%, 100% { box-shadow: 0 0 12px rgba(0,255,255,0.3); }
+  50%       { box-shadow: 0 0 24px rgba(0,255,255,0.6); }
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  93%       { opacity: 1; }
+  94%       { opacity: 0.8; }
+  95%       { opacity: 1; }
+  97%       { opacity: 0.9; }
+  98%       { opacity: 1; }
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbar styling — thin neon-themed scrollbar
+   --------------------------------------------------------------------------- */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: rgba(0,0,0,0.3); }
+::-webkit-scrollbar-thumb        { background: rgba(0,255,255,0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(0,255,255,0.4); }
+
+/* ---------------------------------------------------------------------------
+   Neon button base styles (used in conjunction with ShadCN Button variants)
+   --------------------------------------------------------------------------- */
+.btn-neon-cyan {
+  background:    transparent;
+  border:        1px solid var(--neon-cyan);
+  color:         var(--neon-cyan);
+  transition:    box-shadow 150ms ease, background 150ms ease;
+}
+.btn-neon-cyan:hover {
+  background:    rgba(0,255,255,0.08);
+  box-shadow:    var(--glow-cyan);
+}
+
+.btn-neon-purple {
+  background:    transparent;
+  border:        1px solid var(--neon-purple);
+  color:         var(--neon-purple);
+  transition:    box-shadow 150ms ease, background 150ms ease;
+}
+.btn-neon-purple:hover {
+  background:    rgba(191,0,255,0.08);
+  box-shadow:    var(--glow-purple);
+}
+
+/* ---------------------------------------------------------------------------
+   Status indicator dot
+   --------------------------------------------------------------------------- */
+.status-dot {
+  display:       inline-block;
+  width:         8px;
+  height:        8px;
+  border-radius: 50%;
+  flex-shrink:   0;
+}
+.status-dot-running  { background: var(--neon-green);  box-shadow: var(--glow-green);  animation: pulse-glow 2s ease-in-out infinite; }
+.status-dot-starting { background: var(--neon-cyan);   box-shadow: var(--glow-cyan);   animation: pulse-glow 1s ease-in-out infinite; }
+.status-dot-stopped  { background: var(--text-muted);  }
+.status-dot-error    { background: var(--neon-red);    box-shadow: var(--glow-red); }
+.status-dot-updating { background: var(--neon-purple); box-shadow: var(--glow-purple); animation: pulse-glow 1.5s ease-in-out infinite; }
