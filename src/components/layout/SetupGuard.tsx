@@ -13,9 +13,9 @@
  */
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Zap } from "lucide-react";
 import { SetupWizard } from "@/components/wizard/SetupWizard";
+import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
 import { useAppStore } from "@/store/useAppStore";
 import { getAppSetting } from "@/lib/db";
 
@@ -24,8 +24,7 @@ interface SetupGuardProps {
 }
 
 export function SetupGuard({ children }: SetupGuardProps) {
-  const router = useRouter();
-  const { setupChecked, setupComplete, setSetupChecked, setSetupComplete } = useAppStore();
+  const { setupChecked, setupComplete, setSetupChecked, setSetupComplete, showNewServerWizard, setShowNewServerWizard } = useAppStore();
   const [isTauri, setIsTauri] = useState(false);
 
   useEffect(() => {
@@ -56,7 +55,6 @@ export function SetupGuard({ children }: SetupGuardProps) {
 
   const handleSetupComplete = () => {
     setSetupComplete(true);
-    router.push("/servers/new");
   };
 
   // Still checking
@@ -78,9 +76,13 @@ export function SetupGuard({ children }: SetupGuardProps) {
   return (
     <>
       {children}
-      {/* Setup wizard overlay — sits above everything when setup is incomplete */}
+      {/* First-time setup wizard overlay */}
       {isTauri && !setupComplete && (
         <SetupWizard onComplete={handleSetupComplete} />
+      )}
+      {/* New server creation wizard overlay */}
+      {showNewServerWizard && (
+        <ServerCreationWizard onClose={() => setShowNewServerWizard(false)} />
       )}
     </>
   );

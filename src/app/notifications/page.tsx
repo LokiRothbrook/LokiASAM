@@ -5,7 +5,7 @@ export default function NotificationsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
+        <h1 className="text-2xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           Notifications
         </h1>
         <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>

@@ -14,7 +14,7 @@
  * On completion, writes settings to SQLite and calls onComplete().
  */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap, FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft, Loader2, AlertCircle, HardDrive as DiskIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -213,7 +213,7 @@ function BaseDirStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           Base Installation Directory
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
@@ -303,7 +303,7 @@ function BackupDirStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           Backup Directory
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
@@ -377,14 +377,34 @@ function SteamCmdStep() {
   const handleAutoDownload = async () => {
     setError("");
     setSteamcmdValidated(false);
-    setLoading(true, "Downloading SteamCMD...");
-    setOutputChannel("install");
+    setLoading(true, "Checking for existing SteamCMD...");
 
-    try {
+    const doInstallAndValidate = async () => {
+      setLoading(true, "Downloading SteamCMD...");
+      setOutputChannel("install");
       await tauriCmd.installSteamcmd(autoSteamcmdTarget);
       setLoading(true, "Validating SteamCMD...");
       setOutputChannel("validate");
-      const ok = await tauriCmd.validateSteamcmd(autoExePath);
+      return tauriCmd.validateSteamcmd(autoExePath);
+    };
+
+    try {
+      const alreadyExists = await tauriCmd.checkFileExists(autoExePath);
+      if (alreadyExists) {
+        // Validate the existing install first; only re-download if it fails.
+        setLoading(true, "Found existing SteamCMD, validating...");
+        setOutputChannel("validate");
+        const ok = await tauriCmd.validateSteamcmd(autoExePath);
+        if (ok) {
+          setSteamcmdPath(autoExePath);
+          setSteamcmdValidated(true);
+          return;
+        }
+        // Validation failed — existing install is broken, re-download.
+        setError("");
+      }
+
+      const ok = await doInstallAndValidate();
       if (ok) {
         setSteamcmdPath(autoExePath);
         setSteamcmdValidated(true);
@@ -435,7 +455,7 @@ function SteamCmdStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           SteamCMD Setup
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
@@ -451,8 +471,9 @@ function SteamCmdStep() {
         ].map(({ mode, label, desc }) => (
           <button
             key={mode}
-            onClick={() => { setSteamcmdMode(mode); setSteamcmdValidated(false); setError(""); }}
-            className="rounded-lg p-4 text-left transition-all"
+            onClick={() => { if (!isLoading && !steamcmdValidated) { setSteamcmdMode(mode); setSteamcmdValidated(false); setError(""); } }}
+            disabled={isLoading || steamcmdValidated}
+            className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               background: steamcmdMode === mode ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
               border: `1px solid ${steamcmdMode === mode ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
@@ -540,7 +561,6 @@ function SteamCmdStep() {
           eventChannel={outputChannel === "install" ? "steamcmd://output/setup" : "steamcmd://output/validate"}
           label={outputChannel === "install" ? "Downloading SteamCMD" : "Validating SteamCMD"}
           className="mt-2"
-          bodyClassName="h-40"
         />
       )}
 
@@ -559,7 +579,7 @@ function NotificationsStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           Notification Defaults
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
@@ -660,7 +680,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
           boxShadow: "0 0 20px rgba(191,0,255,0.2)",
         }}
       >
-        Create My First Server
+        Go to Dashboard
         <ArrowRight className="w-4 h-4" />
       </Button>
     </div>
@@ -676,6 +696,19 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [direction, setDirection] = useState(1);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Scroll the card content to bottom when a long-running operation starts
+  // (e.g. SteamCMD download) so the terminal output panel is immediately visible.
+  useEffect(() => {
+    if (isLoading && scrollAreaRef.current) {
+      setTimeout(() => {
+        if (scrollAreaRef.current) {
+          scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+        }
+      }, 80);
+    }
+  }, [isLoading]);
 
   const canAdvance = () => {
     switch (step) {
@@ -779,7 +812,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       {/* Main content */}
       <div className="relative z-10 flex-1 flex items-center justify-center p-6">
         <div
-          className="w-full max-w-lg flex flex-col"
+          className="w-full max-w-2xl flex flex-col"
           style={{
             background: "rgba(10,10,30,0.8)",
             border: "1px solid rgba(191,0,255,0.2)",
@@ -791,7 +824,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           }}
         >
           <div className="p-8 flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div ref={scrollAreaRef} className="flex-1 min-h-0 overflow-y-auto pr-2">
               <AnimatePresence mode="wait" custom={direction}>
                 <motion.div
                   key={step}

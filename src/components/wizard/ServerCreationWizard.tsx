@@ -14,12 +14,11 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Server, Map, Network, GitBranch, Clock, Package,
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
-  CheckCircle2, Plus, X, ChevronRight,
+  CheckCircle2, Plus, X, ChevronRight, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,7 +61,6 @@ interface WizardData {
   port: number;
   queryPort: number;
   rconPort: number;
-  rconPassword: string;
   // Step 3 — Cluster
   clusterId: string;
   // Step 4 — Automation
@@ -87,7 +85,6 @@ const DEFAULT_DATA: WizardData = {
   port: 7777,
   queryPort: 27015,
   rconPort: 27020,
-  rconPassword: "",
   clusterId: "",
   autoUpdate: true,
   autoUpdateCron: "0 3 * * *",
@@ -378,21 +375,6 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
       <PortField label="Game Port" fieldKey="port" description="Clients connect here (UDP). Default: 7777" />
       <PortField label="Query Port" fieldKey="queryPort" description="Steam server browser (UDP). Default: 27015" />
       <PortField label="RCON Port" fieldKey="rconPort" description="Remote console (TCP). Default: 27020" />
-
-      <div className="space-y-1.5">
-        <Label style={{ color: "var(--text-primary)" }}>RCON Password <span style={{ color: "var(--neon-red)" }}>*</span></Label>
-        <Input
-          type="password"
-          value={data.rconPassword}
-          onChange={(e) => onChange({ rconPassword: e.target.value })}
-          placeholder="RCON password for remote console"
-          style={{
-            background: "rgba(10,10,30,0.8)",
-            borderColor: !data.rconPassword ? "var(--neon-red)" : "rgba(191,0,255,0.3)",
-            color: "var(--text-primary)",
-          }}
-        />
-      </div>
 
       {checking && (
         <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
@@ -722,7 +704,7 @@ function InstallStep({
         port: data.port,
         queryPort: data.queryPort,
         rconPort: data.rconPort,
-        rconPassword: data.rconPassword,
+        rconPassword: data.adminPassword,
         maxPlayers: data.maxPlayers,
         serverPassword: data.serverPassword || undefined,
         adminPassword: data.adminPassword,
@@ -890,8 +872,11 @@ function InstallStep({
 // Main ServerCreationWizard
 // ---------------------------------------------------------------------------
 
-export function ServerCreationWizard() {
-  const router = useRouter();
+interface ServerCreationWizardProps {
+  onClose: () => void;
+}
+
+export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
@@ -905,7 +890,7 @@ export function ServerCreationWizard() {
     switch (step) {
       case 0: return !!data.name.trim() && !!data.adminPassword.trim();
       case 1: return !!data.presetId;
-      case 2: return !!data.rconPassword.trim();
+      case 2: return true;
       case 3: return true;
       case 4: return true;
       case 5: return true;
@@ -916,10 +901,6 @@ export function ServerCreationWizard() {
   const next = () => { setDirection(1); setStep((s) => Math.min(s + 1, STEPS.length - 1)); };
   const prev = () => { setDirection(-1); setStep((s) => Math.max(s - 1, 0)); };
 
-  const handleInstallComplete = () => {
-    router.push("/");
-  };
-
   const stepComponents: React.ReactNode[] = [
     <BasicInfoStep  key="basic"      data={data} onChange={onChange} />,
     <PresetStep     key="preset"     data={data} onChange={onChange} />,
@@ -927,128 +908,171 @@ export function ServerCreationWizard() {
     <ClusterStep    key="cluster"    data={data} onChange={onChange} />,
     <AutomationStep key="automation" data={data} onChange={onChange} />,
     <ModsStep       key="mods"       data={data} onChange={onChange} />,
-    <InstallStep    key="install"    data={data} serverId={serverId} onInstallComplete={handleInstallComplete} />,
+    <InstallStep    key="install"    data={data} serverId={serverId} onInstallComplete={onClose} />,
   ];
 
   return (
-    <div className="flex h-full gap-6">
-      {/* Left sidebar — step list */}
+    <div
+      className="fixed inset-0 z-50 flex flex-col"
+      style={{ background: "var(--background)" }}
+    >
+      {/* Background gradient */}
       <div
-        className="w-52 shrink-0 rounded-xl p-4 flex flex-col gap-1 self-start sticky top-0"
+        className="absolute inset-0 pointer-events-none"
         style={{
-          background: "rgba(10,10,30,0.7)",
-          border: "1px solid rgba(191,0,255,0.15)",
-          backdropFilter: "blur(12px)",
+          backgroundImage:
+            "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(191,0,255,0.08) 0%, transparent 60%)",
         }}
+      />
+
+      {/* Top bar */}
+      <div
+        className="relative z-10 flex items-center justify-between px-6 py-3 border-b shrink-0"
+        style={{ borderColor: "rgba(191,0,255,0.15)", background: "rgba(5,5,20,0.8)" }}
       >
-        <p className="text-xs font-semibold mb-3 px-1" style={{ color: "var(--text-muted)" }}>
-          NEW SERVER
-        </p>
-        {STEPS.map((s, i) => {
-          const done = i < step;
-          const active = i === step;
-          return (
-            <div
-              key={s.label}
-              className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-lg transition-all",
-                active && "bg-[rgba(191,0,255,0.1)]",
-                done && "opacity-70"
-              )}
-              style={{
-                border: active ? "1px solid rgba(191,0,255,0.4)" : "1px solid transparent",
-              }}
-            >
-              <div
-                className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-                style={{
-                  background: done
-                    ? "rgba(0,255,136,0.15)"
-                    : active
-                    ? "rgba(191,0,255,0.2)"
-                    : "rgba(191,0,255,0.05)",
-                  border: `1px solid ${done ? "rgba(0,255,136,0.4)" : active ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-                  color: done ? "var(--neon-green)" : active ? "var(--neon-purple)" : "var(--text-subtle)",
-                }}
-              >
-                {done ? "✓" : i + 1}
-              </div>
-              <span
-                className="text-xs truncate"
-                style={{ color: active ? "var(--neon-purple)" : done ? "var(--text-primary)" : "var(--text-muted)" }}
-              >
-                {s.label}
-              </span>
-              {active && <ChevronRight className="w-3 h-3 ml-auto shrink-0" style={{ color: "var(--neon-purple)" }} />}
-            </div>
-          );
-        })}
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 4px var(--neon-purple))" }} />
+          <span className="text-sm font-semibold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            New Server
+          </span>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClose}
+          className="h-8 w-8 p-0"
+          style={{ color: "var(--text-muted)" }}
+          title="Close"
+        >
+          <X className="w-4 h-4" />
+        </Button>
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
-            {STEPS[step].label}
-          </h1>
-          <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
-            Step {step + 1} of {STEPS.length}
-          </p>
-        </div>
+      {/* Content */}
+      <div className="relative z-10 flex-1 overflow-hidden p-6">
+        <div className="flex h-full gap-6">
+          {/* Left sidebar — step list */}
+          <div
+            className="w-52 shrink-0 rounded-xl p-4 flex flex-col gap-1 self-stretch"
+            style={{
+              background: "rgba(10,10,30,0.7)",
+              border: "1px solid rgba(191,0,255,0.15)",
+              backdropFilter: "blur(12px)",
+            }}
+          >
+            <p className="text-xs font-semibold mb-3 px-1" style={{ color: "var(--text-muted)" }}>
+              NEW SERVER
+            </p>
+            {STEPS.map((s, i) => {
+              const done = i < step;
+              const active = i === step;
+              return (
+                <div
+                  key={s.label}
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2 rounded-lg transition-all",
+                    active && "bg-[rgba(191,0,255,0.1)]",
+                    done && "opacity-70"
+                  )}
+                  style={{
+                    border: active ? "1px solid rgba(191,0,255,0.4)" : "1px solid transparent",
+                  }}
+                >
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                    style={{
+                      background: done
+                        ? "rgba(0,255,136,0.15)"
+                        : active
+                        ? "rgba(191,0,255,0.2)"
+                        : "rgba(191,0,255,0.05)",
+                      border: `1px solid ${done ? "rgba(0,255,136,0.4)" : active ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+                      color: done ? "var(--neon-green)" : active ? "var(--neon-purple)" : "var(--text-subtle)",
+                    }}
+                  >
+                    {done ? "✓" : i + 1}
+                  </div>
+                  <span
+                    className="text-xs truncate"
+                    style={{ color: active ? "var(--neon-purple)" : done ? "var(--text-primary)" : "var(--text-muted)" }}
+                  >
+                    {s.label}
+                  </span>
+                  {active && <ChevronRight className="w-3 h-3 ml-auto shrink-0" style={{ color: "var(--neon-purple)" }} />}
+                </div>
+              );
+            })}
+          </div>
 
-        {/* Step content */}
-        <div
-          className="flex-1 rounded-xl p-6 overflow-y-auto"
-          style={{
-            background: "rgba(10,10,30,0.6)",
-            border: "1px solid rgba(191,0,255,0.15)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
-          <AnimatePresence mode="wait" custom={direction}>
-            <motion.div
-              key={step}
-              custom={direction}
-              variants={stepVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{ duration: 0.2, ease: "easeInOut" }}
-            >
-              {stepComponents[step]}
-            </motion.div>
-          </AnimatePresence>
-        </div>
+          {/* Main content */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Header */}
+            <div className="mb-6">
+              <h1
+                className="text-2xl font-bold text-glow-purple"
+                style={{ color: "var(--neon-purple)" }}
+              >
+                {STEPS[step].label}
+              </h1>
+              <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
+                Step {step + 1} of {STEPS.length}
+              </p>
+            </div>
 
-        {/* Navigation — hidden on install step */}
-        {step < STEPS.length - 1 && (
-          <div className="flex items-center justify-between mt-4">
-            <Button
-              variant="ghost"
-              onClick={prev}
-              disabled={step === 0}
-              className="gap-2"
-              style={{ color: "var(--text-muted)" }}
-            >
-              <ArrowLeft className="w-4 h-4" /> Back
-            </Button>
-
-            <Button
-              onClick={next}
-              disabled={!canAdvance()}
-              className="gap-2"
+            {/* Step content */}
+            <div
+              className="flex-1 rounded-xl p-6 overflow-y-auto"
               style={{
-                background: canAdvance() ? "rgba(191,0,255,0.15)" : "rgba(191,0,255,0.05)",
-                border: "1px solid rgba(191,0,255,0.4)",
-                color: canAdvance() ? "var(--neon-purple)" : "var(--text-muted)",
+                background: "rgba(10,10,30,0.6)",
+                border: "1px solid rgba(191,0,255,0.15)",
+                backdropFilter: "blur(12px)",
               }}
             >
-              {step === STEPS.length - 2 ? "Review & Install" : "Next"}
-              <ArrowRight className="w-4 h-4" />
-            </Button>
+              <AnimatePresence mode="wait" custom={direction}>
+                <motion.div
+                  key={step}
+                  custom={direction}
+                  variants={stepVariants}
+                  initial="enter"
+                  animate="center"
+                  exit="exit"
+                  transition={{ duration: 0.2, ease: "easeInOut" }}
+                >
+                  {stepComponents[step]}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+
+            {/* Navigation — hidden on install step */}
+            {step < STEPS.length - 1 && (
+              <div className="flex items-center justify-between mt-4">
+                <Button
+                  variant="ghost"
+                  onClick={prev}
+                  disabled={step === 0}
+                  className="gap-2"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <ArrowLeft className="w-4 h-4" /> Back
+                </Button>
+
+                <Button
+                  onClick={next}
+                  disabled={!canAdvance()}
+                  className="gap-2"
+                  style={{
+                    background: canAdvance() ? "rgba(191,0,255,0.15)" : "rgba(191,0,255,0.05)",
+                    border: "1px solid rgba(191,0,255,0.4)",
+                    color: canAdvance() ? "var(--neon-purple)" : "var(--text-muted)",
+                  }}
+                >
+                  {step === STEPS.length - 2 ? "Review & Install" : "Next"}
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

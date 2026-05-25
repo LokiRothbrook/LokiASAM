@@ -169,6 +169,7 @@ pub fn run() {
             commands::mods::reorder_mods,
             // System stats
             commands::system::check_dir,
+            commands::system::check_file_exists,
             commands::system::get_process_stats,
             commands::system::query_server,
             commands::system::check_port_available,

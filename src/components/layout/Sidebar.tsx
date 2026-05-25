@@ -8,7 +8,6 @@ import {
   Network,
   Bell,
   Settings,
-  Plus,
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,7 +22,6 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/",             icon: LayoutDashboard, label: "Dashboard",      exact: true },
-  { href: "/servers/new",  icon: Plus,            label: "New Server" },
   { href: "/clusters",     icon: Network,         label: "Clusters" },
   { href: "/notifications",icon: Bell,            label: "Notifications" },
   { href: "/settings",     icon: Settings,        label: "Settings" },

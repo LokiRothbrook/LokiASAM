@@ -81,6 +81,14 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
     })
 }
 
+/// Return true if a file (or directory) exists at the given path.
+/// Used by the frontend to check for an existing SteamCMD install without
+/// requiring frontend fs permissions for the `exists` operation.
+#[tauri::command]
+pub async fn check_file_exists(path: String) -> Result<bool, String> {
+    Ok(Path::new(&path).exists())
+}
+
 /// Return CPU % and RSS memory (MB) for a given OS process ID.
 ///
 /// CPU usage requires two sysinfo samples separated by a short delay;

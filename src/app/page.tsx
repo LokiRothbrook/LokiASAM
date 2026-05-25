@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import Link from "next/link";
 import { Plus, Server, Activity, PowerOff, Power } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +10,7 @@ import { useServers } from "@/hooks/useServers";
 import { getRunningServers, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAppStore } from "@/store/useAppStore";
 
 /**
  * On mount, reconcile servers that were marked "running" in SQLite from a
@@ -52,6 +52,7 @@ export default function DashboardPage() {
   useStartupReconciliation();
 
   const { data: servers = [], isLoading } = useServers();
+  const { setShowNewServerWizard } = useAppStore();
 
   const total   = servers.length;
   const running = servers.filter((s) => s.status === "running").length;
@@ -72,11 +73,12 @@ export default function DashboardPage() {
             Manage your Ark Survival Ascended dedicated servers.
           </p>
         </div>
-        <Button asChild className="btn-neon-cyan gap-2">
-          <Link href="/servers/new">
-            <Plus className="w-4 h-4" />
-            New Server
-          </Link>
+        <Button
+          onClick={() => setShowNewServerWizard(true)}
+          className="btn-neon-purple gap-2"
+        >
+          <Plus className="w-4 h-4" />
+          New Server
         </Button>
       </div>
 
@@ -151,11 +153,13 @@ export default function DashboardPage() {
               Create your first Ark Survival Ascended server to get started.
             </p>
           </div>
-          <Button asChild variant="outline" className="btn-neon-purple mt-2">
-            <Link href="/servers/new">
-              <Plus className="w-4 h-4 mr-2" />
-              Create Server
-            </Link>
+          <Button
+            onClick={() => setShowNewServerWizard(true)}
+            variant="outline"
+            className="btn-neon-purple mt-2 gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Create Server
           </Button>
         </div>
       )}

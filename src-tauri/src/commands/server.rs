@@ -41,7 +41,6 @@ pub struct StartServerParams {
     pub port: u16,
     pub query_port: u16,
     pub rcon_port: u16,
-    pub rcon_password: String,
     pub max_players: u32,
     /// Optional join password shown to connecting players.
     pub server_password: Option<String>,
@@ -131,12 +130,11 @@ pub async fn start_server(
 
     // Build the ?-delimited query string that follows the map name.
     let mut query_string = format!(
-        "{}?listen?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?RCONPassword={}?MaxPlayers={}?ServerAdminPassword={}",
+        "{}?listen?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?MaxPlayers={}?ServerAdminPassword={}",
         params.map_path,
         params.port,
         params.query_port,
         params.rcon_port,
-        params.rcon_password,
         params.max_players,
         params.admin_password,
     );

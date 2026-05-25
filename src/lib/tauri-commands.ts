@@ -50,7 +50,6 @@ export interface StartServerParams {
   port: number;
   queryPort: number;
   rconPort: number;
-  rconPassword: string;
   maxPlayers: number;
   serverPassword?: string;
   adminPassword: string;
@@ -228,6 +227,7 @@ export const tauriCmd = {
    * and returns available disk space on that volume.
    */
   checkDir: (path: string) => invoke<DirCheckResult>("check_dir", { path }),
+  checkFileExists: (path: string) => invoke<boolean>("check_file_exists", { path }),
   getProcessStats:    (pid: number) => invoke<ProcessStats>("get_process_stats", { pid }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),

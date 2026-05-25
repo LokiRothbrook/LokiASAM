@@ -16,18 +16,23 @@ interface AppState {
   setupComplete: boolean;
   /** Whether the notification bell dropdown is open. */
   notificationBellOpen: boolean;
+  /** Whether the New Server creation wizard overlay is visible. */
+  showNewServerWizard: boolean;
 
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
   setNotificationBellOpen: (open: boolean) => void;
+  setShowNewServerWizard: (show: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   setupChecked: false,
   setupComplete: false,
   notificationBellOpen: false,
+  showNewServerWizard: false,
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
   setNotificationBellOpen: (open) => set({ notificationBellOpen: open }),
+  setShowNewServerWizard: (show) => set({ showNewServerWizard: show }),
 }));
