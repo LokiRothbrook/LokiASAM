@@ -1,15 +1,8 @@
 "use client";
 
 /**
- * LokiIcon — SVG app logo component.
- *
- * Server rack with neon-purple dinosaur claw marks.
+ * LokiIcon — app logo: server rack with neon-purple dinosaur claw marks.
  * Replaces the generic Zap icon throughout the app.
- *
- * Props:
- *   size      — pixel size (width = height). Default 32.
- *   className — extra CSS classes.
- *   style     — inline styles (e.g. filter for drop-shadow).
  */
 
 interface LokiIconProps {
@@ -17,6 +10,10 @@ interface LokiIconProps {
   className?: string;
   style?: React.CSSProperties;
 }
+
+const CLAW1 = "M 182.0,64.0 C 181.2,66.1 178.9,72.5 177.2,76.7 C 175.4,80.9 173.4,85.0 171.3,89.2 C 169.2,93.3 167.0,97.3 164.8,101.4 C 162.6,105.5 160.2,109.5 158.0,113.6 C 155.7,117.7 153.4,121.7 151.2,125.8 C 149.0,129.9 146.9,134.1 144.9,138.2 C 142.9,142.4 141.0,146.6 139.4,150.9 C 137.7,155.2 136.3,159.5 135.1,163.9 C 133.8,168.3 132.9,172.7 131.8,177.2 C 130.8,181.6 129.8,186.1 128.8,190.5 C 127.7,194.9 126.8,199.4 125.8,203.8 C 124.8,208.3 123.8,212.7 122.9,217.2 C 122.0,221.6 121.0,226.1 120.1,230.5 C 119.2,235.0 118.3,239.5 117.5,243.9 C 116.6,248.4 115.7,252.9 114.9,257.3 C 114.1,261.8 113.2,266.3 112.4,270.7 C 111.6,275.2 110.8,279.7 110.1,284.2 C 109.3,288.7 108.5,293.1 107.8,297.6 C 107.1,302.1 106.4,306.6 105.6,311.1 C 104.9,315.6 104.2,320.1 103.6,324.6 C 103.0,329.1 102.4,333.6 102.1,338.2 C 101.7,342.7 101.6,347.3 101.4,351.9 C 101.3,356.5 101.4,361.1 101.4,365.7 C 101.5,370.3 101.6,374.9 101.8,379.5 C 101.9,384.1 102.1,388.7 102.3,393.3 C 102.5,397.9 102.7,402.5 102.8,407.0 C 103.0,411.6 103.1,416.2 103.1,420.8 C 103.1,425.3 103.1,429.9 102.9,434.4 C 102.7,439.0 102.1,445.7 102.0,448.0 C 101.9,450.3 101.7,450.3 102.0,448.0 C 102.3,445.7 103.0,439.0 103.7,434.5 C 104.3,430.0 105.1,425.5 106.0,421.1 C 106.9,416.6 107.8,412.2 108.8,407.8 C 109.8,403.3 110.9,398.9 112.0,394.5 C 113.1,390.1 114.2,385.7 115.4,381.3 C 116.5,376.9 117.6,372.5 118.8,368.1 C 119.9,363.7 121.0,359.4 122.1,355.0 C 123.1,350.6 124.2,346.2 125.1,341.8 C 126.1,337.4 126.9,333.0 127.7,328.6 C 128.6,324.2 129.3,319.8 130.1,315.3 C 130.9,310.9 131.8,306.5 132.6,302.1 C 133.5,297.7 134.3,293.3 135.2,288.9 C 136.1,284.5 137.0,280.1 137.9,275.7 C 138.8,271.4 139.7,267.0 140.7,262.6 C 141.6,258.2 142.6,253.8 143.6,249.5 C 144.6,245.1 145.6,240.7 146.6,236.4 C 147.6,232.0 148.6,227.6 149.7,223.3 C 150.7,218.9 151.8,214.6 152.9,210.2 C 153.9,205.9 155.0,201.5 156.2,197.2 C 157.3,192.8 158.4,188.5 159.5,184.2 C 160.7,179.8 161.9,175.5 163.0,171.2 C 164.1,166.8 165.0,162.4 165.9,158.0 C 166.7,153.6 167.4,149.1 168.0,144.6 C 168.7,140.2 169.3,135.7 169.9,131.1 C 170.4,126.6 170.9,122.1 171.5,117.6 C 172.1,113.0 172.7,108.5 173.3,104.0 C 174.0,99.4 174.7,94.9 175.5,90.5 C 176.3,86.0 177.2,81.5 178.3,77.1 C 179.4,72.7 181.4,66.2 182.0,64.0 C 182.6,61.8 182.8,61.9 182.0,64.0 Z";
+const CLAW2 = "M 264.0,64.0 C 263.1,66.1 260.8,72.5 258.9,76.6 C 257.0,80.8 254.7,84.9 252.5,88.9 C 250.2,92.9 247.7,96.9 245.3,100.9 C 242.8,104.9 240.2,108.9 237.7,112.9 C 235.1,116.9 232.5,120.9 230.1,124.9 C 227.7,128.9 225.3,133.0 223.1,137.1 C 220.9,141.3 218.8,145.4 217.0,149.7 C 215.3,153.9 213.7,158.3 212.4,162.6 C 211.1,167.0 210.3,171.5 209.2,176.0 C 208.1,180.4 207.1,184.9 206.1,189.3 C 205.1,193.8 204.1,198.2 203.1,202.7 C 202.2,207.2 201.2,211.6 200.3,216.1 C 199.3,220.6 198.4,225.0 197.5,229.5 C 196.6,234.0 195.8,238.5 194.9,242.9 C 194.0,247.4 193.2,251.9 192.4,256.4 C 191.5,260.9 190.7,265.4 190.0,269.9 C 189.2,274.4 188.4,278.9 187.7,283.4 C 186.9,287.9 186.2,292.4 185.5,296.9 C 184.8,301.4 184.1,305.9 183.4,310.4 C 182.7,314.9 181.9,319.4 181.4,323.9 C 180.8,328.5 180.4,333.0 180.1,337.6 C 179.9,342.2 179.8,346.8 179.9,351.4 C 179.9,356.0 180.1,360.6 180.4,365.3 C 180.6,369.9 181.0,374.5 181.3,379.2 C 181.7,383.8 182.1,388.4 182.5,393.1 C 182.9,397.7 183.3,402.3 183.6,406.9 C 184.0,411.5 184.3,416.1 184.4,420.7 C 184.6,425.3 184.7,429.8 184.6,434.4 C 184.6,438.9 184.1,445.7 184.0,448.0 C 183.9,450.3 183.7,450.3 184.0,448.0 C 184.3,445.7 185.0,439.0 185.6,434.5 C 186.3,430.0 187.1,425.5 188.0,421.1 C 188.9,416.6 190.0,412.2 191.1,407.7 C 192.1,403.3 193.3,398.9 194.5,394.5 C 195.7,390.1 196.9,385.7 198.1,381.3 C 199.4,376.9 200.6,372.6 201.8,368.2 C 203.0,363.8 204.2,359.4 205.4,355.1 C 206.5,350.7 207.6,346.3 208.6,341.9 C 209.6,337.6 210.4,333.2 211.3,328.8 C 212.1,324.4 212.8,319.9 213.6,315.5 C 214.4,311.1 215.3,306.7 216.1,302.3 C 217.0,297.9 217.8,293.6 218.7,289.2 C 219.6,284.8 220.5,280.4 221.4,276.0 C 222.3,271.6 223.3,267.3 224.2,262.9 C 225.2,258.5 226.2,254.2 227.2,249.8 C 228.2,245.4 229.2,241.1 230.2,236.7 C 231.2,232.4 232.3,228.0 233.3,223.7 C 234.4,219.4 235.5,215.0 236.6,210.7 C 237.7,206.3 238.8,202.0 239.9,197.7 C 241.1,193.4 242.2,189.0 243.4,184.7 C 244.6,180.4 245.9,176.1 246.9,171.8 C 248.0,167.4 248.9,163.0 249.7,158.6 C 250.5,154.2 251.1,149.7 251.6,145.2 C 252.2,140.7 252.6,136.1 253.1,131.6 C 253.5,127.0 253.9,122.5 254.4,117.9 C 254.8,113.3 255.2,108.7 255.8,104.2 C 256.3,99.6 256.9,95.1 257.7,90.5 C 258.4,86.0 259.2,81.5 260.3,77.1 C 261.3,72.7 263.4,66.2 264.0,64.0 C 264.6,61.8 264.9,61.9 264.0,64.0 Z";
+const CLAW3 = "M 346.0,64.0 C 345.2,66.1 342.9,72.5 341.2,76.7 C 339.4,80.9 337.4,85.0 335.3,89.2 C 333.2,93.3 331.0,97.3 328.8,101.4 C 326.6,105.5 324.2,109.5 322.0,113.6 C 319.7,117.7 317.4,121.7 315.2,125.8 C 313.0,129.9 310.9,134.1 308.9,138.2 C 306.9,142.4 305.0,146.6 303.4,150.9 C 301.7,155.2 300.3,159.5 299.1,163.9 C 297.8,168.3 296.9,172.7 295.8,177.2 C 294.8,181.6 293.8,186.1 292.8,190.5 C 291.7,194.9 290.8,199.4 289.8,203.8 C 288.8,208.3 287.8,212.7 286.9,217.2 C 286.0,221.6 285.0,226.1 284.1,230.5 C 283.2,235.0 282.3,239.5 281.5,243.9 C 280.6,248.4 279.7,252.9 278.9,257.3 C 278.1,261.8 277.2,266.3 276.4,270.7 C 275.6,275.2 274.8,279.7 274.1,284.2 C 273.3,288.7 272.5,293.1 271.8,297.6 C 271.1,302.1 270.4,306.6 269.6,311.1 C 268.9,315.6 268.2,320.1 267.6,324.6 C 267.0,329.1 266.4,333.6 266.1,338.2 C 265.7,342.7 265.6,347.3 265.4,351.9 C 265.3,356.5 265.4,361.1 265.4,365.7 C 265.5,370.3 265.6,374.9 265.8,379.5 C 265.9,384.1 266.1,388.7 266.3,393.3 C 266.5,397.9 266.7,402.5 266.8,407.0 C 267.0,411.6 267.1,416.2 267.1,420.8 C 267.1,425.3 267.1,429.9 266.9,434.4 C 266.7,439.0 266.1,445.7 266.0,448.0 C 265.9,450.3 265.7,450.3 266.0,448.0 C 266.3,445.7 267.0,439.0 267.7,434.5 C 268.3,430.0 269.1,425.5 270.0,421.1 C 270.9,416.6 271.8,412.2 272.8,407.8 C 273.8,403.3 274.9,398.9 276.0,394.5 C 277.1,390.1 278.2,385.7 279.4,381.3 C 280.5,376.9 281.6,372.5 282.8,368.1 C 283.9,363.7 285.0,359.4 286.1,355.0 C 287.1,350.6 288.2,346.2 289.1,341.8 C 290.1,337.4 290.9,333.0 291.7,328.6 C 292.6,324.2 293.3,319.8 294.1,315.3 C 294.9,310.9 295.8,306.5 296.6,302.1 C 297.5,297.7 298.3,293.3 299.2,288.9 C 300.1,284.5 301.0,280.1 301.9,275.7 C 302.8,271.4 303.7,267.0 304.7,262.6 C 305.6,258.2 306.6,253.8 307.6,249.5 C 308.6,245.1 309.6,240.7 310.6,236.4 C 311.6,232.0 312.6,227.6 313.7,223.3 C 314.7,218.9 315.8,214.6 316.9,210.2 C 317.9,205.9 319.0,201.5 320.2,197.2 C 321.3,192.8 322.4,188.5 323.5,184.2 C 324.7,179.8 325.9,175.5 327.0,171.2 C 328.1,166.8 329.0,162.4 329.9,158.0 C 330.7,153.6 331.4,149.1 332.0,144.6 C 332.7,140.2 333.3,135.7 333.9,131.1 C 334.4,126.6 334.9,122.1 335.5,117.6 C 336.1,113.0 336.7,108.5 337.3,104.0 C 338.0,99.4 338.7,94.9 339.5,90.5 C 340.3,86.0 341.2,81.5 342.3,77.1 C 343.4,72.7 345.4,66.2 346.0,64.0 C 346.6,61.8 346.8,61.9 346.0,64.0 Z";
 
 export function LokiIcon({ size = 32, className, style }: LokiIconProps) {
   return (
@@ -30,11 +27,7 @@ export function LokiIcon({ size = 32, className, style }: LokiIconProps) {
       aria-label="LokiASAM"
     >
       <defs>
-        <filter id="loki-glow-s" x="-25%" y="-25%" width="150%" height="150%">
-          <feGaussianBlur stdDeviation="5" result="blur"/>
-          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
-        <filter id="loki-glow-m" x="-40%" y="-40%" width="180%" height="180%">
+        <filter id="loki-gm" x="-40%" y="-40%" width="180%" height="180%">
           <feGaussianBlur stdDeviation="10" result="blur"/>
           <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
@@ -50,7 +43,7 @@ export function LokiIcon({ size = 32, className, style }: LokiIconProps) {
           <stop offset="0%" stopColor="#1c0c34"/>
           <stop offset="100%" stopColor="#0e061e"/>
         </linearGradient>
-        <linearGradient id="loki-active" x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id="loki-uact" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor="#250e40"/>
           <stop offset="100%" stopColor="#120828"/>
         </linearGradient>
@@ -65,83 +58,65 @@ export function LokiIcon({ size = 32, className, style }: LokiIconProps) {
             stroke="#bf00ff" strokeWidth="3" strokeOpacity="0.25"/>
 
       <g clipPath="url(#loki-clip)">
-        {/* ── Rack chassis ── */}
+        {/* Chassis */}
         <rect x="72" y="56" width="368" height="400" rx="20" fill="#0d061c"
-              stroke="#bf00ff" strokeWidth="2.5" strokeOpacity="0.55"/>
+              stroke="#bf00ff" strokeWidth="2.5" strokeOpacity="0.5"/>
         <rect x="88" y="72" width="336" height="368" rx="12" fill="#080414"/>
 
-        {/* Unit 1 */}
-        <rect x="100" y="84"  width="312" height="62" rx="7" fill="url(#loki-unit)"
-              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.4"/>
-        <rect x="114" y="97"  width="192" height="5" rx="2.5" fill="#bf00ff" opacity="0.50"/>
-        <rect x="114" y="108" width="152" height="4" rx="2"   fill="#bf00ff" opacity="0.30"/>
-        <rect x="114" y="118" width="168" height="3" rx="1.5" fill="#bf00ff" opacity="0.20"/>
+        {/* Rack Unit 1 */}
+        <rect x="100" y="84" width="312" height="62" rx="7" fill="url(#loki-unit)"
+              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.35"/>
+        <rect x="114" y="97" width="192" height="5" rx="2.5" fill="#bf00ff" opacity="0.45"/>
+        <rect x="114" y="108" width="152" height="4" rx="2"   fill="#bf00ff" opacity="0.28"/>
+        <rect x="114" y="118" width="168" height="3" rx="1.5" fill="#bf00ff" opacity="0.18"/>
         <circle cx="382" cy="104" r="7" fill="#00ff88" filter="url(#loki-led)"/>
-        <circle cx="366" cy="104" r="5" fill="#00ff88" opacity="0.45"/>
+        <circle cx="366" cy="104" r="5" fill="#00ff88" opacity="0.4"/>
 
-        {/* Unit 2 — active */}
-        <rect x="100" y="154" width="312" height="62" rx="7" fill="url(#loki-active)"
-              stroke="#bf00ff" strokeWidth="2" strokeOpacity="0.75"/>
-        <rect x="114" y="167" width="210" height="5" rx="2.5" fill="#bf00ff" opacity="0.80"/>
-        <rect x="114" y="178" width="165" height="4" rx="2"   fill="#bf00ff" opacity="0.55"/>
-        <rect x="114" y="188" width="182" height="3" rx="1.5" fill="#bf00ff" opacity="0.38"/>
+        {/* Rack Unit 2 — active */}
+        <rect x="100" y="154" width="312" height="62" rx="7" fill="url(#loki-uact)"
+              stroke="#bf00ff" strokeWidth="2" strokeOpacity="0.70"/>
+        <rect x="114" y="167" width="210" height="5" rx="2.5" fill="#bf00ff" opacity="0.75"/>
+        <rect x="114" y="178" width="165" height="4" rx="2"   fill="#bf00ff" opacity="0.50"/>
+        <rect x="114" y="188" width="182" height="3" rx="1.5" fill="#bf00ff" opacity="0.35"/>
         <circle cx="382" cy="174" r="7" fill="#00ff88" filter="url(#loki-led)"/>
-        <circle cx="366" cy="174" r="5" fill="#00ff88" opacity="0.65"/>
+        <circle cx="366" cy="174" r="5" fill="#00ff88" opacity="0.62"/>
 
-        {/* Unit 3 */}
+        {/* Rack Unit 3 */}
         <rect x="100" y="224" width="312" height="62" rx="7" fill="url(#loki-unit)"
-              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.4"/>
-        <rect x="114" y="237" width="172" height="5" rx="2.5" fill="#bf00ff" opacity="0.45"/>
-        <rect x="114" y="248" width="134" height="4" rx="2"   fill="#bf00ff" opacity="0.28"/>
-        <rect x="114" y="258" width="148" height="3" rx="1.5" fill="#bf00ff" opacity="0.18"/>
-        <circle cx="382" cy="244" r="7" fill="#ff3355" opacity="0.85"/>
-        <circle cx="366" cy="244" r="5" fill="#ff3355" opacity="0.45"/>
+              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.35"/>
+        <rect x="114" y="237" width="172" height="5" rx="2.5" fill="#bf00ff" opacity="0.42"/>
+        <rect x="114" y="248" width="134" height="4" rx="2"   fill="#bf00ff" opacity="0.26"/>
+        <rect x="114" y="258" width="148" height="3" rx="1.5" fill="#bf00ff" opacity="0.16"/>
+        <circle cx="382" cy="244" r="7" fill="#ff3355" opacity="0.80"/>
+        <circle cx="366" cy="244" r="5" fill="#ff3355" opacity="0.42"/>
 
-        {/* Unit 4 */}
+        {/* Rack Unit 4 */}
         <rect x="100" y="294" width="312" height="62" rx="7" fill="url(#loki-unit)"
-              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.4"/>
-        <rect x="114" y="307" width="180" height="5" rx="2.5" fill="#bf00ff" opacity="0.50"/>
-        <rect x="114" y="318" width="140" height="4" rx="2"   fill="#bf00ff" opacity="0.30"/>
-        <rect x="114" y="328" width="158" height="3" rx="1.5" fill="#bf00ff" opacity="0.20"/>
+              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.35"/>
+        <rect x="114" y="307" width="180" height="5" rx="2.5" fill="#bf00ff" opacity="0.45"/>
+        <rect x="114" y="318" width="140" height="4" rx="2"   fill="#bf00ff" opacity="0.28"/>
+        <rect x="114" y="328" width="158" height="3" rx="1.5" fill="#bf00ff" opacity="0.18"/>
         <circle cx="382" cy="314" r="7" fill="#00ff88" filter="url(#loki-led)"/>
-        <circle cx="366" cy="314" r="5" fill="#00ff88" opacity="0.50"/>
+        <circle cx="366" cy="314" r="5" fill="#00ff88" opacity="0.45"/>
 
-        {/* Unit 5 */}
+        {/* Rack Unit 5 */}
         <rect x="100" y="364" width="312" height="62" rx="7" fill="url(#loki-unit)"
-              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.4"/>
-        <rect x="114" y="377" width="158" height="5" rx="2.5" fill="#bf00ff" opacity="0.45"/>
-        <rect x="114" y="388" width="122" height="4" rx="2"   fill="#bf00ff" opacity="0.28"/>
-        <rect x="114" y="398" width="138" height="3" rx="1.5" fill="#bf00ff" opacity="0.18"/>
+              stroke="#bf00ff" strokeWidth="1" strokeOpacity="0.35"/>
+        <rect x="114" y="377" width="158" height="5" rx="2.5" fill="#bf00ff" opacity="0.42"/>
+        <rect x="114" y="388" width="122" height="4" rx="2"   fill="#bf00ff" opacity="0.26"/>
+        <rect x="114" y="398" width="138" height="3" rx="1.5" fill="#bf00ff" opacity="0.16"/>
         <circle cx="382" cy="384" r="7" fill="#00ff88" filter="url(#loki-led)"/>
-        <circle cx="366" cy="384" r="5" fill="#00ff88" opacity="0.50"/>
+        <circle cx="366" cy="384" r="5" fill="#00ff88" opacity="0.45"/>
 
-        {/* ── Dino claw marks ── */}
-        {/* Slash 1 */}
-        <line x1="196" y1="72"  x2="120" y2="440"
-              stroke="#bf00ff" strokeWidth="22" strokeLinecap="round" strokeOpacity="0.35"
-              filter="url(#loki-glow-m)"/>
-        <line x1="196" y1="72"  x2="120" y2="440"
-              stroke="#bf00ff" strokeWidth="12" strokeLinecap="round" strokeOpacity="0.85"/>
-        <line x1="196" y1="72"  x2="120" y2="440"
-              stroke="#e080ff" strokeWidth="4"  strokeLinecap="round" strokeOpacity="0.95"/>
-
-        {/* Slash 2 */}
-        <line x1="263" y1="72"  x2="187" y2="440"
-              stroke="#bf00ff" strokeWidth="22" strokeLinecap="round" strokeOpacity="0.35"
-              filter="url(#loki-glow-m)"/>
-        <line x1="263" y1="72"  x2="187" y2="440"
-              stroke="#bf00ff" strokeWidth="12" strokeLinecap="round" strokeOpacity="0.85"/>
-        <line x1="263" y1="72"  x2="187" y2="440"
-              stroke="#e080ff" strokeWidth="4"  strokeLinecap="round" strokeOpacity="0.95"/>
-
-        {/* Slash 3 */}
-        <line x1="330" y1="72"  x2="254" y2="440"
-              stroke="#bf00ff" strokeWidth="22" strokeLinecap="round" strokeOpacity="0.35"
-              filter="url(#loki-glow-m)"/>
-        <line x1="330" y1="72"  x2="254" y2="440"
-              stroke="#bf00ff" strokeWidth="12" strokeLinecap="round" strokeOpacity="0.85"/>
-        <line x1="330" y1="72"  x2="254" y2="440"
-              stroke="#e080ff" strokeWidth="4"  strokeLinecap="round" strokeOpacity="0.95"/>
+        {/* ── Claw marks — three layers: glow halo · fill · bright highlight ── */}
+        {[CLAW1, CLAW2, CLAW3].map((d, i) => (
+          <g key={i}>
+            <path d={d} fill="#bf00ff" opacity="0.28" filter="url(#loki-gm)"/>
+            <path d={d} fill="#bf00ff" opacity="0.92"/>
+            <path d={d} fill="#e0a0ff" opacity="0.50"
+                  transform="scale(0.86 0.98) translate(20 1)"/>
+          </g>
+        ))}
       </g>
     </svg>
   );
