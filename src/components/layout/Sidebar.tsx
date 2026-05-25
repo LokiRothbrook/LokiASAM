@@ -8,10 +8,10 @@ import {
   Network,
   Bell,
   Settings,
-  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { LokiIcon } from "@/components/shared/LokiIcon";
 
 interface NavItem {
   href: string;
@@ -45,9 +45,9 @@ export function Sidebar() {
     >
       {/* Logo */}
       <div className="mb-4 flex items-center justify-center w-10 h-10">
-        <Zap
-          className="w-8 h-8"
-          style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px var(--neon-purple))" }}
+        <LokiIcon
+          size={36}
+          style={{ filter: "drop-shadow(0 0 6px var(--neon-purple))" }}
         />
       </div>
 

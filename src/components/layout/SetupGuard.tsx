@@ -12,13 +12,14 @@
  * passes children through immediately to avoid blocking development.
  */
 
-import { useEffect, useState } from "react";
-import { Zap } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
 import { SetupWizard } from "@/components/wizard/SetupWizard";
+import { LokiIcon } from "@/components/shared/LokiIcon";
 import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
 import { useAppStore } from "@/store/useAppStore";
-import { getAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 interface SetupGuardProps {
   children: React.ReactNode;
@@ -61,6 +62,24 @@ export function SetupGuard({ children }: SetupGuardProps) {
     tauriCmd.setSetupComplete(true).catch(() => {});
   };
 
+  // First-time tray-hide hint: show an OS notification once so the user knows
+  // the app is still running in the background.
+  const handleTrayFirstHide = useCallback(async (_payload: unknown) => {
+    try {
+      const already = await getAppSetting("tray_hint_shown");
+      if (already === "true") return;
+      await tauriCmd.sendOsNotification(
+        "LokiASAM is still running",
+        "The app is minimised to the system tray. Click the tray icon to bring it back."
+      );
+      await setAppSetting("tray_hint_shown", "true");
+    } catch {
+      // Non-critical — silently ignore
+    }
+  }, []);
+
+  useTauriEvent("tray-first-hide", handleTrayFirstHide);
+
   // Still checking
   if (!setupChecked) {
     return (
@@ -68,9 +87,10 @@ export function SetupGuard({ children }: SetupGuardProps) {
         className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4"
         style={{ background: "var(--background)" }}
       >
-        <Zap
-          className="w-12 h-12 animate-pulse"
-          style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 8px var(--neon-purple))" }}
+        <LokiIcon
+          size={52}
+          className="animate-pulse"
+          style={{ filter: "drop-shadow(0 0 8px var(--neon-purple))" }}
         />
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading…</p>
       </div>

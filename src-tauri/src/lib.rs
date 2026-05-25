@@ -9,13 +9,36 @@ use tauri::{
 };
 use tauri_plugin_sql::{Migration, MigrationKind};
 
-/// Show, un-minimize, and focus the main window.
+/// Stores menu items that need to be updated dynamically at runtime.
+struct TrayMenuState {
+    show_item: MenuItem<tauri::Wry>,
+    hide_item: MenuItem<tauri::Wry>,
+}
+
+/// Show, un-minimize, and focus the main window. Updates tray menu to reflect visible state.
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+    if let Some(tray_state) = app.try_state::<TrayMenuState>() {
+        let _ = tray_state.show_item.set_text("Bring to Front");
+        let _ = tray_state.hide_item.set_enabled(true);
+    }
+}
+
+/// Hide the main window and update tray menu to reflect hidden state.
+/// Emits "tray-first-hide" the first time so the frontend can show a one-time hint.
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    if let Some(tray_state) = app.try_state::<TrayMenuState>() {
+        let _ = tray_state.show_item.set_text("Show LokiASAM");
+        let _ = tray_state.hide_item.set_enabled(false);
+    }
+    let _ = app.emit("tray-first-hide", ());
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -57,9 +80,12 @@ pub fn run() {
             app.manage(state::AppState::new());
 
             // ── System tray ───────────────────────────────────────────────
-            let show_i = MenuItem::with_id(app, "show", "Show LokiASAM", true, None::<&str>)?;
+            // Window starts visible, so "Bring to Front" is the correct initial label.
+            // "Hide" starts enabled; it becomes disabled while the window is hidden.
+            let show_i = MenuItem::with_id(app, "show", "Bring to Front", true, None::<&str>)?;
+            let hide_i = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit LokiASAM", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let tray_menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
             let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -68,6 +94,7 @@ pub fn run() {
                 .menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
+                    "hide" => hide_main_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -85,6 +112,8 @@ pub fn run() {
 
             // Keep the TrayIcon alive for the duration of the app.
             app.manage(tray);
+            // Keep menu item handles alive for dynamic text/enabled updates.
+            app.manage(TrayMenuState { show_item: show_i, hide_item: hide_i });
 
             // ── Close-to-tray handler ─────────────────────────────────────
             // If setup is complete, intercept the close button and hide the
@@ -101,9 +130,7 @@ pub fn run() {
                             .load(std::sync::atomic::Ordering::Relaxed)
                         {
                             api.prevent_close();
-                            if let Some(w) = handle_for_close.get_webview_window("main") {
-                                let _ = w.hide();
-                            }
+                            hide_main_window(&handle_for_close);
                         }
                     }
                 });

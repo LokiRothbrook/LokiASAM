@@ -18,7 +18,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Server, Map, Network, GitBranch, Clock, Package,
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
-  CheckCircle2, Plus, X, ChevronRight, Zap,
+  CheckCircle2, Plus, X, ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
+import { LokiIcon } from "@/components/shared/LokiIcon";
 import {
   getReleasedMaps,
   SERVER_PRESETS,
@@ -703,18 +704,30 @@ function InstallStep({
   const installPathRef = useRef("");
   const steamcmdPathRef = useRef("");
   const terminalRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = useCallback(() => {
+    sentinelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, []);
 
   useEffect(() => {
     onStatusChange(status);
   }, [status, onStatusChange]);
 
+  // Scroll to bottom whenever status changes away from idle
   useEffect(() => {
-    if (status === "installing" && terminalRef.current) {
-      setTimeout(() => {
-        terminalRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }, 80);
+    if (status !== "idle") {
+      setTimeout(scrollToBottom, 100);
     }
-  }, [status]);
+  }, [status, scrollToBottom]);
+
+  // Scroll to bottom when the terminal panel resizes (expand/collapse toggle)
+  useEffect(() => {
+    if (!terminalRef.current) return;
+    const ro = new ResizeObserver(scrollToBottom);
+    ro.observe(terminalRef.current);
+    return () => ro.disconnect();
+  }, [scrollToBottom]);
   const selectedPreset = SERVER_PRESETS.find((p) => p.id === data.presetId);
   const maps = getReleasedMaps();
   const selectedMap = maps.find((m: ArkMap) => m.id === data.mapId);
@@ -944,6 +957,8 @@ function InstallStep({
           </Button>
         </div>
       )}
+
+      <div ref={sentinelRef} />
     </div>
   );
 }
@@ -1035,7 +1050,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
         style={{ borderColor: "rgba(191,0,255,0.15)", background: "rgba(5,5,20,0.8)" }}
       >
         <div className="flex items-center gap-2">
-          <Zap className="w-4 h-4" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 4px var(--neon-purple))" }} />
+          <LokiIcon size={16} style={{ filter: "drop-shadow(0 0 4px var(--neon-purple))" }} />
           <span className="text-sm font-semibold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
             New Server
           </span>

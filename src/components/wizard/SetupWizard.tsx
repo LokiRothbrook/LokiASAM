@@ -16,7 +16,8 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft, Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw } from "lucide-react";
+import { FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft, Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw } from "lucide-react";
+import { LokiIcon } from "@/components/shared/LokiIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,7 +37,7 @@ const IS_LINUX =
   typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
 const STEPS_WIN = [
-  { label: "Welcome",       icon: Zap },
+  { label: "Welcome",       icon: LokiIcon },
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
@@ -45,7 +46,7 @@ const STEPS_WIN = [
 ];
 
 const STEPS_LINUX = [
-  { label: "Welcome",       icon: Zap },
+  { label: "Welcome",       icon: LokiIcon },
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
@@ -120,7 +121,7 @@ function WelcomeStep() {
             boxShadow: "0 0 40px rgba(191,0,255,0.2)",
           }}
         >
-          <Zap className="w-12 h-12" style={{ color: "var(--neon-purple)" }} />
+          <LokiIcon size={48} style={{ filter: "drop-shadow(0 0 6px var(--neon-purple))" }} />
         </div>
       </div>
 
