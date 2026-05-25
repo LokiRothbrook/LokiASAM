@@ -5,6 +5,7 @@ import { Providers } from "@/components/layout/Providers";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { SetupGuard } from "@/components/layout/SetupGuard";
+import { DisableContextMenu } from "@/components/layout/DisableContextMenu";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,6 +34,7 @@ export default function RootLayout({
     >
       <body className="h-full bg-[var(--background)] text-[var(--text-primary)]">
         <Providers>
+          <DisableContextMenu />
           {/*
             SetupGuard checks SQLite on mount. While checking it shows a loading
             spinner. If setup is not complete it renders the SetupWizard overlay

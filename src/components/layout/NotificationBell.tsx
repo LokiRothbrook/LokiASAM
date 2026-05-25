@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,14 +9,21 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import Link from "next/link";
 
 export function NotificationBell() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+
   // Unread count will come from Zustand / TanStack Query in Phase 8.
   const unreadCount = 0;
 
+  const handleViewAll = () => {
+    setOpen(false);
+    router.push("/notifications");
+  };
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
@@ -63,13 +72,13 @@ export function NotificationBell() {
           </p>
         </div>
         <div className="border-t px-4 py-2" style={{ borderColor: "var(--border)" }}>
-          <Link
-            href="/notifications"
-            className="text-xs transition-colors"
-            style={{ color: "var(--neon-cyan)" }}
+          <button
+            onClick={handleViewAll}
+            className="text-xs transition-colors hover:underline"
+            style={{ color: "var(--neon-purple)" }}
           >
             View all notifications →
-          </Link>
+          </button>
         </div>
       </PopoverContent>
     </Popover>

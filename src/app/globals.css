@@ -25,6 +25,14 @@
   --color-text-primary:     var(--text-primary);
   --color-text-muted:       var(--text-muted);
 
+  /* Popover / dropdown surfaces (used by ShadCN DropdownMenu, Tooltip, etc.) */
+  --color-popover:            var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  /* Accent (hover / focus highlight inside menus) */
+  --color-accent:             var(--accent);
+  --color-accent-foreground:  var(--accent-foreground);
+
   /* Fonts */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono), "JetBrains Mono", "Fira Code", monospace;
@@ -71,6 +79,14 @@
   --glass-bg:        rgba(10, 10, 35, 0.6);
   --glass-border:    rgba(191, 0, 255, 0.12);
   --glass-blur:      12px;
+
+  /* Popover / dropdown surface */
+  --popover:            #0c0c20;
+  --popover-foreground: #e0e0ff;
+
+  /* Accent — subtle purple highlight for menu item hover/focus */
+  --accent:            rgba(191, 0, 255, 0.15);
+  --accent-foreground: #e0e0ff;
 }
 
 /* ---------------------------------------------------------------------------
