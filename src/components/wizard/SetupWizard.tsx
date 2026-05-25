@@ -540,6 +540,7 @@ function SteamCmdStep() {
           eventChannel={outputChannel === "install" ? "steamcmd://output/setup" : "steamcmd://output/validate"}
           label={outputChannel === "install" ? "Downloading SteamCMD" : "Validating SteamCMD"}
           className="mt-2"
+          bodyClassName="h-40"
         />
       )}
 
@@ -778,17 +779,19 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       {/* Main content */}
       <div className="relative z-10 flex-1 flex items-center justify-center p-6">
         <div
-          className="w-full max-w-lg"
+          className="w-full max-w-lg flex flex-col"
           style={{
             background: "rgba(10,10,30,0.8)",
             border: "1px solid rgba(191,0,255,0.2)",
             borderRadius: "1rem",
             backdropFilter: "blur(12px)",
             boxShadow: "0 0 60px rgba(191,0,255,0.1)",
+            maxHeight: "calc(100vh - 160px)",
+            minHeight: "420px",
           }}
         >
-          <div className="p-8 min-h-[400px] flex flex-col">
-            <div className="flex-1 overflow-y-auto">
+          <div className="p-8 flex-1 flex flex-col min-h-0 overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               <AnimatePresence mode="wait" custom={direction}>
                 <motion.div
                   key={step}

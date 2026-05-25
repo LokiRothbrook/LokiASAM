@@ -38,6 +38,8 @@ export interface CommandOutputPanelProps {
   defaultCollapsed?: boolean;
   /** CSS class name for the outer container. */
   className?: string;
+  /** Tailwind height class for the scrollable output body. Default: "h-64". */
+  bodyClassName?: string;
 }
 
 let lineIdCounter = 0;
@@ -48,6 +50,7 @@ export function CommandOutputPanel({
   maxLines = 500,
   defaultCollapsed = false,
   className,
+  bodyClassName,
 }: CommandOutputPanelProps) {
   const [lines, setLines] = useState<OutputLine[]>([]);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -166,7 +169,7 @@ export function CommandOutputPanel({
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-64 overflow-y-auto p-3 terminal"
+          className={cn("overflow-y-auto p-3 terminal", bodyClassName ?? "h-64")}
           style={{ scrollBehavior: "smooth" }}
         >
           {lines.length === 0 ? (

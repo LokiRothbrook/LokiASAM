@@ -24,13 +24,30 @@ fn emit_line(app: &tauri::AppHandle, channel: &str, stream: &str, line: &str) ->
     .map_err(|e| e.to_string())
 }
 
+/// Build a `tokio::process::Command` for SteamCMD with:
+/// - stdout and stderr piped for capture
+/// - On Windows: CREATE_NO_WINDOW so no console terminal pops up
+fn build_steamcmd_cmd(path: &str, args: &[&str]) -> Command {
+    let mut cmd = Command::new(path);
+    cmd.args(args);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    // Suppress the console window that Windows opens for console-subsystem EXEs.
+    // CREATE_NO_WINDOW = 0x08000000
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    cmd
+}
+
 /// Stream all stdout/stderr from a child process to a Tauri event channel.
-/// Returns Ok(exit_success).
+/// Returns the raw exit code so callers can distinguish codes (e.g. 7 = self-update).
 async fn stream_process(
     app: &tauri::AppHandle,
     child: &mut tokio::process::Child,
     channel: &str,
-) -> Result<bool, String> {
+) -> Result<i32, String> {
     use tokio::io::AsyncBufReadExt;
 
     let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
@@ -39,31 +56,34 @@ async fn stream_process(
     let mut out_lines = BufReader::new(stdout).lines();
     let mut err_lines = BufReader::new(stderr).lines();
 
-    loop {
-        tokio::select! {
-            line = out_lines.next_line() => {
-                match line.map_err(|e| e.to_string())? {
-                    Some(l) => emit_line(app, channel, "stdout", &l)?,
-                    None => break,
-                }
-            }
-            line = err_lines.next_line() => {
-                match line.map_err(|e| e.to_string())? {
-                    Some(l) => emit_line(app, channel, "stderr", &l)?,
-                    None => break,
-                }
-            }
+    // Read stdout and stderr concurrently until both are exhausted.
+    // We use two separate tasks so neither stream starves the other.
+    let app_out = app.clone();
+    let channel_out = channel.to_string();
+    let stdout_task = tauri::async_runtime::spawn(async move {
+        while let Ok(Some(l)) = out_lines.next_line().await {
+            let _ = emit_line(&app_out, &channel_out, "stdout", &l);
         }
-    }
+    });
 
-    // Drain any remaining stderr after stdout closes
-    while let Ok(Some(l)) = err_lines.next_line().await {
-        emit_line(app, channel, "stderr", &l)?;
-    }
+    let app_err = app.clone();
+    let channel_err = channel.to_string();
+    let stderr_task = tauri::async_runtime::spawn(async move {
+        while let Ok(Some(l)) = err_lines.next_line().await {
+            let _ = emit_line(&app_err, &channel_err, "stderr", &l);
+        }
+    });
 
+    // Wait for both streams to finish, then collect the exit code.
+    let _ = tokio::join!(stdout_task, stderr_task);
     let status = child.wait().await.map_err(|e| e.to_string())?;
-    Ok(status.success())
+
+    Ok(status.code().unwrap_or(-1))
 }
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
 
 /// Download and extract SteamCMD into `target_dir`.
 /// Emits progress to `steamcmd://output/setup`.
@@ -81,7 +101,6 @@ pub async fn install_steamcmd(
         .await
         .map_err(|e| format!("Failed to create target directory: {e}"))?;
 
-    // Platform-specific download URL
     #[cfg(target_os = "windows")]
     let (url, is_zip) = (
         "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip",
@@ -113,7 +132,6 @@ pub async fn install_steamcmd(
     )?;
 
     if is_zip {
-        // Windows: extract ZIP using the `zip` crate
         let cursor = std::io::Cursor::new(bytes);
         let mut archive = zip::ZipArchive::new(cursor)
             .map_err(|e| format!("Failed to open ZIP: {e}"))?;
@@ -121,7 +139,6 @@ pub async fn install_steamcmd(
             .extract(dir)
             .map_err(|e| format!("Failed to extract ZIP: {e}"))?;
     } else {
-        // Linux: extract .tar.gz using flate2 + tar
         let gz = flate2::read::GzDecoder::new(bytes.as_ref());
         let mut archive = tar::Archive::new(gz);
         archive
@@ -136,10 +153,13 @@ pub async fn install_steamcmd(
 
     let exe_path = dir.join(exe_name);
     if !exe_path.exists() {
-        return Err(format!("Extraction succeeded but {} not found at {}", exe_name, exe_path.display()));
+        return Err(format!(
+            "Extraction succeeded but {} not found at {}",
+            exe_name,
+            exe_path.display()
+        ));
     }
 
-    // Make executable on Linux
     #[cfg(not(target_os = "windows"))]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -158,8 +178,11 @@ pub async fn install_steamcmd(
     Ok(())
 }
 
-/// Run `steamcmd +quit` to verify the binary works and trigger any first-run updates.
-/// Emits output to `steamcmd://output/validate`. Returns true if exit code is 0.
+/// Run `steamcmd +quit` to verify the binary works and trigger any first-run self-updates.
+///
+/// On Windows, SteamCMD self-updates on its very first run and exits with code 7.
+/// We detect this, log it, and automatically re-run once — the second run exits 0
+/// once the self-update is complete.
 #[tauri::command]
 pub async fn validate_steamcmd(
     path: String,
@@ -168,27 +191,51 @@ pub async fn validate_steamcmd(
     let channel = "steamcmd://output/validate";
     emit_line(&app_handle, channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
 
-    let mut child = Command::new(&path)
-        .args(["+quit"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut child = build_steamcmd_cmd(&path, &["+quit"])
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let ok = stream_process(&app_handle, &mut child, channel).await?;
+    let exit_code = stream_process(&app_handle, &mut child, channel).await?;
 
-    if ok {
-        emit_line(&app_handle, channel, "stdout", "SteamCMD validation successful.")?;
-    } else {
-        emit_line(&app_handle, channel, "stderr", "SteamCMD exited with a non-zero code.")?;
+    // Exit code 7 is SteamCMD's "I just self-updated, please re-run me" signal.
+    // Any other non-zero code on a first attempt also gets one retry, since
+    // SteamCMD can be flaky on first launch while redistributables install.
+    if exit_code != 0 {
+        emit_line(
+            &app_handle,
+            channel,
+            "stdout",
+            &format!(
+                "SteamCMD exited with code {exit_code} (first-run self-update is normal on Windows). Re-running..."
+            ),
+        )?;
+
+        let mut child2 = build_steamcmd_cmd(&path, &["+quit"])
+            .spawn()
+            .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
+
+        let exit_code2 = stream_process(&app_handle, &mut child2, channel).await?;
+
+        if exit_code2 == 0 {
+            emit_line(&app_handle, channel, "stdout", "SteamCMD validation successful.")?;
+            return Ok(true);
+        } else {
+            emit_line(
+                &app_handle,
+                channel,
+                "stderr",
+                &format!("SteamCMD exited with code {exit_code2} after retry. Validation failed."),
+            )?;
+            return Ok(false);
+        }
     }
 
-    Ok(ok)
+    emit_line(&app_handle, channel, "stdout", "SteamCMD validation successful.")?;
+    Ok(true)
 }
 
 /// Install the ASA Dedicated Server (App ID 2430930) via SteamCMD.
 /// Emits line-by-line output to `steamcmd://output/{server_id}`.
-/// The frontend passes the install path and steamcmd path; no DB lookup required.
 #[tauri::command]
 pub async fn install_server(
     server_id: String,
@@ -200,27 +247,27 @@ pub async fn install_server(
     emit_line(&app_handle, &channel, "stdout", &format!("Installing ASA server to: {install_path}"))?;
     emit_line(&app_handle, &channel, "stdout", &format!("Using SteamCMD: {steamcmd_path}"))?;
 
-    let mut child = Command::new(&steamcmd_path)
-        .args([
+    let mut child = build_steamcmd_cmd(
+        &steamcmd_path,
+        &[
             "+force_install_dir", &install_path,
             "+login", "anonymous",
             "+app_update", ASA_SERVER_APP_ID,
             "+quit",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+        ],
+    )
+    .spawn()
+    .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let ok = stream_process(&app_handle, &mut child, &channel).await?;
+    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
 
-    if ok {
+    if exit_code == 0 {
         emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
         Ok(())
     } else {
-        let msg = "SteamCMD exited with a non-zero code. Installation may have failed.";
-        emit_line(&app_handle, &channel, "stderr", msg)?;
-        Err(msg.to_string())
+        let msg = format!("SteamCMD install exited with code {exit_code}. Installation may have failed.");
+        emit_line(&app_handle, &channel, "stderr", &msg)?;
+        Err(msg)
     }
 }
 
@@ -236,25 +283,25 @@ pub async fn update_server(
     let channel = format!("steamcmd://output/{}", server_id);
     emit_line(&app_handle, &channel, "stdout", "Checking for updates...")?;
 
-    let mut child = Command::new(&steamcmd_path)
-        .args([
+    let mut child = build_steamcmd_cmd(
+        &steamcmd_path,
+        &[
             "+force_install_dir", &install_path,
             "+login", "anonymous",
             "+app_update", ASA_SERVER_APP_ID,
             "+quit",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+        ],
+    )
+    .spawn()
+    .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let ok = stream_process(&app_handle, &mut child, &channel).await?;
+    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
 
-    if ok {
+    if exit_code == 0 {
         emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
         Ok(())
     } else {
-        Err("SteamCMD update exited with non-zero code.".to_string())
+        Err(format!("SteamCMD update exited with code {exit_code}."))
     }
 }
 
@@ -269,32 +316,29 @@ pub async fn validate_server_files(
     let channel = format!("steamcmd://output/{}", server_id);
     emit_line(&app_handle, &channel, "stdout", "Validating server files...")?;
 
-    let mut child = Command::new(&steamcmd_path)
-        .args([
+    let mut child = build_steamcmd_cmd(
+        &steamcmd_path,
+        &[
             "+force_install_dir", &install_path,
             "+login", "anonymous",
             "+app_update", ASA_SERVER_APP_ID, "validate",
             "+quit",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+        ],
+    )
+    .spawn()
+    .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let ok = stream_process(&app_handle, &mut child, &channel).await?;
+    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
 
-    if ok {
+    if exit_code == 0 {
         Ok(())
     } else {
-        Err("SteamCMD validate exited with non-zero code.".to_string())
+        Err(format!("SteamCMD validate exited with code {exit_code}."))
     }
 }
 
 /// Check whether a newer build is available for the ASA server.
-/// Compares the local appmanifest build ID against Steam's depot info.
-/// Returns true if an update is available.
 #[tauri::command]
 pub async fn check_server_update_available(_server_id: String) -> Result<bool, String> {
-    // Phase 3 — compare appmanifest_2430930.acf buildid against Steam depot API
     Err("Not implemented".into())
 }
