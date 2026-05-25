@@ -3,6 +3,7 @@ mod events;
 mod state;
 
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
@@ -18,8 +19,12 @@ struct TrayMenuState {
 /// Show, un-minimize, and focus the main window. Updates tray menu to reflect visible state.
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        // Unminimize first — show() is a no-op when the window is already
+        // visible but minimised, so we must call unminimize() explicitly.
+        if w.is_minimized().unwrap_or(false) {
+            let _ = w.unminimize();
+        }
         let _ = w.show();
-        let _ = w.unminimize();
         let _ = w.set_focus();
     }
     if let Some(tray_state) = app.try_state::<TrayMenuState>() {
@@ -62,11 +67,7 @@ pub fn run() {
         // ── Single-instance guard ──────────────────────────────────────────
         // If a second instance is launched, focus the existing window and exit.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.unminimize();
-            }
+            show_main_window(app);
         }))
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -87,8 +88,12 @@ pub fn run() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit LokiASAM", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
+            // Embed the tray icon from the PNG at compile time so it always
+            // reflects the current icon file, even in dev hot-reload mode.
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+
             let tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
                 .tooltip("LokiASAM")
                 .menu(&tray_menu)
                 .menu_on_left_click(false)
