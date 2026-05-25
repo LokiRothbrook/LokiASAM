@@ -1,62 +1,419 @@
+use crate::{events, state::AppState};
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
+use tauri::{Emitter, Manager};
+
+// ---------------------------------------------------------------------------
+// Shared types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct PortConfig {
     pub port: u16,
     pub query_port: u16,
     pub rcon_port: u16,
 }
 
+/// Runtime status of a server. Returned by `get_server_status` and emitted as
+/// the payload for `server://status/{id}` and `server://any-change` events.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatus {
     pub server_id: String,
+    /// One of: stopped | starting | running | stopping | updating | error | crashed
     pub status: String,
     pub pid: Option<u32>,
     pub uptime_seconds: Option<u64>,
 }
 
-/// Start an ASA dedicated server process by server UUID.
-/// Emits `server://status/{id}` events as the process starts.
-#[tauri::command]
-pub async fn start_server(_server_id: String) -> Result<(), String> {
-    // TODO: Phase 3 — read install_path from DB, build launch args, spawn process
-    Err("Not implemented".into())
+/// Full parameter set for starting an ASA dedicated server.
+/// The frontend reads all values from SQLite and passes them here — Rust does
+/// no DB access of its own.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StartServerParams {
+    pub server_id: String,
+    /// Absolute path to the server install directory.
+    pub install_path: String,
+    /// ASA map identifier, e.g. "TheIsland_WP".
+    pub map_path: String,
+    pub port: u16,
+    pub query_port: u16,
+    pub rcon_port: u16,
+    pub rcon_password: String,
+    pub max_players: u32,
+    /// Optional join password shown to connecting players.
+    pub server_password: Option<String>,
+    pub admin_password: String,
+    /// Additional command-line flags, e.g. ["-NoBattlEye", "-servergamelog"].
+    pub extra_args: Vec<String>,
 }
 
-/// Stop a running server. If `graceful` is true, sends RCON `saveworld` + waits
-/// for a clean shutdown before SIGTERM. Otherwise sends SIGTERM immediately.
-#[tauri::command]
-pub async fn stop_server(_server_id: String, _graceful: bool) -> Result<(), String> {
-    Err("Not implemented".into())
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Emit both the per-server and global status-change events.
+fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
+    let _ = app.emit(
+        &events::server_event(events::SERVER_STATUS, &status.server_id),
+        status.clone(),
+    );
+    let _ = app.emit(events::SERVER_ANY_CHANGE, status.clone());
 }
 
-/// Restart a server: stop (graceful) then start. Emits status events throughout.
-#[tauri::command]
-pub async fn restart_server(_server_id: String, _graceful: bool) -> Result<(), String> {
-    Err("Not implemented".into())
+/// Send SIGTERM on Unix or TerminateProcess on Windows for the given PID.
+/// Falls back to SIGKILL if the graceful signal is unavailable on the platform.
+fn kill_pid(pid: u32, graceful: bool) {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let spid = Pid::from_u32(pid);
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
+
+    if let Some(process) = sys.process(spid) {
+        if graceful {
+            #[cfg(unix)]
+            {
+                let sent = process.kill_with(sysinfo::Signal::Term);
+                if sent != Some(true) {
+                    process.kill();
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // Windows has no SIGTERM equivalent — force-kill immediately.
+                process.kill();
+            }
+        } else {
+            process.kill();
+        }
+    }
 }
 
-/// Return the current runtime status of a server (stopped / starting / running / etc.).
-#[tauri::command]
-pub async fn get_server_status(_server_id: String) -> Result<ServerStatus, String> {
-    Err("Not implemented".into())
+/// Check whether a PID is still alive using sysinfo.
+fn pid_alive(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let spid = Pid::from_u32(pid);
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
+    sys.process(spid).is_some()
 }
 
-/// Clone a server: copy its SQLite config row + INI files, then install the
-/// server binary via SteamCMD using the shared cache (hardlinks).
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+/// Start an ASA dedicated server.
+///
+/// Builds the full launch command from the supplied params, spawns the process,
+/// registers it in the in-memory `running_servers` map, and spawns a lightweight
+/// watcher task that detects when the process exits (crash or intentional stop).
+///
+/// Returns the OS process ID so the frontend can persist it in SQLite.
+#[tauri::command]
+pub async fn start_server(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    params: StartServerParams,
+) -> Result<u32, String> {
+    // Resolve the executable path for the current platform.
+    #[cfg(target_os = "windows")]
+    let exe = format!(
+        "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
+        params.install_path
+    );
+    #[cfg(not(target_os = "windows"))]
+    let exe = format!(
+        "{}/ShooterGame/Binaries/Linux/ArkAscendedServer",
+        params.install_path
+    );
+
+    // Build the ?-delimited query string that follows the map name.
+    let mut query_string = format!(
+        "{}?listen?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?RCONPassword={}?MaxPlayers={}?ServerAdminPassword={}",
+        params.map_path,
+        params.port,
+        params.query_port,
+        params.rcon_port,
+        params.rcon_password,
+        params.max_players,
+        params.admin_password,
+    );
+    if let Some(pw) = &params.server_password {
+        if !pw.is_empty() {
+            query_string.push_str(&format!("?ServerPassword={}", pw));
+        }
+    }
+
+    // Assemble the command.
+    // stdout/stderr are sent to null for now; Phase 4 will redirect them to
+    // a log file that the live log viewer streams via a file watcher.
+    let mut cmd = tokio::process::Command::new(&exe);
+    cmd.arg(&query_string);
+    cmd.args(["-server", "-log"]);
+    for arg in &params.extra_args {
+        cmd.arg(arg);
+    }
+    cmd.current_dir(&params.install_path);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start server process: {e}"))?;
+
+    let pid = child.id().ok_or("Spawned process has no PID")?;
+
+    // Register in the running map.
+    {
+        let mut registry = state.running_servers.lock().unwrap();
+        registry.insert(
+            params.server_id.clone(),
+            crate::state::RunningServer {
+                pid,
+                started_at: Instant::now(),
+            },
+        );
+    }
+
+    // Emit "running" status immediately.
+    emit_status(
+        &app_handle,
+        &ServerStatus {
+            server_id: params.server_id.clone(),
+            status: "running".into(),
+            pid: Some(pid),
+            uptime_seconds: Some(0),
+        },
+    );
+
+    // Spawn a watcher task that owns the child handle and waits for it to exit.
+    // When it exits, clean up state and emit the appropriate status event.
+    let sid = params.server_id.clone();
+    let handle_clone = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = child.wait().await;
+
+        let app_state = handle_clone.state::<AppState>();
+
+        let was_intentional = app_state
+            .stopping_servers
+            .lock()
+            .unwrap()
+            .remove(&sid);
+
+        app_state.running_servers.lock().unwrap().remove(&sid);
+
+        let status_str = if was_intentional { "stopped" } else { "crashed" };
+        emit_status(
+            &handle_clone,
+            &ServerStatus {
+                server_id: sid,
+                status: status_str.into(),
+                pid: None,
+                uptime_seconds: None,
+            },
+        );
+    });
+
+    Ok(pid)
+}
+
+/// Stop a running server.
+///
+/// Marks the server as intentionally stopping (so the watcher task emits
+/// "stopped" rather than "crashed"), then sends the OS signal.
+/// If `graceful` is true, SIGTERM is sent first (RCON saveworld will be added
+/// in Phase 4); otherwise the process is killed immediately.
+#[tauri::command]
+pub async fn stop_server(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    graceful: bool,
+) -> Result<(), String> {
+    let pid = {
+        let registry = state.running_servers.lock().unwrap();
+        registry.get(&server_id).map(|rs| rs.pid)
+    };
+
+    let pid = pid.ok_or_else(|| format!("Server {server_id} is not running"))?;
+
+    // Flag as intentional before signalling so the watcher doesn't emit "crashed".
+    state
+        .stopping_servers
+        .lock()
+        .unwrap()
+        .insert(server_id.clone());
+
+    kill_pid(pid, graceful);
+    Ok(())
+}
+
+/// Restart a server: kill the current process (gracefully if requested),
+/// wait up to 15 s for it to exit, then re-spawn with the same params.
+///
+/// Returns the new process ID.
+#[tauri::command]
+pub async fn restart_server(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    params: StartServerParams,
+    graceful: bool,
+) -> Result<u32, String> {
+    let pid = {
+        let registry = state.running_servers.lock().unwrap();
+        registry.get(&params.server_id).map(|rs| rs.pid)
+    };
+
+    if let Some(pid) = pid {
+        // Mark intentional so the watcher doesn't race with us.
+        state
+            .stopping_servers
+            .lock()
+            .unwrap()
+            .insert(params.server_id.clone());
+
+        kill_pid(pid, graceful);
+
+        // Wait up to 15 s for the process to exit.
+        for _ in 0..30 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            if !pid_alive(pid) {
+                break;
+            }
+        }
+
+        // Ensure it's gone regardless.
+        if pid_alive(pid) {
+            kill_pid(pid, false);
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        // Clean up state (the watcher task may have already done this, that's fine).
+        state.stopping_servers.lock().unwrap().remove(&params.server_id);
+        state.running_servers.lock().unwrap().remove(&params.server_id);
+    }
+
+    // Re-spawn using start_server.
+    start_server(app_handle, state, params).await
+}
+
+/// Return the current runtime status of a server.
+///
+/// Consults the in-memory running_servers map and verifies the PID is still
+/// alive via sysinfo before reporting "running".
+#[tauri::command]
+pub async fn get_server_status(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+) -> Result<ServerStatus, String> {
+    let entry = {
+        let registry = state.running_servers.lock().unwrap();
+        registry
+            .get(&server_id)
+            .map(|rs| (rs.pid, rs.started_at))
+    };
+
+    match entry {
+        None => Ok(ServerStatus {
+            server_id,
+            status: "stopped".into(),
+            pid: None,
+            uptime_seconds: None,
+        }),
+        Some((pid, started_at)) => {
+            if pid_alive(pid) {
+                Ok(ServerStatus {
+                    server_id,
+                    status: "running".into(),
+                    pid: Some(pid),
+                    uptime_seconds: Some(started_at.elapsed().as_secs()),
+                })
+            } else {
+                Ok(ServerStatus {
+                    server_id,
+                    status: "stopped".into(),
+                    pid: None,
+                    uptime_seconds: None,
+                })
+            }
+        }
+    }
+}
+
+/// Register a server PID from a previous app session in the running_servers map
+/// so the crash-monitor 30 s polling loop can watch it.
+///
+/// Returns `true` if the process is alive, `false` if it has already exited
+/// (i.e., it crashed while the app was closed — the frontend should mark it
+/// "crashed" in SQLite).
+#[tauri::command]
+pub async fn register_running_server(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    pid: u32,
+) -> Result<bool, String> {
+    if pid_alive(pid) {
+        let mut registry = state.running_servers.lock().unwrap();
+        registry.insert(
+            server_id,
+            crate::state::RunningServer {
+                pid,
+                // started_at is approximate for re-registered servers; uptime
+                // will read from SQLite updated_at on the frontend instead.
+                started_at: Instant::now(),
+            },
+        );
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Delete a server from disk (optionally) and clean up in-memory state.
+///
+/// Database record deletion is handled by the frontend via `db.deleteServerRecord()`.
+/// This command only removes the install directory when `delete_files` is true.
+#[tauri::command]
+pub async fn delete_server(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    install_path: String,
+    delete_files: bool,
+) -> Result<(), String> {
+    // If the server is running, force-stop it first.
+    let pid = {
+        let registry = state.running_servers.lock().unwrap();
+        registry.get(&server_id).map(|rs| rs.pid)
+    };
+    if let Some(pid) = pid {
+        state
+            .stopping_servers
+            .lock()
+            .unwrap()
+            .insert(server_id.clone());
+        kill_pid(pid, false);
+        // Brief wait — we don't block long here.
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        state.running_servers.lock().unwrap().remove(&server_id);
+        state.stopping_servers.lock().unwrap().remove(&server_id);
+    }
+
+    if delete_files && !install_path.is_empty() {
+        std::fs::remove_dir_all(&install_path)
+            .map_err(|e| format!("Failed to delete server files at {install_path}: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Clone a server's config. Full implementation in Phase 9.
 #[tauri::command]
 pub async fn clone_server(
     _source_id: String,
     _new_name: String,
     _new_ports: PortConfig,
 ) -> Result<String, String> {
-    Err("Not implemented".into())
-}
-
-/// Delete a server record from SQLite. If `delete_files` is true, also removes
-/// the install directory from disk (backup directory is never deleted here).
-#[tauri::command]
-pub async fn delete_server(_server_id: String, _delete_files: bool) -> Result<(), String> {
-    Err("Not implemented".into())
+    Err("Clone server is not yet implemented (Phase 9)".into())
 }

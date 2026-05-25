@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessStats {
@@ -23,25 +27,22 @@ pub struct ServerQueryResult {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DirCheckResult {
-    /// True if the directory exists (or was created) and a write test passed.
     pub writable: bool,
-    /// Free bytes available on the volume containing this path. 0 if unknown.
     pub free_bytes: u64,
-    /// Human-readable error if writable is false.
     pub error: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
 
 /// Validate a directory path for use as the LokiASAM base or backup directory.
 /// Creates the directory (and parents) if it does not exist, performs a write
 /// test, and reports available disk space on that volume.
-///
-/// Called from the Setup Wizard so the user gets immediate feedback before
-/// advancing past the directory selection steps.
 #[tauri::command]
 pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
     let p = Path::new(&path);
 
-    // Attempt to create the directory tree
     if let Err(e) = std::fs::create_dir_all(p) {
         return Ok(DirCheckResult {
             writable: false,
@@ -50,7 +51,6 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
         });
     }
 
-    // Write test
     let test_file = p.join(".lokiasam_write_test");
     let write_ok = std::fs::write(&test_file, b"ok").is_ok();
     let _ = std::fs::remove_file(&test_file);
@@ -63,14 +63,11 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
         });
     }
 
-    // Disk space via sysinfo
     let free_bytes = {
         use sysinfo::Disks;
         let disks = Disks::new_with_refreshed_list();
         disks
             .iter()
-            // Find the disk whose mount point is the longest prefix of our path
-            // (most specific match wins on systems with multiple mounts).
             .filter(|d| p.starts_with(d.mount_point()))
             .max_by_key(|d| d.mount_point().components().count())
             .map(|d| d.available_space())
@@ -84,29 +81,171 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
     })
 }
 
-/// Return CPU % and RAM MB for a given OS process ID.
-/// Called every 10 seconds per running server card.
+/// Return CPU % and RSS memory (MB) for a given OS process ID.
+///
+/// CPU usage requires two sysinfo samples separated by a short delay;
+/// the 200 ms sleep inside this command is intentional and negligible.
 #[tauri::command]
-pub async fn get_process_stats(_pid: u32) -> Result<ProcessStats, String> {
-    // Phase 3 — implement via sysinfo crate
-    Err("Not implemented".into())
+pub async fn get_process_stats(pid: u32) -> Result<ProcessStats, String> {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let spid = Pid::from_u32(pid);
+    let mut sys = System::new();
+
+    // First sample — establishes the CPU time baseline.
+    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Second sample — CPU usage is now meaningful.
+    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
+
+    match sys.process(spid) {
+        Some(p) => Ok(ProcessStats {
+            cpu_percent: p.cpu_usage(),
+            memory_mb: p.memory() as f32 / 1_048_576.0,
+            pid,
+        }),
+        None => Err(format!("Process {pid} not found or no longer running")),
+    }
 }
 
-/// Send a Source Query UDP A2S_INFO packet to get live player count and server info.
-/// Called every 30 seconds per running server without needing RCON.
+/// Send a Source Query UDP A2S_INFO packet to a game server and parse the response.
+///
+/// Used to get live player count, map name, and version without requiring RCON.
+/// Handles the modern challenge-response variant automatically.
+/// Timeout: 3 seconds.
 #[tauri::command]
-pub async fn query_server(_ip: String, _port: u16) -> Result<ServerQueryResult, String> {
-    // Phase 3 — implement Source Query protocol
-    Err("Not implemented".into())
+pub async fn query_server(ip: String, port: u16) -> Result<ServerQueryResult, String> {
+    use tokio::net::UdpSocket;
+    use tokio::time::{timeout, Duration};
+
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| format!("Failed to bind UDP socket: {e}"))?;
+
+    socket
+        .connect(format!("{ip}:{port}"))
+        .await
+        .map_err(|e| format!("Failed to connect UDP socket: {e}"))?;
+
+    // A2S_INFO initial request packet.
+    let request: &[u8] = b"\xFF\xFF\xFF\xFF\x54Source Engine Query\x00";
+
+    socket
+        .send(request)
+        .await
+        .map_err(|e| format!("Failed to send A2S_INFO: {e}"))?;
+
+    let mut buf = [0u8; 1400];
+
+    let n = timeout(Duration::from_secs(3), socket.recv(&mut buf))
+        .await
+        .map_err(|_| "A2S_INFO query timed out")?
+        .map_err(|e| format!("UDP recv error: {e}"))?;
+
+    let data = &buf[..n];
+
+    // Some servers respond with a challenge packet (type 0x41) before sending
+    // the real info response. Resend with the 4-byte challenge appended.
+    if data.len() >= 9 && data[4] == 0x41 {
+        let challenge = &data[5..9];
+        let mut challenged_request = request.to_vec();
+        challenged_request.extend_from_slice(challenge);
+
+        socket
+            .send(&challenged_request)
+            .await
+            .map_err(|e| format!("Failed to send challenged A2S_INFO: {e}"))?;
+
+        let n2 = timeout(Duration::from_secs(3), socket.recv(&mut buf))
+            .await
+            .map_err(|_| "A2S_INFO challenge response timed out")?
+            .map_err(|e| format!("UDP recv error after challenge: {e}"))?;
+
+        parse_a2s_info(&buf[..n2])
+    } else {
+        parse_a2s_info(data)
+    }
 }
 
 /// Check whether a given TCP port is available (not currently bound) on localhost.
-/// Used during the server creation wizard to detect port conflicts before assigning.
 #[tauri::command]
 pub async fn check_port_available(port: u16) -> Result<bool, String> {
     use tokio::net::TcpListener;
-    match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+    match TcpListener::bind(format!("0.0.0.0:{port}")).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
+}
+
+// ---------------------------------------------------------------------------
+// A2S_INFO response parser
+// ---------------------------------------------------------------------------
+
+/// Parse a raw A2S_INFO response buffer into `ServerQueryResult`.
+fn parse_a2s_info(data: &[u8]) -> Result<ServerQueryResult, String> {
+    // Expected: FF FF FF FF 49 <protocol> <name\0> <map\0> ...
+    if data.len() < 6 {
+        return Err("A2S_INFO response too short".into());
+    }
+    if &data[0..4] != b"\xFF\xFF\xFF\xFF" {
+        return Err("Missing A2S_INFO header".into());
+    }
+    if data[4] != 0x49 {
+        return Err(format!("Unexpected A2S_INFO type byte: 0x{:02X}", data[4]));
+    }
+
+    // Byte 5 = protocol version; skip it.
+    let mut cursor = 6usize;
+
+    let name = read_cstring(data, &mut cursor)?;
+    let map = read_cstring(data, &mut cursor)?;
+    let _folder = read_cstring(data, &mut cursor)?;
+    let _game = read_cstring(data, &mut cursor)?;
+
+    // App ID: 2 bytes little-endian.
+    if cursor + 2 > data.len() {
+        return Err("Truncated A2S_INFO (app_id)".into());
+    }
+    cursor += 2;
+
+    // num_players, max_players.
+    if cursor + 2 > data.len() {
+        return Err("Truncated A2S_INFO (players)".into());
+    }
+    let players = data[cursor] as u32;
+    cursor += 1;
+    let max_players = data[cursor] as u32;
+    cursor += 1;
+
+    // Bots (1) + server_type (1) + environment (1) + visibility (1) + VAC (1) = 5 bytes.
+    cursor += 5;
+
+    // Version string.
+    let version = if cursor < data.len() {
+        read_cstring(data, &mut cursor).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    Ok(ServerQueryResult {
+        name,
+        map,
+        players,
+        max_players,
+        version,
+    })
+}
+
+/// Read a null-terminated UTF-8 string from `data` starting at `*cursor`,
+/// advancing `*cursor` past the null byte.
+fn read_cstring(data: &[u8], cursor: &mut usize) -> Result<String, String> {
+    let start = *cursor;
+    while *cursor < data.len() && data[*cursor] != 0 {
+        *cursor += 1;
+    }
+    if *cursor >= data.len() {
+        return Err("Unterminated string in A2S_INFO response".into());
+    }
+    let s = String::from_utf8_lossy(&data[start..*cursor]).into_owned();
+    *cursor += 1; // consume the null byte
+    Ok(s)
 }

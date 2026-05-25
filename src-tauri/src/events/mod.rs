@@ -1,13 +1,24 @@
 /// Typed Tauri event name constants.
 /// Frontend subscribes to these via `listen()` / `useTauriEvent()`.
 
+/// Per-server status change: server started, stopped, crashed.
 pub const SERVER_STATUS: &str = "server://status";
+/// Per-server process stats (CPU / RAM) emitted every ~10 s while running.
 pub const SERVER_STATS: &str = "server://stats";
+/// Per-server player list update.
 pub const SERVER_PLAYERS: &str = "server://players";
+/// Fired on every server status change so the dashboard can invalidate its query
+/// without subscribing to every individual per-server channel.
+pub const SERVER_ANY_CHANGE: &str = "server://any-change";
+/// SteamCMD stdout/stderr lines streamed during install / update / validate.
 pub const STEAMCMD_OUTPUT: &str = "steamcmd://output";
+/// ASA server log lines streamed from the ShooterGame.log file watcher.
 pub const LOG_LINE: &str = "log://line";
+/// RCON response for a command (Phase 4).
 pub const RCON_RESPONSE: &str = "rcon://response";
+/// New in-app notification created.
 pub const NOTIFICATION_NEW: &str = "notification://new";
+/// Backup progress update (Phase 6).
 pub const BACKUP_PROGRESS: &str = "backup://progress";
 
 /// Build a namespaced event name for a specific server.

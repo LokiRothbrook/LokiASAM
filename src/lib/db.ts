@@ -255,3 +255,65 @@ export async function isServerNameTaken(name: string): Promise<boolean> {
   );
   return rows.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Server runtime status helpers (called after Tauri commands)
+// ---------------------------------------------------------------------------
+
+/** Update a server's status and optional PID. Sets updated_at to now. */
+export async function updateServerStatus(
+  id: string,
+  status: string,
+  pid: number | null
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET status = ?, pid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [status, pid ?? null, id]
+  );
+}
+
+/** Fetch servers whose status is 'running' and have a stored PID.
+ *  Called on app startup to reconcile state from a previous session. */
+export async function getRunningServers(): Promise<ServerRow[]> {
+  const db = await getDb();
+  return db.select<ServerRow[]>(
+    "SELECT * FROM servers WHERE status = 'running' AND pid IS NOT NULL"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate helpers used by ServerCard
+// ---------------------------------------------------------------------------
+
+/** Return the number of enabled mods attached to a server. */
+export async function getServerModCount(serverId: string): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<{ count: number }[]>(
+    "SELECT COUNT(*) as count FROM server_mods WHERE server_id = ? AND enabled = 1",
+    [serverId]
+  );
+  return rows[0]?.count ?? 0;
+}
+
+/** Return the ISO timestamp of the most recent backup, or null if none exist. */
+export async function getLastBackupTime(serverId: string): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ created_at: string }[]>(
+    "SELECT created_at FROM backups WHERE server_id = ? ORDER BY created_at DESC LIMIT 1",
+    [serverId]
+  );
+  return rows[0]?.created_at ?? null;
+}
+
+/** Return the next_run ISO timestamp for the restart/update schedule, or null. */
+export async function getNextScheduledRestart(serverId: string): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ next_run: string | null }[]>(
+    `SELECT next_run FROM schedules
+     WHERE server_id = ? AND schedule_type IN ('restart', 'update') AND enabled = 1
+     ORDER BY next_run ASC LIMIT 1`,
+    [serverId]
+  );
+  return rows[0]?.next_run ?? null;
+}

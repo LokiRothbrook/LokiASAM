@@ -35,9 +35,27 @@ export interface PortConfig {
 
 export interface ServerStatus {
   serverId: string;
+  /** One of: stopped | starting | running | stopping | updating | error | crashed */
   status: string;
   pid: number | null;
   uptimeSeconds: number | null;
+}
+
+/** Full parameter set passed to `start_server`. All values come from SQLite. */
+export interface StartServerParams {
+  serverId: string;
+  installPath: string;
+  /** ASA map identifier, e.g. "TheIsland_WP". */
+  mapPath: string;
+  port: number;
+  queryPort: number;
+  rconPort: number;
+  rconPassword: string;
+  maxPlayers: number;
+  serverPassword?: string;
+  adminPassword: string;
+  /** Additional CLI flags like ["-NoBattlEye", "-servergamelog"]. */
+  extraArgs: string[];
 }
 
 export interface ProcessStats {
@@ -123,14 +141,25 @@ export interface ScheduleConfig {
 
 export const tauriCmd = {
   // Server lifecycle
-  startServer:   (serverId: string) => invoke<void>("start_server", { serverId }),
-  stopServer:    (serverId: string, graceful: boolean) => invoke<void>("stop_server", { serverId, graceful }),
-  restartServer: (serverId: string, graceful: boolean) => invoke<void>("restart_server", { serverId, graceful }),
-  getServerStatus: (serverId: string) => invoke<ServerStatus>("get_server_status", { serverId }),
-  cloneServer:   (sourceId: string, newName: string, newPorts: PortConfig) =>
+  /** Spawn the ASA server process. Returns the OS PID — persist it in SQLite. */
+  startServer: (params: StartServerParams) =>
+    invoke<number>("start_server", { params }),
+  stopServer: (serverId: string, graceful: boolean) =>
+    invoke<void>("stop_server", { serverId, graceful }),
+  /** Restart with the same params. Returns the new PID. */
+  restartServer: (params: StartServerParams, graceful: boolean) =>
+    invoke<number>("restart_server", { params, graceful }),
+  getServerStatus: (serverId: string) =>
+    invoke<ServerStatus>("get_server_status", { serverId }),
+  /** Re-register a PID from a previous session. Returns false if the process
+   *  already exited (crashed while the app was closed). */
+  registerRunningServer: (serverId: string, pid: number) =>
+    invoke<boolean>("register_running_server", { serverId, pid }),
+  cloneServer: (sourceId: string, newName: string, newPorts: PortConfig) =>
     invoke<string>("clone_server", { sourceId, newName, newPorts }),
-  deleteServer:  (serverId: string, deleteFiles: boolean) =>
-    invoke<void>("delete_server", { serverId, deleteFiles }),
+  /** Delete server files from disk. DB record deletion is done separately via db.ts. */
+  deleteServer: (serverId: string, installPath: string, deleteFiles: boolean) =>
+    invoke<void>("delete_server", { serverId, installPath, deleteFiles }),
 
   // SteamCMD / installation
   /** Download and extract SteamCMD to targetDir. Streams to steamcmd://output/setup. */

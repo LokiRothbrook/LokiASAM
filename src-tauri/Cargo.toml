@@ -24,7 +24,8 @@ tauri-plugin-sql          = { version = "2", features = ["sqlite"] }
 tauri-plugin-fs           = { version = "2" }
 tauri-plugin-dialog       = { version = "2" }
 tauri-plugin-shell        = { version = "2" }
-tauri-plugin-notification = { version = "2" }
+tauri-plugin-notification      = { version = "2" }
+tauri-plugin-single-instance   = { version = "2" }
 
 # Serialization
 serde      = { version = "1", features = ["derive"] }
