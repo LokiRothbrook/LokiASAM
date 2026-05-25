@@ -198,10 +198,16 @@ export const tauriCmd = {
     invoke<boolean>("check_server_update_available", { serverId }),
 
   // RCON
-  rconConnect:    (serverId: string) => invoke<void>("rcon_connect", { serverId }),
+  rconConnect: (serverId: string, host: string, port: number, password: string) =>
+    invoke<void>("rcon_connect", { serverId, host, port, password }),
   rconSend:       (serverId: string, command: string) => invoke<string>("rcon_send", { serverId, command }),
   rconDisconnect: (serverId: string) => invoke<void>("rcon_disconnect", { serverId }),
   rconGetPlayers: (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
+
+  // Log watcher
+  watchServerLog: (serverId: string, logPath: string) =>
+    invoke<void>("watch_server_log", { serverId, logPath }),
+  stopLogWatch: (serverId: string) => invoke<void>("stop_log_watch", { serverId }),
 
   // Config / INI
   /** Read GameUserSettings.ini and Game.ini from the server's install path. */

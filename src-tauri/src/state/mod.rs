@@ -1,3 +1,4 @@
+pub mod log_watcher;
 pub mod rcon_pool;
 pub mod server_registry;
 
@@ -21,8 +22,6 @@ pub struct AppState {
     /// Server IDs currently undergoing an intentional stop.
     /// Prevents the crash-monitor from emitting a "crashed" event when we kill a server on purpose.
     pub stopping_servers: Mutex<HashSet<String>>,
-    /// Maps server_id → active RCON connection state (Phase 4).
-    pub rcon_connections: Mutex<HashMap<String, rcon_pool::RconConnection>>,
     /// True once the frontend has confirmed first-time setup is complete.
     /// Controls whether the close button hides to tray or exits the process.
     pub setup_complete: AtomicBool,
@@ -33,7 +32,6 @@ impl AppState {
         Self {
             running_servers: Mutex::new(HashMap::new()),
             stopping_servers: Mutex::new(HashSet::new()),
-            rcon_connections: Mutex::new(HashMap::new()),
             setup_complete: AtomicBool::new(false),
         }
     }

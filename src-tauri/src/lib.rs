@@ -93,6 +93,8 @@ pub fn run() {
             }
 
             app.manage(state::AppState::new());
+            app.manage(state::rcon_pool::RconPool::new());
+            app.manage(state::log_watcher::LogWatcherState::new());
 
             // ── System tray ───────────────────────────────────────────────
             // Window starts visible, so "Bring to Front" is the correct initial label.
@@ -110,7 +112,7 @@ pub fn run() {
                 .icon(tray_icon)
                 .tooltip("LokiASAM")
                 .menu(&tray_menu)
-                .menu_on_left_click(false)
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
                     "hide" => hide_main_window(app),
@@ -260,11 +262,14 @@ pub fn run() {
             commands::steamcmd::update_server,
             commands::steamcmd::validate_server_files,
             commands::steamcmd::check_server_update_available,
-            // RCON (Phase 4)
+            // RCON
             commands::rcon::rcon_connect,
             commands::rcon::rcon_send,
             commands::rcon::rcon_disconnect,
             commands::rcon::rcon_get_players,
+            // Log watcher
+            commands::logs::watch_server_log,
+            commands::logs::stop_log_watch,
             // Config / INI
             commands::config::read_server_config,
             commands::config::write_server_config,

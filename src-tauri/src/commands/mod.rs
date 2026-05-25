@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod cluster;
 pub mod config;
+pub mod logs;
 pub mod mods;
 pub mod notifications;
 pub mod proton;
