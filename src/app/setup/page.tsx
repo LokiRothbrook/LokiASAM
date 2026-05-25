@@ -1,16 +1,10 @@
 /**
- * First-time setup wizard — implemented in Phase 2.
- * Automatically redirected to on first launch when setup_complete = false.
+ * /setup — landing page for the first-time setup flow.
+ *
+ * The actual wizard is rendered as a full-screen overlay by SetupGuard in the
+ * root layout. This page serves as the route target for direct navigation to
+ * /setup and renders nothing on its own; the overlay handles everything.
  */
 export default function SetupPage() {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-      <h1 className="text-2xl font-bold text-glow-cyan" style={{ color: "var(--neon-cyan)" }}>
-        Welcome to LokiASAM
-      </h1>
-      <p style={{ color: "var(--text-muted)" }}>
-        Setup wizard — coming in Phase 2.
-      </p>
-    </div>
-  );
+  return null;
 }

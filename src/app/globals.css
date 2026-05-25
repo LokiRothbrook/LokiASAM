@@ -3,7 +3,8 @@
 /* ---------------------------------------------------------------------------
    LokiASAM Neon Glow Theme
    Matches the aesthetic of lokisoft.xyz — deep space dark background with
-   vibrant neon cyan, purple, and green accents and glass-morphism card surfaces.
+   vibrant neon purple (primary), cyan (secondary), and green accents with
+   glass-morphism card surfaces. Purple is the dominant accent color.
    --------------------------------------------------------------------------- */
 
 @theme inline {
@@ -43,9 +44,9 @@
   --surface-elevated: rgba(15, 15, 40, 0.9);
   --terminal-bg:      #000008;
 
-  /* Borders */
-  --border:           rgba(0, 255, 255, 0.15);
-  --border-hover:     rgba(0, 255, 255, 0.4);
+  /* Borders — purple is the primary accent */
+  --border:           rgba(191, 0, 255, 0.15);
+  --border-hover:     rgba(191, 0, 255, 0.4);
 
   /* Neon colors */
   --neon-cyan:        #00ffff;
@@ -66,9 +67,9 @@
   --glow-green:       0 0 8px rgba(0,255,136,0.6), 0 0 24px rgba(0,255,136,0.2);
   --glow-red:         0 0 8px rgba(255,0,85,0.6),  0 0 24px rgba(255,0,85,0.2);
 
-  /* Card glass */
+  /* Card glass — purple-tinted borders */
   --glass-bg:        rgba(10, 10, 35, 0.6);
-  --glass-border:    rgba(0, 255, 255, 0.12);
+  --glass-border:    rgba(191, 0, 255, 0.12);
   --glass-blur:      12px;
 }
 
@@ -88,11 +89,11 @@ body {
   color:             var(--text-primary);
   font-family:       var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   min-height:        100vh;
-  /* Subtle scanline/grid background texture */
+  /* Subtle scanline/grid background texture — purple tint for primary theme */
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,255,255,0.06) 0%, transparent 60%),
-    linear-gradient(rgba(0,255,255,0.015) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,255,255,0.015) 1px, transparent 1px);
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(191,0,255,0.06) 0%, transparent 60%),
+    linear-gradient(rgba(191,0,255,0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(191,0,255,0.015) 1px, transparent 1px);
   background-size: 100% 100%, 40px 40px, 40px 40px;
 }
 
@@ -118,7 +119,7 @@ body {
 }
 
 .glass-card:hover {
-  border-color:      rgba(0, 255, 255, 0.3);
+  border-color:      rgba(191, 0, 255, 0.3);
 }
 
 /* ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ body {
 .border-neon-green  { border-color: var(--neon-green);  }
 .border-neon-red    { border-color: var(--neon-red);    }
 
-/* Running server card — pulsing cyan border */
+/* Running server card — pulsing green border */
 .server-card-running {
   border-color: var(--neon-green);
   box-shadow: 0 0 12px rgba(0,255,136,0.3), 0 0 0 1px rgba(0,255,136,0.1);
@@ -167,6 +168,11 @@ body {
   50%       { box-shadow: 0 0 24px rgba(0,255,136,0.5), 0 0 0 1px rgba(0,255,136,0.3); }
 }
 
+@keyframes pulse-border-purple {
+  0%, 100% { box-shadow: 0 0 12px rgba(191,0,255,0.3); }
+  50%       { box-shadow: 0 0 24px rgba(191,0,255,0.6); }
+}
+
 @keyframes pulse-border-cyan {
   0%, 100% { box-shadow: 0 0 12px rgba(0,255,255,0.3); }
   50%       { box-shadow: 0 0 24px rgba(0,255,255,0.6); }
@@ -182,27 +188,16 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Scrollbar styling — thin neon-themed scrollbar
+   Scrollbar styling — thin neon-themed scrollbar (purple primary)
    --------------------------------------------------------------------------- */
 ::-webkit-scrollbar              { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track        { background: rgba(0,0,0,0.3); }
-::-webkit-scrollbar-thumb        { background: rgba(0,255,255,0.2); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover  { background: rgba(0,255,255,0.4); }
+::-webkit-scrollbar-thumb        { background: rgba(191,0,255,0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(191,0,255,0.4); }
 
 /* ---------------------------------------------------------------------------
    Neon button base styles (used in conjunction with ShadCN Button variants)
    --------------------------------------------------------------------------- */
-.btn-neon-cyan {
-  background:    transparent;
-  border:        1px solid var(--neon-cyan);
-  color:         var(--neon-cyan);
-  transition:    box-shadow 150ms ease, background 150ms ease;
-}
-.btn-neon-cyan:hover {
-  background:    rgba(0,255,255,0.08);
-  box-shadow:    var(--glow-cyan);
-}
-
 .btn-neon-purple {
   background:    transparent;
   border:        1px solid var(--neon-purple);
@@ -212,6 +207,17 @@ body {
 .btn-neon-purple:hover {
   background:    rgba(191,0,255,0.08);
   box-shadow:    var(--glow-purple);
+}
+
+.btn-neon-cyan {
+  background:    transparent;
+  border:        1px solid var(--neon-cyan);
+  color:         var(--neon-cyan);
+  transition:    box-shadow 150ms ease, background 150ms ease;
+}
+.btn-neon-cyan:hover {
+  background:    rgba(0,255,255,0.08);
+  box-shadow:    var(--glow-cyan);
 }
 
 /* ---------------------------------------------------------------------------
@@ -225,7 +231,7 @@ body {
   flex-shrink:   0;
 }
 .status-dot-running  { background: var(--neon-green);  box-shadow: var(--glow-green);  animation: pulse-glow 2s ease-in-out infinite; }
-.status-dot-starting { background: var(--neon-cyan);   box-shadow: var(--glow-cyan);   animation: pulse-glow 1s ease-in-out infinite; }
+.status-dot-starting { background: var(--neon-purple); box-shadow: var(--glow-purple); animation: pulse-glow 1s ease-in-out infinite; }
 .status-dot-stopped  { background: var(--text-muted);  }
 .status-dot-error    { background: var(--neon-red);    box-shadow: var(--glow-red); }
-.status-dot-updating { background: var(--neon-purple); box-shadow: var(--glow-purple); animation: pulse-glow 1.5s ease-in-out infinite; }
+.status-dot-updating { background: var(--neon-cyan);   box-shadow: var(--glow-cyan);   animation: pulse-glow 1.5s ease-in-out infinite; }

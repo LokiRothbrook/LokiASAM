@@ -49,7 +49,7 @@ export function Sidebar() {
       <div className="mb-4 flex items-center justify-center w-10 h-10">
         <Zap
           className="w-8 h-8"
-          style={{ color: "var(--neon-cyan)", filter: "drop-shadow(0 0 6px var(--neon-cyan))" }}
+          style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px var(--neon-purple))" }}
         />
       </div>
 
@@ -64,12 +64,12 @@ export function Sidebar() {
                   className={cn(
                     "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
                     active
-                      ? "bg-[rgba(0,255,255,0.1)] text-[var(--neon-cyan)]"
+                      ? "bg-[rgba(191,0,255,0.1)] text-[var(--neon-purple)]"
                       : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.05)]"
                   )}
                   style={
                     active
-                      ? { boxShadow: "0 0 12px rgba(0,255,255,0.15)", borderLeft: "2px solid var(--neon-cyan)" }
+                      ? { boxShadow: "0 0 12px rgba(191,0,255,0.15)", borderLeft: "2px solid var(--neon-purple)" }
                       : {}
                   }
                 >

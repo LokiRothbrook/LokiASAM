@@ -15,7 +15,7 @@ export function TopBar() {
   const stats: GlobalStat[] = [
     { icon: Server,   label: "Servers",  value: "0",      color: "var(--text-muted)" },
     { icon: Activity, label: "Running",  value: "0",      color: "var(--neon-green)" },
-    { icon: Users,    label: "Players",  value: "0/0",    color: "var(--neon-cyan)" },
+    { icon: Users,    label: "Players",  value: "0/0",    color: "var(--neon-purple)" },
   ];
 
   return (

@@ -3,9 +3,25 @@ mod state;
 mod events;
 
 use tauri::Manager;
+use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let migrations = vec![
+        Migration {
+            version: 1,
+            description: "initial_schema",
+            sql: include_str!("../migrations/001_initial.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "clusters",
+            sql: include_str!("../migrations/002_clusters.sql"),
+            kind: MigrationKind::Up,
+        },
+    ];
+
     tauri::Builder::default()
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -21,7 +37,11 @@ pub fn run() {
 
             Ok(())
         })
-        .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(
+            tauri_plugin_sql::Builder::new()
+                .add_migrations("sqlite:lokiasam.db", migrations)
+                .build(),
+        )
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -61,6 +81,7 @@ pub fn run() {
             commands::mods::remove_mod,
             commands::mods::reorder_mods,
             // System stats
+            commands::system::check_dir,
             commands::system::get_process_stats,
             commands::system::query_server,
             commands::system::check_port_available,

@@ -54,5 +54,9 @@ tokio-cron-scheduler = { version = "0.13", features = ["signal"] }
 # INI file parsing
 configparser = { version = "3" }
 
+# Linux .tar.gz extraction for SteamCMD download
+flate2 = { version = "1" }
+tar   = { version = "0.4" }
+
 # Logging
 log = "0.4"

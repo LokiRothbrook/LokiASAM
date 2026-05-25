@@ -59,10 +59,16 @@ export interface ArkPlayer {
   steamId: string;
 }
 
+/**
+ * Serialized INI configuration for a server.
+ * `gameUserSettings` and `gameIni` are nested objects:
+ *   { "[Section]": { "Key": "Value", ... } }
+ * `launchArgs` is a flat key→value map of launch parameters.
+ */
 export interface ServerConfigJson {
-  gameUserSettings: Record<string, unknown>;
-  gameIni: Record<string, unknown>;
-  launchArgs: Record<string, unknown>;
+  gameUserSettings: Record<string, Record<string, string>>;
+  gameIni: Record<string, Record<string, string>>;
+  launchArgs: Record<string, string>;
 }
 
 export interface BackupRecord {
@@ -98,6 +104,12 @@ export interface EmailPayload {
   body: string;
 }
 
+export interface DirCheckResult {
+  writable: boolean;
+  freeBytes: number;
+  error: string | null;
+}
+
 export interface ScheduleConfig {
   serverId: string;
   scheduleType: string;
@@ -121,11 +133,30 @@ export const tauriCmd = {
     invoke<void>("delete_server", { serverId, deleteFiles }),
 
   // SteamCMD / installation
-  installSteamcmd:          (targetDir: string) => invoke<void>("install_steamcmd", { targetDir }),
-  validateSteamcmd:         (path: string) => invoke<boolean>("validate_steamcmd", { path }),
-  installServer:            (serverId: string) => invoke<void>("install_server", { serverId }),
-  updateServer:             (serverId: string) => invoke<void>("update_server", { serverId }),
-  validateServerFiles:      (serverId: string) => invoke<void>("validate_server_files", { serverId }),
+  /** Download and extract SteamCMD to targetDir. Streams to steamcmd://output/setup. */
+  installSteamcmd: (targetDir: string) =>
+    invoke<void>("install_steamcmd", { targetDir }),
+  /** Run steamcmd +quit to verify the binary works. Streams to steamcmd://output/validate. */
+  validateSteamcmd: (path: string) =>
+    invoke<boolean>("validate_steamcmd", { path }),
+  /**
+   * Install the ASA server via SteamCMD.
+   * @param serverId - Used for event channel naming (steamcmd://output/{serverId}).
+   * @param installPath - Absolute path where SteamCMD will install the server files.
+   * @param steamcmdPath - Absolute path to the steamcmd executable.
+   */
+  installServer: (serverId: string, installPath: string, steamcmdPath: string) =>
+    invoke<void>("install_server", { serverId, installPath, steamcmdPath }),
+  /**
+   * Update an existing server via SteamCMD +app_update.
+   * @param serverId - Used for event channel naming.
+   * @param installPath - Absolute path to the existing server install.
+   * @param steamcmdPath - Absolute path to the steamcmd executable.
+   */
+  updateServer: (serverId: string, installPath: string, steamcmdPath: string) =>
+    invoke<void>("update_server", { serverId, installPath, steamcmdPath }),
+  validateServerFiles: (serverId: string, installPath: string, steamcmdPath: string) =>
+    invoke<void>("validate_server_files", { serverId, installPath, steamcmdPath }),
   checkServerUpdateAvailable: (serverId: string) =>
     invoke<boolean>("check_server_update_available", { serverId }),
 
@@ -136,10 +167,14 @@ export const tauriCmd = {
   rconGetPlayers: (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
 
   // Config / INI
-  readServerConfig:  (serverId: string) => invoke<ServerConfigJson>("read_server_config", { serverId }),
-  writeServerConfig: (serverId: string, config: ServerConfigJson) =>
-    invoke<void>("write_server_config", { serverId, config }),
-  importIniFiles:    (gusPath: string, gameIniPath: string) =>
+  /** Read GameUserSettings.ini and Game.ini from the server's install path. */
+  readServerConfig: (installPath: string) =>
+    invoke<ServerConfigJson>("read_server_config", { installPath }),
+  /** Write config JSON back to GameUserSettings.ini and Game.ini on disk. */
+  writeServerConfig: (installPath: string, config: ServerConfigJson) =>
+    invoke<void>("write_server_config", { installPath, config }),
+  /** Parse the user's existing INI files and return structured JSON. */
+  importIniFiles: (gusPath: string, gameIniPath: string) =>
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
 
   // Backups
@@ -159,6 +194,11 @@ export const tauriCmd = {
     invoke<void>("reorder_mods", { serverId, orderedModIds }),
 
   // System stats
+  /**
+   * Validate a directory path: creates it if needed, tests write access,
+   * and returns available disk space on that volume.
+   */
+  checkDir: (path: string) => invoke<DirCheckResult>("check_dir", { path }),
   getProcessStats:    (pid: number) => invoke<ProcessStats>("get_process_stats", { pid }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),
