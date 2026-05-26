@@ -15,6 +15,8 @@ import { ConfigTab } from "@/components/server/tabs/ConfigTab";
 import { RconTab } from "@/components/server/tabs/RconTab";
 import { LogsTab } from "@/components/server/tabs/LogsTab";
 import { ModsTab } from "@/components/server/tabs/ModsTab";
+import { BackupsTab } from "@/components/server/tabs/BackupsTab";
+import { AutomationTab } from "@/components/server/tabs/AutomationTab";
 import { getServer } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -216,8 +218,8 @@ export default function ServerDetailPage() {
         {activeTab === "rcon"       && <RconTab      server={server} />}
         {activeTab === "logs"       && <LogsTab      server={server} />}
         {activeTab === "mods"       && <ModsTab server={server} />}
-        {activeTab === "backups"    && <PhaseStub label="Backups"     phase={6} />}
-        {activeTab === "automation" && <PhaseStub label="Automation"  phase={6} />}
+        {activeTab === "backups"    && <BackupsTab    server={server} />}
+        {activeTab === "automation" && <AutomationTab server={server} />}
       </div>
     </div>
   );

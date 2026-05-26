@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -8,26 +9,25 @@ pub struct ScheduleConfig {
     pub schedule_type: String,
     /// Standard 5-field cron expression (e.g. "0 3 * * *" for 3 AM daily)
     pub cron_expression: String,
-    /// JSON blob of type-specific options (broadcast message, retention count, etc.)
+    /// JSON blob of type-specific options (broadcast message, warning minutes, etc.)
     pub config_json: String,
 }
 
-/// Register a new cron job with `tokio-cron-scheduler` and persist it to SQLite.
-/// Returns the new schedule UUID.
+/// Generate and return a UUID for a new schedule.
+/// All schedule persistence is handled by the frontend via SQLite (db.ts).
 #[tauri::command]
 pub async fn create_schedule(_config: ScheduleConfig) -> Result<String, String> {
-    Err("Not implemented".into())
+    Ok(Uuid::new_v4().to_string())
 }
 
-/// Remove a schedule from the cron scheduler and delete its SQLite record.
+/// No-op — the frontend removes the schedule record from SQLite.
 #[tauri::command]
 pub async fn delete_schedule(_schedule_id: String) -> Result<(), String> {
-    Err("Not implemented".into())
+    Ok(())
 }
 
-/// Enable or disable a schedule without deleting it.
-/// Pauses/resumes the underlying cron job and updates the `enabled` flag in SQLite.
+/// No-op — the frontend updates the enabled flag in SQLite.
 #[tauri::command]
 pub async fn toggle_schedule(_schedule_id: String, _enabled: bool) -> Result<(), String> {
-    Err("Not implemented".into())
+    Ok(())
 }

@@ -382,6 +382,102 @@ export async function getServerModCount(serverId: string): Promise<number> {
   return rows[0]?.count ?? 0;
 }
 
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+export interface BackupRow {
+  id: string;
+  server_id: string;
+  file_path: string;
+  file_size_bytes: number;
+  map_id: string;
+  triggered_by: string;
+  created_at: string;
+}
+
+/** Insert a backup record returned by the Rust create_backup command. */
+export async function insertBackup(record: BackupRow): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO backups (id, server_id, file_path, file_size_bytes, map_id, triggered_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.id,
+      record.server_id,
+      record.file_path,
+      record.file_size_bytes,
+      record.map_id,
+      record.triggered_by,
+      record.created_at,
+    ]
+  );
+}
+
+/** Fetch all backup records for a server, newest first. */
+export async function getServerBackups(serverId: string): Promise<BackupRow[]> {
+  const db = await getDb();
+  return db.select<BackupRow[]>(
+    "SELECT * FROM backups WHERE server_id = ? ORDER BY created_at DESC",
+    [serverId]
+  );
+}
+
+/** Remove a backup record from the database (after the file has been deleted). */
+export async function deleteBackupRecord(backupId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM backups WHERE id = ?", [backupId]);
+}
+
+// ---------------------------------------------------------------------------
+// Schedule mutations
+// ---------------------------------------------------------------------------
+
+/** Delete a schedule record from the database. */
+export async function deleteScheduleRecord(scheduleId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM schedules WHERE id = ?", [scheduleId]);
+}
+
+/** Enable or disable a schedule. */
+export async function updateScheduleEnabled(
+  scheduleId: string,
+  enabled: boolean
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE schedules SET enabled = ? WHERE id = ?",
+    [enabled ? 1 : 0, scheduleId]
+  );
+}
+
+/** Update last_run and next_run after a schedule fires. */
+export async function updateScheduleRun(
+  scheduleId: string,
+  lastRun: string,
+  nextRun: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE schedules SET last_run = ?, next_run = ? WHERE id = ?",
+    [lastRun, nextRun, scheduleId]
+  );
+}
+
+/** Update the cron expression and config for a schedule. */
+export async function updateScheduleConfig(
+  scheduleId: string,
+  cronExpression: string,
+  configJson: string,
+  nextRun: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE schedules SET cron_expression = ?, config_json = ?, next_run = ? WHERE id = ?",
+    [cronExpression, configJson, nextRun, scheduleId]
+  );
+}
+
 /** Return the ISO timestamp of the most recent backup, or null if none exist. */
 export async function getLastBackupTime(serverId: string): Promise<string | null> {
   const db = await getDb();

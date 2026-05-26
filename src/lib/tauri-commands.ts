@@ -223,12 +223,27 @@ export const tauriCmd = {
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
 
   // Backups
-  createBackup:  (serverId: string, triggeredBy: string) =>
-    invoke<BackupRecord>("create_backup", { serverId, triggeredBy }),
-  restoreBackup: (serverId: string, backupId: string) =>
-    invoke<void>("restore_backup", { serverId, backupId }),
-  deleteBackup:  (backupId: string) => invoke<void>("delete_backup", { backupId }),
-  pruneBackups:  (serverId: string) => invoke<number>("prune_backups", { serverId }),
+  /**
+   * Zip the server's ShooterGame/Saved directory into backup_dir.
+   * Emits backup://progress/{serverId} events. Returns a BackupRecord to
+   * persist in SQLite via db.insertBackup().
+   */
+  createBackup: (
+    serverId: string,
+    serverName: string,
+    installPath: string,
+    backupDir: string,
+    mapId: string,
+    triggeredBy: string,
+  ) => invoke<BackupRecord>("create_backup", { serverId, serverName, installPath, backupDir, mapId, triggeredBy }),
+  /**
+   * Extract backup zip over ShooterGame/Saved. The frontend must stop the
+   * server before calling this and restart it after.
+   */
+  restoreBackup: (serverId: string, backupFilePath: string, installPath: string) =>
+    invoke<void>("restore_backup", { serverId, backupFilePath, installPath }),
+  /** Delete the zip file from disk. Frontend removes the SQLite record via db.deleteBackupRecord(). */
+  deleteBackup: (filePath: string) => invoke<void>("delete_backup", { filePath }),
 
   // Mods
   /**

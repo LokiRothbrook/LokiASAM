@@ -10,8 +10,9 @@ import { useServerStats } from "@/hooks/useServerStats";
 import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
-  getLastBackupTime, getNextScheduledRestart, getAppSetting,
+  getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup,
 } from "@/lib/db";
+import type { BackupRecord } from "@/lib/tauri-commands";
 import { ARK_MAPS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ServerRow } from "@/lib/db";
@@ -250,7 +251,15 @@ export function OverviewTab({ server }: Props) {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => tauriCmd.createBackup(server.id, "manual").catch(() => null)}
+          onClick={async () => {
+            const backupDir = await getAppSetting("backup_dir");
+            if (!backupDir) return;
+            tauriCmd.createBackup(server.id, server.name, server.install_path, backupDir, server.map_id, "manual")
+              .then(async (record: BackupRecord) => {
+                await insertBackup({ id: record.id, server_id: record.serverId, file_path: record.filePath, file_size_bytes: record.fileSizeBytes, map_id: record.mapId, triggered_by: record.triggeredBy, created_at: record.createdAt });
+              })
+              .catch(() => null);
+          }}
           disabled={isTransitioning}
         >
           <Save className="w-3.5 h-3.5 mr-1.5" />
