@@ -703,6 +703,7 @@ function InstallStep({
   const dbSavedRef = useRef(false);
   const installPathRef = useRef("");
   const steamcmdPathRef = useRef("");
+  const cacheDirRef = useRef("");
   const terminalRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -765,6 +766,7 @@ function InstallStep({
         const sep = baseDir.includes("\\") ? "\\" : "/";
         installPath = `${baseDir}${sep}servers${sep}${data.name}`;
         steamcmdPath = scmdPath;
+        cacheDirRef.current = `${baseDir}${sep}.cache${sep}asa-server`;
 
         // Persist server record to SQLite
         await createServer({
@@ -826,8 +828,8 @@ function InstallStep({
         steamcmdPath = steamcmdPathRef.current;
       }
 
-      // Run SteamCMD install (streams live output)
-      await tauriCmd.installServer(serverId, installPath, steamcmdPath);
+      // Run SteamCMD install (streams live output via shared cache)
+      await tauriCmd.installServer(serverId, installPath, cacheDirRef.current, steamcmdPath);
 
       // Write INI files from preset defaults
       const preset = SERVER_PRESETS.find((p) => p.id === data.presetId);

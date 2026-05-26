@@ -102,8 +102,13 @@ async function fireUpdate(server: ServerRow, schedule: ScheduleRow) {
     message?: string;
   };
 
-  const steamcmdPath = await getAppSetting("steamcmd_path");
-  if (!steamcmdPath) return;
+  const [steamcmdPath, baseDir] = await Promise.all([
+    getAppSetting("steamcmd_path"),
+    getAppSetting("base_dir"),
+  ]);
+  if (!steamcmdPath || !baseDir) return;
+  const sep = baseDir.includes("\\") ? "\\" : "/";
+  const cacheDir = `${baseDir}${sep}.cache${sep}asa-server`;
 
   if (server.status === "running" && cfg.broadcastWarning && cfg.warningMinutes && cfg.warningMinutes > 0) {
     const msg = (cfg.message ?? "Server updating in {minutes} minutes.")
@@ -120,7 +125,7 @@ async function fireUpdate(server: ServerRow, schedule: ScheduleRow) {
   }
 
   try {
-    await tauriCmd.updateServer(server.id, server.install_path, steamcmdPath);
+    await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
     toast.success(`[${server.name}] Scheduled update completed.`);
   } catch (e) {
     toast.error(`[${server.name}] Scheduled update failed: ${e}`);

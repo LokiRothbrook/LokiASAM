@@ -179,23 +179,34 @@ export const tauriCmd = {
   validateSteamcmd: (path: string) =>
     invoke<boolean>("validate_steamcmd", { path }),
   /**
-   * Install the ASA server via SteamCMD.
-   * @param serverId - Used for event channel naming (steamcmd://output/{serverId}).
-   * @param installPath - Absolute path where SteamCMD will install the server files.
-   * @param steamcmdPath - Absolute path to the steamcmd executable.
+   * Install the ASA server via a shared cache.
+   * SteamCMD downloads into `cacheDir` first, then files are copied to `installPath`.
+   * Re-running is safe — SteamCMD only downloads changed files, keeping installs fast.
+   * @param cacheDir - Shared cache path, e.g. `{baseDir}/.cache/asa-server`.
    */
-  installServer: (serverId: string, installPath: string, steamcmdPath: string) =>
-    invoke<void>("install_server", { serverId, installPath, steamcmdPath }),
+  installServer: (
+    serverId: string,
+    installPath: string,
+    cacheDir: string,
+    steamcmdPath: string,
+  ) => invoke<void>("install_server", { serverId, installPath, cacheDir, steamcmdPath }),
   /**
-   * Update an existing server via SteamCMD +app_update.
-   * @param serverId - Used for event channel naming.
-   * @param installPath - Absolute path to the existing server install.
-   * @param steamcmdPath - Absolute path to the steamcmd executable.
+   * Update the server via the shared cache, then sync to `installPath`.
+   * ShooterGame/Saved (player data + configs) is never overwritten.
+   * @param cacheDir - Shared cache path, e.g. `{baseDir}/.cache/asa-server`.
    */
-  updateServer: (serverId: string, installPath: string, steamcmdPath: string) =>
-    invoke<void>("update_server", { serverId, installPath, steamcmdPath }),
-  validateServerFiles: (serverId: string, installPath: string, steamcmdPath: string) =>
-    invoke<void>("validate_server_files", { serverId, installPath, steamcmdPath }),
+  updateServer: (
+    serverId: string,
+    installPath: string,
+    cacheDir: string,
+    steamcmdPath: string,
+  ) => invoke<void>("update_server", { serverId, installPath, cacheDir, steamcmdPath }),
+  validateServerFiles: (
+    serverId: string,
+    installPath: string,
+    cacheDir: string,
+    steamcmdPath: string,
+  ) => invoke<void>("validate_server_files", { serverId, installPath, cacheDir, steamcmdPath }),
   checkServerUpdateAvailable: (serverId: string) =>
     invoke<boolean>("check_server_update_available", { serverId }),
 
@@ -323,8 +334,8 @@ export const tauriCmd = {
     invoke<void>("send_os_notification", { title, body }),
 
   // Clusters
-  createCluster:          (name: string, clusterDirOverride?: string) =>
-    invoke<string>("create_cluster", { name, clusterDirOverride }),
+  createCluster:          (name: string, baseDir: string, clusterDirOverride?: string) =>
+    invoke<string>("create_cluster", { name, baseDir, clusterDirOverride }),
   deleteCluster:          (clusterId: string) => invoke<void>("delete_cluster", { clusterId }),
   addServerToCluster:     (serverId: string, clusterId: string) =>
     invoke<void>("add_server_to_cluster", { serverId, clusterId }),

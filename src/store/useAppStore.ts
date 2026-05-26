@@ -32,6 +32,11 @@ interface AppState {
   verifyTotal: number;
   /** Number of mod IDs processed so far (success + fail + skip). */
   verifyProgress: number;
+  /**
+   * Bumped each time a new notification is logged. TanStack Query watches this
+   * as a query key so the bell and notifications page re-fetch automatically.
+   */
+  unreadBump: number;
 
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
@@ -44,6 +49,10 @@ interface AppState {
   startVerifying: (total: number) => void;
   incrementVerifyProgress: () => void;
   stopVerifying: () => void;
+  /** Called by dispatchNotification after logging a new notification. */
+  incrementUnread: () => void;
+  /** Called after the user views/clears notifications. */
+  resetUnreadBump: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -58,6 +67,7 @@ export const useAppStore = create<AppState>((set) => ({
   verifying: false,
   verifyTotal: 0,
   verifyProgress: 0,
+  unreadBump: 0,
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
@@ -70,4 +80,6 @@ export const useAppStore = create<AppState>((set) => ({
   startVerifying: (total) => set({ verifying: true, verifyTotal: total, verifyProgress: 0 }),
   incrementVerifyProgress: () => set((s) => ({ verifyProgress: s.verifyProgress + 1 })),
   stopVerifying: () => set({ verifying: false, verifyTotal: 0, verifyProgress: 0 }),
+  incrementUnread: () => set((s) => ({ unreadBump: s.unreadBump + 1 })),
+  resetUnreadBump: () => set({ unreadBump: 0 }),
 }));

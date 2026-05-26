@@ -45,7 +45,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 zip = { version = "2" }
 
 # Email / SMTP notifications
-lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls"], default-features = false }
+lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"], default-features = false }
 
 # System process stats (CPU / RAM per PID)
 sysinfo = { version = "0.32" }

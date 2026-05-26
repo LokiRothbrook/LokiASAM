@@ -246,6 +246,71 @@ export async function getClusters(): Promise<ClusterRow[]> {
   return db.select<ClusterRow[]>("SELECT * FROM clusters ORDER BY name ASC");
 }
 
+/** Fetch a single cluster by ID. Returns null if not found. */
+export async function getCluster(id: string): Promise<ClusterRow | null> {
+  const db = await getDb();
+  const rows = await db.select<ClusterRow[]>(
+    "SELECT * FROM clusters WHERE id = ?",
+    [id]
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
+/** Insert a new cluster record. */
+export async function createClusterRecord(
+  id: string,
+  name: string,
+  clusterDirOverride: string | null
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO clusters (id, name, cluster_dir_override, settings_json)
+     VALUES (?, ?, ?, '{}')`,
+    [id, name, clusterDirOverride ?? null]
+  );
+}
+
+/** Delete a cluster record. Servers in the cluster should have cluster_id cleared first. */
+export async function deleteClusterRecord(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM clusters WHERE id = ?", [id]);
+}
+
+/** Fetch all servers belonging to a specific cluster. */
+export async function getServersInCluster(clusterId: string): Promise<ServerRow[]> {
+  const db = await getDb();
+  return db.select<ServerRow[]>(
+    "SELECT * FROM servers WHERE cluster_id = ? ORDER BY name ASC",
+    [clusterId]
+  );
+}
+
+/** Set or clear a server's cluster_id. Pass null to remove from cluster. */
+export async function setServerCluster(
+  serverId: string,
+  clusterId: string | null
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET cluster_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [clusterId, serverId]
+  );
+}
+
+/** Fetch clusters with server count for the list page. */
+export async function getClustersWithServerCount(): Promise<
+  Array<ClusterRow & { server_count: number }>
+> {
+  const db = await getDb();
+  return db.select<Array<ClusterRow & { server_count: number }>>(
+    `SELECT c.*, COUNT(s.id) as server_count
+     FROM clusters c
+     LEFT JOIN servers s ON s.cluster_id = c.id
+     GROUP BY c.id
+     ORDER BY c.name ASC`
+  );
+}
+
 /** Check if a server name is already in use. */
 export async function isServerNameTaken(name: string): Promise<boolean> {
   const db = await getDb();
@@ -498,4 +563,188 @@ export async function getNextScheduledRestart(serverId: string): Promise<string 
     [serverId]
   );
   return rows[0]?.next_run ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// In-app Notifications
+// ---------------------------------------------------------------------------
+
+export interface InAppNotificationRow {
+  id: string;
+  server_id: string | null;
+  event_type: string;
+  title: string;
+  body: string;
+  severity: string;
+  read: number;
+  created_at: string;
+}
+
+export interface LogNotificationInput {
+  id: string;
+  serverId: string | null;
+  eventType: string;
+  title: string;
+  body: string;
+  severity: "info" | "success" | "warning" | "error";
+}
+
+/** Insert a new notification into the in_app_notifications log. */
+export async function logNotification(input: LogNotificationInput): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read)
+     VALUES (?, ?, ?, ?, ?, ?, 0)`,
+    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity]
+  );
+}
+
+export interface GetNotificationsFilter {
+  serverId?: string | null;
+  unreadOnly?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+/** Fetch notification rows, newest first. */
+export async function getNotifications(
+  filter: GetNotificationsFilter = {}
+): Promise<InAppNotificationRow[]> {
+  const db = await getDb();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filter.serverId !== undefined) {
+    if (filter.serverId === null) {
+      conditions.push("server_id IS NULL");
+    } else {
+      conditions.push("server_id = ?");
+      params.push(filter.serverId);
+    }
+  }
+  if (filter.unreadOnly) {
+    conditions.push("read = 0");
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = filter.limit ?? 50;
+  const offset = filter.offset ?? 0;
+
+  return db.select<InAppNotificationRow[]>(
+    `SELECT * FROM in_app_notifications ${where}
+     ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+}
+
+/** Return the count of unread notifications. */
+export async function getUnreadNotificationCount(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<{ count: number }[]>(
+    "SELECT COUNT(*) as count FROM in_app_notifications WHERE read = 0"
+  );
+  return rows[0]?.count ?? 0;
+}
+
+/** Mark a single notification as read. */
+export async function markNotificationRead(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE in_app_notifications SET read = 1 WHERE id = ?", [id]);
+}
+
+/** Mark all notifications as read. */
+export async function markAllNotificationsRead(): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE in_app_notifications SET read = 1 WHERE read = 0");
+}
+
+/** Delete notifications older than `days` days. */
+export async function pruneOldNotifications(days: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `DELETE FROM in_app_notifications
+     WHERE created_at < datetime('now', '-' || ? || ' days')`,
+    [days]
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Notification Configs
+// ---------------------------------------------------------------------------
+
+export interface NotificationConfigRow {
+  id: string;
+  server_id: string | null;
+  channel: string;
+  enabled: number;
+  config_json: string;
+  events_json: string;
+}
+
+export interface SaveNotificationConfigInput {
+  id: string;
+  serverId: string | null;
+  channel: string;
+  enabled: boolean;
+  configJson: string;
+  eventsJson: string;
+}
+
+/** Fetch all notification configs for a server (and global fallbacks). */
+export async function getNotificationConfigs(
+  serverId: string | null
+): Promise<NotificationConfigRow[]> {
+  const db = await getDb();
+  if (serverId) {
+    // Return per-server configs + global configs (server_id IS NULL)
+    return db.select<NotificationConfigRow[]>(
+      `SELECT * FROM notification_configs
+       WHERE server_id = ? OR server_id IS NULL
+       ORDER BY server_id NULLS LAST`,
+      [serverId]
+    );
+  }
+  return db.select<NotificationConfigRow[]>(
+    "SELECT * FROM notification_configs WHERE server_id IS NULL"
+  );
+}
+
+/** Fetch notification configs for a specific server only (no global fallback). */
+export async function getServerNotificationConfigs(
+  serverId: string
+): Promise<NotificationConfigRow[]> {
+  const db = await getDb();
+  return db.select<NotificationConfigRow[]>(
+    "SELECT * FROM notification_configs WHERE server_id = ?",
+    [serverId]
+  );
+}
+
+/** Upsert a notification config (insert or replace on server_id+channel conflict). */
+export async function saveNotificationConfig(
+  input: SaveNotificationConfigInput
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO notification_configs (id, server_id, channel, enabled, config_json, events_json)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_id, channel) DO UPDATE SET
+       enabled     = excluded.enabled,
+       config_json = excluded.config_json,
+       events_json = excluded.events_json`,
+    [
+      input.id,
+      input.serverId ?? null,
+      input.channel,
+      input.enabled ? 1 : 0,
+      input.configJson,
+      input.eventsJson,
+    ]
+  );
+}
+
+/** Delete a notification config row. */
+export async function deleteNotificationConfig(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM notification_configs WHERE id = ?", [id]);
 }

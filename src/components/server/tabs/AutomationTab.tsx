@@ -12,18 +12,22 @@ import { useState, useCallback, useEffect } from "react";
 import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
-  AlertTriangle,
+  AlertTriangle, Bell, Mail, MessageSquare, Monitor, ChevronDown, ChevronUp, Send,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { CronBuilder, getNextCronDate, CRON_PRESETS } from "@/components/shared/CronBuilder";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
-  type ScheduleRow, type CreateScheduleInput,
+  getServerNotificationConfigs, saveNotificationConfig,
+  type ScheduleRow, type CreateScheduleInput, type NotificationConfigRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
@@ -496,6 +500,357 @@ export function AutomationTab({ server }: Props) {
               onRefresh={loadSchedules}
             />
           ))}
+        </div>
+      )}
+
+      {/* Notification Config */}
+      <NotificationConfigSection serverId={server.id} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NotificationConfigSection — per-server channel configuration
+// ---------------------------------------------------------------------------
+
+const CHANNEL_DEFS = [
+  {
+    id:    "desktop",
+    label: "Desktop Notifications",
+    icon:  Monitor,
+    desc:  "OS-level toast notifications via the system tray.",
+    fields: [],
+  },
+  {
+    id:    "discord",
+    label: "Discord Webhook",
+    icon:  MessageSquare,
+    desc:  "POST an embed to a Discord channel webhook URL.",
+    fields: [
+      { key: "webhookUrl", label: "Webhook URL", placeholder: "https://discord.com/api/webhooks/…", type: "url" },
+    ],
+  },
+  {
+    id:    "email",
+    label: "Email / SMTP",
+    icon:  Mail,
+    desc:  "Send email alerts via your SMTP server.",
+    fields: [
+      { key: "host",        label: "SMTP Host",    placeholder: "smtp.example.com",    type: "text" },
+      { key: "port",        label: "Port",         placeholder: "587",                 type: "number" },
+      { key: "username",    label: "Username",     placeholder: "user@example.com",    type: "text" },
+      { key: "password",    label: "Password",     placeholder: "••••••••",            type: "password" },
+      { key: "fromAddress", label: "From",         placeholder: "noreply@example.com", type: "email" },
+      { key: "toAddress",   label: "To",           placeholder: "admin@example.com",   type: "email" },
+    ],
+  },
+];
+
+const EVENT_OPTIONS: { value: string; label: string }[] = [
+  { value: NOTIFICATION_EVENTS.SERVER_STARTED,    label: "Server Started" },
+  { value: NOTIFICATION_EVENTS.SERVER_STOPPED,    label: "Server Stopped" },
+  { value: NOTIFICATION_EVENTS.SERVER_CRASHED,    label: "Server Crashed" },
+  { value: NOTIFICATION_EVENTS.BACKUP_COMPLETED,  label: "Backup Completed" },
+  { value: NOTIFICATION_EVENTS.BACKUP_FAILED,     label: "Backup Failed" },
+  { value: NOTIFICATION_EVENTS.SERVER_UPDATED,    label: "Server Updated" },
+];
+
+interface NotificationConfigSectionProps {
+  serverId: string;
+}
+
+function NotificationConfigSection({ serverId }: NotificationConfigSectionProps) {
+  const [open, setOpen] = useState(false);
+  const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  const loadConfigs = useCallback(async () => {
+    try {
+      const rows = await getServerNotificationConfigs(serverId);
+      setConfigs(rows);
+    } catch { /* ignore */ }
+  }, [serverId]);
+
+  useEffect(() => {
+    if (open) loadConfigs();
+  }, [open, loadConfigs]);
+
+  function getConfig(channelId: string): NotificationConfigRow | undefined {
+    return configs.find((c) => c.channel === channelId);
+  }
+
+  async function handleToggle(channelId: string, enabled: boolean) {
+    const existing = getConfig(channelId);
+    const id = existing?.id ?? crypto.randomUUID();
+    await saveNotificationConfig({
+      id,
+      serverId,
+      channel: channelId,
+      enabled,
+      configJson: existing?.config_json ?? "{}",
+      eventsJson: existing?.events_json ?? "[]",
+    });
+    await loadConfigs();
+  }
+
+  async function handleSaveConfig(
+    channelId: string,
+    configJson: string,
+    eventsJson: string
+  ) {
+    setSaving(channelId);
+    try {
+      const existing = getConfig(channelId);
+      const id = existing?.id ?? crypto.randomUUID();
+      await saveNotificationConfig({
+        id,
+        serverId,
+        channel: channelId,
+        enabled: existing?.enabled === 1,
+        configJson,
+        eventsJson,
+      });
+      await loadConfigs();
+      toast.success("Notification config saved.");
+    } catch (e) {
+      toast.error(`Failed to save config: ${e}`);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function handleTest(channelId: string) {
+    const config = getConfig(channelId);
+    const cfg = JSON.parse(config?.config_json ?? "{}") as Record<string, string | boolean | number>;
+    try {
+      if (channelId === "desktop") {
+        await tauriCmd.sendOsNotification("LokiASAM Test", "Desktop notifications are working.");
+      } else if (channelId === "discord") {
+        const url = cfg.webhookUrl as string | undefined;
+        if (!url) { toast.error("Enter a webhook URL first."); return; }
+        await tauriCmd.sendDiscordNotification(url, {
+          title:       "LokiASAM Test",
+          description: "Discord notifications are working.",
+          color:       0x00ff88,
+          serverName:  "Test",
+          eventType:   "test",
+        });
+      } else if (channelId === "email") {
+        const to = cfg.toAddress as string | undefined;
+        if (!to) { toast.error("Enter a To address first."); return; }
+        await tauriCmd.sendEmailNotification(
+          {
+            host:        (cfg.host        as string) ?? "",
+            port:        Number(cfg.port  ?? 587),
+            username:    (cfg.username    as string) ?? "",
+            password:    (cfg.password    as string) ?? "",
+            fromAddress: (cfg.fromAddress as string) ?? "noreply@lokiasam",
+            toAddress:   to,
+            useTls:      Boolean(cfg.useTls ?? false),
+          },
+          { subject: "LokiASAM Test", body: "Email notifications are working." }
+        );
+      }
+      toast.success("Test notification sent.");
+    } catch (e) {
+      toast.error(`Test failed: ${e}`);
+    }
+  }
+
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{ border: "1px solid var(--border)" }}
+    >
+      {/* Collapsible header */}
+      <button
+        className="flex items-center justify-between w-full px-4 py-3 transition-colors hover:bg-white/[0.02]"
+        onClick={() => setOpen((v) => !v)}
+        style={{ background: "rgba(191,0,255,0.04)" }}
+      >
+        <div className="flex items-center gap-2">
+          <Bell className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+          <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+            Notification Channels
+          </span>
+        </div>
+        {open
+          ? <ChevronUp className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+          : <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+        }
+      </button>
+
+      {open && (
+        <div className="flex flex-col divide-y" style={{ borderColor: "var(--border)" }}>
+          {CHANNEL_DEFS.map((ch) => {
+            const row = getConfig(ch.id);
+            const enabled = row?.enabled === 1;
+            const cfg = JSON.parse(row?.config_json ?? "{}") as Record<string, string>;
+            const events: string[] = JSON.parse(row?.events_json ?? "[]");
+            const Icon = ch.icon;
+
+            return (
+              <ChannelCard
+                key={ch.id}
+                channelId={ch.id}
+                icon={Icon}
+                label={ch.label}
+                desc={ch.desc}
+                fields={ch.fields}
+                enabled={enabled}
+                cfg={cfg}
+                events={events}
+                saving={saving === ch.id}
+                onToggle={(v) => handleToggle(ch.id, v)}
+                onSave={(cfgJson, evJson) => handleSaveConfig(ch.id, cfgJson, evJson)}
+                onTest={() => handleTest(ch.id)}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ChannelCard — individual notification channel config
+// ---------------------------------------------------------------------------
+
+interface ChannelCardProps {
+  channelId: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  label: string;
+  desc: string;
+  fields: { key: string; label: string; placeholder: string; type: string }[];
+  enabled: boolean;
+  cfg: Record<string, string>;
+  events: string[];
+  saving: boolean;
+  onToggle: (v: boolean) => void;
+  onSave: (cfgJson: string, evJson: string) => void;
+  onTest: () => void;
+}
+
+function ChannelCard({
+  channelId, icon: Icon, label, desc, fields,
+  enabled, cfg, events, saving,
+  onToggle, onSave, onTest,
+}: ChannelCardProps) {
+  const [localCfg, setLocalCfg] = useState<Record<string, string>>(cfg);
+  const [localEvents, setLocalEvents] = useState<string[]>(events);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => { setLocalCfg(cfg); }, [JSON.stringify(cfg)]);
+  useEffect(() => { setLocalEvents(events); }, [JSON.stringify(events)]);
+
+  function toggleEvent(ev: string) {
+    setLocalEvents((prev) =>
+      prev.includes(ev) ? prev.filter((e) => e !== ev) : [...prev, ev]
+    );
+  }
+
+  return (
+    <div className="px-4 py-3 flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{desc}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {enabled && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="w-7 h-7"
+              onClick={onTest}
+              title="Send test notification"
+            >
+              <Send className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
+            </Button>
+          )}
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-xs"
+            style={{ color: "var(--neon-purple)" }}
+          >
+            {expanded ? "Hide" : "Configure"}
+          </button>
+          <Switch
+            checked={enabled}
+            onCheckedChange={onToggle}
+          />
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="flex flex-col gap-3 pl-7">
+          {/* Config fields */}
+          {fields.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {fields.map((f) => (
+                <div key={f.key} className="flex flex-col gap-1">
+                  <Label className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                    {f.label}
+                  </Label>
+                  <Input
+                    type={f.type}
+                    value={localCfg[f.key] ?? ""}
+                    onChange={(e) =>
+                      setLocalCfg((prev) => ({ ...prev, [f.key]: e.target.value }))
+                    }
+                    placeholder={f.placeholder}
+                    className="h-7 text-xs"
+                    style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Event filters */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+              Trigger on events{" "}
+              <span style={{ color: "var(--text-subtle)" }}>(all if none selected)</span>
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {EVENT_OPTIONS.map((ev) => {
+                const active = localEvents.includes(ev.value);
+                return (
+                  <button
+                    key={ev.value}
+                    onClick={() => toggleEvent(ev.value)}
+                    className="text-[10px] px-2 py-1 rounded transition-all"
+                    style={{
+                      background: active ? "rgba(191,0,255,0.15)" : "transparent",
+                      border: `1px solid ${active ? "var(--neon-purple)" : "var(--border)"}`,
+                      color: active ? "var(--neon-purple)" : "var(--text-muted)",
+                    }}
+                  >
+                    {ev.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <Button
+            size="sm"
+            onClick={() =>
+              onSave(JSON.stringify(localCfg), JSON.stringify(localEvents))
+            }
+            disabled={saving}
+            className="h-7 text-xs self-end"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--neon-purple)",
+              color: "var(--neon-purple)",
+            }}
+          >
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
+          </Button>
         </div>
       )}
     </div>

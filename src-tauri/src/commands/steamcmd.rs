@@ -235,137 +235,265 @@ pub async fn validate_steamcmd(
     Ok(true)
 }
 
-/// Install the ASA Dedicated Server (App ID 2430930) via SteamCMD.
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Run SteamCMD `+force_install_dir {dir} +login anonymous +app_update {ASA_ID} +quit`
+/// with an optional `validate` flag. Retries once on non-zero exit (Windows self-update).
+async fn steamcmd_app_update(
+    app: &tauri::AppHandle,
+    steamcmd_path: &str,
+    target_dir: &str,
+    validate: bool,
+    channel: &str,
+) -> Result<(), String> {
+    let validate_flag = if validate { "validate" } else { "" };
+
+    let mut base_args = vec![
+        "+force_install_dir", target_dir,
+        "+login", "anonymous",
+        "+app_update", ASA_SERVER_APP_ID,
+    ];
+    if validate {
+        base_args.push(validate_flag);
+    }
+    base_args.push("+quit");
+
+    let mut child = build_steamcmd_cmd(steamcmd_path, &base_args)
+        .spawn()
+        .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+
+    let exit_code = stream_process(app, &mut child, channel).await?;
+    if exit_code == 0 {
+        return Ok(());
+    }
+
+    // Retry once — SteamCMD exits non-zero on Windows first-run self-update.
+    emit_line(
+        app, channel, "stdout",
+        &format!("SteamCMD exited {exit_code} (may be first-run self-update). Retrying…"),
+    )?;
+    let mut child2 = build_steamcmd_cmd(steamcmd_path, &base_args)
+        .spawn()
+        .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
+    let exit_code2 = stream_process(app, &mut child2, channel).await?;
+    if exit_code2 == 0 {
+        Ok(())
+    } else {
+        Err(format!("SteamCMD exited {exit_code2} after retry."))
+    }
+}
+
+/// Recursively copy `src` into `dst`, skipping `skip_rel` sub-paths (relative to `src`).
+/// Creates `dst` if it doesn't exist. Existing files in `dst` are overwritten.
+fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+
+        // Build the relative path fragment for skip checking (case-insensitive on Windows)
+        let should_skip = skip_rel.iter().any(|skip| {
+            file_name_str.eq_ignore_ascii_case(skip)
+        });
+        if should_skip {
+            continue;
+        }
+
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path, &[])?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+/// Install the ASA Dedicated Server using a shared cache directory to avoid
+/// re-downloading the ~15 GB game files for every new server.
+///
+/// Flow:
+///  1. Ensure `cache_dir` exists.
+///  2. Run SteamCMD `+force_install_dir {cache_dir} +app_update 2430930` — this
+///     updates the cache (fast no-op if already current).
+///  3. Recursively copy the cache into `install_path` (full copy, no hardlinks).
+///
 /// Emits line-by-line output to `steamcmd://output/{server_id}`.
 #[tauri::command]
 pub async fn install_server(
     server_id: String,
     install_path: String,
+    cache_dir: String,
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
-    emit_line(&app_handle, &channel, "stdout", &format!("Installing ASA server to: {install_path}"))?;
-    emit_line(&app_handle, &channel, "stdout", &format!("Using SteamCMD: {steamcmd_path}"))?;
 
-    let mut child = build_steamcmd_cmd(
-        &steamcmd_path,
-        &[
-            "+force_install_dir", &install_path,
-            "+login", "anonymous",
-            "+app_update", ASA_SERVER_APP_ID,
-            "+quit",
-        ],
-    )
-    .spawn()
-    .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+    // ── Step 1: ensure cache dir exists ──────────────────────────────────────
+    emit_line(&app_handle, &channel, "stdout",
+        &format!("Ensuring server cache at: {cache_dir}"))?;
+    tokio::fs::create_dir_all(&cache_dir).await
+        .map_err(|e| format!("Failed to create cache directory: {e}"))?;
 
-    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
+    // ── Step 2: update/populate the cache via SteamCMD ───────────────────────
+    emit_line(&app_handle, &channel, "stdout",
+        "Updating server cache (SteamCMD will skip unchanged files)…")?;
+    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel).await?;
+    emit_line(&app_handle, &channel, "stdout", "Cache is up to date.")?;
 
-    if exit_code == 0 {
-        emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
-        return Ok(());
-    }
+    // ── Step 3: copy cache → server install dir ───────────────────────────────
+    emit_line(&app_handle, &channel, "stdout",
+        &format!("Copying server files from cache to: {install_path}"))?;
+    tokio::fs::create_dir_all(&install_path).await
+        .map_err(|e| format!("Failed to create install directory: {e}"))?;
 
-    // On Windows, SteamCMD can exit with code 7 (self-update) or 8 (missing config)
-    // on its first real app_update call while it finishes initializing. Retry once.
-    emit_line(
-        &app_handle,
-        &channel,
-        "stdout",
-        &format!(
-            "SteamCMD exited with code {exit_code} (first-run initialization on Windows is normal). Retrying…"
-        ),
-    )?;
+    let src = std::path::PathBuf::from(&cache_dir);
+    let dst = std::path::PathBuf::from(&install_path);
 
-    let mut child2 = build_steamcmd_cmd(
-        &steamcmd_path,
-        &[
-            "+force_install_dir", &install_path,
-            "+login", "anonymous",
-            "+app_update", ASA_SERVER_APP_ID,
-            "+quit",
-        ],
-    )
-    .spawn()
-    .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
+    // Run the potentially slow recursive copy on a blocking thread.
+    tokio::task::spawn_blocking(move || {
+        copy_dir_recursive(&src, &dst, &[])
+    })
+    .await
+    .map_err(|e| format!("Copy task panicked: {e}"))?
+    .map_err(|e| format!("Failed to copy server files: {e}"))?;
 
-    let exit_code2 = stream_process(&app_handle, &mut child2, &channel).await?;
-
-    if exit_code2 == 0 {
-        emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
-        Ok(())
-    } else {
-        let msg = format!("SteamCMD install exited with code {exit_code2} after retry. Installation may have failed.");
-        emit_line(&app_handle, &channel, "stderr", &msg)?;
-        Err(msg)
-    }
+    emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
+    Ok(())
 }
 
-/// Update an existing ASA server via SteamCMD +app_update.
+/// Update an existing ASA server.
+///
+/// Flow:
+///  1. Run SteamCMD against `cache_dir` to bring the cache up to date.
+///  2. Copy updated files from cache to `install_path`, skipping
+///     `ShooterGame/Saved` so player data and configs are preserved.
+///
 /// Emits output to `steamcmd://output/{server_id}`.
 #[tauri::command]
 pub async fn update_server(
     server_id: String,
     install_path: String,
+    cache_dir: String,
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
-    emit_line(&app_handle, &channel, "stdout", "Checking for updates...")?;
 
-    let mut child = build_steamcmd_cmd(
-        &steamcmd_path,
-        &[
-            "+force_install_dir", &install_path,
-            "+login", "anonymous",
-            "+app_update", ASA_SERVER_APP_ID,
-            "+quit",
-        ],
-    )
-    .spawn()
-    .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+    // ── Step 1: update the shared cache ──────────────────────────────────────
+    emit_line(&app_handle, &channel, "stdout", "Checking for updates (cache)…")?;
+    tokio::fs::create_dir_all(&cache_dir).await
+        .map_err(|e| format!("Failed to ensure cache directory: {e}"))?;
+    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel).await?;
+    emit_line(&app_handle, &channel, "stdout", "Cache updated.")?;
 
-    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
+    // ── Step 2: sync cache → server, preserving ShooterGame/Saved ────────────
+    emit_line(&app_handle, &channel, "stdout",
+        "Syncing updated files to server (preserving Saved/ data)…")?;
 
-    if exit_code == 0 {
-        emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
-        Ok(())
-    } else {
-        Err(format!("SteamCMD update exited with code {exit_code}."))
-    }
+    let cache_path = std::path::PathBuf::from(&cache_dir);
+    let server_path = std::path::PathBuf::from(&install_path);
+
+    tokio::task::spawn_blocking(move || {
+        sync_cache_to_server(&cache_path, &server_path)
+    })
+    .await
+    .map_err(|e| format!("Sync task panicked: {e}"))?
+    .map_err(|e| format!("Failed to sync server files: {e}"))?;
+
+    emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
+    Ok(())
 }
 
-/// Run SteamCMD +app_update with the `validate` flag to repair corrupted files.
+/// Copy from `cache` to `server`, skipping subdirectories in `server` that
+/// contain user data (ShooterGame/Saved).  Top-level directory names are
+/// compared case-insensitively so the logic works on both Linux and Windows.
+fn sync_cache_to_server(cache: &Path, server: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(server)?;
+    for entry in std::fs::read_dir(cache)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_lower = name.to_string_lossy().to_lowercase();
+        let src = entry.path();
+        let dst = server.join(&name);
+
+        if src.is_dir() {
+            // For the "ShooterGame" directory, recurse but skip the "Saved" subtree.
+            if name_lower == "shootergame" {
+                sync_shootergame(&src, &dst)?;
+            } else {
+                copy_dir_recursive(&src, &dst, &[])?;
+            }
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// Recurse into `ShooterGame/`, skipping the `Saved/` subdirectory so player
+/// data, configs, and logs in the live server are never overwritten.
+fn sync_shootergame(cache_sg: &Path, server_sg: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(server_sg)?;
+    for entry in std::fs::read_dir(cache_sg)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_lower = name.to_string_lossy().to_lowercase();
+        // Skip ShooterGame/Saved — contains player data and server configs.
+        if name_lower == "saved" {
+            continue;
+        }
+        let src = entry.path();
+        let dst = server_sg.join(&name);
+        if src.is_dir() {
+            copy_dir_recursive(&src, &dst, &[])?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate and repair the server files in the shared cache, then re-copy to the
+/// server install directory.  Use this when files are suspected to be corrupted.
 #[tauri::command]
 pub async fn validate_server_files(
     server_id: String,
     install_path: String,
+    cache_dir: String,
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
-    emit_line(&app_handle, &channel, "stdout", "Validating server files...")?;
+    emit_line(&app_handle, &channel, "stdout", "Validating server files in cache…")?;
 
-    let mut child = build_steamcmd_cmd(
-        &steamcmd_path,
-        &[
-            "+force_install_dir", &install_path,
-            "+login", "anonymous",
-            "+app_update", ASA_SERVER_APP_ID, "validate",
-            "+quit",
-        ],
-    )
-    .spawn()
-    .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
+    tokio::fs::create_dir_all(&cache_dir).await
+        .map_err(|e| format!("Failed to ensure cache directory: {e}"))?;
 
-    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
+    // Validate + repair the cache
+    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, true, &channel).await?;
+    emit_line(&app_handle, &channel, "stdout", "Validation complete. Re-syncing to server…")?;
 
-    if exit_code == 0 {
-        Ok(())
-    } else {
-        Err(format!("SteamCMD validate exited with code {exit_code}."))
-    }
+    let cache_path = std::path::PathBuf::from(&cache_dir);
+    let server_path = std::path::PathBuf::from(&install_path);
+    tokio::task::spawn_blocking(move || {
+        sync_cache_to_server(&cache_path, &server_path)
+    })
+    .await
+    .map_err(|e| format!("Sync task panicked: {e}"))?
+    .map_err(|e| format!("Failed to sync after validate: {e}"))?;
+
+    emit_line(&app_handle, &channel, "stdout", "Server files validated and synced.")?;
+    Ok(())
 }
 
 /// Check whether a newer build is available for the ASA server.
