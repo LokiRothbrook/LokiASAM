@@ -18,6 +18,7 @@ import { LokiIcon } from "@/components/shared/LokiIcon";
 import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
 import { useAppStore } from "@/store/useAppStore";
 import { getAppSetting, setAppSetting, initDb } from "@/lib/db";
+import { applyThemeAccent } from "@/lib/theme";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 
@@ -59,7 +60,11 @@ export function SetupGuard({ children }: SetupGuardProps) {
           sep + "lokiasam" + sep + "lokiasam.db";
         await initDb(dbPath);
 
-        const value = await getAppSetting("setup_complete");
+        const [value, accent] = await Promise.all([
+          getAppSetting("setup_complete"),
+          getAppSetting("theme_accent"),
+        ]);
+        if (accent) applyThemeAccent(accent);
         const complete = value === "true";
         setSetupComplete(complete);
         setSetupChecked(true);

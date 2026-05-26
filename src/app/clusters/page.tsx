@@ -47,7 +47,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
     if (!name.trim()) return;
     setBusy(true);
     try {
-      const baseDir = (await getAppSetting("base_install_dir")) ?? "";
+      const baseDir = (await getAppSetting("base_dir")) ?? "";
       const id = await tauriCmd.createCluster(
         name.trim(),
         baseDir,

@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Server,
   LayoutDashboard,
   Network,
   Bell,
@@ -12,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LokiIcon } from "@/components/shared/LokiIcon";
+import { useServers } from "@/hooks/useServers";
 
 interface NavItem {
   href: string;
@@ -21,14 +21,16 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: "/",             icon: LayoutDashboard, label: "Dashboard",      exact: true },
-  { href: "/clusters",     icon: Network,         label: "Clusters" },
-  { href: "/notifications",icon: Bell,            label: "Notifications" },
-  { href: "/settings",     icon: Settings,        label: "Settings" },
+  { href: "/",              icon: LayoutDashboard, label: "Dashboard",     exact: true },
+  { href: "/clusters",      icon: Network,         label: "Clusters" },
+  { href: "/notifications", icon: Bell,            label: "Notifications" },
+  { href: "/settings",      icon: Settings,        label: "Settings" },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { data: servers = [] } = useServers();
+  const runningCount = servers.filter((s) => s.status === "running").length;
 
   function isActive(item: NavItem): boolean {
     if (item.exact) return pathname === item.href;
@@ -82,16 +84,30 @@ export function Sidebar() {
         })}
       </div>
 
-      {/* Server status indicator strip — populated in Phase 3 */}
-      <div className="flex flex-col gap-1 px-2 w-full mb-2">
+      {/* Running server count badge */}
+      <div className="px-2 w-full mb-1">
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center justify-center w-full h-8">
-              <Server className="w-4 h-4" style={{ color: "var(--text-subtle)" }} />
+            <div className="flex items-center justify-center w-full h-8 relative">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{
+                  background: runningCount > 0 ? "var(--neon-green)" : "var(--text-subtle)",
+                  boxShadow: runningCount > 0 ? "var(--glow-green)" : "none",
+                }}
+              />
+              {runningCount > 0 && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold"
+                  style={{ background: "var(--neon-green)", color: "#000" }}
+                >
+                  {runningCount > 9 ? "9+" : runningCount}
+                </span>
+              )}
             </div>
           </TooltipTrigger>
           <TooltipContent side="right" className="text-xs">
-            Server status (Phase 3)
+            {runningCount > 0 ? `${runningCount} server${runningCount !== 1 ? "s" : ""} running` : "No servers running"}
           </TooltipContent>
         </Tooltip>
       </div>

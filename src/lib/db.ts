@@ -153,12 +153,12 @@ async function runMigrations(db: Database): Promise<void> {
   // Seed default settings (only for brand-new DBs)
   await db.execute(`INSERT OR IGNORE INTO app_settings (key, value) VALUES
     ('setup_complete', 'false'),
-    ('base_install_dir', ''),
+    ('base_dir', ''),
     ('backup_dir', ''),
     ('steamcmd_path', ''),
     ('steamcmd_mode', 'auto'),
     ('app_version', '0.1.0'),
-    ('theme_accent', 'cyan')`);
+    ('theme_accent', 'purple')`);
 
   // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
   try {
