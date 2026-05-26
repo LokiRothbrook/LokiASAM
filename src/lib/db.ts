@@ -2,20 +2,170 @@
  * db.ts — Typed SQLite helper functions using @tauri-apps/plugin-sql.
  *
  * All database access from the frontend goes through these helpers.
- * The underlying tauri-plugin-sql runs migrations automatically on first open
- * (configured in src-tauri/src/lib.rs).
+ * Call initDb(absoluteDbPath) once on startup before using any other
+ * function in this module. Migrations are applied manually inside initDb.
  */
 
 import Database from "@tauri-apps/plugin-sql";
 
-// Singleton DB connection — opened on first use.
+// Singleton DB connection — populated by initDb().
 let _db: Database | null = null;
+
+/**
+ * Open (or reuse) the database at an absolute filesystem path and apply
+ * all schema migrations idempotently.  Must be called before any other
+ * function in this module.
+ */
+export async function initDb(absoluteDbPath: string): Promise<void> {
+  if (_db) return;
+  _db = await Database.load(`sqlite:${absoluteDbPath}`);
+  await runMigrations(_db);
+}
 
 async function getDb(): Promise<Database> {
   if (!_db) {
-    _db = await Database.load("sqlite:lokiasam.db");
+    throw new Error("Database not initialized. Call initDb() first.");
   }
   return _db;
+}
+
+/** Apply all schema migrations idempotently. Safe to call on any DB state. */
+async function runMigrations(db: Database): Promise<void> {
+  await db.execute("PRAGMA journal_mode=WAL");
+  await db.execute("PRAGMA foreign_keys=ON");
+
+  // ── Migration 001: core tables ──────────────────────────────────────────
+  await db.execute(`CREATE TABLE IF NOT EXISTS servers (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    map_id            TEXT NOT NULL,
+    install_path      TEXT NOT NULL,
+    port              INTEGER NOT NULL DEFAULT 7777,
+    query_port        INTEGER NOT NULL DEFAULT 27015,
+    rcon_port         INTEGER NOT NULL DEFAULT 27020,
+    rcon_password     TEXT NOT NULL DEFAULT '',
+    max_players       INTEGER NOT NULL DEFAULT 70,
+    server_password   TEXT,
+    admin_password    TEXT NOT NULL DEFAULT '',
+    cluster_id        TEXT,
+    preset_id         TEXT,
+    status            TEXT NOT NULL DEFAULT 'stopped',
+    pid               INTEGER,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_config (
+    server_id               TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+    game_user_settings_json TEXT NOT NULL DEFAULT '{}',
+    game_ini_json           TEXT NOT NULL DEFAULT '{}',
+    launch_args_json        TEXT NOT NULL DEFAULT '{}',
+    updated_at              DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_mods (
+    id                TEXT PRIMARY KEY,
+    server_id         TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    mod_id            TEXT NOT NULL,
+    mod_name          TEXT NOT NULL,
+    mod_thumbnail_url TEXT,
+    install_order     INTEGER NOT NULL DEFAULT 0,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    added_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(server_id, mod_id)
+  )`);
+
+  // clusters includes settings_json (migration 002 column) so new DBs get it
+  // directly; old copied DBs already have it from the ALTER TABLE below.
+  await db.execute(`CREATE TABLE IF NOT EXISTS clusters (
+    id                   TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL UNIQUE,
+    cluster_dir_override TEXT,
+    settings_json        TEXT NOT NULL DEFAULT '{}',
+    created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS schedules (
+    id              TEXT PRIMARY KEY,
+    server_id       TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    schedule_type   TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    config_json     TEXT NOT NULL DEFAULT '{}',
+    last_run        DATETIME,
+    next_run        DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS backups (
+    id              TEXT PRIMARY KEY,
+    server_id       TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    file_path       TEXT NOT NULL,
+    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+    map_id          TEXT NOT NULL,
+    triggered_by    TEXT NOT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS notification_configs (
+    id          TEXT PRIMARY KEY,
+    server_id   TEXT,
+    channel     TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    config_json TEXT NOT NULL DEFAULT '{}',
+    events_json TEXT NOT NULL DEFAULT '[]',
+    UNIQUE(server_id, channel)
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS in_app_notifications (
+    id         TEXT PRIMARY KEY,
+    server_id  TEXT,
+    event_type TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    severity   TEXT NOT NULL DEFAULT 'info',
+    read       INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS file_cache (
+    cache_key    TEXT PRIMARY KEY,
+    file_path    TEXT NOT NULL,
+    size_bytes   INTEGER NOT NULL DEFAULT 0,
+    sha256_hash  TEXT,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Indexes
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_server_mods_server_id ON server_mods(server_id)");
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_schedules_server_id ON schedules(server_id)");
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_backups_server_id ON backups(server_id)");
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_notifications_server_id ON in_app_notifications(server_id)");
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON in_app_notifications(created_at)");
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_notifications_read ON in_app_notifications(read)");
+
+  // Seed default settings (only for brand-new DBs)
+  await db.execute(`INSERT OR IGNORE INTO app_settings (key, value) VALUES
+    ('setup_complete', 'false'),
+    ('base_install_dir', ''),
+    ('backup_dir', ''),
+    ('steamcmd_path', ''),
+    ('steamcmd_mode', 'auto'),
+    ('app_version', '0.1.0'),
+    ('theme_accent', 'cyan')`);
+
+  // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
+  try {
+    await db.execute("ALTER TABLE clusters ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
 }
 
 // ---------------------------------------------------------------------------

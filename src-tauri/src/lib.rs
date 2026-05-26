@@ -8,7 +8,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
-use tauri_plugin_sql::{Migration, MigrationKind};
 
 /// Stores menu items that need to be updated dynamically at runtime.
 struct TrayMenuState {
@@ -71,20 +70,6 @@ fn hide_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let migrations = vec![
-        Migration {
-            version: 1,
-            description: "initial_schema",
-            sql: include_str!("../migrations/001_initial.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "clusters",
-            sql: include_str!("../migrations/002_clusters.sql"),
-            kind: MigrationKind::Up,
-        },
-    ];
 
     tauri::Builder::default()
         // ── Single-instance guard ──────────────────────────────────────────
@@ -245,11 +230,7 @@ pub fn run() {
 
             Ok(())
         })
-        .plugin(
-            tauri_plugin_sql::Builder::new()
-                .add_migrations("sqlite:lokiasam.db", migrations)
-                .build(),
-        )
+        .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -306,6 +287,8 @@ pub fn run() {
             commands::system::set_setup_complete,
             commands::system::query_server,
             commands::system::check_port_available,
+            commands::system::read_bootstrap,
+            commands::system::write_bootstrap,
             // Proton-GE (Linux)
             commands::proton::scan_for_proton,
             commands::proton::validate_proton_path,

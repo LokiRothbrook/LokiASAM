@@ -24,7 +24,7 @@ import { Label } from "@/components/ui/label";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
-import { setAppSetting } from "@/lib/db";
+import { setAppSetting, initDb } from "@/lib/db";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 
@@ -1074,10 +1074,19 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
   const handleNext = async () => {
     if (step === TOTAL_STEPS - 2) {
-      // Before completing, save all settings
+      // Before completing, initialise the DB at its permanent location then save all settings.
       setSaving(true);
       setSaveError("");
       try {
+        // 1. Write bootstrap + create {base_dir}/lokiasam/ (Rust handles old-DB copy).
+        await tauriCmd.writeBootstrap(baseDir);
+
+        // 2. Open the DB at its permanent path, applying all migrations.
+        const sep = baseDir.includes("\\") ? "\\" : "/";
+        const dbPath = baseDir.replace(/[/\\]$/, "") +
+          sep + "lokiasam" + sep + "lokiasam.db";
+        await initDb(dbPath);
+
         await setAppSetting("base_dir", baseDir);
         await setAppSetting("backup_dir", backupDir);
         await setAppSetting("steamcmd_path", steamcmdPath);

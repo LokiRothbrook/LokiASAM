@@ -108,7 +108,7 @@ async function fireUpdate(server: ServerRow, schedule: ScheduleRow) {
   ]);
   if (!steamcmdPath || !baseDir) return;
   const sep = baseDir.includes("\\") ? "\\" : "/";
-  const cacheDir = `${baseDir}${sep}.cache${sep}asa-server`;
+  const cacheDir = `${baseDir}${sep}lokiasam${sep}cache${sep}asa-server`;
 
   if (server.status === "running" && cfg.broadcastWarning && cfg.warningMinutes && cfg.warningMinutes > 0) {
     const msg = (cfg.message ?? "Server updating in {minutes} minutes.")

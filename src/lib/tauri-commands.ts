@@ -347,4 +347,13 @@ export const tauriCmd = {
   deleteSchedule: (scheduleId: string) => invoke<void>("delete_schedule", { scheduleId }),
   toggleSchedule: (scheduleId: string, enabled: boolean) =>
     invoke<void>("toggle_schedule", { scheduleId, enabled }),
+
+  // Bootstrap
+  /** Read the bootstrap file. Returns null if first-time setup has never run. */
+  readBootstrap: () => invoke<{ baseDir: string } | null>("read_bootstrap"),
+  /**
+   * Persist base_dir to the bootstrap file.  Also creates {base_dir}/lokiasam/
+   * and migrates the old database from app_data_dir if present.
+   */
+  writeBootstrap: (baseDir: string) => invoke<void>("write_bootstrap", { baseDir }),
 };

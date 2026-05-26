@@ -1,5 +1,76 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tauri::Manager;
+
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Bootstrap {
+    pub base_dir: String,
+}
+
+fn bootstrap_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("bootstrap.json"))
+        .map_err(|e| format!("Failed to get app data dir: {e}"))
+}
+
+/// Read the bootstrap file from the OS-standard app data directory.
+/// Returns None if setup has never been completed (file does not exist).
+#[tauri::command]
+pub async fn read_bootstrap(app: tauri::AppHandle) -> Result<Option<Bootstrap>, String> {
+    let path = bootstrap_path(&app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read bootstrap: {e}"))?;
+    let b: Bootstrap = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse bootstrap: {e}"))?;
+    Ok(Some(b))
+}
+
+/// Persist the base directory to the bootstrap file, create the
+/// {base_dir}/lokiasam/ folder, and copy the old database (if it exists
+/// at app_data_dir/lokiasam.db) to {base_dir}/lokiasam/lokiasam.db.
+#[tauri::command]
+pub async fn write_bootstrap(app: tauri::AppHandle, base_dir: String) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+
+    // Ensure {base_dir}/lokiasam/ exists.
+    let lokiasam_dir = std::path::Path::new(&base_dir).join("lokiasam");
+    tokio::fs::create_dir_all(&lokiasam_dir)
+        .await
+        .map_err(|e| format!("Failed to create lokiasam dir: {e}"))?;
+
+    // Copy old DB if present and new location is still empty.
+    let old_db = data_dir.join("lokiasam.db");
+    let new_db = lokiasam_dir.join("lokiasam.db");
+    if old_db.exists() && !new_db.exists() {
+        tokio::fs::copy(&old_db, &new_db)
+            .await
+            .map_err(|e| format!("Failed to copy database: {e}"))?;
+    }
+
+    // Write bootstrap.json.
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(|e| format!("Failed to create data dir: {e}"))?;
+    let text = serde_json::to_string(&Bootstrap { base_dir })
+        .map_err(|e| format!("Failed to serialize bootstrap: {e}"))?;
+    tokio::fs::write(data_dir.join("bootstrap.json"), text)
+        .await
+        .map_err(|e| format!("Failed to write bootstrap: {e}"))?;
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Types

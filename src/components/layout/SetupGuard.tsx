@@ -17,7 +17,7 @@ import { SetupWizard } from "@/components/wizard/SetupWizard";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
 import { useAppStore } from "@/store/useAppStore";
-import { getAppSetting, setAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting, initDb } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 
@@ -42,19 +42,34 @@ export function SetupGuard({ children }: SetupGuardProps) {
       return;
     }
 
-    getAppSetting("setup_complete")
-      .then((value) => {
+    (async () => {
+      try {
+        const bootstrap = await tauriCmd.readBootstrap();
+        if (!bootstrap) {
+          // No bootstrap file → first-ever run, show the setup wizard.
+          // DB will be initialised by the wizard once base_dir is known.
+          setSetupComplete(false);
+          setSetupChecked(true);
+          return;
+        }
+
+        // Bootstrap exists → derive DB path and open it.
+        const sep = bootstrap.baseDir.includes("\\") ? "\\" : "/";
+        const dbPath = bootstrap.baseDir.replace(/[/\\]$/, "") +
+          sep + "lokiasam" + sep + "lokiasam.db";
+        await initDb(dbPath);
+
+        const value = await getAppSetting("setup_complete");
         const complete = value === "true";
         setSetupComplete(complete);
         setSetupChecked(true);
-        // Let the backend know so close-to-tray activates correctly.
         if (complete) tauriCmd.setSetupComplete(true).catch(() => {});
-      })
-      .catch(() => {
-        // DB error — treat as not setup to allow recovery
+      } catch {
+        // Any error → treat as not setup so the wizard can recover.
         setSetupComplete(false);
         setSetupChecked(true);
-      });
+      }
+    })();
   }, [setSetupChecked, setSetupComplete]);
 
   const handleSetupComplete = () => {

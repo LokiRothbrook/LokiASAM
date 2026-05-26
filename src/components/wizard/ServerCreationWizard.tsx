@@ -766,7 +766,7 @@ function InstallStep({
         const sep = baseDir.includes("\\") ? "\\" : "/";
         installPath = `${baseDir}${sep}servers${sep}${data.name}`;
         steamcmdPath = scmdPath;
-        cacheDirRef.current = `${baseDir}${sep}.cache${sep}asa-server`;
+        cacheDirRef.current = `${baseDir}${sep}lokiasam${sep}cache${sep}asa-server`;
 
         // Persist server record to SQLite
         await createServer({
