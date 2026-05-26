@@ -58,6 +58,10 @@ fn hide_main_window(app: &tauri::AppHandle) {
         let _ = browser.close();
         let _ = app.emit("mod://browser-closed", ());
     }
+    if let Some(verify) = app.get_webview_window("mod-verify") {
+        let _ = verify.close();
+        let _ = app.emit("mod://verify-complete", ());
+    }
     if let Some(tray_state) = app.try_state::<TrayMenuState>() {
         let _ = tray_state.show_item.set_text("Show LokiASAM");
         let _ = tray_state.hide_item.set_enabled(false);
@@ -291,7 +295,8 @@ pub fn run() {
             commands::mods::reorder_mods,
             commands::mods::open_mod_browser,
             commands::mods::close_mod_browser,
-            commands::mods::verify_mods,
+            commands::mods::start_mod_verification,
+            commands::mods::close_mod_verify,
             // System stats
             commands::system::check_dir,
             commands::system::check_file_exists,

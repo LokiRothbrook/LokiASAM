@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getServerMods,
-  addServerMod,
   removeServerMod,
   toggleServerMod,
   reorderServerMods,
@@ -34,18 +33,23 @@ export function ModsTab({ server }: Props) {
   const [loading, setLoading] = useState(true);
 
   // Add-by-ID form state
-  const [addInput, setAddInput]   = useState("");
-  const [addError, setAddError]   = useState("");
-  const [addLoading, setAddLoading] = useState(false);
+  const [addInput, setAddInput] = useState("");
+  const [addError, setAddError] = useState("");
 
   const addInputRef = useRef<HTMLInputElement>(null);
+  const prevVerifyingRef = useRef(false);
 
   const modBrowserOpen      = useAppStore((s) => s.modBrowserOpen);
   const setModBrowserOpen   = useAppStore((s) => s.setModBrowserOpen);
   const setModBrowserParams = useAppStore((s) => s.setModBrowserParams);
   const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
   const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
-  const modAddedCount = useAppStore((s) => s.modAddedCount);
+  const modAddedCount    = useAppStore((s) => s.modAddedCount);
+  const verifying        = useAppStore((s) => s.verifying);
+  const verifyTotal      = useAppStore((s) => s.verifyTotal);
+  const verifyProgress   = useAppStore((s) => s.verifyProgress);
+  const startVerifying   = useAppStore((s) => s.startVerifying);
+  const stopVerifying    = useAppStore((s) => s.stopVerifying);
 
   // ── Load mods from SQLite ──────────────────────────────────────────────
   const loadMods = async () => {
@@ -75,6 +79,14 @@ export function ModsTab({ server }: Props) {
     }
   }, [modBrowserJustClosed]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Clear the add input when verification finishes
+  useEffect(() => {
+    if (prevVerifyingRef.current && !verifying) {
+      setAddInput("");
+    }
+    prevVerifyingRef.current = verifying;
+  }, [verifying]);
+
   // ── Mod browser open / close ───────────────────────────────────────────
   const handleToggleBrowser = async () => {
     if (modBrowserOpen) {
@@ -99,22 +111,19 @@ export function ModsTab({ server }: Props) {
     }
   };
 
-  // ── Add mods by ID (comma-separated, verified) ─────────────────────────
+  // ── Add mods by ID (comma-separated, verified via hidden WebviewWindow) ──
   const handleAddFromForm = async () => {
     const raw = addInput.trim();
     if (!raw) { setAddError("Enter at least one mod ID."); return; }
 
-    // Split on commas, strip whitespace, remove empty entries
     const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
 
-    // Check for non-numeric entries before making any network calls
     const invalid = ids.filter((id) => !/^\d+$/.test(id));
     if (invalid.length > 0) {
       setAddError(`Invalid ID${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")} — IDs must be numbers.`);
       return;
     }
 
-    // Dedupe against already-added mods
     const duplicates = ids.filter((id) => mods.some((m) => m.mod_id === id));
     const toVerify   = ids.filter((id) => !mods.some((m) => m.mod_id === id));
 
@@ -123,58 +132,27 @@ export function ModsTab({ server }: Props) {
       return;
     }
 
+    if (duplicates.length > 0) {
+      toast.warning(
+        `${duplicates.length} ID${duplicates.length > 1 ? "s were" : " was"} already in the list`,
+        { description: duplicates.join(", "), duration: 5000 },
+      );
+    }
+
     setAddError("");
-    setAddLoading(true);
+    startVerifying(toVerify.length);
 
     try {
-      const results = await tauriCmd.verifyMods(toVerify);
-
-      const succeeded = results.filter((r) => r.verified);
-      const failed    = results.filter((r) => !r.verified);
-
-      // Add all verified mods to SQLite
-      for (const r of succeeded) {
-        try {
-          await addServerMod(server.id, r.modId, r.name ?? `Mod ${r.modId}`);
-        } catch (e) {
-          console.error(`addServerMod(${r.modId}) failed:`, e);
-        }
-      }
-
-      await loadMods();
-      if (succeeded.length > 0) setAddInput("");
-
-      // Build a summary of any problems
-      const problems: string[] = [];
-      if (duplicates.length > 0) {
-        problems.push(`Already in list: ${duplicates.join(", ")}`);
-      }
-      if (failed.length > 0) {
-        const lines = failed.map((r) => `${r.modId} — ${r.error ?? "unknown error"}`);
-        toast.error(
-          `${failed.length} mod${failed.length > 1 ? "s" : ""} could not be verified`,
-          {
-            description: lines.join("\n"),
-            duration: 8000,
-          },
-        );
-      }
-      if (duplicates.length > 0) {
-        toast.warning(`${duplicates.length} ID${duplicates.length > 1 ? "s were" : " was"} already in the list`, {
-          description: duplicates.join(", "),
-          duration: 5000,
-        });
-      }
-      if (succeeded.length > 0 && failed.length === 0 && duplicates.length === 0) {
-        toast.success(
-          `Added ${succeeded.length} mod${succeeded.length > 1 ? "s" : ""}`,
-          { duration: 3000 },
-        );
-      }
+      await tauriCmd.startModVerification(
+        toVerify,
+        server.id,
+        mods.map((m) => m.mod_id),
+      );
+      // Verification is now running in the hidden window.
+      // Results arrive via ModBrowserEventHandler events; input cleared when verifying → false.
     } catch (e) {
+      stopVerifying();
       setAddError(String(e));
-    } finally {
-      setAddLoading(false);
     }
   };
 
@@ -291,20 +269,24 @@ export function ModsTab({ server }: Props) {
               placeholder="e.g. 927090, 123456, 789012"
               className="flex-1 text-sm font-mono"
               style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)" }}
-              disabled={addLoading}
+              disabled={verifying}
             />
             <Button
               onClick={handleAddFromForm}
-              disabled={addLoading || !addInput.trim()}
+              disabled={verifying || !addInput.trim()}
               className="shrink-0 btn-neon-purple"
               size="sm"
             >
-              {addLoading ? (
+              {verifying ? (
                 <Loader2 className="w-4 h-4 mr-1 animate-spin" />
               ) : (
                 <Plus className="w-4 h-4 mr-1" />
               )}
-              {addLoading ? "Verifying…" : "Add"}
+              {verifying
+                ? verifyTotal > 0
+                  ? `Verifying ${verifyProgress} / ${verifyTotal}…`
+                  : "Verifying…"
+                : "Add"}
             </Button>
           </div>
           {addError && (

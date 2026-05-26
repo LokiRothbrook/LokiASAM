@@ -241,14 +241,45 @@ fn build_browser_script(server_id: &str, server_name: &str, added_mod_ids: &[Str
     }}
 
     // ── Bootstrap — deferred to DOMContentLoaded ───────────────────────────
+    // navDepth is declared here so the pushState/popstate closures share it.
+    var navDepth = 0;
+
     function init() {{
         updateAddBtn();
 
-        window.addEventListener('popstate', function() {{ setTimeout(updateAddBtn, 600); }});
+        // ── Back button (created inside init so body exists) ──────────────
+        var backBtn = document.createElement('button');
+        backBtn.id = '__lokiasam_back_btn';
+        backBtn.textContent = '←';
+        backBtn.style.cssText = [
+            'position:fixed;bottom:28px;left:28px;z-index:2147483646',
+            'width:36px;height:36px;display:none',
+            'align-items:center;justify-content:center',
+            'border-radius:8px',
+            'font-size:18px;font-weight:700;color:#fff',
+            'background:rgba(191,0,255,0.25);border:1px solid rgba(191,0,255,0.5)',
+            'box-shadow:0 0 16px rgba(191,0,255,0.4)',
+            'cursor:pointer;font-family:system-ui,-apple-system,sans-serif',
+            'transition:all 0.18s;line-height:1',
+        ].join(';');
+        backBtn.addEventListener('click', function() {{ window.history.back(); }});
+        document.body.appendChild(backBtn);
+
+        function updateBackBtn() {{
+            backBtn.style.display = navDepth > 0 ? 'flex' : 'none';
+        }}
+
+        window.addEventListener('popstate', function() {{
+            navDepth = Math.max(0, navDepth - 1);
+            updateBackBtn();
+            setTimeout(updateAddBtn, 600);
+        }});
         ['pushState', 'replaceState'].forEach(function(method) {{
             var orig = history[method].bind(history);
             history[method] = function() {{
+                if (method === 'pushState') {{ navDepth++; }}
                 orig.apply(history, arguments);
+                updateBackBtn();
                 setTimeout(updateAddBtn, 600);
             }};
         }});
@@ -464,8 +495,8 @@ pub fn open_mod_browser(
 
     let window = WebviewWindowBuilder::new(&app, "mod-browser", WebviewUrl::External(url))
         .title(&title)
-        .inner_size(1100.0, 680.0)
-        .min_inner_size(900.0, 600.0)
+        .inner_size(1300.0, 680.0)
+        .min_inner_size(1300.0, 600.0)
         .resizable(true)
         .initialization_script(&script)
         .build()
@@ -497,166 +528,174 @@ pub fn close_mod_browser(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Mod verification via CurseForge page scraping
+// Mod verification via hidden WebviewWindow (bypasses Cloudflare)
 // ---------------------------------------------------------------------------
 
-/// Result of verifying a single mod ID against the CurseForge website.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModVerifyResult {
-    pub mod_id: String,
-    pub name: Option<String>,
-    pub verified: bool,
-    pub error: Option<String>,
+/// Build the JS initialization script injected into the hidden mod-verify webview.
+///
+/// The script navigates sequentially through each mod ID's CurseForge project
+/// URL, extracts the mod name from the page, and emits results back to the
+/// main window via Tauri IPC events.  State is persisted in `sessionStorage`
+/// so it survives between page navigations within the same webview.
+///
+/// Events emitted per mod:
+///   `mod://add-to-server`  — mod verified successfully (source: "verify")
+///   `mod://verify-skip`    — mod is already in the server's installed list
+///   `mod://verify-fail`    — mod could not be verified (wrong game, no name, etc.)
+///
+/// After all IDs are processed: `mod://verify-complete`
+fn build_verify_script(mod_ids: &[String], server_id: &str, added_mod_ids: &[String]) -> String {
+    let sid = serde_json::to_string(server_id).unwrap_or_default();
+    let ids_json = serde_json::to_string(mod_ids).unwrap_or_else(|_| "[]".to_string());
+    let added_json = serde_json::to_string(added_mod_ids).unwrap_or_else(|_| "[]".to_string());
+
+    format!(
+        r#"
+(function() {{
+    var STATE_KEY  = '__lokiasam_verify';
+    var SERVER_ID  = {sid};
+    var INITIAL_IDS = {ids_json};
+    var ADDED_IDS  = new Set({added_json});
+
+    function ipcEmit(event, payload) {{
+        try {{
+            window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {{
+                event: event,
+                payload: JSON.stringify(payload),
+            }});
+        }} catch (e) {{}}
+    }}
+
+    function extractModName() {{
+        var sel = 'h1.name, h1.project-title, [class*="ProjectDetails"] h1, [class*="project-title"]';
+        var el = document.querySelector(sel);
+        return (el && el.textContent.trim()) ||
+               document.title.split(' | ')[0].split(' - ')[0].trim() ||
+               null;
+    }}
+
+    var raw   = sessionStorage.getItem(STATE_KEY);
+    var state = raw ? JSON.parse(raw) : {{ ids: INITIAL_IDS, index: 0 }};
+
+    function saveState() {{ sessionStorage.setItem(STATE_KEY, JSON.stringify(state)); }}
+
+    function navigateToNext() {{
+        if (state.index >= state.ids.length) {{
+            sessionStorage.removeItem(STATE_KEY);
+            ipcEmit('mod://verify-complete', {{}});
+            return;
+        }}
+        window.location.href = 'https://www.curseforge.com/projects/' + state.ids[state.index];
+    }}
+
+    function process() {{
+        if (state.ids.length === 0 || state.index >= state.ids.length) {{
+            sessionStorage.removeItem(STATE_KEY);
+            ipcEmit('mod://verify-complete', {{}});
+            return;
+        }}
+
+        var href = window.location.href;
+
+        // Still on the initial blank page — trigger first navigation
+        if (!href || href === 'about:blank') {{
+            navigateToNext();
+            return;
+        }}
+
+        // Cloudflare challenge — do nothing; CF's own JS will redirect when done
+        if (document.title === 'Just a moment...' ||
+            !!document.querySelector('#challenge-form, #challenge-running')) {{
+            return;
+        }}
+
+        var modId = state.ids[state.index];
+
+        if (href.indexOf('/ark-survival-ascended/mods/') !== -1) {{
+            var name = extractModName();
+            if (!name) {{
+                ipcEmit('mod://verify-fail', {{ modId: modId, error: 'Could not extract mod name' }});
+            }} else if (ADDED_IDS.has(modId)) {{
+                ipcEmit('mod://verify-skip', {{ modId: modId }});
+            }} else {{
+                ipcEmit('mod://add-to-server', {{
+                    serverId: SERVER_ID,
+                    modId: modId,
+                    modName: name,
+                    source: 'verify',
+                }});
+            }}
+        }} else {{
+            ipcEmit('mod://verify-fail', {{ modId: modId, error: 'Not an ARK: Survival Ascended mod' }});
+        }}
+
+        state.index++;
+        saveState();
+        navigateToNext();
+    }}
+
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', process);
+    }} else {{
+        process();
+    }}
+}})();
+"#,
+        sid = sid,
+        ids_json = ids_json,
+        added_json = added_json,
+    )
 }
 
-/// Extract the mod name from a CurseForge HTML page.
+/// Open a hidden WebviewWindow that navigates sequentially through the given
+/// mod IDs on CurseForge, extracting names and emitting results as Tauri events.
 ///
-/// Tries `<meta property="og:title" content="...">` first (most stable — it's
-/// an SEO tag CurseForge will never remove), then falls back to `<title>`.
-/// Strips the trailing " | CurseForge" / " - CurseForge" suffix.
-fn extract_mod_name(html: &str) -> Option<String> {
-    let html_lower = html.to_lowercase();
-
-    // og:title — handles both attribute orderings CurseForge uses
-    if let Some(og_pos) = html_lower.find("og:title") {
-        let lo = og_pos.saturating_sub(300);
-        let hi = (og_pos + 400).min(html.len());
-        let snippet = &html[lo..hi];
-        let snippet_lower = snippet.to_lowercase();
-
-        for prefix in &[r#"content=""#, r#"content='"#] {
-            if let Some(p) = snippet_lower.find(prefix) {
-                let start = p + prefix.len();
-                let quote = prefix.chars().last().unwrap();
-                let rest = &snippet[start..];
-                if let Some(end) = rest.find(quote) {
-                    let v = rest[..end].trim();
-                    if !v.is_empty() {
-                        return Some(clean_cf_title(v));
-                    }
-                }
-            }
-        }
-    }
-
-    // <title> fallback
-    if let (Some(s), Some(e)) = (html_lower.find("<title>"), html_lower.find("</title>")) {
-        if s < e {
-            let t = html[s + 7..e].trim();
-            if !t.is_empty() {
-                return Some(clean_cf_title(t));
-            }
-        }
-    }
-
-    None
-}
-
-fn clean_cf_title(raw: &str) -> String {
-    for sep in &[" | CurseForge", " - CurseForge", " | curseforge", " - curseforge"] {
-        if let Some(pos) = raw.to_lowercase().find(&sep.to_lowercase()) {
-            return raw[..pos].trim().to_string();
-        }
-    }
-    raw.trim().to_string()
-}
-
-/// Verify a list of mod IDs by fetching their CurseForge project pages.
+/// The window uses the real browser engine (WebKitGTK / WebView2) which bypasses
+/// Cloudflare's bot-detection that blocks plain HTTP clients like reqwest.
 ///
-/// For each ID we GET `https://www.curseforge.com/projects/{id}` (which
-/// CurseForge redirects to the canonical slug URL) and check:
-///   1. The redirect target contains `/ark-survival-ascended/mods/` — ensures
-///      the mod belongs to the correct game.
-///   2. The page HTML contains a parseable mod name via og:title or <title>.
-///
-/// Successfully verified mods come back with `verified: true` and a `name`.
-/// Failures come back with `verified: false` and an `error` message.
+/// Returns immediately — all results arrive asynchronously via:
+///   `mod://add-to-server` (source: "verify"), `mod://verify-fail`,
+///   `mod://verify-skip`, and finally `mod://verify-complete`.
 #[tauri::command]
-pub async fn verify_mods(mod_ids: Vec<String>) -> Result<Vec<ModVerifyResult>, String> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        )
-        .timeout(std::time::Duration::from_secs(15))
+pub fn start_mod_verification(
+    mod_ids: Vec<String>,
+    server_id: String,
+    added_mod_ids: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if mod_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Close any previous verify window before opening a fresh one.
+    if let Some(existing) = app.get_webview_window("mod-verify") {
+        let _ = existing.close();
+    }
+
+    let script = build_verify_script(&mod_ids, &server_id, &added_mod_ids);
+
+    let first_url: tauri::Url = format!("https://www.curseforge.com/projects/{}", mod_ids[0])
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
+
+    WebviewWindowBuilder::new(&app, "mod-verify", WebviewUrl::External(first_url))
+        .title("Mod Verification")
+        .inner_size(800.0, 600.0)
+        .visible(false)
+        .initialization_script(&script)
         .build()
         .map_err(|e| e.to_string())?;
 
-    let mut results = Vec::new();
+    Ok(())
+}
 
-    for mod_id in mod_ids {
-        if mod_id.is_empty() {
-            continue;
-        }
-
-        if !mod_id.chars().all(|c| c.is_ascii_digit()) {
-            results.push(ModVerifyResult {
-                mod_id,
-                name: None,
-                verified: false,
-                error: Some("Mod ID must be numeric".to_string()),
-            });
-            continue;
-        }
-
-        let url = format!("https://www.curseforge.com/projects/{}", mod_id);
-
-        match client.get(&url).send().await {
-            Ok(response) => {
-                let final_url = response.url().to_string();
-
-                if !final_url.contains("/ark-survival-ascended/mods/") {
-                    results.push(ModVerifyResult {
-                        mod_id,
-                        name: None,
-                        verified: false,
-                        error: Some("Not an ARK: Survival Ascended mod".to_string()),
-                    });
-                    continue;
-                }
-
-                match response.text().await {
-                    Ok(html) => match extract_mod_name(&html) {
-                        Some(name) => results.push(ModVerifyResult {
-                            mod_id,
-                            name: Some(name),
-                            verified: true,
-                            error: None,
-                        }),
-                        None => results.push(ModVerifyResult {
-                            mod_id,
-                            name: None,
-                            verified: false,
-                            error: Some("Could not extract mod name from page".to_string()),
-                        }),
-                    },
-                    Err(e) => results.push(ModVerifyResult {
-                        mod_id,
-                        name: None,
-                        verified: false,
-                        error: Some(format!("Failed to read page: {e}")),
-                    }),
-                }
-            }
-            Err(e) => {
-                let msg = if e.is_timeout() {
-                    "Request timed out".to_string()
-                } else if e.status().map_or(false, |s| s.as_u16() == 404) {
-                    "Mod not found".to_string()
-                } else {
-                    format!("Network error: {e}")
-                };
-                results.push(ModVerifyResult {
-                    mod_id,
-                    name: None,
-                    verified: false,
-                    error: Some(msg),
-                });
-            }
-        }
+/// Close the hidden mod-verify window if it is open.
+#[tauri::command]
+pub fn close_mod_verify(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("mod-verify") {
+        w.close().map_err(|e| e.to_string())?;
     }
-
-    Ok(results)
+    Ok(())
 }

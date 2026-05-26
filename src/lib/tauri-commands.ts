@@ -99,13 +99,6 @@ export interface ServerConfigJson {
   launchArgs: Record<string, string>;
 }
 
-export interface ModVerifyResult {
-  modId: string;
-  name: string | null;
-  verified: boolean;
-  error: string | null;
-}
-
 export interface BackupRecord {
   id: string;
   serverId: string;
@@ -262,12 +255,16 @@ export const tauriCmd = {
   closeModBrowser: () =>
     invoke<void>("close_mod_browser", {}),
   /**
-   * Verify a list of mod IDs by fetching their CurseForge project pages.
-   * Returns verified mod names for valid ASA mods and error messages for
-   * IDs that could not be resolved.
+   * Open a hidden WebviewWindow that navigates through each mod ID on CurseForge,
+   * verifying the mod belongs to ASA and extracting its name.  Returns immediately;
+   * results arrive as Tauri events: mod://add-to-server (source:"verify"),
+   * mod://verify-fail, mod://verify-skip, and mod://verify-complete.
    */
-  verifyMods: (modIds: string[]) =>
-    invoke<ModVerifyResult[]>("verify_mods", { modIds }),
+  startModVerification: (modIds: string[], serverId: string, addedModIds: string[]) =>
+    invoke<void>("start_mod_verification", { modIds, serverId, addedModIds }),
+  /** Close the hidden mod-verify window. */
+  closeModVerify: () =>
+    invoke<void>("close_mod_verify", {}),
   addMod:       (serverId: string, modId: string, modName: string) =>
     invoke<void>("add_mod", { serverId, modId, modName }),
   removeMod:    (serverId: string, modId: string) => invoke<void>("remove_mod", { serverId, modId }),

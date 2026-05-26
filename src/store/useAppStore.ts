@@ -26,6 +26,12 @@ interface AppState {
   modBrowserJustClosed: boolean;
   /** Increments each time a mod is added via the browser. ModsTab watches this for real-time list updates. */
   modAddedCount: number;
+  /** True while a mod ID verification is running via the hidden WebviewWindow. */
+  verifying: boolean;
+  /** Total number of mod IDs being verified in the current batch. */
+  verifyTotal: number;
+  /** Number of mod IDs processed so far (success + fail + skip). */
+  verifyProgress: number;
 
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
@@ -35,6 +41,9 @@ interface AppState {
   setModBrowserParams: (p: { serverId: string; serverName: string; addedModIds: string[] } | null) => void;
   setModBrowserJustClosed: (v: boolean) => void;
   incrementModAddedCount: () => void;
+  startVerifying: (total: number) => void;
+  incrementVerifyProgress: () => void;
+  stopVerifying: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -46,6 +55,9 @@ export const useAppStore = create<AppState>((set) => ({
   modBrowserParams: null,
   modBrowserJustClosed: false,
   modAddedCount: 0,
+  verifying: false,
+  verifyTotal: 0,
+  verifyProgress: 0,
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
@@ -55,4 +67,7 @@ export const useAppStore = create<AppState>((set) => ({
   setModBrowserParams: (p) => set({ modBrowserParams: p }),
   setModBrowserJustClosed: (v) => set({ modBrowserJustClosed: v }),
   incrementModAddedCount: () => set((s) => ({ modAddedCount: s.modAddedCount + 1 })),
+  startVerifying: (total) => set({ verifying: true, verifyTotal: total, verifyProgress: 0 }),
+  incrementVerifyProgress: () => set((s) => ({ verifyProgress: s.verifyProgress + 1 })),
+  stopVerifying: () => set({ verifying: false, verifyTotal: 0, verifyProgress: 0 }),
 }));
