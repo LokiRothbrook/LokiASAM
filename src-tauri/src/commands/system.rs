@@ -321,6 +321,36 @@ pub fn get_platform() -> String {
     }
 }
 
+/// Open `path` in the platform file manager (Nautilus / Thunar / Explorer…).
+/// Non-blocking: spawns the process and returns immediately.
+#[tauri::command]
+pub async fn open_folder(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {path}"));
+    }
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("xdg-open failed: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("explorer failed: {e}"))?;
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("open failed: {e}"))?;
+
+    Ok(())
+}
+
 /// Check whether a given TCP port is available (not currently bound) on localhost.
 #[tauri::command]
 pub async fn check_port_available(port: u16) -> Result<bool, String> {

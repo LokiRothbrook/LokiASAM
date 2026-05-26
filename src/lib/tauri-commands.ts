@@ -165,8 +165,13 @@ export const tauriCmd = {
    *  already exited (crashed while the app was closed). */
   registerRunningServer: (serverId: string, pid: number) =>
     invoke<boolean>("register_running_server", { serverId, pid }),
-  cloneServer: (sourceId: string, newName: string, newPorts: PortConfig) =>
-    invoke<string>("clone_server", { sourceId, newName, newPorts }),
+  /**
+   * Copy server installation files from sourceInstallPath to destInstallPath.
+   * ShooterGame/Saved is excluded so player data is not carried over.
+   * All SQLite record creation is handled by the frontend.
+   */
+  cloneServer: (sourceInstallPath: string, destInstallPath: string) =>
+    invoke<void>("clone_server", { sourceInstallPath, destInstallPath }),
   /** Delete server files from disk. DB record deletion is done separately via db.ts. */
   deleteServer: (serverId: string, installPath: string, deleteFiles: boolean) =>
     invoke<void>("delete_server", { serverId, installPath, deleteFiles }),
@@ -313,6 +318,8 @@ export const tauriCmd = {
   setSetupComplete:   (complete: boolean) => invoke<void>("set_setup_complete", { complete }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),
+  /** Open a directory in the platform file manager (xdg-open / Explorer). */
+  openFolder: (path: string) => invoke<void>("open_folder", { path }),
 
   // Proton-GE (Linux)
   /** Scan well-known Steam locations and {baseDir}/proton/ for GE-Proton installs. */

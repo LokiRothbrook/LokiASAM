@@ -287,7 +287,7 @@ async fn steamcmd_app_update(
 
 /// Recursively copy `src` into `dst`, skipping `skip_rel` sub-paths (relative to `src`).
 /// Creates `dst` if it doesn't exist. Existing files in `dst` are overwritten.
-fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io::Result<()> {
+pub fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;

@@ -289,6 +289,7 @@ pub fn run() {
             commands::system::check_port_available,
             commands::system::read_bootstrap,
             commands::system::write_bootstrap,
+            commands::system::open_folder,
             // Proton-GE (Linux)
             commands::proton::scan_for_proton,
             commands::proton::validate_proton_path,

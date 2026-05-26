@@ -31,35 +31,11 @@ const TABS = [
   { value: "rcon",       label: "RCON",       icon: Terminal },
   { value: "logs",       label: "Logs",       icon: ScrollText },
   { value: "mods",       label: "Mods",       icon: Package },
-  { value: "backups",    label: "Backups",     icon: Archive,         phase: 6 },
-  { value: "automation", label: "Automation", icon: CalendarClock,   phase: 6 },
+  { value: "backups",    label: "Backups",    icon: Archive },
+  { value: "automation", label: "Automation", icon: CalendarClock },
 ] as const;
 
 type TabValue = typeof TABS[number]["value"];
-
-function PhaseStub({ label, phase }: { label: string; phase: number }) {
-  return (
-    <div
-      className="glass-card flex flex-col items-center justify-center gap-4 py-20 text-center rounded-2xl"
-      style={{ borderColor: "rgba(191,0,255,0.15)" }}
-    >
-      <div
-        className="flex items-center justify-center w-14 h-14 rounded-full"
-        style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.2)" }}
-      >
-        <Package className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
-      </div>
-      <div>
-        <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
-          {label} — Phase {phase}
-        </h2>
-        <p className="text-sm mt-1 max-w-xs" style={{ color: "var(--text-muted)" }}>
-          This section will be implemented in Phase {phase}.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Server detail page — accessed via `/servers/detail?id={uuid}`.

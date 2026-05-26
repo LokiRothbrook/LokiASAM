@@ -524,12 +524,36 @@ pub async fn delete_server(
     Ok(())
 }
 
-/// Clone a server's config. Full implementation in Phase 9.
+/// Recursively copy the server installation directory to a new location.
+///
+/// This is the file-system half of Clone Server — all SQLite record creation
+/// (new server row, config, mods, schedules) is handled by the frontend.
+/// Skips `ShooterGame/Saved` so player data from the source is not carried over.
 #[tauri::command]
 pub async fn clone_server(
-    _source_id: String,
-    _new_name: String,
-    _new_ports: PortConfig,
-) -> Result<String, String> {
-    Err("Clone server is not yet implemented (Phase 9)".into())
+    source_install_path: String,
+    dest_install_path: String,
+) -> Result<(), String> {
+    let src = std::path::PathBuf::from(&source_install_path);
+    let dst = std::path::PathBuf::from(&dest_install_path);
+
+    if !src.exists() {
+        return Err(format!(
+            "Source path does not exist: {source_install_path}"
+        ));
+    }
+    if dst.exists() {
+        return Err(format!(
+            "Destination already exists: {dest_install_path}"
+        ));
+    }
+
+    tokio::task::spawn_blocking(move || {
+        super::steamcmd::copy_dir_recursive(&src, &dst, &["Saved"])
+            .map_err(|e| format!("Failed to clone server files: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Clone task panicked: {e}"))??;
+
+    Ok(())
 }
