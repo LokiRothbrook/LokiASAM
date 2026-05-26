@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -20,15 +21,14 @@ impl RconConn {
     /// Packet layout: [size:i32][id:i32][type:i32][body\0][pad\0]
     pub async fn send_packet(&mut self, id: i32, pkt_type: i32, body: &str) -> Result<(), String> {
         let body_bytes = body.as_bytes();
-        // size = id(4) + type(4) + body + null + pad null
         let size = (4 + 4 + body_bytes.len() + 2) as i32;
         let mut buf = Vec::with_capacity((size + 4) as usize);
         buf.extend_from_slice(&size.to_le_bytes());
         buf.extend_from_slice(&id.to_le_bytes());
         buf.extend_from_slice(&pkt_type.to_le_bytes());
         buf.extend_from_slice(body_bytes);
-        buf.push(0u8); // body null terminator
-        buf.push(0u8); // padding null terminator
+        buf.push(0u8);
+        buf.push(0u8);
         self.stream
             .write_all(&buf)
             .await
@@ -39,18 +39,17 @@ impl RconConn {
     /// Read and decode one Source RCON response packet from the stream.
     /// Returns (packet_id, packet_type, body_string).
     pub async fn recv_packet(&mut self) -> Result<(i32, i32, String), String> {
-        // Read the 4-byte size prefix
         let mut size_buf = [0u8; 4];
         self.stream
             .read_exact(&mut size_buf)
             .await
-            .map_err(|e| format!("RCON read size error: {e}"))?;
+            .map_err(|e| format!("RCON read error: {e}"))?;
         let size = i32::from_le_bytes(size_buf) as usize;
 
         if size < 10 {
             return Err(format!("RCON packet too small: {size} bytes"));
         }
-        if size > 4096 {
+        if size > 8192 {
             return Err(format!("RCON packet too large: {size} bytes"));
         }
 
@@ -62,7 +61,6 @@ impl RconConn {
 
         let id = i32::from_le_bytes(payload[0..4].try_into().unwrap());
         let pkt_type = i32::from_le_bytes(payload[4..8].try_into().unwrap());
-        // Body starts at byte 8, terminated by a null before the padding null
         let body_end = payload[8..]
             .iter()
             .position(|&b| b == 0)
@@ -74,9 +72,9 @@ impl RconConn {
 }
 
 /// Global pool of live RCON connections, keyed by server UUID.
-/// Uses `tokio::sync::Mutex` so it is safe to hold across async I/O awaits.
+/// Each connection has its own Mutex so the pool lock is never held during I/O.
 pub struct RconPool {
-    pub connections: Mutex<HashMap<String, RconConn>>,
+    pub connections: Mutex<HashMap<String, Arc<Mutex<RconConn>>>>,
 }
 
 impl RconPool {

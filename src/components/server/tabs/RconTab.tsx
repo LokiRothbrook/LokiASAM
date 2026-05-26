@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Terminal, Send, Plug, PlugZap, Trash2, Copy,
+  Terminal, Send, PlugZap, Trash2, Copy, RefreshCw, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,12 +20,11 @@ interface ConsoleLine {
   kind: "command" | "response" | "error" | "system";
 }
 
-// Common RCON preset commands for ASA
 const PRESETS = [
-  { label: "Save World", cmd: "saveworld" },
+  { label: "Save World",          cmd: "saveworld" },
   { label: "Destroy Wild Dinos", cmd: "cheat destroywilddinos" },
-  { label: "List Players", cmd: "listplayers" },
-  { label: "Kick All", cmd: "kickall" },
+  { label: "List Players",        cmd: "listplayers" },
+  { label: "Kick All",            cmd: "kickall" },
 ] as const;
 
 function lineColor(kind: ConsoleLine["kind"]): string {
@@ -49,49 +48,65 @@ function mkLine(text: string, kind: ConsoleLine["kind"]): ConsoleLine {
 }
 
 export function RconTab({ server }: Props) {
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected]   = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [lines, setLines] = useState<ConsoleLine[]>([
-    mkLine("RCON console ready. Click Connect to authenticate.", "system"),
-  ]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [history, setHistory] = useState<string[]>([]);
+  const [error, setError]           = useState<string | null>(null);
+  const [lines, setLines]           = useState<ConsoleLine[]>([]);
+  const [input, setInput]           = useState("");
+  const [sending, setSending]       = useState(false);
+  const [history, setHistory]       = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
-  const [broadcastMsg, setBroadcastMsg] = useState("");
+  const [broadcastMsg, setBroadcastMsg]   = useState("");
   const [showBroadcast, setShowBroadcast] = useState(false);
 
-  const logRef = useRef<HTMLDivElement>(null);
+  const logRef   = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const addLine = useCallback((text: string, kind: ConsoleLine["kind"]) => {
     setLines((prev) => [...prev.slice(-499), mkLine(text, kind)]);
   }, []);
 
-  // Auto-scroll to bottom when lines change
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
-  const connect = async () => {
+  // ── Connection helpers ──────────────────────────────────────────────────────
+
+  const connect = useCallback(async (serverId: string, port: number, password: string) => {
     setConnecting(true);
+    setError(null);
     try {
-      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
+      await tauriCmd.rconConnect(serverId, "127.0.0.1", port, password);
       setConnected(true);
-      addLine(`Connected to RCON at 127.0.0.1:${server.rcon_port}`, "system");
+      setLines((prev) => [...prev, mkLine(`Connected to RCON at 127.0.0.1:${port}`, "system")]);
     } catch (e) {
-      addLine(`Connection failed: ${e}`, "error");
+      const msg = String(e);
+      setError(msg);
+      setLines((prev) => [...prev, mkLine(`Connection failed: ${msg}`, "error")]);
     } finally {
       setConnecting(false);
     }
-  };
+  }, []);
 
-  const disconnect = async () => {
-    await tauriCmd.rconDisconnect(server.id).catch(() => null);
-    setConnected(false);
-    addLine("Disconnected from RCON.", "system");
-  };
+  // Auto-connect on mount, auto-disconnect on unmount
+  useEffect(() => {
+    const { id, rcon_port, rcon_password, status } = server;
+    if (status === "running") {
+      connect(id, rcon_port, rcon_password);
+    } else {
+      setLines([mkLine("Server is not running — start the server to use RCON.", "system")]);
+    }
+    return () => {
+      tauriCmd.rconDisconnect(id).catch(() => null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleReconnect = () =>
+    connect(server.id, server.rcon_port, server.rcon_password);
+
+  // ── Command send ────────────────────────────────────────────────────────────
 
   const sendCommand = async (cmd: string) => {
     if (!cmd.trim() || !connected || sending) return;
@@ -105,14 +120,16 @@ export function RconTab({ server }: Props) {
       const response = await tauriCmd.rconSend(server.id, trimmed);
       const resp = response.trim();
       if (resp) {
-        for (const line of resp.split("\n")) {
-          addLine(line, "response");
-        }
+        for (const line of resp.split("\n")) addLine(line, "response");
       } else {
         addLine("(no response)", "system");
       }
     } catch (e) {
-      addLine(`Error: ${e}`, "error");
+      const msg = String(e);
+      addLine(`Error: ${msg}`, "error");
+      // Treat any send failure as a dropped connection
+      setConnected(false);
+      setError(msg);
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -148,40 +165,57 @@ export function RconTab({ server }: Props) {
     }
   };
 
+  // ── Derived status ──────────────────────────────────────────────────────────
+
+  const statusColor = connected
+    ? "var(--neon-green)"
+    : error
+    ? "var(--neon-red)"
+    : connecting
+    ? "var(--neon-cyan)"
+    : "var(--text-muted)";
+
+  const statusLabel = connected
+    ? `Connected — 127.0.0.1:${server.rcon_port}`
+    : connecting
+    ? "Connecting…"
+    : error
+    ? "Disconnected"
+    : server.status !== "running"
+    ? "Server not running"
+    : "Disconnected";
+
+  const showReconnect =
+    !connected && !connecting && server.status === "running";
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <div className="flex flex-col gap-4 h-full">
+
       {/* ── Connection bar ── */}
       <div
         className="glass-card rounded-xl p-3 flex items-center gap-3 flex-wrap"
-        style={{ borderColor: connected ? "rgba(0,255,136,0.3)" : "rgba(191,0,255,0.15)" }}
+        style={{ borderColor: connected ? "rgba(0,255,136,0.3)" : error ? "rgba(255,50,50,0.25)" : "rgba(191,0,255,0.15)" }}
       >
         <div className="flex items-center gap-2">
           <div
             className="w-2 h-2 rounded-full"
             style={{
-              background: connected ? "var(--neon-green)" : connecting ? "var(--neon-cyan)" : "var(--text-muted)",
-              boxShadow: connected ? "0 0 6px var(--neon-green)" : connecting ? "0 0 6px var(--neon-cyan)" : "none",
+              background: statusColor,
+              boxShadow: connected || connecting ? `0 0 6px ${statusColor}` : "none",
             }}
           />
           <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
-            {connected ? `Connected — 127.0.0.1:${server.rcon_port}` : connecting ? "Connecting…" : "Disconnected"}
+            {statusLabel}
           </span>
         </div>
+
         <div className="flex items-center gap-2 ml-auto flex-wrap">
-          {!connected ? (
-            <Button
-              size="sm"
-              className="btn-neon-green"
-              onClick={connect}
-              disabled={connecting || server.status !== "running"}
-            >
-              <Plug className="w-3.5 h-3.5 mr-1.5" />
-              {server.status !== "running" ? "Server not running" : "Connect"}
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" onClick={disconnect}>
-              <PlugZap className="w-3.5 h-3.5 mr-1.5" />
-              Disconnect
+          {showReconnect && (
+            <Button size="sm" className="btn-neon-green" onClick={handleReconnect}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+              Reconnect
             </Button>
           )}
           <Button size="sm" variant="ghost" onClick={copyLog} title="Copy log to clipboard">
@@ -192,6 +226,17 @@ export function RconTab({ server }: Props) {
           </Button>
         </div>
       </div>
+
+      {/* ── Error detail ── */}
+      {error && !connected && (
+        <div
+          className="rounded-lg px-3 py-2 flex items-start gap-2 text-xs font-mono"
+          style={{ background: "rgba(255,50,50,0.08)", border: "1px solid rgba(255,50,50,0.2)" }}
+        >
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-red)" }} />
+          <span style={{ color: "var(--neon-red)" }}>{error}</span>
+        </div>
+      )}
 
       {/* ── Preset commands ── */}
       {connected && (
@@ -287,7 +332,7 @@ export function RconTab({ server }: Props) {
         <Input
           ref={inputRef}
           className="font-mono text-sm h-9"
-          placeholder={connected ? "Enter RCON command… (↑↓ for history)" : "Connect first to send commands"}
+          placeholder={connected ? "Enter RCON command… (↑↓ for history)" : "Connecting…"}
           value={input}
           onChange={(e) => { setInput(e.target.value); setHistoryIdx(-1); }}
           onKeyDown={handleKeyDown}
