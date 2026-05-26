@@ -47,8 +47,9 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// Hide the main window and update tray menu to reflect hidden state.
-/// Emits "tray-first-hide" the first time so the frontend can show a one-time hint.
-/// Also closes any open mod browser overlay so it doesn't float orphaned.
+/// Emits "tray-first-hide" only on the very first hide so the frontend can show a
+/// one-time "minimized to tray" hint.
+/// Also closes any open mod browser/verify overlay so it doesn't float orphaned.
 fn hide_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
@@ -65,7 +66,15 @@ fn hide_main_window(app: &tauri::AppHandle) {
         let _ = tray_state.show_item.set_text("Show LokiASAM");
         let _ = tray_state.hide_item.set_enabled(false);
     }
-    let _ = app.emit("tray-first-hide", ());
+    // Only fire the hint event the first time the window is hidden.
+    if let Some(app_state) = app.try_state::<state::AppState>() {
+        let was_shown = app_state
+            .tray_hint_shown
+            .swap(true, std::sync::atomic::Ordering::Relaxed);
+        if !was_shown {
+            let _ = app.emit("tray-first-hide", ());
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -89,6 +98,7 @@ pub fn run() {
             app.manage(state::AppState::new());
             app.manage(state::rcon_pool::RconPool::new());
             app.manage(state::log_watcher::LogWatcherState::new());
+            app.manage(state::scheduler::SchedulerState::new());
 
             // ── System tray ───────────────────────────────────────────────
             // Window starts visible, so "Bring to Front" is the correct initial label.
@@ -228,6 +238,21 @@ pub fn run() {
                 }
             });
 
+            // ── Scheduler background task ──────────────────────────────────
+            // Checks every 30 s for due entries. This runs unconditionally — JS
+            // timers are throttled when the window is hidden to tray; this loop is not.
+            let scheduler_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.tick().await; // skip the immediate first tick
+
+                loop {
+                    interval.tick().await;
+                    commands::scheduler::tick_scheduler(&scheduler_handle);
+                }
+            });
+
             Ok(())
         })
         .plugin(tauri_plugin_sql::Builder::new().build())
@@ -271,9 +296,6 @@ pub fn run() {
             commands::backup::prune_backups,
             // Mods (Phase 5)
             commands::mods::install_mods,
-            commands::mods::add_mod,
-            commands::mods::remove_mod,
-            commands::mods::reorder_mods,
             commands::mods::open_mod_browser,
             commands::mods::close_mod_browser,
             commands::mods::start_mod_verification,
@@ -303,10 +325,11 @@ pub fn run() {
             commands::cluster::delete_cluster,
             commands::cluster::add_server_to_cluster,
             commands::cluster::remove_server_from_cluster,
-            // Scheduler (Phase 6)
+            // Scheduler
             commands::scheduler::create_schedule,
             commands::scheduler::delete_schedule,
             commands::scheduler::toggle_schedule,
+            commands::scheduler::sync_schedules,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LokiASAM");

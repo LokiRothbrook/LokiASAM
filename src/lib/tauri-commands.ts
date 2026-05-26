@@ -145,6 +145,46 @@ export interface ScheduleConfig {
   configJson: string;
 }
 
+/** One fully-hydrated schedule entry sent to Rust via sync_schedules. */
+export interface ScheduleEntry {
+  scheduleId: string;
+  serverId: string;
+  serverName: string;
+  installPath: string;
+  mapPath: string;
+  mapId: string;
+  port: number;
+  queryPort: number;
+  rconPort: number;
+  rconPassword: string;
+  maxPlayers: number;
+  serverPassword?: string;
+  adminPassword: string;
+  extraArgs: string[];
+  modIds: string[];
+  protonPath?: string;
+  prefixPath?: string;
+  steamcmdPath: string;
+  baseDir: string;
+  backupDir: string;
+  scheduleType: string;
+  enabled: boolean;
+  configJson: string;
+  /** Unix timestamp in milliseconds (from cron-parser). */
+  nextRunMs: number;
+}
+
+/** Payload emitted by `scheduler://fired` when an entry fires. */
+export interface SchedulerFiredPayload {
+  scheduleId: string;
+  serverId: string;
+  serverName: string;
+  scheduleType: string;
+  success: boolean;
+  error?: string;
+  backupRecord?: BackupRecord;
+}
+
 // ---------------------------------------------------------------------------
 // Typed command wrappers — grouped by domain
 // ---------------------------------------------------------------------------
@@ -296,12 +336,6 @@ export const tauriCmd = {
   /** Close the hidden mod-verify window. */
   closeModVerify: () =>
     invoke<void>("close_mod_verify", {}),
-  addMod:       (serverId: string, modId: string, modName: string) =>
-    invoke<void>("add_mod", { serverId, modId, modName }),
-  removeMod:    (serverId: string, modId: string) => invoke<void>("remove_mod", { serverId, modId }),
-  reorderMods:  (serverId: string, orderedModIds: string[]) =>
-    invoke<void>("reorder_mods", { serverId, orderedModIds }),
-
   // System stats
   /**
    * Validate a directory path: creates it if needed, tests write access,
@@ -354,6 +388,9 @@ export const tauriCmd = {
   deleteSchedule: (scheduleId: string) => invoke<void>("delete_schedule", { scheduleId }),
   toggleSchedule: (scheduleId: string, enabled: boolean) =>
     invoke<void>("toggle_schedule", { scheduleId, enabled }),
+  /** Atomically replace all active schedule entries in the Rust scheduler. */
+  syncSchedules: (entries: ScheduleEntry[]) =>
+    invoke<void>("sync_schedules", { entries }),
 
   // Bootstrap
   /** Read the bootstrap file. Returns null if first-time setup has never run. */

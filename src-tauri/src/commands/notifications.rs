@@ -32,10 +32,10 @@ pub struct EmailPayload {
 
 /// POST a Discord embed message to a webhook URL.
 ///
-/// The embed includes title, description, color, server name, and event type.
-/// Uses `reqwest` with rustls so no native TLS dependency is needed.
+/// Uses the shared `reqwest::Client` from AppState to reuse connection pools and TLS sessions.
 #[tauri::command]
 pub async fn send_discord_notification(
+    state: tauri::State<'_, crate::state::AppState>,
     webhook_url: String,
     payload: DiscordPayload,
 ) -> Result<(), String> {
@@ -45,29 +45,15 @@ pub async fn send_discord_notification(
             "description": payload.description,
             "color": payload.color,
             "fields": [
-                {
-                    "name": "Event",
-                    "value": payload.event_type,
-                    "inline": true
-                },
-                {
-                    "name": "Server",
-                    "value": payload.server_name,
-                    "inline": true
-                }
+                { "name": "Event",  "value": payload.event_type,  "inline": true },
+                { "name": "Server", "value": payload.server_name, "inline": true }
             ],
-            "footer": {
-                "text": "LokiASAM"
-            }
+            "footer": { "text": "LokiASAM" }
         }]
     });
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-
-    let response = client
+    let response = state
+        .http_client
         .post(&webhook_url)
         .json(&body)
         .send()

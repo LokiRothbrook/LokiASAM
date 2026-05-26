@@ -27,10 +27,12 @@ export function useServers() {
     queryClient.invalidateQueries({ queryKey: ["servers"] });
   });
 
+  // Primary updates arrive via server://any-change events above.
+  // 30 s poll is a safety-net fallback for dev mode or missed events.
   return useQuery({
     queryKey: ["servers"],
     queryFn: getServers,
-    staleTime: 5_000,
-    refetchInterval: 5_000,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }

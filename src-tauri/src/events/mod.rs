@@ -10,9 +10,7 @@ pub const SERVER_ANY_CHANGE: &str = "server://any-change";
 pub const STEAMCMD_OUTPUT: &str = "steamcmd://output";
 /// ASA server log lines streamed from the ShooterGame.log file watcher.
 pub const LOG_LINE: &str = "log://line";
-/// New in-app notification created.
-pub const NOTIFICATION_NEW: &str = "notification://new";
-/// Backup progress update (Phase 6).
+/// Backup progress update.
 pub const BACKUP_PROGRESS: &str = "backup://progress";
 
 /// Build a namespaced event name for a specific server.

@@ -134,6 +134,7 @@ async function runMigrations(db: Database): Promise<void> {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Reserved for future file-integrity tracking — not yet used by any query.
   await db.execute(`CREATE TABLE IF NOT EXISTS file_cache (
     cache_key    TEXT PRIMARY KEY,
     file_path    TEXT NOT NULL,
@@ -573,17 +574,25 @@ export async function toggleServerMod(
 /**
  * Reorder mods by updating each row's install_order to match the provided array index.
  * `orderedModIds` must contain every mod_id currently attached to the server.
+ * All updates run in a single transaction so partial reorders are never persisted.
  */
 export async function reorderServerMods(
   serverId: string,
   orderedModIds: string[]
 ): Promise<void> {
   const db = await getDb();
-  for (let i = 0; i < orderedModIds.length; i++) {
-    await db.execute(
-      "UPDATE server_mods SET install_order = ? WHERE server_id = ? AND mod_id = ?",
-      [i, serverId, orderedModIds[i]]
-    );
+  await db.execute("BEGIN");
+  try {
+    for (let i = 0; i < orderedModIds.length; i++) {
+      await db.execute(
+        "UPDATE server_mods SET install_order = ? WHERE server_id = ? AND mod_id = ?",
+        [i, serverId, orderedModIds[i]]
+      );
+    }
+    await db.execute("COMMIT");
+  } catch (err) {
+    await db.execute("ROLLBACK").catch(() => {});
+    throw err;
   }
 }
 
@@ -670,7 +679,7 @@ export async function updateScheduleEnabled(
 export async function updateScheduleRun(
   scheduleId: string,
   lastRun: string,
-  nextRun: string
+  nextRun: string | null
 ): Promise<void> {
   const db = await getDb();
   await db.execute(

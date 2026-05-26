@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::Manager;
 
+use super::utils::collect_subtree;
+
 // ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
@@ -203,25 +205,6 @@ pub async fn get_process_stats(pid: u32) -> Result<ProcessStats, String> {
         memory_mb: total_mem_bytes as f32 / 1_048_576.0,
         pid,
     })
-}
-
-/// BFS walk of the sysinfo process table starting at `root`.
-/// Returns every PID in the subtree (including `root` itself).
-fn collect_subtree(sys: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::Pid> {
-    use std::collections::HashSet;
-    let mut all = vec![root];
-    let mut queue = vec![root];
-    let mut visited: HashSet<sysinfo::Pid> = std::iter::once(root).collect();
-
-    while let Some(parent) = queue.pop() {
-        for (pid, proc) in sys.processes() {
-            if proc.parent() == Some(parent) && visited.insert(*pid) {
-                all.push(*pid);
-                queue.push(*pid);
-            }
-        }
-    }
-    all
 }
 
 /// Send a Source Query UDP A2S_INFO packet to a game server and parse the response.

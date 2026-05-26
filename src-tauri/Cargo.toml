@@ -50,9 +50,6 @@ lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "builder
 # System process stats (CPU / RAM per PID)
 sysinfo = { version = "0.32" }
 
-# Cron scheduling
-tokio-cron-scheduler = { version = "0.13", features = ["signal"] }
-
 # INI file parsing
 configparser = { version = "3" }
 

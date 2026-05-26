@@ -27,6 +27,7 @@ import {
   type ScheduleRow, type CreateScheduleInput, type NotificationConfigRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
 
@@ -170,6 +171,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       onRefresh();
+      syncSchedulesToRust();
     } catch (e) {
       toast.error(`Failed to save schedule: ${e}`);
     } finally {
@@ -184,6 +186,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
       await tauriCmd.deleteSchedule(existing.id);
       await deleteScheduleRecord(existing.id);
       onRefresh();
+      syncSchedulesToRust();
       toast.success(`${title} schedule removed.`);
     } catch (e) {
       toast.error(`Failed to delete: ${e}`);
@@ -200,6 +203,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
         await tauriCmd.toggleSchedule(existing.id, newVal);
         await updateScheduleEnabled(existing.id, newVal);
         onRefresh();
+        syncSchedulesToRust();
       } catch (e) {
         toast.error(`Toggle failed: ${e}`);
         setEnabled(!newVal);

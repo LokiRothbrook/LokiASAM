@@ -1,5 +1,6 @@
 pub mod log_watcher;
 pub mod rcon_pool;
+pub mod scheduler;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Mutex};
@@ -24,6 +25,10 @@ pub struct AppState {
     /// True once the frontend has confirmed first-time setup is complete.
     /// Controls whether the close button hides to tray or exits the process.
     pub setup_complete: AtomicBool,
+    /// Guards the one-time "tray hint" toast shown when the user first hides the window.
+    pub tray_hint_shown: AtomicBool,
+    /// Shared HTTP client — reuses connections and TLS sessions across all outbound requests.
+    pub http_client: reqwest::Client,
 }
 
 impl AppState {
@@ -32,6 +37,11 @@ impl AppState {
             running_servers: Mutex::new(HashMap::new()),
             stopping_servers: Mutex::new(HashSet::new()),
             setup_complete: AtomicBool::new(false),
+            tray_hint_shown: AtomicBool::new(false),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .expect("Failed to build shared HTTP client"),
         }
     }
 }

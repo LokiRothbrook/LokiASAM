@@ -3,17 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::{Emitter, Manager};
 
+use super::utils::{collect_subtree, copy_dir_recursive};
+
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PortConfig {
-    pub port: u16,
-    pub query_port: u16,
-    pub rcon_port: u16,
-}
 
 /// Runtime status of a server. Returned by `get_server_status` and emitted as
 /// the payload for `server://status/{id}` and `server://any-change` events.
@@ -71,26 +65,6 @@ fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
     let _ = app.emit(events::SERVER_ANY_CHANGE, status.clone());
 }
 
-/// Collect the PID of every process in the subtree rooted at `root`.
-/// Uses a BFS over the sysinfo process table. A visited-set prevents
-/// infinite loops in the (rare) event of circular parent links.
-fn collect_process_tree(sys: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::Pid> {
-    use std::collections::HashSet;
-    let mut all = vec![root];
-    let mut queue = vec![root];
-    let mut visited: HashSet<sysinfo::Pid> = std::iter::once(root).collect();
-
-    while let Some(parent) = queue.pop() {
-        for (pid, proc) in sys.processes() {
-            if proc.parent() == Some(parent) && visited.insert(*pid) {
-                all.push(*pid);
-                queue.push(*pid);
-            }
-        }
-    }
-    all
-}
-
 /// Kill a process AND all of its descendants.
 ///
 /// On Linux with Proton the tracked PID is the Proton launcher script; the
@@ -104,7 +78,7 @@ fn kill_process_tree(root_pid: u32, graceful: bool) {
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::All, false);
 
-    let pids = collect_process_tree(&sys, root);
+    let pids = collect_subtree(&sys, root);
 
     // Kill leaves → root so parents cannot respawn children.
     for pid in pids.iter().rev() {
@@ -141,17 +115,34 @@ fn pid_alive(pid: u32) -> bool {
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Start an ASA dedicated server.
-///
-/// Builds the full launch command from the supplied params, spawns the process,
-/// registers it in the in-memory `running_servers` map, and spawns a lightweight
-/// watcher task that detects when the process exits (crash or intentional stop).
-///
-/// Returns the OS process ID so the frontend can persist it in SQLite.
-#[tauri::command]
-pub async fn start_server(
+/// Internal: start a server without requiring Tauri State injection.
+/// Called by both the `start_server` command and the Rust scheduler.
+pub async fn inner_start_server(
     app_handle: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
+    params: StartServerParams,
+) -> Result<u32, String> {
+    let state = app_handle.state::<AppState>();
+    inner_start_server_with_state(&app_handle, &state, params).await
+}
+
+/// Internal: stop a server without requiring Tauri State injection.
+/// Called by both the `stop_server` command and the Rust scheduler.
+pub fn inner_stop_server(app: &tauri::AppHandle, server_id: &str, graceful: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let pid = {
+        let registry = state.running_servers.lock().unwrap();
+        registry.get(server_id).map(|rs| rs.pid)
+    };
+    let pid = pid.ok_or_else(|| format!("Server {server_id} is not running"))?;
+    state.stopping_servers.lock().unwrap().insert(server_id.to_string());
+    kill_process_tree(pid, graceful);
+    Ok(())
+}
+
+/// Core start logic shared between `start_server` (Tauri command) and `inner_start_server`.
+async fn inner_start_server_with_state(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
     params: StartServerParams,
 ) -> Result<u32, String> {
     // Build the ?-delimited query string that follows the map name.
@@ -336,34 +327,28 @@ pub async fn start_server(
     Ok(pid)
 }
 
+/// Start an ASA dedicated server.
+#[tauri::command]
+pub async fn start_server(
+    app_handle: tauri::AppHandle,
+    _state: tauri::State<'_, AppState>,
+    params: StartServerParams,
+) -> Result<u32, String> {
+    inner_start_server(app_handle, params).await
+}
+
 /// Stop a running server.
 ///
 /// Marks the server as intentionally stopping (so the watcher task emits
 /// "stopped" rather than "crashed"), then sends the OS signal.
-/// If `graceful` is true, SIGTERM is sent first (RCON saveworld will be added
-/// in Phase 4); otherwise the process is killed immediately.
+/// If `graceful` is true, SIGTERM is sent first; otherwise the process is killed immediately.
 #[tauri::command]
 pub async fn stop_server(
-    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     server_id: String,
     graceful: bool,
 ) -> Result<(), String> {
-    let pid = {
-        let registry = state.running_servers.lock().unwrap();
-        registry.get(&server_id).map(|rs| rs.pid)
-    };
-
-    let pid = pid.ok_or_else(|| format!("Server {server_id} is not running"))?;
-
-    // Flag as intentional before signalling so the watcher doesn't emit "crashed".
-    state
-        .stopping_servers
-        .lock()
-        .unwrap()
-        .insert(server_id.clone());
-
-    kill_process_tree(pid, graceful);
-    Ok(())
+    inner_stop_server(&app_handle, &server_id, graceful)
 }
 
 /// Restart a server: kill the current process (gracefully if requested),
@@ -373,22 +358,30 @@ pub async fn stop_server(
 #[tauri::command]
 pub async fn restart_server(
     app_handle: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
+    _state: tauri::State<'_, AppState>,
+    params: StartServerParams,
+    graceful: bool,
+) -> Result<u32, String> {
+    inner_restart_server(app_handle, params, graceful).await
+}
+
+/// Internal: restart logic shared between the `restart_server` command and the scheduler.
+pub async fn inner_restart_server(
+    app_handle: tauri::AppHandle,
     params: StartServerParams,
     graceful: bool,
 ) -> Result<u32, String> {
     let pid = {
+        let state = app_handle.state::<AppState>();
         let registry = state.running_servers.lock().unwrap();
         registry.get(&params.server_id).map(|rs| rs.pid)
     };
 
     if let Some(pid) = pid {
-        // Mark intentional so the watcher doesn't race with us.
-        state
-            .stopping_servers
-            .lock()
-            .unwrap()
-            .insert(params.server_id.clone());
+        {
+            let state = app_handle.state::<AppState>();
+            state.stopping_servers.lock().unwrap().insert(params.server_id.clone());
+        }
 
         kill_process_tree(pid, graceful);
 
@@ -407,12 +400,12 @@ pub async fn restart_server(
         }
 
         // Clean up state (the watcher task may have already done this, that's fine).
+        let state = app_handle.state::<AppState>();
         state.stopping_servers.lock().unwrap().remove(&params.server_id);
         state.running_servers.lock().unwrap().remove(&params.server_id);
     }
 
-    // Re-spawn using start_server.
-    start_server(app_handle, state, params).await
+    inner_start_server(app_handle, params).await
 }
 
 /// Return the current runtime status of a server.
@@ -549,7 +542,7 @@ pub async fn clone_server(
     }
 
     tokio::task::spawn_blocking(move || {
-        super::steamcmd::copy_dir_recursive(&src, &dst, &["Saved"])
+        copy_dir_recursive(&src, &dst, &["Saved"])
             .map_err(|e| format!("Failed to clone server files: {e}"))
     })
     .await

@@ -21,6 +21,7 @@ import { getAppSetting, setAppSetting, initDb } from "@/lib/db";
 import { applyThemeAccent } from "@/lib/theme";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 
 interface SetupGuardProps {
   children: React.ReactNode;
@@ -68,7 +69,10 @@ export function SetupGuard({ children }: SetupGuardProps) {
         const complete = value === "true";
         setSetupComplete(complete);
         setSetupChecked(true);
-        if (complete) tauriCmd.setSetupComplete(true).catch(() => {});
+        if (complete) {
+          tauriCmd.setSetupComplete(true).catch(() => {});
+          syncSchedulesToRust();
+        }
       } catch {
         // Any error → treat as not setup so the wizard can recover.
         setSetupComplete(false);
@@ -80,6 +84,7 @@ export function SetupGuard({ children }: SetupGuardProps) {
   const handleSetupComplete = () => {
     setSetupComplete(true);
     tauriCmd.setSetupComplete(true).catch(() => {});
+    syncSchedulesToRust();
   };
 
   // First-time tray-hide hint: show an OS notification once so the user knows

@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Stdio;
 use tauri::{Emitter, Manager};
-use tokio::io::BufReader;
-use tokio::process::Command;
+
+use super::utils::{build_steamcmd_cmd, copy_dir_all};
 
 /// ASA Client App ID — used for workshop mod downloads (not the server App ID).
 const ASA_CLIENT_APP_ID: &str = "2399830";
@@ -23,16 +22,6 @@ pub struct ModProgressLine {
 // Internal helpers — install_mods pipeline
 // ---------------------------------------------------------------------------
 
-fn build_steamcmd_cmd(path: &str, args: &[&str]) -> Command {
-    let mut cmd = Command::new(path);
-    cmd.args(args);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    cmd
-}
-
 fn emit_mod_line(
     app: &tauri::AppHandle,
     channel: &str,
@@ -50,15 +39,15 @@ fn emit_mod_line(
     );
 }
 
-/// Stream stdout + stderr from a child process to a Tauri event channel.
-/// Returns the process exit code.
-async fn stream_process(
+/// Stream stdout + stderr from a child process to a Tauri event channel,
+/// tagging each line with an optional mod ID.
+async fn stream_process_mod(
     app: &tauri::AppHandle,
     child: &mut tokio::process::Child,
     channel: &str,
     mod_id: Option<&str>,
 ) -> Result<i32, String> {
-    use tokio::io::AsyncBufReadExt;
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("failed to capture stderr")?;
@@ -87,32 +76,6 @@ async fn stream_process(
     let _ = tokio::join!(stdout_task, stderr_task);
     let status = child.wait().await.map_err(|e| e.to_string())?;
     Ok(status.code().unwrap_or(-1))
-}
-
-/// Recursively copy a directory tree from `src` to `dst`.
-/// Always copies (no hardlinks) so it works across filesystem boundaries.
-async fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
-    tokio::fs::create_dir_all(dst)
-        .await
-        .map_err(|e| format!("create_dir {}: {e}", dst.display()))?;
-
-    let mut entries = tokio::fs::read_dir(src)
-        .await
-        .map_err(|e| format!("read_dir {}: {e}", src.display()))?;
-
-    while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-        let ft = entry.file_type().await.map_err(|e| e.to_string())?;
-        let src_p = entry.path();
-        let dst_p = dst.join(entry.file_name());
-        if ft.is_dir() {
-            Box::pin(copy_dir_all(&src_p, &dst_p)).await?;
-        } else {
-            tokio::fs::copy(&src_p, &dst_p)
-                .await
-                .map_err(|e| format!("copy {} -> {}: {e}", src_p.display(), dst_p.display()))?;
-        }
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +328,7 @@ pub async fn install_mods(
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-        let exit_code = stream_process(&app, &mut child, &channel, Some(mod_id)).await?;
+        let exit_code = stream_process_mod(&app, &mut child, &channel, Some(mod_id)).await?;
 
         if exit_code != 0 {
             let msg = format!(
@@ -434,31 +397,6 @@ pub async fn install_mods(
         "All mods installed successfully.",
         None,
     );
-    Ok(())
-}
-
-/// Stub — mod list additions are handled directly via frontend SQLite helpers.
-#[tauri::command]
-pub async fn add_mod(
-    _server_id: String,
-    _mod_id: String,
-    _mod_name: String,
-) -> Result<(), String> {
-    Ok(())
-}
-
-/// Stub — mod removal is handled directly via frontend SQLite helpers.
-#[tauri::command]
-pub async fn remove_mod(_server_id: String, _mod_id: String) -> Result<(), String> {
-    Ok(())
-}
-
-/// Stub — reordering is handled directly via frontend SQLite helpers.
-#[tauri::command]
-pub async fn reorder_mods(
-    _server_id: String,
-    _ordered_mod_ids: Vec<String>,
-) -> Result<(), String> {
     Ok(())
 }
 
