@@ -18,11 +18,23 @@ interface AppState {
   notificationBellOpen: boolean;
   /** Whether the New Server creation wizard overlay is visible. */
   showNewServerWizard: boolean;
+  /** Whether the CurseForge mod browser overlay is currently open. */
+  modBrowserOpen: boolean;
+  /** Params passed to the mod-browser page so it knows which server to open for. */
+  modBrowserParams: { serverId: string; serverName: string; addedModIds: string[] } | null;
+  /** Set to true when the mod browser closes so ModsTab knows to reload its list. */
+  modBrowserJustClosed: boolean;
+  /** Increments each time a mod is added via the browser. ModsTab watches this for real-time list updates. */
+  modAddedCount: number;
 
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
   setNotificationBellOpen: (open: boolean) => void;
   setShowNewServerWizard: (show: boolean) => void;
+  setModBrowserOpen: (open: boolean) => void;
+  setModBrowserParams: (p: { serverId: string; serverName: string; addedModIds: string[] } | null) => void;
+  setModBrowserJustClosed: (v: boolean) => void;
+  incrementModAddedCount: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -30,9 +42,17 @@ export const useAppStore = create<AppState>((set) => ({
   setupComplete: false,
   notificationBellOpen: false,
   showNewServerWizard: false,
+  modBrowserOpen: false,
+  modBrowserParams: null,
+  modBrowserJustClosed: false,
+  modAddedCount: 0,
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
   setNotificationBellOpen: (open) => set({ notificationBellOpen: open }),
   setShowNewServerWizard: (show) => set({ showNewServerWizard: show }),
+  setModBrowserOpen: (open) => set({ modBrowserOpen: open }),
+  setModBrowserParams: (p) => set({ modBrowserParams: p }),
+  setModBrowserJustClosed: (v) => set({ modBrowserJustClosed: v }),
+  incrementModAddedCount: () => set((s) => ({ modAddedCount: s.modAddedCount + 1 })),
 }));

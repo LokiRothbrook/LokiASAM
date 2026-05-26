@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useServerStats } from "@/hooks/useServerStats";
 import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
 import {
-  updateServerStatus, getServerConfig, getServerModCount,
+  updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getAppSetting,
 } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
@@ -114,12 +114,16 @@ export function OverviewTab({ server }: Props) {
   }, [server.id]);
 
   const buildStartParams = async (): Promise<StartServerParams> => {
-    const config = await getServerConfig(server.id);
+    const [config, mods] = await Promise.all([
+      getServerConfig(server.id),
+      getServerMods(server.id),
+    ]);
     const launchArgs: Record<string, string> = config ? JSON.parse(config.launch_args_json) : {};
     const extraArgs = Object.entries(launchArgs)
       .filter(([, v]) => v === "true" || v === "1")
       .map(([k]) => `-${k}`);
     const map = ARK_MAPS.find((m) => m.id === server.map_id);
+    const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
     const params: StartServerParams = {
       serverId: server.id,
       installPath: server.install_path,
@@ -131,6 +135,7 @@ export function OverviewTab({ server }: Props) {
       serverPassword: server.server_password ?? undefined,
       adminPassword: server.admin_password,
       extraArgs,
+      modIds: enabledModIds,
     };
     if (isLinux) {
       params.protonPath = (await getAppSetting("proton_path")) ?? undefined;

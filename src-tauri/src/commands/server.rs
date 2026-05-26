@@ -47,6 +47,9 @@ pub struct StartServerParams {
     pub admin_password: String,
     /// Additional command-line flags, e.g. ["-NoBattlEye", "-servergamelog"].
     pub extra_args: Vec<String>,
+    /// CurseForge mod IDs to load. Passed as `-mods=id1,id2,...` — the server
+    /// downloads and applies them on startup automatically.
+    pub mod_ids: Vec<String>,
     /// Linux only: path to the Proton-GE installation directory (must contain `proton` script).
     /// Typically {base_dir}/proton/GE-ProtonX-Y/
     pub proton_path: Option<String>,
@@ -210,6 +213,9 @@ pub async fn start_server(
 
     cmd.arg(&query_string);
     cmd.args(["-server", "-log"]);
+    if !params.mod_ids.is_empty() {
+        cmd.arg(format!("-mods={}", params.mod_ids.join(",")));
+    }
     for arg in &params.extra_args {
         cmd.arg(arg);
     }

@@ -3,22 +3,22 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Package, Plus, Trash2, ChevronUp, ChevronDown, Globe,
-  AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Search,
+  AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Info,
+  Loader2, XCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
-import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
   getServerMods,
   addServerMod,
   removeServerMod,
   toggleServerMod,
   reorderServerMods,
-  getAppSetting,
   type ModRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { useAppStore } from "@/store/useAppStore";
 import type { ServerRow } from "@/lib/db";
 
 interface Props {
@@ -30,20 +30,22 @@ interface Props {
 // ---------------------------------------------------------------------------
 
 export function ModsTab({ server }: Props) {
-  const [mods, setMods] = useState<ModRow[]>([]);
+  const [mods, setMods]       = useState<ModRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pendingModIds, setPendingModIds] = useState<Set<string>>(new Set());
-  const [installing, setInstalling] = useState(false);
-  const [installCompleted, setInstallCompleted] = useState(false);
-  const [browserOpen, setBrowserOpen] = useState(false);
 
   // Add-by-ID form state
-  const [addModId, setAddModId] = useState("");
-  const [addModName, setAddModName] = useState("");
-  const [addError, setAddError] = useState("");
+  const [addInput, setAddInput]   = useState("");
+  const [addError, setAddError]   = useState("");
   const [addLoading, setAddLoading] = useState(false);
 
   const addInputRef = useRef<HTMLInputElement>(null);
+
+  const modBrowserOpen      = useAppStore((s) => s.modBrowserOpen);
+  const setModBrowserOpen   = useAppStore((s) => s.setModBrowserOpen);
+  const setModBrowserParams = useAppStore((s) => s.setModBrowserParams);
+  const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
+  const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
+  const modAddedCount = useAppStore((s) => s.modAddedCount);
 
   // ── Load mods from SQLite ──────────────────────────────────────────────
   const loadMods = async () => {
@@ -58,80 +60,117 @@ export function ModsTab({ server }: Props) {
     }
   };
 
+  useEffect(() => { loadMods(); }, [server.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Real-time update: a mod was added via the browser window
   useEffect(() => {
-    loadMods();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id]);
+    if (modAddedCount > 0) loadMods();
+  }, [modAddedCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Close any open mod browser when this tab unmounts (e.g. server deleted / navigated away).
+  // Reload when the browser window is closed (safety net for any missed events)
   useEffect(() => {
-    return () => {
-      tauriCmd.closeModBrowser().catch(() => {});
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Browser lifecycle events from the overlay script ──────────────────
-  // "Close" button in overlay header → close the window via Rust command.
-  useTauriEvent<unknown>("mod://close-browser", () => {
-    tauriCmd.closeModBrowser().catch(console.error);
-  });
-
-  // "Pop Out" button in overlay header → reopen as decorated window at current URL.
-  useTauriEvent<unknown>("mod://popout-browser", (raw) => {
-    try {
-      const data = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
-        serverId: string;
-        currentUrl: string;
-      };
-      if (data.serverId !== server.id) return;
-      tauriCmd.popoutModBrowser(server.id, server.name, data.currentUrl)
-        .then(() => setBrowserOpen(true))
-        .catch(console.error);
-    } catch (e) {
-      console.error("mod://popout-browser parse error:", e);
+    if (modBrowserJustClosed) {
+      loadMods();
+      setModBrowserJustClosed(false);
     }
-  });
+  }, [modBrowserJustClosed]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fired by Rust when any mod browser window is closed.
-  useTauriEvent<unknown>("mod://browser-closed", () => {
-    setBrowserOpen(false);
-    loadMods();
-  });
-
-  // ── Listen for mod://add-to-server events from the browser window ──────
-  // The injected script emits JSON.stringify({ serverId, modId, modName }).
-  // Tauri may deliver the payload as the object or as a JSON string — handle both.
-  useTauriEvent<unknown>("mod://add-to-server", async (raw) => {
-    try {
-      const data = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
-        serverId: string;
-        modId: string;
-        modName: string;
-      };
-      if (data.serverId !== server.id) return;
-      await handleAddMod(data.modId.trim(), data.modName.trim() || "Unknown Mod");
-    } catch (e) {
-      console.error("mod://add-to-server parse error:", e);
+  // ── Mod browser open / close ───────────────────────────────────────────
+  const handleToggleBrowser = async () => {
+    if (modBrowserOpen) {
+      try { await tauriCmd.closeModBrowser(); } catch { /* not in Tauri */ }
+    } else {
+      setModBrowserParams({
+        serverId: server.id,
+        serverName: server.name,
+        addedModIds: mods.map((m) => m.mod_id),
+      });
+      try {
+        await tauriCmd.openModBrowser(
+          server.id,
+          server.name,
+          mods.map((m) => m.mod_id),
+        );
+        setModBrowserOpen(true);
+      } catch (e) {
+        console.error("openModBrowser failed:", e);
+        setModBrowserParams(null);
+      }
     }
-  });
+  };
 
-  // ── Mod CRUD ──────────────────────────────────────────────────────────
-  const handleAddMod = async (modId: string, modName: string) => {
-    if (!modId) return;
-    const exists = mods.some((m) => m.mod_id === modId);
-    if (exists) {
-      setAddError(`Mod ${modId} is already in the list.`);
+  // ── Add mods by ID (comma-separated, verified) ─────────────────────────
+  const handleAddFromForm = async () => {
+    const raw = addInput.trim();
+    if (!raw) { setAddError("Enter at least one mod ID."); return; }
+
+    // Split on commas, strip whitespace, remove empty entries
+    const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+    // Check for non-numeric entries before making any network calls
+    const invalid = ids.filter((id) => !/^\d+$/.test(id));
+    if (invalid.length > 0) {
+      setAddError(`Invalid ID${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")} — IDs must be numbers.`);
       return;
     }
-    setAddLoading(true);
+
+    // Dedupe against already-added mods
+    const duplicates = ids.filter((id) => mods.some((m) => m.mod_id === id));
+    const toVerify   = ids.filter((id) => !mods.some((m) => m.mod_id === id));
+
+    if (toVerify.length === 0) {
+      setAddError("All entered IDs are already in the mod list.");
+      return;
+    }
+
     setAddError("");
+    setAddLoading(true);
+
     try {
-      await addServerMod(server.id, modId, modName || `Mod ${modId}`);
-      setPendingModIds((prev) => new Set([...prev, modId]));
-      setAddModId("");
-      setAddModName("");
+      const results = await tauriCmd.verifyMods(toVerify);
+
+      const succeeded = results.filter((r) => r.verified);
+      const failed    = results.filter((r) => !r.verified);
+
+      // Add all verified mods to SQLite
+      for (const r of succeeded) {
+        try {
+          await addServerMod(server.id, r.modId, r.name ?? `Mod ${r.modId}`);
+        } catch (e) {
+          console.error(`addServerMod(${r.modId}) failed:`, e);
+        }
+      }
+
       await loadMods();
+      if (succeeded.length > 0) setAddInput("");
+
+      // Build a summary of any problems
+      const problems: string[] = [];
+      if (duplicates.length > 0) {
+        problems.push(`Already in list: ${duplicates.join(", ")}`);
+      }
+      if (failed.length > 0) {
+        const lines = failed.map((r) => `${r.modId} — ${r.error ?? "unknown error"}`);
+        toast.error(
+          `${failed.length} mod${failed.length > 1 ? "s" : ""} could not be verified`,
+          {
+            description: lines.join("\n"),
+            duration: 8000,
+          },
+        );
+      }
+      if (duplicates.length > 0) {
+        toast.warning(`${duplicates.length} ID${duplicates.length > 1 ? "s were" : " was"} already in the list`, {
+          description: duplicates.join(", "),
+          duration: 5000,
+        });
+      }
+      if (succeeded.length > 0 && failed.length === 0 && duplicates.length === 0) {
+        toast.success(
+          `Added ${succeeded.length} mod${succeeded.length > 1 ? "s" : ""}`,
+          { duration: 3000 },
+        );
+      }
     } catch (e) {
       setAddError(String(e));
     } finally {
@@ -139,20 +178,10 @@ export function ModsTab({ server }: Props) {
     }
   };
 
-  const handleAddFromForm = async () => {
-    const id = addModId.trim();
-    if (!id) { setAddError("Enter a mod ID."); return; }
-    await handleAddMod(id, addModName.trim() || `Mod ${id}`);
-  };
-
+  // ── Mod CRUD ──────────────────────────────────────────────────────────
   const handleRemoveMod = async (modId: string) => {
     try {
       await removeServerMod(server.id, modId);
-      setPendingModIds((prev) => {
-        const next = new Set(prev);
-        next.delete(modId);
-        return next;
-      });
       await loadMods();
     } catch (e) {
       console.error("Remove mod failed:", e);
@@ -184,49 +213,6 @@ export function ModsTab({ server }: Props) {
     await loadMods();
   };
 
-  // ── Install (Apply Changes) ────────────────────────────────────────────
-  const handleApplyChanges = async () => {
-    setInstalling(true);
-    setInstallCompleted(false);
-    try {
-      const [steamcmdPath, baseDir] = await Promise.all([
-        getAppSetting("steamcmd_path"),
-        getAppSetting("base_dir"),
-      ]);
-      if (!steamcmdPath || !baseDir) {
-        throw new Error("Setup not complete. Run the setup wizard first.");
-      }
-      const enabledModIds = mods
-        .filter((m) => m.enabled === 1)
-        .map((m) => m.mod_id);
-      await tauriCmd.installMods({
-        serverId: server.id,
-        steamcmdPath,
-        baseDir,
-        installPath: server.install_path,
-        modIds: enabledModIds,
-      });
-      setPendingModIds(new Set());
-      setInstallCompleted(true);
-    } catch (e) {
-      console.error("Install mods failed:", e);
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  // ── Open mod browser window ─────────────────────────────────────────
-  const handleOpenBrowser = async () => {
-    try {
-      await tauriCmd.openModBrowser(server.id, server.name);
-      setBrowserOpen(true);
-    } catch (e) {
-      console.error("Open mod browser failed:", e);
-    }
-  };
-
-  const hasPending = pendingModIds.size > 0;
-
   // ── Render ──────────────────────────────────────────────────────────
   return (
     <div className="flex gap-4" style={{ minHeight: 520 }}>
@@ -247,18 +233,6 @@ export function ModsTab({ server }: Props) {
               ({mods.length})
             </span>
           </h2>
-          {hasPending && (
-            <span
-              className="text-xs px-2 py-0.5 rounded-full font-medium"
-              style={{
-                background: "rgba(191,0,255,0.12)",
-                border: "1px solid rgba(191,0,255,0.35)",
-                color: "var(--neon-purple)",
-              }}
-            >
-              {pendingModIds.size} pending install
-            </span>
-          )}
         </div>
 
         {/* Mod list */}
@@ -281,17 +255,16 @@ export function ModsTab({ server }: Props) {
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
               <Package className="w-8 h-8" style={{ color: "var(--text-muted)" }} />
               <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                No mods installed. Add a mod ID below or open the browser.
+                No mods installed. Add mod IDs below or open the browser.
               </p>
             </div>
           ) : (
             mods.map((mod, index) => (
-              <ModRow
+              <ModRowItem
                 key={mod.mod_id}
                 mod={mod}
                 index={index}
                 total={mods.length}
-                isPending={pendingModIds.has(mod.mod_id)}
                 onMoveUp={() => handleMoveUp(index)}
                 onMoveDown={() => handleMoveDown(index)}
                 onToggle={(enabled) => handleToggleMod(mod.mod_id, enabled)}
@@ -307,36 +280,31 @@ export function ModsTab({ server }: Props) {
           style={{ borderColor: "rgba(191,0,255,0.12)" }}
         >
           <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-            Add mod by ID
+            Add mods by ID
           </p>
           <div className="flex gap-2">
             <Input
               ref={addInputRef}
-              value={addModId}
-              onChange={(e) => { setAddModId(e.target.value); setAddError(""); }}
+              value={addInput}
+              onChange={(e) => { setAddInput(e.target.value); setAddError(""); }}
               onKeyDown={(e) => { if (e.key === "Enter") handleAddFromForm(); }}
-              placeholder="Mod ID (e.g. 927090)"
+              placeholder="e.g. 927090, 123456, 789012"
               className="flex-1 text-sm font-mono"
-              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)" }}
-              disabled={addLoading}
-            />
-            <Input
-              value={addModName}
-              onChange={(e) => setAddModName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleAddFromForm(); }}
-              placeholder="Name (optional)"
-              className="flex-1 text-sm"
               style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)" }}
               disabled={addLoading}
             />
             <Button
               onClick={handleAddFromForm}
-              disabled={addLoading || !addModId.trim()}
+              disabled={addLoading || !addInput.trim()}
               className="shrink-0 btn-neon-purple"
               size="sm"
             >
-              <Plus className="w-4 h-4 mr-1" />
-              Add
+              {addLoading ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4 mr-1" />
+              )}
+              {addLoading ? "Verifying…" : "Add"}
             </Button>
           </div>
           {addError && (
@@ -345,41 +313,25 @@ export function ModsTab({ server }: Props) {
               {addError}
             </p>
           )}
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Separate multiple IDs with commas. Each ID is verified against CurseForge before being added.
+          </p>
         </div>
 
-        {/* Apply Changes button */}
-        <Button
-          onClick={handleApplyChanges}
-          disabled={installing || mods.length === 0}
-          className="w-full btn-neon-purple"
-          style={
-            hasPending
-              ? { boxShadow: "0 0 16px rgba(191,0,255,0.4)" }
-              : {}
-          }
+        {/* Apply note */}
+        <div
+          className="flex items-start gap-2 rounded-xl px-3 py-2.5"
+          style={{
+            background: "rgba(0,255,255,0.04)",
+            border: "1px solid rgba(0,255,255,0.12)",
+          }}
         >
-          {installing ? (
-            <>
-              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-              Installing mods…
-            </>
-          ) : (
-            <>
-              <Package className="w-4 h-4 mr-2" />
-              {hasPending ? `Apply Changes (${pendingModIds.size} pending)` : "Re-install All Mods"}
-            </>
-          )}
-        </Button>
-
-        {/* Install output panel */}
-        {(installing || installCompleted) && (
-          <CommandOutputPanel
-            eventChannel={`mods://progress/${server.id}`}
-            label="Mod install output"
-            completed={installCompleted}
-            bodyClassName="h-40"
-          />
-        )}
+          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-cyan)" }} />
+          <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+            Mod changes apply on the next server start or restart — no manual install needed.
+            ARK: Survival Ascended downloads mods automatically.
+          </p>
+        </div>
       </div>
 
       {/* ── Right column: browser panel ─────────────────────────────── */}
@@ -387,7 +339,7 @@ export function ModsTab({ server }: Props) {
         className="flex flex-col gap-3 shrink-0"
         style={{ width: 260 }}
       >
-        {/* Open browser card */}
+        {/* Open / Close browser card */}
         <div
           className="glass-card flex flex-col gap-3 p-4 rounded-xl"
           style={{ borderColor: "rgba(191,0,255,0.15)" }}
@@ -400,18 +352,50 @@ export function ModsTab({ server }: Props) {
             >
               Mod Browser
             </span>
+            {modBrowserOpen && (
+              <span
+                className="ml-auto text-xs px-1.5 py-0.5 rounded-full"
+                style={{
+                  background: "rgba(191,0,255,0.15)",
+                  color: "var(--neon-purple)",
+                  border: "1px solid rgba(191,0,255,0.3)",
+                }}
+              >
+                Open
+              </span>
+            )}
           </div>
           <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
-            Opens CurseForge in a dedicated browser window with a neon
-            <span style={{ color: "var(--neon-purple)" }}> "+ Add to {server.name}"</span>{" "}
-            button injected on each mod page.
+            {modBrowserOpen ? (
+              <>
+                CurseForge is open in a separate window. Click{" "}
+                <span style={{ color: "var(--neon-purple)" }}>+ Add Mod</span>{" "}
+                on any mod page — it appears in your list instantly.
+              </>
+            ) : (
+              <>
+                Opens CurseForge in a separate window with a
+                <span style={{ color: "var(--neon-purple)" }}> "+ Add Mod"</span>{" "}
+                button on each mod page.
+              </>
+            )}
           </p>
           <Button
-            onClick={handleOpenBrowser}
-            className="w-full btn-neon-purple"
+            onClick={handleToggleBrowser}
+            className={`w-full ${modBrowserOpen ? "" : "btn-neon-purple"}`}
+            variant={modBrowserOpen ? "outline" : "default"}
           >
-            <Globe className="w-4 h-4 mr-2" />
-            {browserOpen ? "Mod Browser Open" : "Open Mod Browser"}
+            {modBrowserOpen ? (
+              <>
+                <XCircle className="w-4 h-4 mr-2" />
+                Close Mod Browser
+              </>
+            ) : (
+              <>
+                <Globe className="w-4 h-4 mr-2" />
+                Open Mod Browser
+              </>
+            )}
           </Button>
         </div>
 
@@ -430,30 +414,12 @@ export function ModsTab({ server }: Props) {
             className="text-xs leading-relaxed space-y-1.5"
             style={{ color: "var(--text-muted)" }}
           >
-            <li>• Add mods by ID or via the browser window</li>
-            <li>• Reorder using ↑↓ arrows — order matters for ASA</li>
-            <li>• Toggle the switch to disable a mod without removing it</li>
-            <li>• Click <strong style={{ color: "var(--text-primary)" }}>Apply Changes</strong> to download &amp; install</li>
-            <li>• The server must be restarted for mod changes to take effect</li>
+            <li>• Add mods by ID or via the browser</li>
+            <li>• Reorder using ↑↓ — order matters for ASA</li>
+            <li>• Toggle the switch to disable without removing</li>
+            <li>• Mods apply automatically on next server start</li>
+            <li>• ASA downloads mods itself — no manual install</li>
           </ul>
-        </div>
-
-        {/* Search helper */}
-        <div
-          className="glass-card flex flex-col gap-2 p-4 rounded-xl"
-          style={{ borderColor: "rgba(191,0,255,0.1)" }}
-        >
-          <div className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-muted)" }} />
-            <p className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>
-              Finding mod IDs
-            </p>
-          </div>
-          <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
-            The mod ID is the numeric project ID shown on the CurseForge mod page (e.g.{" "}
-            <span className="font-mono" style={{ color: "var(--text-primary)" }}>927090</span>).
-            Open the browser above and click the purple button on any mod page to add it automatically.
-          </p>
         </div>
       </div>
     </div>
@@ -461,30 +427,28 @@ export function ModsTab({ server }: Props) {
 }
 
 // ---------------------------------------------------------------------------
-// ModRow sub-component
+// ModRowItem sub-component
 // ---------------------------------------------------------------------------
 
-interface ModRowProps {
+interface ModRowItemProps {
   mod: ModRow;
   index: number;
   total: number;
-  isPending: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onToggle: (enabled: boolean) => void;
   onRemove: () => void;
 }
 
-function ModRow({
+function ModRowItem({
   mod,
   index,
   total,
-  isPending,
   onMoveUp,
   onMoveDown,
   onToggle,
   onRemove,
-}: ModRowProps) {
+}: ModRowItemProps) {
   const enabled = mod.enabled === 1;
 
   return (
@@ -537,18 +501,6 @@ function ModRow({
           >
             {mod.mod_name}
           </span>
-          {isPending && (
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0"
-              style={{
-                background: "rgba(191,0,255,0.1)",
-                border: "1px solid rgba(191,0,255,0.3)",
-                color: "var(--neon-purple)",
-              }}
-            >
-              pending
-            </span>
-          )}
         </div>
         <span
           className="text-xs font-mono"

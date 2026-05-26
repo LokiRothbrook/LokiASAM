@@ -55,6 +55,8 @@ export interface StartServerParams {
   adminPassword: string;
   /** Additional CLI flags like ["-NoBattlEye", "-servergamelog"]. */
   extraArgs: string[];
+  /** CurseForge mod IDs to pass as -mods=id1,id2,... on startup. */
+  modIds: string[];
   /** Linux only: path to the Proton-GE installation directory. */
   protonPath?: string;
   /** Linux only: path to the Steam compatibility prefix (WINEPREFIX). */
@@ -95,6 +97,13 @@ export interface ServerConfigJson {
   gameUserSettings: Record<string, Record<string, string>>;
   gameIni: Record<string, Record<string, string>>;
   launchArgs: Record<string, string>;
+}
+
+export interface ModVerifyResult {
+  modId: string;
+  name: string | null;
+  verified: boolean;
+  error: string | null;
 }
 
 export interface BackupRecord {
@@ -240,15 +249,25 @@ export const tauriCmd = {
     installPath: string;
     modIds: string[];
   }) => invoke<void>("install_mods", params),
-  /** Open the CurseForge mod browser as a frameless overlay over the main window. */
-  openModBrowser: (serverId: string, serverName: string) =>
-    invoke<void>("open_mod_browser", { serverId, serverName }),
-  /** Close the mod browser window (overlay or popped-out). Emits mod://browser-closed. */
+  /**
+   * Open CurseForge in a dedicated WebviewWindow sized for the mod browser.
+   * Pass the list of already-added mod IDs so the injected button reflects state.
+   */
+  openModBrowser: (
+    serverId: string,
+    serverName: string,
+    addedModIds: string[],
+  ) => invoke<void>("open_mod_browser", { serverId, serverName, addedModIds }),
+  /** Close the mod browser window. Emits mod://browser-closed. */
   closeModBrowser: () =>
     invoke<void>("close_mod_browser", {}),
-  /** Convert the frameless overlay to a standard decorated window at the current URL. */
-  popoutModBrowser: (serverId: string, serverName: string, currentUrl: string) =>
-    invoke<void>("popout_mod_browser", { serverId, serverName, currentUrl }),
+  /**
+   * Verify a list of mod IDs by fetching their CurseForge project pages.
+   * Returns verified mod names for valid ASA mods and error messages for
+   * IDs that could not be resolved.
+   */
+  verifyMods: (modIds: string[]) =>
+    invoke<ModVerifyResult[]>("verify_mods", { modIds }),
   addMod:       (serverId: string, modId: string, modName: string) =>
     invoke<void>("add_mod", { serverId, modId, modName }),
   removeMod:    (serverId: string, modId: string) => invoke<void>("remove_mod", { serverId, modId }),

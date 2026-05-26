@@ -20,7 +20,8 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "center": true
+        "center": true,
+        "backgroundColor": [5, 5, 16, 255]
       }
     ],
     "security": {

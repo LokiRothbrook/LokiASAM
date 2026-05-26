@@ -25,6 +25,7 @@ import {
   updateServerStatus,
   getServerConfig,
   getServerModCount,
+  getServerMods,
   getLastBackupTime,
   getNextScheduledRestart,
   getAppSetting,
@@ -116,7 +117,10 @@ export function ServerCard({ server }: Props) {
     typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
   const buildStartParams = async (): Promise<StartServerParams> => {
-    const config = await getServerConfig(server.id);
+    const [config, mods] = await Promise.all([
+      getServerConfig(server.id),
+      getServerMods(server.id),
+    ]);
     const launchArgs: Record<string, string> = config
       ? JSON.parse(config.launch_args_json)
       : {};
@@ -126,6 +130,7 @@ export function ServerCard({ server }: Props) {
       .map(([k]) => `-${k}`);
 
     const map = ARK_MAPS.find((m) => m.id === server.map_id);
+    const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
     const params: StartServerParams = {
       serverId: server.id,
@@ -138,6 +143,7 @@ export function ServerCard({ server }: Props) {
       serverPassword: server.server_password ?? undefined,
       adminPassword: server.admin_password,
       extraArgs,
+      modIds: enabledModIds,
     };
 
     if (isLinux) {

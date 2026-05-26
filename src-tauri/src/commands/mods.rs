@@ -121,25 +121,26 @@ async fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
 
 /// Build the JS initialization script injected into the mod-browser webview.
 ///
-/// `show_header` — inject a neon header bar (for the frameless overlay window).
-///               Pass `false` for the decorated pop-out window (OS chrome is sufficient).
+/// `added_mod_ids` — mod IDs already in the server's list. The injected button
+/// shows "✓ Already Added" (green, non-clickable) for these instead of the
+/// purple "+ Add" button, even before the user has interacted with anything.
 ///
-/// Key correctness rule: ALL DOM work is deferred inside a `DOMContentLoaded`
-/// listener so that `document.body` is guaranteed to exist when the script runs.
-/// Attaching a MutationObserver at injection time (before `<body>` is parsed)
-/// caused `document.body.appendChild()` to throw, crashing CurseForge's React
-/// bootstrap and leaving the page white below the static header.
-fn build_browser_script(server_id: &str, server_name: &str, show_header: bool) -> String {
+/// All DOM work is deferred to `DOMContentLoaded` so that `document.body` is
+/// guaranteed to exist when the script runs. Attaching DOM mutations before
+/// `<body>` is parsed caused `appendChild` to throw and crash CurseForge's
+/// React bootstrap, leaving the page white.
+fn build_browser_script(server_id: &str, server_name: &str, added_mod_ids: &[String]) -> String {
     let sid = serde_json::to_string(server_id).unwrap_or_default();
     let sname = serde_json::to_string(server_name).unwrap_or_default();
-    let show_hdr = if show_header { "true" } else { "false" };
+    let added_ids_json =
+        serde_json::to_string(added_mod_ids).unwrap_or_else(|_| "[]".to_string());
 
     format!(
         r#"
 (function() {{
     var SERVER_ID   = {sid};
     var SERVER_NAME = {sname};
-    var SHOW_HEADER = {show_hdr};
+    var addedIds    = new Set({added_ids_json});
 
     // Emit a Tauri event from this external-URL webview.
     function ipcEmit(event, payload) {{
@@ -151,55 +152,6 @@ fn build_browser_script(server_id: &str, server_name: &str, show_header: bool) -
         }} catch (e) {{
             console.error('[LokiASAM] ipcEmit error:', e);
         }}
-    }}
-
-    // ── Overlay header bar ─────────────────────────────────────────────────
-    function injectHeader() {{
-        if (!SHOW_HEADER || document.getElementById('__lokiasam_hdr')) return;
-
-        var hdr = document.createElement('div');
-        hdr.id = '__lokiasam_hdr';
-        hdr.style.cssText = [
-            'position:fixed;top:0;left:0;right:0;z-index:2147483647;height:38px',
-            'background:rgba(8,5,22,0.97)',
-            'border-bottom:1px solid rgba(191,0,255,0.4)',
-            'display:flex;align-items:center;gap:8px;padding:0 12px',
-            'font-family:system-ui,-apple-system,sans-serif',
-        ].join(';');
-
-        var title = document.createElement('span');
-        title.textContent = 'Mod Browser — ' + SERVER_NAME;
-        title.style.cssText = 'flex:1;font-size:13px;font-weight:600;color:#d4b0f0;user-select:none';
-
-        function makeBtn(label, color) {{
-            var b = document.createElement('button');
-            b.textContent = label;
-            b.style.cssText = [
-                'padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600',
-                'cursor:pointer;border:1px solid;background:rgba(0,0,0,0.35)',
-                'color:' + color + ';border-color:' + color + '88',
-                'transition:opacity 0.15s;font-family:inherit',
-            ].join(';');
-            b.addEventListener('mouseenter', function() {{ b.style.opacity = '0.7'; }});
-            b.addEventListener('mouseleave', function() {{ b.style.opacity = '1'; }});
-            return b;
-        }}
-
-        var popBtn   = makeBtn('Pop Out', '#bf00ff');
-        var closeBtn = makeBtn('Close',   '#ff5555');
-
-        popBtn.addEventListener('click', function() {{
-            ipcEmit('mod://popout-browser', {{ serverId: SERVER_ID, currentUrl: window.location.href }});
-        }});
-        closeBtn.addEventListener('click', function() {{
-            ipcEmit('mod://close-browser', {{ serverId: SERVER_ID }});
-        }});
-
-        hdr.appendChild(title);
-        hdr.appendChild(popBtn);
-        hdr.appendChild(closeBtn);
-        document.body.insertBefore(hdr, document.body.firstChild);
-        document.documentElement.style.paddingTop = '38px';
     }}
 
     // ── Mod ID / name extraction from CurseForge page ─────────────────────
@@ -230,6 +182,24 @@ fn build_browser_script(server_id: &str, server_name: &str, show_header: bool) -
             || 'Unknown Mod';
     }}
 
+    // ── Apply visual state to the floating button ─────────────────────────
+    function renderBtn(btn, modId) {{
+        var already = addedIds.has(modId);
+        if (already) {{
+            btn.textContent      = '✓ Installed';
+            btn.style.background = '#00b060';
+            btn.style.border     = '1px solid rgba(0,200,100,0.6)';
+            btn.style.boxShadow  = '0 0 24px rgba(0,200,100,0.7)';
+            btn.style.cursor     = 'default';
+        }} else {{
+            btn.textContent      = '+ Add Mod';
+            btn.style.background = '#bf00ff';
+            btn.style.border     = '1px solid rgba(191,0,255,0.6)';
+            btn.style.boxShadow  = '0 0 24px rgba(191,0,255,0.7)';
+            btn.style.cursor     = 'pointer';
+        }}
+    }}
+
     // ── Floating "Add to server" button ────────────────────────────────────
     function updateAddBtn() {{
         var isModPage = /\/mods\/[^/?#]+/.test(window.location.pathname);
@@ -245,55 +215,35 @@ fn build_browser_script(server_id: &str, server_name: &str, show_header: bool) -
             btn.id = '__lokiasam_add_btn';
             btn.style.cssText = [
                 'position:fixed;bottom:28px;right:28px;z-index:2147483646',
-                'padding:12px 22px;background:#bf00ff;color:#fff',
-                'border:1px solid rgba(191,0,255,0.6);border-radius:10px',
+                'padding:12px 22px;color:#fff',
+                'border-radius:10px',
                 'font-size:14px;font-weight:700',
                 'font-family:system-ui,-apple-system,sans-serif',
-                'cursor:pointer;box-shadow:0 0 24px rgba(191,0,255,0.7)',
                 'transition:all 0.18s;line-height:1.2',
             ].join(';');
 
-            btn.addEventListener('mouseenter', function() {{
-                btn.style.background  = '#d400ff';
-                btn.style.boxShadow   = '0 0 36px rgba(191,0,255,1)';
-            }});
-            btn.addEventListener('mouseleave', function() {{
-                btn.style.background  = '#bf00ff';
-                btn.style.boxShadow   = '0 0 24px rgba(191,0,255,0.7)';
-            }});
             btn.addEventListener('click', function() {{
                 var modId   = btn.getAttribute('data-mod-id')   || '';
                 var modName = btn.getAttribute('data-mod-name') || 'Unknown Mod';
-                if (!modId) {{
-                    btn.textContent = 'Mod ID not found';
-                    setTimeout(function() {{ btn.textContent = '+ Add to ' + SERVER_NAME; }}, 2000);
-                    return;
-                }}
+                if (!modId || addedIds.has(modId)) return;
                 ipcEmit('mod://add-to-server', {{ serverId: SERVER_ID, modId: modId, modName: modName }});
-                btn.textContent       = 'Added to ' + SERVER_NAME + '!';
-                btn.style.background  = '#00b060';
-                btn.style.boxShadow   = '0 0 24px rgba(0,200,100,0.7)';
-                setTimeout(function() {{
-                    btn.textContent      = '+ Add to ' + SERVER_NAME;
-                    btn.style.background = '#bf00ff';
-                    btn.style.boxShadow  = '0 0 24px rgba(191,0,255,0.7)';
-                }}, 2200);
+                addedIds.add(modId);
+                renderBtn(btn, modId);
             }});
             document.body.appendChild(btn);
         }}
 
-        btn.setAttribute('data-mod-id',   extractModId()   || '');
+        var modId = extractModId() || '';
+        btn.setAttribute('data-mod-id',   modId);
         btn.setAttribute('data-mod-name', extractModName() || 'Unknown Mod');
-        btn.textContent   = '+ Add to ' + SERVER_NAME;
         btn.style.display = 'block';
+        renderBtn(btn, modId);
     }}
 
     // ── Bootstrap — deferred to DOMContentLoaded ───────────────────────────
     function init() {{
-        injectHeader();
         updateAddBtn();
 
-        // Wire SPA navigation hooks after page has loaded.
         window.addEventListener('popstate', function() {{ setTimeout(updateAddBtn, 600); }});
         ['pushState', 'replaceState'].forEach(function(method) {{
             var orig = history[method].bind(history);
@@ -313,7 +263,7 @@ fn build_browser_script(server_id: &str, server_name: &str, show_header: bool) -
 "#,
         sid = sid,
         sname = sname,
-        show_hdr = show_hdr,
+        added_ids_json = added_ids_json,
     )
 }
 
@@ -394,7 +344,6 @@ pub async fn install_mods(
             return Err(msg);
         }
 
-        // SteamCMD places files at: {steamcmd_dir}/steamapps/workshop/content/2399830/{mod_id}
         let src = steamcmd_dir
             .join("steamapps")
             .join("workshop")
@@ -411,7 +360,6 @@ pub async fn install_mods(
             return Err(msg);
         }
 
-        // Copy to shared cache: {base_dir}/.cache/mods/{mod_id}
         let cache_dest = Path::new(&base_dir)
             .join(".cache")
             .join("mods")
@@ -425,7 +373,6 @@ pub async fn install_mods(
         );
         copy_dir_all(&src, &cache_dest).await?;
 
-        // Copy from cache to server: {install_path}/ShooterGame/Content/Mods/{mod_id}
         let server_dest = Path::new(&install_path)
             .join("ShooterGame")
             .join("Content")
@@ -484,19 +431,20 @@ pub async fn reorder_mods(
     Ok(())
 }
 
-/// Open the CurseForge mod browser as a frameless overlay window positioned
-/// exactly over the main window's inner content area.
+/// Open the CurseForge mod browser as a separate decorated `WebviewWindow`.
 ///
-/// The overlay injects a neon header bar (Close / Pop Out buttons) and a
-/// floating "+ Add to [Server]" button on mod detail pages.
+/// A `WebviewWindow` (stable API) is used instead of the unstable `add_child`
+/// approach.  The window is decorated and appears in the taskbar so the user
+/// can manage it independently.  The initialization script is still injected
+/// so the floating "Add" button works exactly as before.
 ///
-/// All DOM work in the init script is deferred to `DOMContentLoaded` so that
-/// `document.body` is guaranteed to exist — avoiding the TypeError that
-/// previously crashed CurseForge's React bootstrap and left the page white.
+/// If a mod-browser window is already open it is closed and a fresh one is
+/// created so the `added_mod_ids` list is always up-to-date.
 #[tauri::command]
 pub fn open_mod_browser(
     server_id: String,
     server_name: String,
+    added_mod_ids: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -505,97 +453,210 @@ pub fn open_mod_browser(
         .parse()
         .map_err(|e: url::ParseError| e.to_string())?;
 
-    // Close any previously-opened mod browser before opening a new one.
+    // Close any existing browser window before opening a fresh one.
     if let Some(existing) = app.get_webview_window("mod-browser") {
         let _ = existing.close();
     }
 
-    // Position the frameless overlay to exactly cover the main window's webview.
-    let main_win = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
-    let pos   = main_win.inner_position().map_err(|e| e.to_string())?;
-    let size  = main_win.inner_size().map_err(|e| e.to_string())?;
-    let scale = main_win.scale_factor().map_err(|e| e.to_string())?;
+    let script = build_browser_script(&server_id, &server_name, &added_mod_ids);
 
-    let x = pos.x as f64 / scale;
-    let y = pos.y as f64 / scale;
-    let w = size.width  as f64 / scale;
-    let h = size.height as f64 / scale;
+    let title = format!("Mod Browser — {server_name}");
 
-    let script = build_browser_script(&server_id, &server_name, true);
-
-    WebviewWindowBuilder::new(&app, "mod-browser", WebviewUrl::External(url))
-        .title(format!("Mod Browser — {}", server_name))
-        .inner_size(w, h)
-        .position(x, y)
-        .decorations(false)
-        .always_on_top(true)
+    let window = WebviewWindowBuilder::new(&app, "mod-browser", WebviewUrl::External(url))
+        .title(&title)
+        .inner_size(1100.0, 680.0)
+        .min_inner_size(900.0, 600.0)
+        .resizable(true)
         .initialization_script(&script)
         .build()
         .map_err(|e| e.to_string())?;
 
+    // Emit browser-closed when the user closes the window via the OS button
+    // so the frontend can update its open/closed state.
+    let app_handle = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let _ = app_handle.emit("mod://browser-closed", ());
+        }
+    });
+
     Ok(())
 }
 
-/// Close the mod browser window (overlay or popped-out decorated).
+/// Close the mod browser window.
 /// Emits `mod://browser-closed` so the frontend can update its open/close state.
 #[tauri::command]
 pub fn close_mod_browser(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("mod-browser") {
         w.close().map_err(|e| e.to_string())?;
     }
+    // Emit immediately — the Destroyed handler above also fires, but emitting
+    // here ensures the frontend updates even if the window was already gone.
     let _ = app.emit("mod://browser-closed", ());
     Ok(())
 }
 
-/// Convert the frameless overlay into a standard decorated window.
-///
-/// Closes the overlay and opens a new decorated window at `current_url`
-/// (passed by the overlay's "Pop Out" button via `mod://popout-browser` event).
-/// Registers a `Destroyed` handler on the new window so `mod://browser-closed`
-/// fires when the user closes it via the OS title-bar button.
-#[tauri::command]
-pub fn popout_mod_browser(
-    server_id: String,
-    server_name: String,
-    current_url: String,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
+// ---------------------------------------------------------------------------
+// Mod verification via CurseForge page scraping
+// ---------------------------------------------------------------------------
 
-    // Close the overlay without emitting browser-closed (we're reopening it).
-    if let Some(w) = app.get_webview_window("mod-browser") {
-        let _ = w.close();
+/// Result of verifying a single mod ID against the CurseForge website.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModVerifyResult {
+    pub mod_id: String,
+    pub name: Option<String>,
+    pub verified: bool,
+    pub error: Option<String>,
+}
+
+/// Extract the mod name from a CurseForge HTML page.
+///
+/// Tries `<meta property="og:title" content="...">` first (most stable — it's
+/// an SEO tag CurseForge will never remove), then falls back to `<title>`.
+/// Strips the trailing " | CurseForge" / " - CurseForge" suffix.
+fn extract_mod_name(html: &str) -> Option<String> {
+    let html_lower = html.to_lowercase();
+
+    // og:title — handles both attribute orderings CurseForge uses
+    if let Some(og_pos) = html_lower.find("og:title") {
+        let lo = og_pos.saturating_sub(300);
+        let hi = (og_pos + 400).min(html.len());
+        let snippet = &html[lo..hi];
+        let snippet_lower = snippet.to_lowercase();
+
+        for prefix in &[r#"content=""#, r#"content='"#] {
+            if let Some(p) = snippet_lower.find(prefix) {
+                let start = p + prefix.len();
+                let quote = prefix.chars().last().unwrap();
+                let rest = &snippet[start..];
+                if let Some(end) = rest.find(quote) {
+                    let v = rest[..end].trim();
+                    if !v.is_empty() {
+                        return Some(clean_cf_title(v));
+                    }
+                }
+            }
+        }
     }
 
-    let url: tauri::Url = current_url
-        .parse()
-        .unwrap_or_else(|_| {
-            "https://www.curseforge.com/ark-survival-ascended"
-                .parse()
-                .unwrap()
-        });
+    // <title> fallback
+    if let (Some(s), Some(e)) = (html_lower.find("<title>"), html_lower.find("</title>")) {
+        if s < e {
+            let t = html[s + 7..e].trim();
+            if !t.is_empty() {
+                return Some(clean_cf_title(t));
+            }
+        }
+    }
 
-    let script = build_browser_script(&server_id, &server_name, false);
+    None
+}
 
-    let browser = WebviewWindowBuilder::new(&app, "mod-browser", WebviewUrl::External(url))
-        .title(format!("Mod Browser — {}", server_name))
-        .inner_size(1360.0, 920.0)
-        .resizable(true)
-        .decorations(true)
-        .always_on_top(false)
-        .initialization_script(&script)
+fn clean_cf_title(raw: &str) -> String {
+    for sep in &[" | CurseForge", " - CurseForge", " | curseforge", " - curseforge"] {
+        if let Some(pos) = raw.to_lowercase().find(&sep.to_lowercase()) {
+            return raw[..pos].trim().to_string();
+        }
+    }
+    raw.trim().to_string()
+}
+
+/// Verify a list of mod IDs by fetching their CurseForge project pages.
+///
+/// For each ID we GET `https://www.curseforge.com/projects/{id}` (which
+/// CurseForge redirects to the canonical slug URL) and check:
+///   1. The redirect target contains `/ark-survival-ascended/mods/` — ensures
+///      the mod belongs to the correct game.
+///   2. The page HTML contains a parseable mod name via og:title or <title>.
+///
+/// Successfully verified mods come back with `verified: true` and a `name`.
+/// Failures come back with `verified: false` and an `error` message.
+#[tauri::command]
+pub async fn verify_mods(mod_ids: Vec<String>) -> Result<Vec<ModVerifyResult>, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Emit mod://browser-closed when the OS-chrome window is closed by the user.
-    let app_clone = app.clone();
-    browser.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
-            let _ = app_clone.emit("mod://browser-closed", ());
-        }
-    });
+    let mut results = Vec::new();
 
-    Ok(())
+    for mod_id in mod_ids {
+        if mod_id.is_empty() {
+            continue;
+        }
+
+        if !mod_id.chars().all(|c| c.is_ascii_digit()) {
+            results.push(ModVerifyResult {
+                mod_id,
+                name: None,
+                verified: false,
+                error: Some("Mod ID must be numeric".to_string()),
+            });
+            continue;
+        }
+
+        let url = format!("https://www.curseforge.com/projects/{}", mod_id);
+
+        match client.get(&url).send().await {
+            Ok(response) => {
+                let final_url = response.url().to_string();
+
+                if !final_url.contains("/ark-survival-ascended/mods/") {
+                    results.push(ModVerifyResult {
+                        mod_id,
+                        name: None,
+                        verified: false,
+                        error: Some("Not an ARK: Survival Ascended mod".to_string()),
+                    });
+                    continue;
+                }
+
+                match response.text().await {
+                    Ok(html) => match extract_mod_name(&html) {
+                        Some(name) => results.push(ModVerifyResult {
+                            mod_id,
+                            name: Some(name),
+                            verified: true,
+                            error: None,
+                        }),
+                        None => results.push(ModVerifyResult {
+                            mod_id,
+                            name: None,
+                            verified: false,
+                            error: Some("Could not extract mod name from page".to_string()),
+                        }),
+                    },
+                    Err(e) => results.push(ModVerifyResult {
+                        mod_id,
+                        name: None,
+                        verified: false,
+                        error: Some(format!("Failed to read page: {e}")),
+                    }),
+                }
+            }
+            Err(e) => {
+                let msg = if e.is_timeout() {
+                    "Request timed out".to_string()
+                } else if e.status().map_or(false, |s| s.as_u16() == 404) {
+                    "Mod not found".to_string()
+                } else {
+                    format!("Network error: {e}")
+                };
+                results.push(ModVerifyResult {
+                    mod_id,
+                    name: None,
+                    verified: false,
+                    error: Some(msg),
+                });
+            }
+        }
+    }
+
+    Ok(results)
 }

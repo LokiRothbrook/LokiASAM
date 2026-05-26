@@ -6,6 +6,8 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { SetupGuard } from "@/components/layout/SetupGuard";
 import { DisableContextMenu } from "@/components/layout/DisableContextMenu";
+import { ModBrowserEventHandler } from "@/components/layout/ModBrowserEventHandler";
+import { Toaster } from "sonner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -41,11 +43,22 @@ export default function RootLayout({
             on top of everything. Once setup completes it clears the overlay.
           */}
           <SetupGuard>
+            <ModBrowserEventHandler />
+            <Toaster
+              position="bottom-right"
+              toastOptions={{
+                style: {
+                  background: "rgba(10,10,30,0.95)",
+                  border: "1px solid rgba(191,0,255,0.25)",
+                  color: "var(--text-primary)",
+                },
+              }}
+            />
             <div className="flex h-full">
               <Sidebar />
               <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
                 <TopBar />
-                <main className="flex-1 overflow-y-auto p-6">
+                <main id="main-content" className="flex-1 overflow-y-auto p-6">
                   {children}
                 </main>
               </div>

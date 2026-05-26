@@ -291,7 +291,7 @@ pub fn run() {
             commands::mods::reorder_mods,
             commands::mods::open_mod_browser,
             commands::mods::close_mod_browser,
-            commands::mods::popout_mod_browser,
+            commands::mods::verify_mods,
             // System stats
             commands::system::check_dir,
             commands::system::check_file_exists,
