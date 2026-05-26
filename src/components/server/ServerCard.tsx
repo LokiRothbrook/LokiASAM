@@ -14,6 +14,7 @@ import {
   Package,
   HardDrive,
   ChevronRight,
+  ArrowUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -86,6 +87,7 @@ export function ServerCard({ server }: Props) {
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [nextRestart, setNextRestart] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
+  const [hasUpdateAvailable, setHasUpdateAvailable] = useState(false);
 
   const mapDisplay =
     ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
@@ -93,23 +95,29 @@ export function ServerCard({ server }: Props) {
   const isRunning = server.status === "running";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
 
-  // Load secondary card data (mod count, backup, schedule).
+  // Load secondary card data (mod count, backup, schedule, update badge).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr] = await Promise.all([
+      const [mc, lb, nr, cachedBuild, serverBuild] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
+        getAppSetting("asa_cached_build_id"),
+        tauriCmd.getInstalledBuildId(server.install_path).catch(() => null),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
+        // Show badge when the cache has a newer build than what's installed.
+        if (cachedBuild && serverBuild && cachedBuild !== "0" && serverBuild !== "0") {
+          setHasUpdateAvailable(parseInt(cachedBuild) > parseInt(serverBuild));
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [server.id]);
+  }, [server.id, server.install_path]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -241,6 +249,15 @@ export function ServerCard({ server }: Props) {
               {server.name}
             </h3>
             <ServerStatusBadge status={server.status} />
+            {hasUpdateAvailable && (
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
+                style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}
+              >
+                <ArrowUp className="w-2.5 h-2.5" />
+                Update
+              </span>
+            )}
           </div>
           <div
             className="flex items-center gap-1 mt-1 text-xs"

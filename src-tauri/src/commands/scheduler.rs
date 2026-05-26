@@ -191,17 +191,69 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
 }
 
 async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
+    let cfg: serde_json::Value =
+        serde_json::from_str(&entry.config_json).unwrap_or_default();
+
+    let mode = cfg["mode"].as_str().unwrap_or("check_and_apply");
+    let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
+    let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
+
+    // ── Check-only mode: query Steam API, emit result, do nothing else ────────
+    if mode == "check_only" {
+        let result = crate::commands::steamcmd::check_asa_update(cache_dir).await?;
+        let _ = app.emit(crate::events::ASA_UPDATE_CHECK, result);
+        return Ok(());
+    }
+
+    // ── Check & Apply mode ────────────────────────────────────────────────────
     let is_running = {
         let state = app.state::<AppState>();
         let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
         r
     };
 
-    let cfg: serde_json::Value =
-        serde_json::from_str(&entry.config_json).unwrap_or_default();
-    let broadcast_warning = cfg["broadcastWarning"].as_bool().unwrap_or(false);
-    let warning_minutes = cfg["warningMinutes"].as_u64().unwrap_or(0);
+    let broadcast_warning   = cfg["broadcastWarning"].as_bool().unwrap_or(false);
+    let warning_minutes     = cfg["warningMinutes"].as_u64().unwrap_or(0);
+    let skip_if_players     = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
+    let restart_after       = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
 
+    // Skip if players are online.
+    if is_running && skip_if_players {
+        use crate::state::rcon_pool::{RconConn, RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND};
+        use tokio::net::TcpStream;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], entry.rcon_port));
+        if let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await {
+            let _ = stream.set_nodelay(true);
+            let mut conn = RconConn { stream, next_id: 1 };
+            if conn.send_packet(1, RCON_AUTH, &entry.admin_password).await.is_ok() {
+                for _ in 0..3 {
+                    match tokio::time::timeout(Duration::from_secs(3), conn.recv_packet()).await {
+                        Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
+                        Ok(Err(_)) | Err(_) => break,
+                        _ => {}
+                    }
+                }
+                if let Ok(Ok(response)) = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    conn.send_packet(2, RCON_EXECCOMMAND, "ListPlayers"),
+                ).await {
+                    let _ = response;
+                    // Wait briefly for the response then read it
+                    if let Ok(Ok((_, _, body))) = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        conn.recv_packet(),
+                    ).await {
+                        // "No Players Connected" or a list of players
+                        if !body.trim().is_empty() && !body.contains("No Players Connected") {
+                            return Ok(()); // players online — skip update
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Broadcast warning before stopping the server.
     if is_running && broadcast_warning && warning_minutes > 0 {
         let template = cfg["message"]
             .as_str()
@@ -214,7 +266,6 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
 
     if is_running {
         let _ = inner_stop_server(app, &entry.server_id, true);
-        // Wait up to 15 s for the process to exit.
         for _ in 0..30 {
             sleep(Duration::from_millis(500)).await;
             let running = {
@@ -222,32 +273,22 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
                 let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
                 r
             };
-            if !running {
-                break;
-            }
+            if !running { break; }
         }
     }
 
-    // Run SteamCMD update.
-    let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
-    let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
+    // Update shared cache via SteamCMD.
     let channel = format!("schedule://update/{}", entry.server_id);
-
     tokio::fs::create_dir_all(&cache_dir)
         .await
         .map_err(|e| format!("Failed to create cache dir: {e}"))?;
 
     crate::commands::steamcmd::steamcmd_app_update(
-        app,
-        &entry.steamcmd_path,
-        &cache_dir,
-        false,
-        &channel,
-    )
-    .await?;
+        app, &entry.steamcmd_path, &cache_dir, false, &channel,
+    ).await?;
 
-    // Sync updated files to the server directory.
-    let cache_path = std::path::PathBuf::from(&cache_dir);
+    // Sync updated files to the server directory (preserving Saved/).
+    let cache_path  = std::path::PathBuf::from(&cache_dir);
     let server_path = std::path::PathBuf::from(&entry.install_path);
     tokio::task::spawn_blocking(move || {
         crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path)
@@ -256,8 +297,14 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     .map_err(|e| format!("Sync task panicked: {e}"))?
     .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
-    // Auto-restart if the server was running before the update.
-    if is_running {
+    // Emit update-applied event so the frontend can refresh the cached build ID.
+    let _ = app.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
+        "updateApplied": true,
+        "serverId": entry.server_id,
+    }));
+
+    // Restart if requested and server was running.
+    if restart_after && is_running {
         let params = entry_to_start_params(entry);
         inner_start_server(app.clone(), params).await.map(|_| ())?;
     }

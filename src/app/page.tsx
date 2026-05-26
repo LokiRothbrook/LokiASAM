@@ -1,16 +1,189 @@
 "use client";
 
-import { useEffect } from "react";
-import { Plus, Server, Activity, PowerOff, Power } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { Plus, Server, Activity, PowerOff, Power, RefreshCw, Upload, ArrowUp, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
+import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getRunningServers, updateServerStatus } from "@/lib/db";
-import { tauriCmd } from "@/lib/tauri-commands";
+import { getRunningServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
+import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { toast } from "sonner";
+
+// ---------------------------------------------------------------------------
+// Update status chip
+// ---------------------------------------------------------------------------
+
+function UpdateStatusChip() {
+  const [checking, setChecking]       = useState(false);
+  const [updating, setUpdating]       = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [cachedBuild, setCachedBuild] = useState("");
+  const [latestBuild, setLatestBuild] = useState("");
+  const [lastChecked, setLastChecked] = useState("");
+
+  const load = useCallback(async () => {
+    const [avail, cached, latest, checked] = await Promise.all([
+      getAppSetting("asa_update_available"),
+      getAppSetting("asa_cached_build_id"),
+      getAppSetting("asa_latest_build_id"),
+      getAppSetting("asa_last_checked"),
+    ]);
+    setUpdateAvailable(avail === "true");
+    setCachedBuild(cached ?? "");
+    setLatestBuild(latest ?? "");
+    setLastChecked(checked ?? "");
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Listen for background check results fired from the Rust scheduler.
+  useTauriEvent<UpdateCheckResult | { updateApplied?: boolean }>("asa://update-check", async (payload) => {
+    if ("updateApplied" in payload && payload.updateApplied) {
+      await setAppSetting("asa_update_available", "false");
+      await setAppSetting("asa_cached_build_id", latestBuild || cachedBuild);
+      load();
+      return;
+    }
+    if ("updateAvailable" in payload) {
+      const r = payload as UpdateCheckResult;
+      const now = new Date().toISOString();
+      await setAppSetting("asa_update_available", String(r.updateAvailable));
+      await setAppSetting("asa_cached_build_id", r.cachedBuildId);
+      await setAppSetting("asa_latest_build_id", r.latestBuildId);
+      await setAppSetting("asa_last_checked", now);
+      load();
+    }
+  });
+
+  const handleCheck = async () => {
+    setChecking(true);
+    try {
+      const cacheDir = await getAppSetting("base_dir");
+      if (!cacheDir) { toast.error("Base directory not configured."); return; }
+      const sep = cacheDir.includes("\\") ? "\\" : "/";
+      const dir = `${cacheDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const result = await tauriCmd.checkAsaUpdate(dir);
+      const now = new Date().toISOString();
+      await setAppSetting("asa_update_available", String(result.updateAvailable));
+      await setAppSetting("asa_cached_build_id", result.cachedBuildId);
+      await setAppSetting("asa_latest_build_id", result.latestBuildId);
+      await setAppSetting("asa_last_checked", now);
+      load();
+      if (result.updateAvailable) {
+        toast.info(`Update available: build ${result.latestBuildId}`);
+      } else {
+        toast.success("Server is up to date.");
+      }
+    } catch (e) {
+      toast.error(`Update check failed: ${e}`);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const handleUpdateCache = async () => {
+    setUpdating(true);
+    try {
+      const [cacheBase, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!cacheBase || !steamcmdPath) {
+        toast.error("Base directory or SteamCMD path not configured.");
+        return;
+      }
+      const sep = cacheBase.includes("\\") ? "\\" : "/";
+      const cacheDir = `${cacheBase.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const newBuild = await tauriCmd.updateCache("global", cacheDir, steamcmdPath);
+      await setAppSetting("asa_cached_build_id", newBuild);
+      await setAppSetting("asa_update_available", "false");
+      await setAppSetting("asa_last_checked", new Date().toISOString());
+      load();
+      toast.success(`Cache updated to build ${newBuild}. Apply to individual servers via their Overview tab.`);
+    } catch (e) {
+      toast.error(`Cache update failed: ${e}`);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const busy = checking || updating;
+  const neverChecked = !lastChecked;
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {updateAvailable ? (
+        <div
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium"
+          style={{
+            background: "rgba(255,165,0,0.1)",
+            border: "1px solid rgba(255,165,0,0.4)",
+            color: "#ffa500",
+          }}
+        >
+          <ArrowUp className="w-3 h-3" />
+          Update Available
+          {cachedBuild && latestBuild && cachedBuild !== latestBuild && (
+            <span className="opacity-70 ml-0.5">
+              (build {latestBuild})
+            </span>
+          )}
+        </div>
+      ) : !neverChecked ? (
+        <div
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs"
+          style={{ background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.2)", color: "var(--neon-green)" }}
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          Up to date
+        </div>
+      ) : null}
+
+      {updateAvailable && (
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={handleUpdateCache}
+          className="h-7 gap-1.5 text-xs"
+          style={{
+            background: "rgba(255,165,0,0.12)",
+            border: "1px solid rgba(255,165,0,0.4)",
+            color: "#ffa500",
+          }}
+        >
+          {updating
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : <Upload className="w-3 h-3" />}
+          Update Cache
+        </Button>
+      )}
+
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={handleCheck}
+        className="h-7 gap-1.5 text-xs"
+        style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}
+      >
+        {checking
+          ? <Loader2 className="w-3 h-3 animate-spin" />
+          : <RefreshCw className="w-3 h-3" />}
+        Check
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Startup reconciliation
+// ---------------------------------------------------------------------------
 
 /**
  * On mount, reconcile servers that were marked "running" in SQLite from a
@@ -53,6 +226,8 @@ export default function DashboardPage() {
 
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard } = useAppStore();
+  const [showImport, setShowImport] = useState(false);
+  const queryClient = useQueryClient();
 
   const total   = servers.length;
   const running = servers.filter((s) => s.status === "running").length;
@@ -61,7 +236,7 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* ── Page header ── */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1
             className="text-2xl font-bold tracking-tight"
@@ -73,13 +248,25 @@ export default function DashboardPage() {
             Manage your Ark Survival Ascended dedicated servers.
           </p>
         </div>
-        <Button
-          onClick={() => setShowNewServerWizard(true)}
-          className="btn-neon-purple gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          New Server
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <UpdateStatusChip />
+          <Button
+            variant="outline"
+            onClick={() => setShowImport(true)}
+            className="gap-2"
+            style={{ borderColor: "rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}
+          >
+            <Upload className="w-4 h-4" />
+            Import Server
+          </Button>
+          <Button
+            onClick={() => setShowNewServerWizard(true)}
+            className="btn-neon-purple gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            New Server
+          </Button>
+        </div>
       </div>
 
       {/* ── Global stats bar ── */}
@@ -171,6 +358,17 @@ export default function DashboardPage() {
             <ServerCard key={server.id} server={server} />
           ))}
         </div>
+      )}
+
+      {/* ── Import existing server modal ── */}
+      {showImport && (
+        <ImportServerWizard
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            setShowImport(false);
+            queryClient.invalidateQueries({ queryKey: ["servers"] });
+          }}
+        />
       )}
     </div>
   );

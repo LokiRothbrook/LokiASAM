@@ -1,23 +1,16 @@
 "use client";
 
 /**
- * SchedulerManager — thin event listener for the Rust-side scheduler.
+ * SchedulerManager — bridges the Rust scheduler and SQLite.
  *
- * The heavy lifting (cron tick, process management, backup, restart, update)
- * all happens in a Tokio background task in Rust — immune to JS timer throttling
- * when the window is minimised to tray.
- *
- * This component's only job:
- *   1. Call syncSchedulesToRust() on mount so the Rust scheduler is hydrated.
- *   2. Listen for `scheduler://fired` events, persist the result to SQLite
- *      (last_run / next_run), and re-sync so the Rust scheduler gets the
- *      fresh next_run timestamp.
+ * On mount: hydrates the Rust scheduler from SQLite via syncSchedulesToRust().
+ * On `scheduler://fired`: persists last_run / next_run to SQLite and re-syncs.
  */
 
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { insertBackup, updateScheduleRun } from "@/lib/db";
+import { insertBackup, updateScheduleRun, getScheduleById } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import type { SchedulerFiredPayload } from "@/lib/tauri-commands";
@@ -49,15 +42,14 @@ export function SchedulerManager() {
     }
 
     // Update last_run / next_run in SQLite so the UI shows correct times.
-    // We need the cron expression to compute next_run — re-query is expensive,
-    // so we let syncSchedulesToRust (called below) re-read and pass the correct
-    // next_run_ms back to Rust. For the SQLite update we just advance from now.
+    // Fetch the schedule to get the cron expression and compute the real next_run
+    // up-front — avoids a null flash in the UI between update and re-sync.
     const lastRun = new Date().toISOString();
-    // We don't have the cron expression here; syncSchedulesToRust will recompute
-    // it from the stored next_run. Set next_run to null temporarily so it gets
-    // recomputed on the next sync rather than firing again immediately.
     try {
-      await updateScheduleRun(scheduleId, lastRun, null);
+      const row = await getScheduleById(scheduleId);
+      const nextDate = row ? getNextCronDate(row.cron_expression) : null;
+      const nextRun = nextDate?.toISOString() ?? null;
+      await updateScheduleRun(scheduleId, lastRun, nextRun);
     } catch {
       // Non-fatal.
     }

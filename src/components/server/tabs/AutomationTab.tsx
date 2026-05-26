@@ -3,8 +3,8 @@
 /**
  * AutomationTab — manage per-server cron schedules (backup, update, restart, broadcast).
  *
- * Schedule data lives entirely in SQLite (frontend). The Rust scheduler commands
- * are thin UUID generators; actual firing is handled by SchedulerManager in the root layout.
+ * Schedule data lives in SQLite. Firing is handled by the Tokio background task in lib.rs
+ * via the Rust SchedulerState (immune to JS timer throttling when minimized to tray).
  * Schedules only fire while the LokiASAM app is running.
  */
 
@@ -48,9 +48,12 @@ interface RestartConfig {
 }
 
 interface UpdateConfig {
+  mode: "check_only" | "check_and_apply";
+  restartAfterUpdate: boolean;
   broadcastWarning: boolean;
   warningMinutes: number;
   message: string;
+  skipIfPlayersOnline: boolean;
 }
 
 interface BroadcastConfig {
@@ -70,7 +73,14 @@ const DEFAULT_CRON: Record<ScheduleType, string> = {
 
 const DEFAULT_CONFIG: Record<ScheduleType, object> = {
   backup:    {} as BackupConfig,
-  update:    { broadcastWarning: true, warningMinutes: 15, message: "Server updating in {minutes} minutes. Progress will be saved." } as UpdateConfig,
+  update:    {
+    mode: "check_and_apply",
+    restartAfterUpdate: true,
+    broadcastWarning: true,
+    warningMinutes: 15,
+    message: "Server updating in {minutes} minutes. Progress will be saved.",
+    skipIfPlayersOnline: false,
+  } as UpdateConfig,
   restart:   { broadcastWarning: true, warningMinutes: 15, message: "Server restarting in {minutes} minutes. Progress will be saved." } as RestartConfig,
   broadcast: { message: "Welcome to the server! Type /help for commands." } as BroadcastConfig,
 };
@@ -276,8 +286,103 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
       {/* Cron picker */}
       <CronBuilder value={cron} onChange={setCron} label="Schedule" />
 
-      {/* Type-specific options */}
-      {(type === "restart" || type === "update") && (
+      {/* Update-specific options */}
+      {type === "update" && (
+        <div className="space-y-3">
+          {/* Mode toggle */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Update Mode</label>
+            <div className="flex gap-2">
+              {(["check_only", "check_and_apply"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => patchConfig({ mode: m })}
+                  className="flex-1 text-xs py-1.5 rounded-lg transition-all"
+                  style={{
+                    background: (c.mode ?? "check_and_apply") === m ? "rgba(191,0,255,0.15)" : "transparent",
+                    border: `1px solid ${(c.mode ?? "check_and_apply") === m ? "var(--neon-purple)" : "rgba(191,0,255,0.2)"}`,
+                    color: (c.mode ?? "check_and_apply") === m ? "var(--neon-purple)" : "var(--text-muted)",
+                  }}
+                >
+                  {m === "check_only" ? "Check Only" : "Check & Apply"}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+              {(c.mode ?? "check_and_apply") === "check_only"
+                ? "Only check if an update is available. An Update Available badge will appear — apply manually."
+                : "Check for an update and apply it automatically. The shared cache is updated, then synced to this server."}
+            </p>
+          </div>
+
+          {/* Check & Apply options */}
+          {(c.mode ?? "check_and_apply") === "check_and_apply" && (
+            <div className="space-y-2 pl-0.5">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={c.restartAfterUpdate ?? true}
+                  onChange={(e) => patchConfig({ restartAfterUpdate: e.target.checked })}
+                  className="w-3.5 h-3.5 accent-purple-500"
+                />
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Restart server after update (if it was running)
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={c.skipIfPlayersOnline ?? false}
+                  onChange={(e) => patchConfig({ skipIfPlayersOnline: e.target.checked })}
+                  className="w-3.5 h-3.5 accent-purple-500"
+                />
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Skip update if players are online
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={c.broadcastWarning ?? true}
+                  onChange={(e) => patchConfig({ broadcastWarning: e.target.checked })}
+                  className="w-3.5 h-3.5 accent-purple-500"
+                />
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Broadcast in-game warning before updating
+                </span>
+              </label>
+              {c.broadcastWarning && (
+                <div className="flex gap-3 items-end pl-5">
+                  <div className="space-y-1">
+                    <label className="text-xs" style={{ color: "var(--text-muted)" }}>Warning (minutes)</label>
+                    <Input
+                      type="number" min={1} max={60}
+                      value={c.warningMinutes ?? 15}
+                      onChange={(e) => patchConfig({ warningMinutes: parseInt(e.target.value, 10) || 15 })}
+                      className="h-7 w-20 text-xs"
+                      style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+                    />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message ({"{minutes}"} = countdown)</label>
+                    <Input
+                      value={c.message ?? ""}
+                      onChange={(e) => patchConfig({ message: e.target.value })}
+                      placeholder="Server updating in {minutes} minutes."
+                      className="h-7 text-xs"
+                      style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Restart-specific options */}
+      {type === "restart" && (
         <div className="space-y-2">
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
@@ -287,7 +392,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
               className="w-3.5 h-3.5 accent-purple-500"
             />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Broadcast warning in-game before {type}
+              Broadcast warning in-game before restart
             </span>
           </label>
           {c.broadcastWarning && (

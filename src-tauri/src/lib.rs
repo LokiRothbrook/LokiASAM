@@ -276,7 +276,11 @@ pub fn run() {
             commands::steamcmd::install_server,
             commands::steamcmd::update_server,
             commands::steamcmd::validate_server_files,
-            commands::steamcmd::check_server_update_available,
+            commands::steamcmd::check_asa_update,
+            commands::steamcmd::get_installed_build_id,
+            commands::steamcmd::update_cache,
+            commands::steamcmd::apply_cache_to_server,
+            commands::steamcmd::detect_server_install,
             // RCON
             commands::rcon::rcon_connect,
             commands::rcon::rcon_send,

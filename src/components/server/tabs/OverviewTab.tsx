@@ -3,16 +3,17 @@
 import { useState, useEffect } from "react";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
-  Map, Package, HardDrive, Save, RefreshCw,
+  Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useServerStats } from "@/hooks/useServerStats";
 import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
-  getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup,
+  getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup, setAppSetting,
 } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
+import { toast } from "sonner";
 import { ARK_MAPS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ServerRow } from "@/lib/db";
@@ -84,6 +85,8 @@ export function OverviewTab({ server }: Props) {
   const [actionPending, setActionPending] = useState(false);
   const [players, setPlayers] = useState<ArkPlayer[] | null>(null);
   const [playersLoading, setPlayersLoading] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [applyingUpdate, setApplyingUpdate] = useState(false);
 
   const isRunning = server.status === "running";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
@@ -100,19 +103,24 @@ export function OverviewTab({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr] = await Promise.all([
+      const [mc, lb, nr, cachedBuild, serverBuild] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
+        getAppSetting("asa_cached_build_id"),
+        tauriCmd.getInstalledBuildId(server.install_path).catch(() => null),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
+        if (cachedBuild && serverBuild && cachedBuild !== "0" && serverBuild !== "0") {
+          setUpdateAvailable(parseInt(cachedBuild) > parseInt(serverBuild));
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [server.id]);
+  }, [server.id, server.install_path]);
 
   const buildStartParams = async (): Promise<StartServerParams> => {
     const [config, mods] = await Promise.all([
@@ -194,6 +202,26 @@ export function OverviewTab({ server }: Props) {
     }
   };
 
+  const handleApplyUpdate = async () => {
+    setApplyingUpdate(true);
+    try {
+      const cacheBase = await getAppSetting("base_dir");
+      if (!cacheBase) { toast.error("Base directory not configured."); return; }
+      const sep = cacheBase.includes("\\") ? "\\" : "/";
+      const cacheDir = `${cacheBase.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      await tauriCmd.applyCacheToServer(server.id, server.install_path, cacheDir);
+      // Update the cached build ID so the badge refreshes.
+      const cachedBuild = await getAppSetting("asa_cached_build_id");
+      if (cachedBuild) await setAppSetting(`asa_installed_build_${server.id}`, cachedBuild);
+      setUpdateAvailable(false);
+      toast.success("Update applied. Restart the server to use the new version.");
+    } catch (e) {
+      toast.error(`Apply update failed: ${e}`);
+    } finally {
+      setApplyingUpdate(false);
+    }
+  };
+
   const refreshPlayers = async () => {
     setPlayersLoading(true);
     try {
@@ -265,6 +293,24 @@ export function OverviewTab({ server }: Props) {
           <Save className="w-3.5 h-3.5 mr-1.5" />
           Backup Now
         </Button>
+        {updateAvailable && (
+          <Button
+            size="sm"
+            disabled={applyingUpdate || isTransitioning}
+            onClick={handleApplyUpdate}
+            className="gap-1.5"
+            style={{
+              background: "rgba(255,165,0,0.12)",
+              border: "1px solid rgba(255,165,0,0.4)",
+              color: "#ffa500",
+            }}
+          >
+            {applyingUpdate
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <ArrowUp className="w-3.5 h-3.5" />}
+            Apply Update
+          </Button>
+        )}
       </div>
 
       {/* ── Stats grid ── */}

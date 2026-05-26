@@ -159,7 +159,12 @@ async function runMigrations(db: Database): Promise<void> {
     ('steamcmd_path', ''),
     ('steamcmd_mode', 'auto'),
     ('app_version', '0.1.0'),
-    ('theme_accent', 'purple')`);
+    ('theme_accent', 'purple'),
+    ('asa_update_available', 'false'),
+    ('asa_last_checked', ''),
+    ('asa_cached_build_id', ''),
+    ('asa_latest_build_id', ''),
+    ('asa_auto_check_hours', '0')`);
 
   // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
   try {
@@ -385,6 +390,16 @@ export async function getServerSchedules(serverId: string): Promise<ScheduleRow[
     "SELECT * FROM schedules WHERE server_id = ? ORDER BY schedule_type ASC",
     [serverId]
   );
+}
+
+/** Fetch a single schedule by ID. Returns null if not found. */
+export async function getScheduleById(scheduleId: string): Promise<ScheduleRow | null> {
+  const db = await getDb();
+  const rows = await db.select<ScheduleRow[]>(
+    "SELECT * FROM schedules WHERE id = ?",
+    [scheduleId]
+  );
+  return rows.length > 0 ? rows[0] : null;
 }
 
 // ---------------------------------------------------------------------------

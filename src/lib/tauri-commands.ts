@@ -109,6 +109,26 @@ export interface BackupRecord {
   createdAt: string;
 }
 
+/** Result of comparing the shared cache against the Steam UpToDateCheck API. */
+export interface UpdateCheckResult {
+  updateAvailable: boolean;
+  cachedBuildId: string;
+  latestBuildId: string;
+}
+
+/** Fields pre-filled from an existing server installation's INI files. */
+export interface DetectedServerConfig {
+  exeFound: boolean;
+  sessionName: string | null;
+  port: number | null;
+  queryPort: number | null;
+  rconPort: number | null;
+  adminPassword: string | null;
+  serverPassword: string | null;
+  maxPlayers: number | null;
+  buildId: string | null;
+}
+
 export interface DiscordPayload {
   title: string;
   description: string;
@@ -252,8 +272,30 @@ export const tauriCmd = {
     cacheDir: string,
     steamcmdPath: string,
   ) => invoke<void>("validate_server_files", { serverId, installPath, cacheDir, steamcmdPath }),
-  checkServerUpdateAvailable: (serverId: string) =>
-    invoke<boolean>("check_server_update_available", { serverId }),
+  /**
+   * Compare the shared cache build ID against the Steam UpToDateCheck API.
+   * Lightweight — does NOT run SteamCMD.
+   */
+  checkAsaUpdate: (cacheDir: string) =>
+    invoke<UpdateCheckResult>("check_asa_update", { cacheDir }),
+  /** Read the build ID installed at a specific server path. Null if not installed. */
+  getInstalledBuildId: (installPath: string) =>
+    invoke<string | null>("get_installed_build_id", { installPath }),
+  /**
+   * Run SteamCMD to update the shared cache. Returns the new build ID.
+   * Streams to steamcmd://output/{serverId}.
+   */
+  updateCache: (serverId: string, cacheDir: string, steamcmdPath: string) =>
+    invoke<string>("update_cache", { serverId, cacheDir, steamcmdPath }),
+  /**
+   * Copy the shared cache to a specific server directory without running SteamCMD.
+   * Preserves ShooterGame/Saved. Streams to steamcmd://output/{serverId}.
+   */
+  applyCacheToServer: (serverId: string, installPath: string, cacheDir: string) =>
+    invoke<void>("apply_cache_to_server", { serverId, installPath, cacheDir }),
+  /** Inspect an existing folder: checks for the server exe and parses INI files. */
+  detectServerInstall: (installPath: string) =>
+    invoke<DetectedServerConfig>("detect_server_install", { installPath }),
 
   // RCON
   rconConnect: (serverId: string, host: string, port: number, password: string) =>

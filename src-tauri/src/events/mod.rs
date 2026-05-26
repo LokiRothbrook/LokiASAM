@@ -12,6 +12,8 @@ pub const STEAMCMD_OUTPUT: &str = "steamcmd://output";
 pub const LOG_LINE: &str = "log://line";
 /// Backup progress update.
 pub const BACKUP_PROGRESS: &str = "backup://progress";
+/// ASA update check result (or update-applied notification).
+pub const ASA_UPDATE_CHECK: &str = "asa://update-check";
 
 /// Build a namespaced event name for a specific server.
 /// e.g. `server_event("server://status", "abc-123")` → `"server://status/abc-123"`
