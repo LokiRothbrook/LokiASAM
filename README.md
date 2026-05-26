@@ -1,36 +1,71 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LokiASAM
 
-## Getting Started
+**Loki Ark Survival Ascended Server Manager** — a desktop app for managing dedicated ASA servers on Linux and Windows.
 
-First, run the development server:
+Built with Tauri v2, Next.js, and Rust. No web browser required, no monthly subscription, no cloud dependency.
 
+---
+
+## Features
+
+- **Server management** — create, start, stop, restart, clone, and delete dedicated ASA servers
+- **SteamCMD integration** — automated install, update, and validation with a shared cache to speed up multi-server setups
+- **Server configuration** — edit `GameUserSettings.ini` and `Game.ini` with a structured section editor or raw textarea
+- **RCON console** — live terminal with command history, presets, and broadcast support
+- **Live log viewer** — tail server logs in real time with filtering and auto-scroll
+- **Mod management** — install mods by ID, reorder, toggle, and browse CurseForge from within the app
+- **Scheduled automation** — cron-based schedules for backups, updates, restarts, and RCON broadcasts
+- **Backup and restore** — create, restore, and prune ZIP backups per server with retention settings
+- **Cluster support** — group servers into clusters with a shared directory
+- **Notifications** — Discord webhooks, email (SMTP), and desktop notifications for server events
+- **Proton-GE** — automatic detection and download on Linux for running the Windows server binary
+- **System tray** — minimizes to tray; server processes keep running while the window is hidden
+- **Auto-update** — checks for app updates and installs them in the background
+
+---
+
+## Download
+
+Pre-built installers are on the [Releases](https://github.com/LokiRothbrook/LokiASAM/releases) page.
+
+**Linux:** Download the `.AppImage`, make it executable, and run it.
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+chmod +x LokiASAM_*.AppImage
+./LokiASAM_*.AppImage
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**Windows:** Run the `LokiASAM_*_x64-setup.exe` installer.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Building from Source
 
-## Learn More
+**Requirements**
 
-To learn more about Next.js, take a look at the following resources:
+- [Rust](https://rustup.rs/) (stable)
+- [Node.js](https://nodejs.org/) 22+
+- [pnpm](https://pnpm.io/) 9+
+- Linux: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`
+- Windows: WebView2 (ships with Windows 11; installer available for Windows 10)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+**Steps**
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+git clone https://github.com/LokiRothbrook/LokiASAM.git
+cd LokiASAM
+pnpm install
+pnpm tauri dev        # development mode
+pnpm tauri build      # production build
+```
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## First Run
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+On first launch you will be guided through a one-time setup wizard to choose a base directory and configure SteamCMD. After that you can create your first server.
+
+---
+
+## License
+
+LokiASAM is free software licensed under the [GNU General Public License v3.0](LICENSE).

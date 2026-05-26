@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Folder, Terminal, Palette, Info,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
-  Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send,
+  Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { getAppSetting, setAppSetting, saveNotificationConfig, getNotificationConfigs, type NotificationConfigRow } from "@/lib/db";
+import { check } from "@tauri-apps/plugin-updater";
+import { getVersion } from "@tauri-apps/api/app";
 import { tauriCmd, type DirCheckResult } from "@/lib/tauri-commands";
 import { applyThemeAccent, type ThemeAccent } from "@/lib/theme";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -372,8 +374,10 @@ function AboutSection() {
     dbPath: "",
     cachePath: "",
   });
+  const [appVersion, setAppVersion] = useState("…");
 
   useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion("0.9.0"));
     (async () => {
       const baseDir = (await getAppSetting("base_dir")) ?? "";
       if (!baseDir) return;
@@ -392,7 +396,7 @@ function AboutSection() {
     : "%APPDATA%\\lokiasam\\bootstrap.json";
 
   const rows = [
-    { label: "Version",        value: "0.1.0" },
+    { label: "Version",        value: appVersion },
     { label: "Base Directory", value: paths.baseDir  || "—" },
     { label: "Database",       value: paths.dbPath   || "—" },
     { label: "Server Cache",   value: paths.cachePath || "—" },
@@ -581,6 +585,112 @@ function ServerUpdatesSection() {
           Apply updates manually via the server Overview tab or via an Auto-Update schedule.
         </p>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App Updates section
+// ---------------------------------------------------------------------------
+
+const APP_UPDATE_MODE_OPTIONS = [
+  { value: "startup",  label: "On startup only" },
+  { value: "periodic", label: "Every hour" },
+  { value: "off",      label: "Disabled" },
+];
+
+function AppUpdateSection() {
+  const [mode, setMode]       = useState("startup");
+  const [saved, setSaved]     = useState("startup");
+  const [checking, setCheck]  = useState(false);
+
+  useEffect(() => {
+    getAppSetting("app_update_check_mode").then((v) => {
+      const m = v ?? "startup";
+      setMode(m);
+      setSaved(m);
+    });
+  }, []);
+
+  const handleSave = async () => {
+    await setAppSetting("app_update_check_mode", mode);
+    setSaved(mode);
+    toast.success("Update check preference saved.");
+  };
+
+  const handleCheckNow = async () => {
+    setCheck(true);
+    try {
+      const update = await check();
+      if (!update) {
+        toast.success("LokiASAM is up to date.");
+      } else {
+        toast.info(`LokiASAM ${update.version} is available. Click the notification to install.`);
+      }
+    } catch (e) {
+      toast.error(`Update check failed: ${e}`);
+    } finally {
+      setCheck(false);
+    }
+  };
+
+  const dirty = mode !== saved;
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Automatic update checks for LokiASAM itself. When an update is found, a notification
+          appears with an option to download and install it.
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          {APP_UPDATE_MODE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setMode(opt.value)}
+              className="text-xs px-3 py-1.5 rounded-lg transition-all"
+              style={{
+                background: mode === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
+                border: `1px solid ${mode === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
+                color: mode === opt.value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <Button
+          onClick={handleSave}
+          disabled={!dirty}
+          size="sm"
+          className="gap-1.5"
+          style={{
+            background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
+            border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
+            color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
+          }}
+        >
+          <Save className="w-3 h-3" />
+          Save
+        </Button>
+      </div>
+
+      <Separator style={{ background: "var(--border)" }} />
+
+      <Button
+        onClick={handleCheckNow}
+        disabled={checking}
+        size="sm"
+        className="gap-1.5"
+        style={{
+          background: "rgba(191,0,255,0.15)",
+          border: "1px solid rgba(191,0,255,0.4)",
+          color: "var(--neon-purple)",
+        }}
+      >
+        {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+        Check for App Update Now
+      </Button>
     </div>
   );
 }
@@ -887,6 +997,10 @@ export default function SettingsPage() {
 
       <Section icon={Palette} title="Appearance" description="Customize the interface accent color.">
         <AppearanceSection />
+      </Section>
+
+      <Section icon={Download} title="App Updates" description="Automatic update checks for LokiASAM itself.">
+        <AppUpdateSection />
       </Section>
 
       <Section icon={Info} title="About" description="Application version and data paths.">

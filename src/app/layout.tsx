@@ -9,6 +9,7 @@ import { DisableContextMenu } from "@/components/layout/DisableContextMenu";
 import { ModBrowserEventHandler } from "@/components/layout/ModBrowserEventHandler";
 import { SchedulerManager } from "@/components/layout/SchedulerManager";
 import { NotificationManager } from "@/components/layout/NotificationManager";
+import { UpdateManager } from "@/components/layout/UpdateManager";
 import { Toaster } from "sonner";
 
 const geistSans = Geist({
@@ -50,6 +51,7 @@ export default function RootLayout({
             <ModBrowserEventHandler />
             <SchedulerManager />
             <NotificationManager />
+            <UpdateManager />
             <Toaster
               position="bottom-right"
               toastOptions={{
