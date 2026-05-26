@@ -157,7 +157,9 @@ export function ServerCard({ server }: Props) {
       const params = await buildStartParams();
       const pid = await tauriCmd.startServer(params);
 
-      await updateServerStatus(server.id, "running", pid);
+      // Stay "starting" — Rust backend emits server://status/{id} with "running"
+      // once the RCON port responds (server fully loaded and joinable).
+      await updateServerStatus(server.id, "starting", pid);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (err) {
       console.error("Start failed:", err);

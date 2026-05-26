@@ -1,6 +1,5 @@
 pub mod log_watcher;
 pub mod rcon_pool;
-pub mod server_registry;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Mutex};

@@ -89,30 +89,68 @@ pub async fn check_file_exists(path: String) -> Result<bool, String> {
     Ok(Path::new(&path).exists())
 }
 
-/// Return CPU % and RSS memory (MB) for a given OS process ID.
+/// Return CPU % and RSS memory (MB) for a server process and ALL its descendants.
+///
+/// On Linux the tracked PID is the Proton launcher; the actual ASA server runs
+/// as a grandchild under Wine.  Summing the whole subtree gives the true totals.
 ///
 /// CPU usage requires two sysinfo samples separated by a short delay;
 /// the 200 ms sleep inside this command is intentional and negligible.
 #[tauri::command]
 pub async fn get_process_stats(pid: u32) -> Result<ProcessStats, String> {
     use sysinfo::{Pid, ProcessesToUpdate, System};
-    let spid = Pid::from_u32(pid);
+
+    let root = Pid::from_u32(pid);
     let mut sys = System::new();
 
-    // First sample — establishes the CPU time baseline.
-    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    // Second sample — CPU usage is now meaningful.
-    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
+    // First sample — establishes the CPU time baseline for all processes.
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+    let all_pids = collect_subtree(&sys, root);
 
-    match sys.process(spid) {
-        Some(p) => Ok(ProcessStats {
-            cpu_percent: p.cpu_usage(),
-            memory_mb: p.memory() as f32 / 1_048_576.0,
-            pid,
-        }),
-        None => Err(format!("Process {pid} not found or no longer running")),
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Second sample — CPU deltas are now meaningful.
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+
+    // Verify the root process is still alive.
+    if sys.process(root).is_none() {
+        return Err(format!("Process {pid} not found or no longer running"));
     }
+
+    let mut total_cpu = 0.0f32;
+    let mut total_mem_bytes = 0u64;
+
+    for p in &all_pids {
+        if let Some(proc) = sys.process(*p) {
+            total_cpu += proc.cpu_usage();
+            total_mem_bytes += proc.memory();
+        }
+    }
+
+    Ok(ProcessStats {
+        cpu_percent: total_cpu,
+        memory_mb: total_mem_bytes as f32 / 1_048_576.0,
+        pid,
+    })
+}
+
+/// BFS walk of the sysinfo process table starting at `root`.
+/// Returns every PID in the subtree (including `root` itself).
+fn collect_subtree(sys: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::Pid> {
+    use std::collections::HashSet;
+    let mut all = vec![root];
+    let mut queue = vec![root];
+    let mut visited: HashSet<sysinfo::Pid> = std::iter::once(root).collect();
+
+    while let Some(parent) = queue.pop() {
+        for (pid, proc) in sys.processes() {
+            if proc.parent() == Some(parent) && visited.insert(*pid) {
+                all.push(*pid);
+                queue.push(*pid);
+            }
+        }
+    }
+    all
 }
 
 /// Send a Source Query UDP A2S_INFO packet to a game server and parse the response.

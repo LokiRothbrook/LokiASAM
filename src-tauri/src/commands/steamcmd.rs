@@ -1,3 +1,4 @@
+use crate::events;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
@@ -93,10 +94,10 @@ pub async fn install_steamcmd(
     target_dir: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let channel = "steamcmd://output/setup";
+    let channel = format!("{}/setup", events::STEAMCMD_OUTPUT);
     let dir = Path::new(&target_dir);
 
-    emit_line(&app_handle, channel, "stdout", &format!("Creating directory: {}", dir.display()))?;
+    emit_line(&app_handle, &channel, "stdout", &format!("Creating directory: {}", dir.display()))?;
     tokio::fs::create_dir_all(dir)
         .await
         .map_err(|e| format!("Failed to create target directory: {e}"))?;
@@ -112,7 +113,7 @@ pub async fn install_steamcmd(
         false,
     );
 
-    emit_line(&app_handle, channel, "stdout", &format!("Downloading SteamCMD from {url}"))?;
+    emit_line(&app_handle, &channel, "stdout", &format!("Downloading SteamCMD from {url}"))?;
 
     let response = reqwest::get(url)
         .await
@@ -126,7 +127,7 @@ pub async fn install_steamcmd(
 
     emit_line(
         &app_handle,
-        channel,
+        &channel,
         "stdout",
         &format!("Downloaded {} / {} bytes. Extracting...", bytes.len(), total),
     )?;
@@ -173,8 +174,8 @@ pub async fn install_steamcmd(
             .map_err(|e| e.to_string())?;
     }
 
-    emit_line(&app_handle, channel, "stdout", "SteamCMD extracted successfully.")?;
-    emit_line(&app_handle, channel, "stdout", &format!("Executable: {}", exe_path.display()))?;
+    emit_line(&app_handle, &channel, "stdout", "SteamCMD extracted successfully.")?;
+    emit_line(&app_handle, &channel, "stdout", &format!("Executable: {}", exe_path.display()))?;
     Ok(())
 }
 
@@ -188,14 +189,14 @@ pub async fn validate_steamcmd(
     path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
-    let channel = "steamcmd://output/validate";
-    emit_line(&app_handle, channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
+    let channel = format!("{}/validate", events::STEAMCMD_OUTPUT);
+    emit_line(&app_handle, &channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
 
     let mut child = build_steamcmd_cmd(&path, &["+quit"])
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let exit_code = stream_process(&app_handle, &mut child, channel).await?;
+    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
 
     // Exit code 7 is SteamCMD's "I just self-updated, please re-run me" signal.
     // Any other non-zero code on a first attempt also gets one retry, since
@@ -203,7 +204,7 @@ pub async fn validate_steamcmd(
     if exit_code != 0 {
         emit_line(
             &app_handle,
-            channel,
+            &channel,
             "stdout",
             &format!(
                 "SteamCMD exited with code {exit_code} (first-run self-update is normal on Windows). Re-running..."
@@ -214,15 +215,15 @@ pub async fn validate_steamcmd(
             .spawn()
             .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
 
-        let exit_code2 = stream_process(&app_handle, &mut child2, channel).await?;
+        let exit_code2 = stream_process(&app_handle, &mut child2, &channel).await?;
 
         if exit_code2 == 0 {
-            emit_line(&app_handle, channel, "stdout", "SteamCMD validation successful.")?;
+            emit_line(&app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
             return Ok(true);
         } else {
             emit_line(
                 &app_handle,
-                channel,
+                &channel,
                 "stderr",
                 &format!("SteamCMD exited with code {exit_code2} after retry. Validation failed."),
             )?;
@@ -230,7 +231,7 @@ pub async fn validate_steamcmd(
         }
     }
 
-    emit_line(&app_handle, channel, "stdout", "SteamCMD validation successful.")?;
+    emit_line(&app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
     Ok(true)
 }
 
@@ -243,7 +244,7 @@ pub async fn install_server(
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let channel = format!("steamcmd://output/{}", server_id);
+    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
     emit_line(&app_handle, &channel, "stdout", &format!("Installing ASA server to: {install_path}"))?;
     emit_line(&app_handle, &channel, "stdout", &format!("Using SteamCMD: {steamcmd_path}"))?;
 
@@ -310,7 +311,7 @@ pub async fn update_server(
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let channel = format!("steamcmd://output/{}", server_id);
+    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
     emit_line(&app_handle, &channel, "stdout", "Checking for updates...")?;
 
     let mut child = build_steamcmd_cmd(
@@ -343,7 +344,7 @@ pub async fn validate_server_files(
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let channel = format!("steamcmd://output/{}", server_id);
+    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
     emit_line(&app_handle, &channel, "stdout", "Validating server files...")?;
 
     let mut child = build_steamcmd_cmd(

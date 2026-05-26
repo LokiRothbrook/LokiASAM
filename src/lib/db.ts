@@ -286,6 +286,92 @@ export async function getRunningServers(): Promise<ServerRow[]> {
 // Aggregate helpers used by ServerCard
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Mods
+// ---------------------------------------------------------------------------
+
+export interface ModRow {
+  id: string;
+  server_id: string;
+  mod_id: string;
+  mod_name: string;
+  mod_thumbnail_url: string | null;
+  install_order: number;
+  enabled: number;
+  added_at: string;
+}
+
+/** Return all mods for a server ordered by install_order ascending. */
+export async function getServerMods(serverId: string): Promise<ModRow[]> {
+  const db = await getDb();
+  return db.select<ModRow[]>(
+    "SELECT * FROM server_mods WHERE server_id = ? ORDER BY install_order ASC",
+    [serverId]
+  );
+}
+
+/** Add a mod to the server_mods table if it doesn't already exist. */
+export async function addServerMod(
+  serverId: string,
+  modId: string,
+  modName: string,
+  thumbnailUrl?: string | null
+): Promise<void> {
+  const db = await getDb();
+  // Find the current max install_order to append at the end.
+  const rows = await db.select<{ max_order: number | null }[]>(
+    "SELECT MAX(install_order) as max_order FROM server_mods WHERE server_id = ?",
+    [serverId]
+  );
+  const nextOrder = (rows[0]?.max_order ?? -1) + 1;
+  const id = crypto.randomUUID();
+  await db.execute(
+    `INSERT OR IGNORE INTO server_mods
+       (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`,
+    [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder]
+  );
+}
+
+/** Remove a mod from a server's mod list. */
+export async function removeServerMod(serverId: string, modId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "DELETE FROM server_mods WHERE server_id = ? AND mod_id = ?",
+    [serverId, modId]
+  );
+}
+
+/** Toggle the enabled flag on a mod. */
+export async function toggleServerMod(
+  serverId: string,
+  modId: string,
+  enabled: boolean
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_mods SET enabled = ? WHERE server_id = ? AND mod_id = ?",
+    [enabled ? 1 : 0, serverId, modId]
+  );
+}
+
+/**
+ * Reorder mods by updating each row's install_order to match the provided array index.
+ * `orderedModIds` must contain every mod_id currently attached to the server.
+ */
+export async function reorderServerMods(
+  serverId: string,
+  orderedModIds: string[]
+): Promise<void> {
+  const db = await getDb();
+  for (let i = 0; i < orderedModIds.length; i++) {
+    await db.execute(
+      "UPDATE server_mods SET install_order = ? WHERE server_id = ? AND mod_id = ?",
+      [i, serverId, orderedModIds[i]]
+    );
+  }
+}
+
 /** Return the number of enabled mods attached to a server. */
 export async function getServerModCount(serverId: string): Promise<number> {
   const db = await getDb();

@@ -7,7 +7,6 @@ use tokio::sync::Mutex;
 pub const RCON_AUTH: i32 = 3;
 pub const RCON_AUTH_RESPONSE: i32 = 2;
 pub const RCON_EXECCOMMAND: i32 = 2;
-pub const RCON_RESPONSE_VALUE: i32 = 0;
 
 /// A live, authenticated RCON TCP connection to one running server.
 pub struct RconConn {

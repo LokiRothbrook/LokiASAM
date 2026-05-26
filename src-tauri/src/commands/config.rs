@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Serialized representation of a server's full INI configuration.
@@ -164,36 +163,3 @@ pub async fn import_ini_files(
     })
 }
 
-/// Build a default `ServerConfigJson` from a flat config map.
-/// Used during server creation to pre-populate INI values from a preset
-/// and from the wizard's form fields.
-///
-/// `gus_fields` maps `"Section.Key"` → value string.
-/// `game_ini_fields` maps `"Section.Key"` → value string.
-pub fn build_config_from_flat(
-    gus_fields: &HashMap<String, String>,
-    game_ini_fields: &HashMap<String, String>,
-) -> ServerConfigJson {
-    fn build_section_map(fields: &HashMap<String, String>) -> Value {
-        let mut sections: Map<String, Value> = Map::new();
-        for (dotted_key, value) in fields {
-            if let Some(dot) = dotted_key.find('.') {
-                let section = dotted_key[..dot].to_string();
-                let key = dotted_key[dot + 1..].to_string();
-                let section_entry = sections
-                    .entry(section)
-                    .or_insert_with(|| Value::Object(Map::new()));
-                if let Value::Object(m) = section_entry {
-                    m.insert(key, Value::String(value.clone()));
-                }
-            }
-        }
-        Value::Object(sections)
-    }
-
-    ServerConfigJson {
-        game_user_settings: build_section_map(gus_fields),
-        game_ini: build_section_map(game_ini_fields),
-        launch_args: Value::Object(Map::new()),
-    }
-}

@@ -88,6 +88,14 @@ export function OverviewTab({ server }: Props) {
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
   const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
+  // Force a re-render every 30 s so the uptime counter visually advances.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -138,7 +146,9 @@ export function OverviewTab({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       const params = await buildStartParams();
       const pid = await tauriCmd.startServer(params);
-      await updateServerStatus(server.id, "running", pid);
+      // Keep status "starting" — Rust backend will emit server://status/{id}
+      // with "running" once the RCON port responds (server fully loaded).
+      await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
       await updateServerStatus(server.id, "error", null);
     } finally {

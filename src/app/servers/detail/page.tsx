@@ -14,6 +14,7 @@ import { OverviewTab } from "@/components/server/tabs/OverviewTab";
 import { ConfigTab } from "@/components/server/tabs/ConfigTab";
 import { RconTab } from "@/components/server/tabs/RconTab";
 import { LogsTab } from "@/components/server/tabs/LogsTab";
+import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { getServer } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -27,7 +28,7 @@ const TABS = [
   { value: "config",     label: "Config",     icon: Settings2 },
   { value: "rcon",       label: "RCON",       icon: Terminal },
   { value: "logs",       label: "Logs",       icon: ScrollText },
-  { value: "mods",       label: "Mods",       icon: Package,         phase: 5 },
+  { value: "mods",       label: "Mods",       icon: Package },
   { value: "backups",    label: "Backups",     icon: Archive,         phase: 6 },
   { value: "automation", label: "Automation", icon: CalendarClock,   phase: 6 },
 ] as const;
@@ -214,7 +215,7 @@ export default function ServerDetailPage() {
         {activeTab === "config"     && <ConfigTab   server={server} />}
         {activeTab === "rcon"       && <RconTab      server={server} />}
         {activeTab === "logs"       && <LogsTab      server={server} />}
-        {activeTab === "mods"       && <PhaseStub label="Mods"       phase={5} />}
+        {activeTab === "mods"       && <ModsTab server={server} />}
         {activeTab === "backups"    && <PhaseStub label="Backups"     phase={6} />}
         {activeTab === "automation" && <PhaseStub label="Automation"  phase={6} />}
       </div>

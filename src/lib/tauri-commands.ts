@@ -229,7 +229,26 @@ export const tauriCmd = {
   pruneBackups:  (serverId: string) => invoke<number>("prune_backups", { serverId }),
 
   // Mods
-  installMods:  (serverId: string) => invoke<void>("install_mods", { serverId }),
+  /**
+   * Download all listed mods via SteamCMD, cache them, and copy to the server.
+   * Streams progress to `mods://progress/{serverId}`.
+   */
+  installMods: (params: {
+    serverId: string;
+    steamcmdPath: string;
+    baseDir: string;
+    installPath: string;
+    modIds: string[];
+  }) => invoke<void>("install_mods", params),
+  /** Open the CurseForge mod browser as a frameless overlay over the main window. */
+  openModBrowser: (serverId: string, serverName: string) =>
+    invoke<void>("open_mod_browser", { serverId, serverName }),
+  /** Close the mod browser window (overlay or popped-out). Emits mod://browser-closed. */
+  closeModBrowser: () =>
+    invoke<void>("close_mod_browser", {}),
+  /** Convert the frameless overlay to a standard decorated window at the current URL. */
+  popoutModBrowser: (serverId: string, serverName: string, currentUrl: string) =>
+    invoke<void>("popout_mod_browser", { serverId, serverName, currentUrl }),
   addMod:       (serverId: string, modId: string, modName: string) =>
     invoke<void>("add_mod", { serverId, modId, modName }),
   removeMod:    (serverId: string, modId: string) => invoke<void>("remove_mod", { serverId, modId }),

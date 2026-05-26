@@ -68,30 +68,59 @@ fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
     let _ = app.emit(events::SERVER_ANY_CHANGE, status.clone());
 }
 
-/// Send SIGTERM on Unix or TerminateProcess on Windows for the given PID.
-/// Falls back to SIGKILL if the graceful signal is unavailable on the platform.
-fn kill_pid(pid: u32, graceful: bool) {
-    use sysinfo::{Pid, ProcessesToUpdate, System};
-    let spid = Pid::from_u32(pid);
-    let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
+/// Collect the PID of every process in the subtree rooted at `root`.
+/// Uses a BFS over the sysinfo process table. A visited-set prevents
+/// infinite loops in the (rare) event of circular parent links.
+fn collect_process_tree(sys: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::Pid> {
+    use std::collections::HashSet;
+    let mut all = vec![root];
+    let mut queue = vec![root];
+    let mut visited: HashSet<sysinfo::Pid> = std::iter::once(root).collect();
 
-    if let Some(process) = sys.process(spid) {
-        if graceful {
-            #[cfg(unix)]
-            {
-                let sent = process.kill_with(sysinfo::Signal::Term);
-                if sent != Some(true) {
-                    process.kill();
+    while let Some(parent) = queue.pop() {
+        for (pid, proc) in sys.processes() {
+            if proc.parent() == Some(parent) && visited.insert(*pid) {
+                all.push(*pid);
+                queue.push(*pid);
+            }
+        }
+    }
+    all
+}
+
+/// Kill a process AND all of its descendants.
+///
+/// On Linux with Proton the tracked PID is the Proton launcher script; the
+/// real ASA server runs as a grandchild under Wine.  Signalling only the root
+/// orphans those children, so we walk the full subtree and signal every node
+/// (leaves first so parents don't respawn children before they're killed).
+fn kill_process_tree(root_pid: u32, graceful: bool) {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+
+    let root = Pid::from_u32(root_pid);
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+
+    let pids = collect_process_tree(&sys, root);
+
+    // Kill leaves → root so parents cannot respawn children.
+    for pid in pids.iter().rev() {
+        if let Some(proc) = sys.process(*pid) {
+            if graceful {
+                #[cfg(unix)]
+                {
+                    let sent = proc.kill_with(sysinfo::Signal::Term);
+                    if sent != Some(true) {
+                        proc.kill();
+                    }
                 }
+                #[cfg(not(unix))]
+                {
+                    proc.kill();
+                }
+            } else {
+                proc.kill();
             }
-            #[cfg(not(unix))]
-            {
-                // Windows has no SIGTERM equivalent — force-kill immediately.
-                process.kill();
-            }
-        } else {
-            process.kill();
         }
     }
 }
@@ -206,19 +235,19 @@ pub async fn start_server(
         );
     }
 
-    // Emit "running" status immediately.
+    // Emit "starting" — the readiness poller below will emit "running" once
+    // the RCON port responds, which means ASA has fully loaded and is joinable.
     emit_status(
         &app_handle,
         &ServerStatus {
             server_id: params.server_id.clone(),
-            status: "running".into(),
+            status: "starting".into(),
             pid: Some(pid),
-            uptime_seconds: Some(0),
+            uptime_seconds: None,
         },
     );
 
     // Spawn a watcher task that owns the child handle and waits for it to exit.
-    // When it exits, clean up state and emit the appropriate status event.
     let sid = params.server_id.clone();
     let handle_clone = app_handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -244,6 +273,58 @@ pub async fn start_server(
                 uptime_seconds: None,
             },
         );
+    });
+
+    // Spawn a readiness poller.  ASA on Linux via Proton can take several
+    // minutes to load the map before it accepts connections.  We poll the
+    // RCON TCP port every 5 s; the first successful TCP connect means the
+    // server is up and players can join.  Timeout after 15 min.
+    let sid2 = params.server_id.clone();
+    let handle2 = app_handle.clone();
+    let rcon_port = params.rcon_port;
+    tauri::async_runtime::spawn(async move {
+        use tokio::net::TcpStream;
+        use tokio::time::{sleep, timeout, Duration};
+
+        for _ in 0..180u32 {
+            sleep(Duration::from_secs(5)).await;
+
+            // Abort if the process already died (stop/crash before it was ready).
+            if !pid_alive(pid) {
+                return;
+            }
+
+            // A successful TCP handshake on the RCON port means ASA is up.
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], rcon_port));
+            if timeout(Duration::from_secs(2), TcpStream::connect(addr))
+                .await
+                .is_ok()
+            {
+                emit_status(
+                    &handle2,
+                    &ServerStatus {
+                        server_id: sid2,
+                        status: "running".into(),
+                        pid: Some(pid),
+                        uptime_seconds: Some(0),
+                    },
+                );
+                return;
+            }
+        }
+
+        // 15-minute timeout — emit running anyway so the UI doesn't stay stuck.
+        if pid_alive(pid) {
+            emit_status(
+                &handle2,
+                &ServerStatus {
+                    server_id: sid2,
+                    status: "running".into(),
+                    pid: Some(pid),
+                    uptime_seconds: Some(0),
+                },
+            );
+        }
     });
 
     Ok(pid)
@@ -275,7 +356,7 @@ pub async fn stop_server(
         .unwrap()
         .insert(server_id.clone());
 
-    kill_pid(pid, graceful);
+    kill_process_tree(pid, graceful);
     Ok(())
 }
 
@@ -303,7 +384,7 @@ pub async fn restart_server(
             .unwrap()
             .insert(params.server_id.clone());
 
-        kill_pid(pid, graceful);
+        kill_process_tree(pid, graceful);
 
         // Wait up to 15 s for the process to exit.
         for _ in 0..30 {
@@ -315,7 +396,7 @@ pub async fn restart_server(
 
         // Ensure it's gone regardless.
         if pid_alive(pid) {
-            kill_pid(pid, false);
+            kill_process_tree(pid, false);
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
 
@@ -422,7 +503,7 @@ pub async fn delete_server(
             .lock()
             .unwrap()
             .insert(server_id.clone());
-        kill_pid(pid, false);
+        kill_process_tree(pid, false);
         // Brief wait — we don't block long here.
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         state.running_servers.lock().unwrap().remove(&server_id);

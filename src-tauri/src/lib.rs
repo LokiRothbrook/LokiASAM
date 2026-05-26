@@ -49,9 +49,14 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 /// Hide the main window and update tray menu to reflect hidden state.
 /// Emits "tray-first-hide" the first time so the frontend can show a one-time hint.
+/// Also closes any open mod browser overlay so it doesn't float orphaned.
 fn hide_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
+    }
+    if let Some(browser) = app.get_webview_window("mod-browser") {
+        let _ = browser.close();
+        let _ = app.emit("mod://browser-closed", ());
     }
     if let Some(tray_state) = app.try_state::<TrayMenuState>() {
         let _ = tray_state.show_item.set_text("Show LokiASAM");
@@ -284,6 +289,9 @@ pub fn run() {
             commands::mods::add_mod,
             commands::mods::remove_mod,
             commands::mods::reorder_mods,
+            commands::mods::open_mod_browser,
+            commands::mods::close_mod_browser,
+            commands::mods::popout_mod_browser,
             // System stats
             commands::system::check_dir,
             commands::system::check_file_exists,

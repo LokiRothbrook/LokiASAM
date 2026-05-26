@@ -3,7 +3,7 @@ use std::sync::{atomic::Ordering, Arc};
 use tauri::{Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
 
-use crate::state::log_watcher::LogWatcherState;
+use crate::{events, state::log_watcher::LogWatcherState};
 
 /// Begin tailing `log_path` for `server_id`.
 /// A background tokio task polls the file every 200 ms, seeking to the current
@@ -19,7 +19,7 @@ pub async fn watch_server_log(
     state: State<'_, LogWatcherState>,
 ) -> Result<(), String> {
     let stop_flag = state.start(&server_id).await;
-    let event_name = format!("log://line/{server_id}");
+    let event_name = format!("{}/{server_id}", events::LOG_LINE);
 
     tauri::async_runtime::spawn(async move {
         tail_log(app, event_name, log_path, stop_flag).await;
