@@ -62,16 +62,61 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'LokiASAM ${{ github.ref_name }}'
           releaseBody: |
-            ## LokiASAM ${{ github.ref_name }}
+            ## LokiASAM ${{ github.ref_name }} — Public Beta
+
+            LokiASAM is a desktop manager for Ark Survival Ascended dedicated servers, built for Linux and Windows. This is the first public beta release.
+
+            ### What's included
+
+            **Server management**
+            - Create, start, stop, restart, clone, and delete dedicated ASA servers
+            - Import existing server installations
+            - Live status monitoring with CPU/RAM and player counts via Source Query
+
+            **Configuration**
+            - Structured INI editor for `GameUserSettings.ini` and `Game.ini`
+            - Raw textarea toggle for direct editing
+            - Import config files from an existing server
+
+            **RCON**
+            - Live terminal console with command history and presets
+            - Broadcast to all players with one click
+
+            **Mods**
+            - Install mods by ID, reorder, toggle, and remove
+            - Built-in CurseForge mod browser with one-click add
+
+            **Backups & Automation**
+            - Manual and scheduled ZIP backups with retention settings
+            - Cron-based schedules for backups, updates, restarts, and RCON broadcasts
+            - Scheduler runs in Rust — continues firing while the app is minimized to tray
+
+            **Clusters**
+            - Group servers into clusters with a shared directory
+
+            **Notifications**
+            - Discord webhooks, email (SMTP), and desktop notifications per server event
+
+            **Linux support**
+            - Proton-GE integration for running the Windows ASA server binary
+            - Auto-detection and download of Proton-GE
+
+            **App updates**
+            - Automatic update checks on startup (configurable in Settings)
 
             ### Installation
 
-            **Linux:** Download `LokiASAM_*_amd64.AppImage`, make it executable with `chmod +x LokiASAM_*.AppImage`, and run it.
+            **Linux:** Download `LokiASAM_0.9.0_amd64.AppImage`, make it executable, and run it.
+            ```bash
+            chmod +x LokiASAM_0.9.0_amd64.AppImage
+            ./LokiASAM_0.9.0_amd64.AppImage
+            ```
+            > The AppImage version receives automatic update notifications. The `.deb` does not.
 
-            **Windows:** Run the `LokiASAM_*_x64-setup.exe` installer.
+            **Windows:** Run `LokiASAM_0.9.0_x64-setup.exe`.
 
-            ---
-            *The app will automatically notify you when future updates are available.*
+            ### Known limitations
+            - This is a beta release — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
           releaseDraft: false
           prerelease: false
           updaterJsonKeepUniversal: false
