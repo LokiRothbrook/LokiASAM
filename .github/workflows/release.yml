@@ -66,27 +66,23 @@ jobs:
           releaseBody: |
             ## LokiASAM ${{ github.ref_name }}
 
-            ### Bug fixes
+            ### Changes
 
-            **AppImage: server start now works**
-            The AppImage version failed to start servers immediately after clicking Start. The AppImage runtime injects its own bundled libraries and Python environment into child processes (`LD_LIBRARY_PATH`, `PYTHONHOME`). Proton — a Python script — inherited `PYTHONHOME` pointing into the AppImage squashfs mount, causing Python to crash instantly with `No module named 'encodings'` before Wine ever ran. The app now restores the pre-AppImage environment before spawning the server process. The standalone binary and `.deb` package were not affected.
+            **Auto-update now works**
+            Previous releases (v0.9.0, v0.9.1) were missing the signing infrastructure required for the built-in updater. The "Update Now" button in Settings and the automatic update check on startup will now correctly detect and install future releases.
 
-            **Server stuck in "Starting" after app restart**
-            If the app was closed while a server was in the middle of starting, the server could get stuck in "Starting" permanently on the next launch with no error shown. Two causes were fixed: (1) the Tauri event listener was registered after a dynamic module import, creating a brief window where status-change events could be missed — the module is now pre-loaded so the listener is ready immediately; (2) startup reconciliation now checks servers left in "Starting" state and resets them to "Stopped" if their process is no longer alive.
-
-            **Start failure notifications now include error details**
-            When a server process exits immediately after launch, the notification now includes the last output from the process — making it clear why it failed rather than showing a generic crash message. "Server failed to start" is now a distinct notification event from "Server crashed while running", configurable separately in the Automation tab.
+            This release is otherwise identical to v0.9.1. Users on v0.9.1 will be offered this update — accepting it validates the update pipeline end-to-end.
 
             ### Installation
 
             **Linux:** Download the `.AppImage`, make it executable, and run it.
             ```bash
-            chmod +x LokiASAM_0.9.1_amd64.AppImage
-            ./LokiASAM_0.9.1_amd64.AppImage
+            chmod +x LokiASAM_0.9.2_amd64.AppImage
+            ./LokiASAM_0.9.2_amd64.AppImage
             ```
             > The AppImage version receives automatic update notifications. The `.deb` does not.
 
-            **Windows:** Run `LokiASAM_0.9.1_x64-setup.exe`.
+            **Windows:** Run `LokiASAM_0.9.2_x64-setup.exe`.
 
             ### Notes
             - This is a beta release — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
