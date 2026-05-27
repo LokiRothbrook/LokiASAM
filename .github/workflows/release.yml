@@ -66,23 +66,16 @@ jobs:
           releaseBody: |
             ## LokiASAM ${{ github.ref_name }}
 
-            ### Changes
-
-            **Auto-update now works**
-            Previous releases (v0.9.0, v0.9.1) were missing the signing infrastructure required for the built-in updater. The "Update Now" button in Settings and the automatic update check on startup will now correctly detect and install future releases.
-
-            This release is otherwise identical to v0.9.1. Users on v0.9.1 will be offered this update — accepting it validates the update pipeline end-to-end.
-
             ### Installation
 
             **Linux:** Download the `.AppImage`, make it executable, and run it.
             ```bash
-            chmod +x LokiASAM_0.9.2_amd64.AppImage
-            ./LokiASAM_0.9.2_amd64.AppImage
+            chmod +x LokiASAM_${{ github.ref_name }}_amd64.AppImage
+            ./LokiASAM_${{ github.ref_name }}_amd64.AppImage
             ```
             > The AppImage version receives automatic update notifications. The `.deb` does not.
 
-            **Windows:** Run `LokiASAM_0.9.2_x64-setup.exe`.
+            **Windows:** Run `LokiASAM_${{ github.ref_name }}_x64-setup.exe`.
 
             ### Notes
             - This is a beta release — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.

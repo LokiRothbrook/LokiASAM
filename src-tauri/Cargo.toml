@@ -1,6 +1,6 @@
 [package]
 name = "lokiasam"
-version = "0.9.2"
+version = "0.8.0"
 description = "Loki Ark Survival Ascended Server Manager"
 authors = ["Loki"]
 license = "GPL-3.0-or-later"
