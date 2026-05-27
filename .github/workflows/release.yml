@@ -64,21 +64,45 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'LokiASAM ${{ github.ref_name }}'
           releaseBody: |
-            ## LokiASAM ${{ github.ref_name }}
+            ## LokiASAM ${{ github.ref_name }} — Public Beta
+
+            LokiASAM is a desktop application for managing Ark Survival Ascended dedicated servers on Linux and Windows. It provides a full GUI for every aspect of running one or more ASA servers without needing to touch config files or the command line.
+
+            ### Features
+
+            - **Server management** — create, start, stop, restart, and monitor multiple servers from a single dashboard. Live CPU/RAM stats and player counts update automatically.
+            - **Server configuration** — edit `GameUserSettings.ini` and `Game.ini` through an organized section editor, or drop into the raw text view for full control.
+            - **RCON console** — built-in terminal with command history, preset commands, and broadcast support.
+            - **Live log viewer** — tail server logs in real time with text filtering and auto-scroll.
+            - **Mods** — browse CurseForge directly inside the app, add mods by ID, reorder, toggle, and install via SteamCMD with one click.
+            - **Backups** — create, restore, and delete server backups; configurable retention with scheduled automatic backups.
+            - **Automation** — schedule backups, updates, restarts, and broadcasts on a cron schedule with optional RCON warnings before restarts.
+            - **Clusters** — group servers into clusters with shared player data directories.
+            - **Notifications** — configurable desktop, Discord webhook, and email alerts for server started, stopped, crashed, and player join/leave events.
+            - **ASA server updates** — shared SteamCMD cache keeps downloads fast when managing multiple servers; update cache and apply to servers independently.
+            - **Auto-update** — the app checks for new LokiASAM releases and can download and install them without leaving the app.
+            - **Setup wizard** — guided first-run experience that installs SteamCMD and Proton (Linux) automatically.
+
+            ### Bug fixes since initial development
+
+            - **AppImage: server start works correctly** — the AppImage runtime was injecting its own Python environment into child processes, causing Proton to crash before Wine ran. The app now strips the AppImage environment before spawning server processes.
+            - **Server stuck in "Starting" after app restart** — servers left in Starting state from a previous session are now correctly reset to Stopped on launch.
+            - **Start failure notifications include error output** — the last lines of process output are now included in crash notifications so the cause is immediately visible.
 
             ### Installation
 
-            **Linux:** Download the `.AppImage`, make it executable, and run it.
+            **Linux:** Download the `.AppImage` from the assets below, make it executable, and run it.
             ```bash
-            chmod +x LokiASAM_${{ github.ref_name }}_amd64.AppImage
-            ./LokiASAM_${{ github.ref_name }}_amd64.AppImage
+            chmod +x LokiASAM_0.9.0_amd64.AppImage
+            ./LokiASAM_0.9.0_amd64.AppImage
             ```
-            > The AppImage version receives automatic update notifications. The `.deb` does not.
+            > The AppImage receives automatic update notifications. The `.deb` package does not.
 
-            **Windows:** Run `LokiASAM_${{ github.ref_name }}_x64-setup.exe`.
+            **Windows:** Download and run `LokiASAM_0.9.0_x64-setup.exe` from the assets below.
 
             ### Notes
-            - This is a beta release — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
+            - This is a public beta — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
+            - Linux requires a working Proton-GE installation for server processes. The setup wizard will guide you through this.
           releaseDraft: false
           prerelease: false
           updaterJsonKeepUniversal: false
