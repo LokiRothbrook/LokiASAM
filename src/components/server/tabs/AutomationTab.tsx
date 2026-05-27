@@ -656,12 +656,13 @@ const CHANNEL_DEFS = [
 ];
 
 const EVENT_OPTIONS: { value: string; label: string }[] = [
-  { value: NOTIFICATION_EVENTS.SERVER_STARTED,    label: "Server Started" },
-  { value: NOTIFICATION_EVENTS.SERVER_STOPPED,    label: "Server Stopped" },
-  { value: NOTIFICATION_EVENTS.SERVER_CRASHED,    label: "Server Crashed" },
-  { value: NOTIFICATION_EVENTS.BACKUP_COMPLETED,  label: "Backup Completed" },
-  { value: NOTIFICATION_EVENTS.BACKUP_FAILED,     label: "Backup Failed" },
-  { value: NOTIFICATION_EVENTS.SERVER_UPDATED,    label: "Server Updated" },
+  { value: NOTIFICATION_EVENTS.SERVER_STARTED,      label: "Server Started" },
+  { value: NOTIFICATION_EVENTS.SERVER_STOPPED,      label: "Server Stopped" },
+  { value: NOTIFICATION_EVENTS.SERVER_CRASHED,      label: "Server Crashed" },
+  { value: NOTIFICATION_EVENTS.SERVER_START_FAILED, label: "Server Failed to Start" },
+  { value: NOTIFICATION_EVENTS.BACKUP_COMPLETED,    label: "Backup Completed" },
+  { value: NOTIFICATION_EVENTS.BACKUP_FAILED,       label: "Backup Failed" },
+  { value: NOTIFICATION_EVENTS.SERVER_UPDATED,      label: "Server Updated" },
 ];
 
 interface NotificationConfigSectionProps {

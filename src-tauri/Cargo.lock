@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "lokiasam"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "configparser",
  "flate2",

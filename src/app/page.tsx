@@ -8,7 +8,7 @@ import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
 import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getRunningServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
+import { getTransitioningServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
@@ -186,9 +186,13 @@ function UpdateStatusChip() {
 // ---------------------------------------------------------------------------
 
 /**
- * On mount, reconcile servers that were marked "running" in SQLite from a
- * previous app session by re-registering their PIDs with the Rust backend.
- * If a PID is no longer alive, the server is marked "crashed".
+ * On mount, reconcile servers that were left in a transitioning state
+ * ('running' or 'starting') from a previous app session.
+ *
+ * For each server, the stored PID is checked against live OS processes:
+ *   - alive PID  → re-register in the Rust crash-monitor map; status unchanged
+ *   - dead PID, was "running"  → "crashed" (was running, died while app was closed)
+ *   - dead PID, was "starting" → "stopped" (never confirmed running; clean slate)
  */
 function useStartupReconciliation() {
   const queryClient = useQueryClient();
@@ -196,16 +200,17 @@ function useStartupReconciliation() {
   useEffect(() => {
     (async () => {
       try {
-        const running = await getRunningServers();
-        if (!running.length) return;
+        const transitioning = await getTransitioningServers();
+        if (!transitioning.length) return;
 
         await Promise.all(
-          running.map(async (s) => {
+          transitioning.map(async (s) => {
             if (!s.pid) return;
             try {
               const alive = await tauriCmd.registerRunningServer(s.id, s.pid);
               if (!alive) {
-                await updateServerStatus(s.id, "crashed", null);
+                const deadStatus = s.status === "running" ? "crashed" : "stopped";
+                await updateServerStatus(s.id, deadStatus, null);
               }
             } catch {
               // Tauri not available (dev browser preview) — skip.

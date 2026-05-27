@@ -35,10 +35,12 @@ export interface PortConfig {
 
 export interface ServerStatus {
   serverId: string;
-  /** One of: stopped | starting | running | stopping | updating | error | crashed */
+  /** One of: stopped | starting | running | stopping | updating | error | crashed | start-failed */
   status: string;
   pid: number | null;
   uptimeSeconds: number | null;
+  /** Populated for `start-failed` — last ~800 chars of stderr from the failed process. */
+  error?: string;
 }
 
 /** Full parameter set passed to `start_server`. All values come from SQLite. */

@@ -504,12 +504,14 @@ export async function updateServerStatus(
   );
 }
 
-/** Fetch servers whose status is 'running' and have a stored PID.
- *  Called on app startup to reconcile state from a previous session. */
-export async function getRunningServers(): Promise<ServerRow[]> {
+/** Fetch servers in a transitioning state ('running' or 'starting') that have
+ *  a stored PID. Called on app startup to reconcile state from a previous session.
+ *  - 'running' servers: PID checked against live processes; dead → 'crashed'
+ *  - 'starting' servers: PID checked; dead → 'stopped' (never confirmed running) */
+export async function getTransitioningServers(): Promise<ServerRow[]> {
   const db = await getDb();
   return db.select<ServerRow[]>(
-    "SELECT * FROM servers WHERE status = 'running' AND pid IS NOT NULL"
+    "SELECT * FROM servers WHERE status IN ('running', 'starting') AND pid IS NOT NULL"
   );
 }
 

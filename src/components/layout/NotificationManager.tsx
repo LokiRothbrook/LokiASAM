@@ -58,8 +58,20 @@ export function NotificationManager() {
         eventType:  NOTIFICATION_EVENTS.SERVER_CRASHED,
         serverId:   status.serverId,
         serverName,
-        title:      `${serverName} crashed!`,
-        body:       "Server process exited unexpectedly. Check the Logs tab.",
+        title:      `${serverName} crashed`,
+        body:       "Server process exited unexpectedly. Check the Logs tab for details.",
+        severity:   "error",
+      });
+    } else if (status.status === "start-failed") {
+      const detail = status.error
+        ? `Server process exited immediately after launch.\n\nProcess output:\n${status.error}`
+        : "Server process exited immediately after launch. Verify that Proton-GE is configured correctly, the server files are intact, and all required ports are available.";
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
+        serverId:   status.serverId,
+        serverName,
+        title:      `${serverName} failed to start`,
+        body:       detail,
         severity:   "error",
       });
     }

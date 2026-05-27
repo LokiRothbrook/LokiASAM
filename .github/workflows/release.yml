@@ -64,60 +64,31 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'LokiASAM ${{ github.ref_name }}'
           releaseBody: |
-            ## LokiASAM ${{ github.ref_name }} — Public Beta
+            ## LokiASAM ${{ github.ref_name }}
 
-            LokiASAM is a desktop manager for Ark Survival Ascended dedicated servers, built for Linux and Windows. This is the first public beta release.
+            ### Bug fixes
 
-            ### What's included
+            **AppImage: server start now works**
+            The AppImage version failed to start servers immediately after clicking Start. The AppImage runtime injects its own bundled libraries and Python environment into child processes (`LD_LIBRARY_PATH`, `PYTHONHOME`). Proton — a Python script — inherited `PYTHONHOME` pointing into the AppImage squashfs mount, causing Python to crash instantly with `No module named 'encodings'` before Wine ever ran. The app now restores the pre-AppImage environment before spawning the server process. The standalone binary and `.deb` package were not affected.
 
-            **Server management**
-            - Create, start, stop, restart, clone, and delete dedicated ASA servers
-            - Import existing server installations
-            - Live status monitoring with CPU/RAM and player counts via Source Query
+            **Server stuck in "Starting" after app restart**
+            If the app was closed while a server was in the middle of starting, the server could get stuck in "Starting" permanently on the next launch with no error shown. Two causes were fixed: (1) the Tauri event listener was registered after a dynamic module import, creating a brief window where status-change events could be missed — the module is now pre-loaded so the listener is ready immediately; (2) startup reconciliation now checks servers left in "Starting" state and resets them to "Stopped" if their process is no longer alive.
 
-            **Configuration**
-            - Structured INI editor for `GameUserSettings.ini` and `Game.ini`
-            - Raw textarea toggle for direct editing
-            - Import config files from an existing server
-
-            **RCON**
-            - Live terminal console with command history and presets
-            - Broadcast to all players with one click
-
-            **Mods**
-            - Install mods by ID, reorder, toggle, and remove
-            - Built-in CurseForge mod browser with one-click add
-
-            **Backups & Automation**
-            - Manual and scheduled ZIP backups with retention settings
-            - Cron-based schedules for backups, updates, restarts, and RCON broadcasts
-            - Scheduler runs in Rust — continues firing while the app is minimized to tray
-
-            **Clusters**
-            - Group servers into clusters with a shared directory
-
-            **Notifications**
-            - Discord webhooks, email (SMTP), and desktop notifications per server event
-
-            **Linux support**
-            - Proton-GE integration for running the Windows ASA server binary
-            - Auto-detection and download of Proton-GE
-
-            **App updates**
-            - Automatic update checks on startup (configurable in Settings)
+            **Start failure notifications now include error details**
+            When a server process exits immediately after launch, the notification now includes the last output from the process — making it clear why it failed rather than showing a generic crash message. "Server failed to start" is now a distinct notification event from "Server crashed while running", configurable separately in the Automation tab.
 
             ### Installation
 
-            **Linux:** Download `LokiASAM_0.9.0_amd64.AppImage`, make it executable, and run it.
+            **Linux:** Download the `.AppImage`, make it executable, and run it.
             ```bash
-            chmod +x LokiASAM_0.9.0_amd64.AppImage
-            ./LokiASAM_0.9.0_amd64.AppImage
+            chmod +x LokiASAM_0.9.1_amd64.AppImage
+            ./LokiASAM_0.9.1_amd64.AppImage
             ```
             > The AppImage version receives automatic update notifications. The `.deb` does not.
 
-            **Windows:** Run `LokiASAM_0.9.0_x64-setup.exe`.
+            **Windows:** Run `LokiASAM_0.9.1_x64-setup.exe`.
 
-            ### Known limitations
+            ### Notes
             - This is a beta release — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
           releaseDraft: false
           prerelease: false

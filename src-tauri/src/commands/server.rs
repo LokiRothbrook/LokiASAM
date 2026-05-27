@@ -1,5 +1,9 @@
 use crate::{events, state::AppState};
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 use tauri::{Emitter, Manager};
 
@@ -15,10 +19,32 @@ use super::utils::{collect_subtree, copy_dir_recursive};
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatus {
     pub server_id: String,
-    /// One of: stopped | starting | running | stopping | updating | error | crashed
+    /// One of: stopped | starting | running | stopping | updating | error | crashed | start-failed
     pub status: String,
     pub pid: Option<u32>,
     pub uptime_seconds: Option<u64>,
+    /// Populated for `start-failed` — last ~800 chars of stderr from the failed process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Strip ANSI escape sequences (e.g. `\x1b[1;32m`) from a string so raw
+/// terminal output is readable in notifications and Discord embeds.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Full parameter set for starting an ASA dedicated server.
@@ -212,13 +238,47 @@ async fn inner_start_server_with_state(
     }
     cmd.current_dir(&params.install_path);
     cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::piped());
+
+    // The AppImage runtime modifies several environment variables so the Tauri
+    // binary can find its bundled libraries and Python runtime. Child processes
+    // (Proton script, Wine) inherit all of these and break in different ways:
+    //   - LD_LIBRARY_PATH: Wine loads AppImage's bundled .so instead of system libs
+    //   - PYTHONHOME:       Proton (a Python script) sets sys.prefix to the squashfs
+    //                       mount, then crashes with "No module named 'encodings'"
+    //                       because the system Python binary can't find modules there
+    //   - PYTHONPATH:       adds AppImage Python paths to sys.path, same root cause
+    // The AppImage linker saves original values as APPIMAGE_ORIGINAL_* — restore
+    // them for the child so our process is unaffected.
+    #[cfg(not(target_os = "windows"))]
+    if std::env::var_os("APPIMAGE").is_some() {
+        match std::env::var("APPIMAGE_ORIGINAL_LD_LIBRARY_PATH") {
+            Ok(orig) => { cmd.env("LD_LIBRARY_PATH", orig); }
+            Err(_) => { cmd.env_remove("LD_LIBRARY_PATH"); }
+        }
+        if let Ok(orig_path) = std::env::var("APPIMAGE_ORIGINAL_PATH") {
+            cmd.env("PATH", orig_path);
+        }
+        // PYTHONHOME must be cleared — if left set, the system Python binary
+        // uses the AppImage squashfs as its prefix and immediately fails to find
+        // its own stdlib (confirmed via 'No module named encodings' crash).
+        cmd.env_remove("PYTHONHOME");
+        cmd.env_remove("PYTHONPATH");
+    }
 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start server process: {e}"))?;
 
     let pid = child.id().ok_or("Spawned process has no PID")?;
+
+    // Take the stderr handle before moving `child` into the watcher task.
+    let child_stderr = child.stderr.take();
+
+    // Shared flag: set to true by the readiness poller once RCON responds.
+    // The watcher task reads this on exit to distinguish a startup failure
+    // (process died before ever being ready) from a runtime crash.
+    let confirmed_running = Arc::new(AtomicBool::new(false));
 
     // Register in the running map.
     {
@@ -241,26 +301,56 @@ async fn inner_start_server_with_state(
             status: "starting".into(),
             pid: Some(pid),
             uptime_seconds: None,
+            error: None,
         },
     );
 
     // Spawn a watcher task that owns the child handle and waits for it to exit.
+    // Concurrently reads up to 4 KB of stderr (Wine/Proton diagnostic output)
+    // so we can surface the reason in the notification when a start fails.
     let sid = params.server_id.clone();
     let handle_clone = app_handle.clone();
+    let confirmed_clone = Arc::clone(&confirmed_running);
     tauri::async_runtime::spawn(async move {
-        let _ = child.wait().await;
+        let (_, raw_stderr) = tokio::join!(
+            child.wait(),
+            async move {
+                let Some(s) = child_stderr else {
+                    return String::new();
+                };
+                use tokio::io::AsyncReadExt;
+                use tokio::time::{timeout, Duration};
+                let mut buf = Vec::new();
+                // 3-second safety timeout in case Wine children keep the pipe open.
+                let _ = timeout(
+                    Duration::from_secs(3),
+                    s.take(4096).read_to_end(&mut buf),
+                )
+                .await;
+                String::from_utf8_lossy(&buf).to_string()
+            }
+        );
 
         let app_state = handle_clone.state::<AppState>();
-
-        let was_intentional = app_state
-            .stopping_servers
-            .lock()
-            .unwrap()
-            .remove(&sid);
-
+        let was_intentional = app_state.stopping_servers.lock().unwrap().remove(&sid);
         app_state.running_servers.lock().unwrap().remove(&sid);
 
-        let status_str = if was_intentional { "stopped" } else { "crashed" };
+        let (status_str, error) = if was_intentional {
+            ("stopped", None)
+        } else if confirmed_clone.load(Ordering::Relaxed) {
+            // Was confirmed running at some point — this is a genuine runtime crash.
+            ("crashed", None)
+        } else {
+            // Died before RCON ever responded — startup failure.
+            let cleaned = strip_ansi(raw_stderr.trim());
+            let trimmed = if cleaned.len() > 800 {
+                format!("\u{2026}{}", &cleaned[cleaned.len() - 800..])
+            } else {
+                cleaned
+            };
+            ("start-failed", Some(trimmed).filter(|s| !s.is_empty()))
+        };
+
         emit_status(
             &handle_clone,
             &ServerStatus {
@@ -268,6 +358,7 @@ async fn inner_start_server_with_state(
                 status: status_str.into(),
                 pid: None,
                 uptime_seconds: None,
+                error,
             },
         );
     });
@@ -279,6 +370,7 @@ async fn inner_start_server_with_state(
     let sid2 = params.server_id.clone();
     let handle2 = app_handle.clone();
     let rcon_port = params.rcon_port;
+    let confirmed2 = Arc::clone(&confirmed_running);
     tauri::async_runtime::spawn(async move {
         use tokio::net::TcpStream;
         use tokio::time::{sleep, timeout, Duration};
@@ -297,6 +389,7 @@ async fn inner_start_server_with_state(
                 .await
                 .is_ok()
             {
+                confirmed2.store(true, Ordering::Relaxed);
                 emit_status(
                     &handle2,
                     &ServerStatus {
@@ -304,14 +397,17 @@ async fn inner_start_server_with_state(
                         status: "running".into(),
                         pid: Some(pid),
                         uptime_seconds: Some(0),
+                        error: None,
                     },
                 );
                 return;
             }
         }
 
-        // 15-minute timeout — emit running anyway so the UI doesn't stay stuck.
+        // 15-minute timeout — server is presumably up even though RCON isn't
+        // responding. Mark confirmed so a later crash doesn't appear as start-failed.
         if pid_alive(pid) {
+            confirmed2.store(true, Ordering::Relaxed);
             emit_status(
                 &handle2,
                 &ServerStatus {
@@ -319,6 +415,7 @@ async fn inner_start_server_with_state(
                     status: "running".into(),
                     pid: Some(pid),
                     uptime_seconds: Some(0),
+                    error: None,
                 },
             );
         }
@@ -430,6 +527,7 @@ pub async fn get_server_status(
             status: "stopped".into(),
             pid: None,
             uptime_seconds: None,
+            error: None,
         }),
         Some((pid, started_at)) => {
             if pid_alive(pid) {
@@ -438,6 +536,7 @@ pub async fn get_server_status(
                     status: "running".into(),
                     pid: Some(pid),
                     uptime_seconds: Some(started_at.elapsed().as_secs()),
+                    error: None,
                 })
             } else {
                 Ok(ServerStatus {
@@ -445,6 +544,7 @@ pub async fn get_server_status(
                     status: "stopped".into(),
                     pid: None,
                     uptime_seconds: None,
+                    error: None,
                 })
             }
         }

@@ -223,6 +223,7 @@ pub fn run() {
                                 status: status_str.into(),
                                 pid: None,
                                 uptime_seconds: None,
+                                error: None,
                             };
 
                             let _ = handle.emit(

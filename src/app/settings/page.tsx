@@ -377,7 +377,7 @@ function AboutSection() {
   const [appVersion, setAppVersion] = useState("…");
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => setAppVersion("0.9.0"));
+    getVersion().then(setAppVersion).catch(() => setAppVersion("0.9.1"));
     (async () => {
       const baseDir = (await getAppSetting("base_dir")) ?? "";
       if (!baseDir) return;
@@ -392,8 +392,8 @@ function AboutSection() {
   }, []);
 
   const bootstrapHint = IS_LINUX
-    ? "~/.local/share/lokiasam/bootstrap.json"
-    : "%APPDATA%\\lokiasam\\bootstrap.json";
+    ? "~/.local/share/xyz.lokisoft.lokiasam/bootstrap.json"
+    : "%APPDATA%\\xyz.lokisoft.lokiasam\\bootstrap.json";
 
   const rows = [
     { label: "Version",        value: appVersion },

@@ -16,6 +16,18 @@ import { useEffect, useRef } from "react";
 
 type UnlistenFn = () => void;
 
+// Kick off the dynamic import at module-evaluation time so the Tauri event
+// module is already in the browser's module cache before any useEffect fires.
+// Without this, the first call to useTauriEvent involves two async hops
+// (dynamic import + listen IPC), creating a window where events emitted
+// immediately after startServer() can arrive before the listener is registered
+// — causing status updates to be silently missed on app restart.
+// The window guard ensures this never runs during Next.js static prerendering.
+const _tauriEventApiPromise =
+  typeof window !== "undefined"
+    ? import("@tauri-apps/api/event")
+    : null;
+
 export function useTauriEvent<T = unknown>(
   event: string,
   handler: (payload: T) => void
@@ -35,7 +47,7 @@ export function useTauriEvent<T = unknown>(
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
 
-    import("@tauri-apps/api/event").then(({ listen }) => {
+    (_tauriEventApiPromise ?? import("@tauri-apps/api/event")).then(({ listen }) => {
       if (cancelled) return;
       listen<T>(event, (e) => handlerRef.current(e.payload)).then((fn) => {
         if (cancelled) {

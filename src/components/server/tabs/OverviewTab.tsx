@@ -14,7 +14,8 @@ import {
 } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import { toast } from "sonner";
-import { ARK_MAPS } from "@/data/game-data";
+import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ServerRow } from "@/lib/db";
 
@@ -164,7 +165,17 @@ export function OverviewTab({ server }: Props) {
       // with "running" once the RCON port responds (server fully loaded).
       await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
+      const errMsg = typeof e === "string" ? e : String(e);
       await updateServerStatus(server.id, "error", null);
+      toast.error(`${server.name} failed to start — ${errMsg}`);
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
+        serverId:   server.id,
+        serverName: server.name,
+        title:      `${server.name} failed to start`,
+        body:       errMsg,
+        severity:   "error",
+      });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       setActionPending(false);
