@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Bell, CheckCheck, Filter, Trash2 } from "lucide-react";
+import { useState, useCallback, useEffect, useRef, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Bell, Filter, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,15 +13,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useNotificationList } from "@/hooks/useNotifications";
 import {
   markAllNotificationsRead,
-  markNotificationRead,
-  pruneOldNotifications,
+  deleteNotification,
+  pruneNotificationsWithFilter,
   type InAppNotificationRow,
 } from "@/lib/db";
 import { useAppStore } from "@/store/useAppStore";
-import { NOTIFICATION_EVENT_LABELS } from "@/data/game-data";
+import { NOTIFICATION_EVENT_LABELS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { useQueryClient } from "@tanstack/react-query";
 
 // ---------------------------------------------------------------------------
 // Severity helpers
@@ -53,22 +62,35 @@ function SeverityDot({ severity }: { severity: string }) {
 
 function NotificationRow({
   n,
-  onMarkRead,
+  highlighted,
+  onDelete,
 }: {
   n: InAppNotificationRow;
-  onMarkRead: (id: string) => void;
+  highlighted: boolean;
+  onDelete: (id: string) => void;
 }) {
-  const ts = new Date(n.created_at);
+  const rowRef = useRef<HTMLDivElement>(null);
   const label =
     NOTIFICATION_EVENT_LABELS[n.event_type as keyof typeof NOTIFICATION_EVENT_LABELS] ??
     n.event_type;
 
+  useEffect(() => {
+    if (highlighted && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlighted]);
+
   return (
     <div
-      className="flex items-start gap-3 px-5 py-4 border-b last:border-0 transition-colors group"
+      ref={rowRef}
+      id={`notif-${n.id}`}
+      className="flex items-start gap-3 px-5 py-4 border-b last:border-0 transition-all group"
       style={{
         borderColor: "var(--border)",
-        background: n.read ? "transparent" : "rgba(191,0,255,0.04)",
+        background: highlighted
+          ? "rgba(191,0,255,0.12)"
+          : "transparent",
+        outline: highlighted ? "1px solid rgba(191,0,255,0.4)" : "none",
       }}
     >
       <SeverityDot severity={n.severity} />
@@ -76,7 +98,7 @@ function NotificationRow({
         <div className="flex items-baseline justify-between gap-2">
           <span
             className="text-sm font-semibold"
-            style={{ color: n.read ? "var(--text-muted)" : "var(--text-primary)" }}
+            style={{ color: "var(--text-primary)" }}
           >
             {n.title}
           </span>
@@ -84,13 +106,13 @@ function NotificationRow({
             className="text-xs shrink-0"
             style={{ color: "var(--text-subtle)" }}
           >
-            {ts.toLocaleString()}
+            {new Date(n.created_at).toLocaleString()}
           </span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
           {n.body}
         </p>
-        <div className="flex items-center gap-3 mt-1.5">
+        <div className="mt-1.5">
           <span
             className="text-[10px] px-1.5 py-0.5 rounded font-mono"
             style={{
@@ -101,17 +123,16 @@ function NotificationRow({
           >
             {label}
           </span>
-          {!n.read && (
-            <button
-              onClick={() => onMarkRead(n.id)}
-              className="text-[10px] hover:underline opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ color: "var(--neon-purple)" }}
-            >
-              Mark read
-            </button>
-          )}
         </div>
       </div>
+      <button
+        onClick={() => onDelete(n.id)}
+        className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5 p-1 rounded hover:bg-white/10"
+        style={{ color: "var(--text-subtle)" }}
+        title="Delete notification"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }
@@ -128,18 +149,48 @@ const SEVERITY_OPTIONS = [
   { value: "error",   label: "Error" },
 ];
 
-export default function NotificationsPage() {
+const EVENT_TYPE_OPTIONS = [
+  { value: "all", label: "All Types" },
+  ...Object.values(NOTIFICATION_EVENTS).map((v) => ({
+    value: v,
+    label: NOTIFICATION_EVENT_LABELS[v as keyof typeof NOTIFICATION_EVENT_LABELS] ?? v,
+  })),
+];
+
+function NotificationsContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const highlightId = searchParams.get("highlight");
+
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState("all");
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [eventTypeFilter, setEventTypeFilter] = useState("all");
+  const [highlighted, setHighlighted] = useState<string | null>(highlightId);
   const resetUnreadBump = useAppStore((s) => s.resetUnreadBump);
-  const incrementUnread = useAppStore((s) => s.incrementUnread);
 
-  const { data: notifications = [], refetch } = useNotificationList({ limit: 200 });
+  const { data: notifications = [], refetch } = useNotificationList({ limit: 500 });
+
+  // Mark all as read and clear the highlight param on page load
+  useEffect(() => {
+    markAllNotificationsRead().then(() => {
+      resetUnreadBump();
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
+    if (highlightId) {
+      // Clear the URL param after a moment without re-fetching
+      const timeout = setTimeout(() => {
+        setHighlighted(null);
+        router.replace("/notifications", { scroll: false });
+      }, 3000);
+      return () => clearTimeout(timeout);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = notifications.filter((n) => {
     if (severityFilter !== "all" && n.severity !== severityFilter) return false;
-    if (unreadOnly && n.read) return false;
+    if (eventTypeFilter !== "all" && n.event_type !== eventTypeFilter) return false;
     if (search.trim()) {
       const q = search.toLowerCase();
       return (
@@ -151,25 +202,21 @@ export default function NotificationsPage() {
     return true;
   });
 
-  const handleMarkRead = useCallback(async (id: string) => {
-    await markNotificationRead(id);
+  const handleDelete = useCallback(async (id: string) => {
+    await deleteNotification(id);
     refetch();
   }, [refetch]);
 
-  const handleMarkAllRead = useCallback(async () => {
-    await markAllNotificationsRead();
-    resetUnreadBump();
+  const handleBulkDelete = useCallback(async (days?: number) => {
+    const daysLabel = days ? `older than ${days} day${days === 1 ? "" : "s"}` : "all";
+    await pruneNotificationsWithFilter({
+      days,
+      severity: severityFilter !== "all" ? severityFilter : undefined,
+      eventType: eventTypeFilter !== "all" ? eventTypeFilter : undefined,
+    });
     refetch();
-    toast.success("All notifications marked as read.");
-  }, [refetch, resetUnreadBump]);
-
-  const handlePrune = useCallback(async (days: number) => {
-    await pruneOldNotifications(days);
-    refetch();
-    toast.success(`Notifications older than ${days} days deleted.`);
-  }, [refetch]);
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
+    toast.success(`Deleted ${daysLabel} notifications${severityFilter !== "all" || eventTypeFilter !== "all" ? " matching current filter" : ""}.`);
+  }, [refetch, severityFilter, eventTypeFilter]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -184,50 +231,52 @@ export default function NotificationsPage() {
           </h1>
           <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
             Event log for all managed servers.
-            {unreadCount > 0 && (
-              <span
-                className="ml-2 font-semibold"
-                style={{ color: "var(--neon-red)" }}
-              >
-                {unreadCount} unread
-              </span>
-            )}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {unreadCount > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="sm"
-              onClick={handleMarkAllRead}
-              className="text-xs"
-              style={{ color: "var(--text-muted)" }}
+              className="text-xs gap-1.5"
+              style={{ color: "var(--text-muted)", border: "1px solid var(--border)" }}
             >
-              <CheckCheck className="w-3.5 h-3.5 mr-1.5" />
-              Mark all read
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete…
             </Button>
-          )}
-          <Select
-            value="prune"
-            onValueChange={(v) => {
-              if (v === "7")  handlePrune(7);
-              if (v === "30") handlePrune(30);
-            }}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            style={{ background: "var(--surface-elevated)", border: "1px solid var(--border)" }}
           >
-            <SelectTrigger
-              className="h-8 text-xs w-36"
-              style={{ background: "var(--surface)", borderColor: "var(--border)", color: "var(--text-muted)" }}
+            <DropdownMenuItem
+              onClick={() => handleBulkDelete(1)}
+              style={{ color: "var(--text-primary)" }}
             >
-              <Trash2 className="w-3 h-3 mr-1.5" />
-              <SelectValue placeholder="Prune…" />
-            </SelectTrigger>
-            <SelectContent style={{ background: "var(--surface-elevated)", borderColor: "var(--border)" }}>
-              <SelectItem value="7">Delete older than 7d</SelectItem>
-              <SelectItem value="30">Delete older than 30d</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+              Older than 1 day
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleBulkDelete(7)}
+              style={{ color: "var(--text-primary)" }}
+            >
+              Older than 7 days
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleBulkDelete(30)}
+              style={{ color: "var(--text-primary)" }}
+            >
+              Older than 30 days
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => handleBulkDelete(undefined)}
+              style={{ color: "var(--neon-red)" }}
+            >
+              Delete all{severityFilter !== "all" || eventTypeFilter !== "all" ? " (filtered)" : ""}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Filters */}
@@ -258,17 +307,21 @@ export default function NotificationsPage() {
             ))}
           </SelectContent>
         </Select>
-        <button
-          onClick={() => setUnreadOnly((v) => !v)}
-          className="text-xs px-3 py-1.5 rounded transition-all"
-          style={{
-            background: unreadOnly ? "rgba(191,0,255,0.15)" : "transparent",
-            border: `1px solid ${unreadOnly ? "var(--neon-purple)" : "var(--border)"}`,
-            color: unreadOnly ? "var(--neon-purple)" : "var(--text-muted)",
-          }}
-        >
-          Unread only
-        </button>
+        <Select value={eventTypeFilter} onValueChange={setEventTypeFilter}>
+          <SelectTrigger
+            className="h-8 text-xs w-48"
+            style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent style={{ background: "var(--surface-elevated)", borderColor: "var(--border)" }}>
+            {EVENT_TYPE_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* List */}
@@ -300,10 +353,27 @@ export default function NotificationsPage() {
             </span>
           </div>
           {filtered.map((n) => (
-            <NotificationRow key={n.id} n={n} onMarkRead={handleMarkRead} />
+            <NotificationRow
+              key={n.id}
+              n={n}
+              highlighted={highlighted === n.id}
+              onDelete={handleDelete}
+            />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page export — wraps with Suspense for useSearchParams
+// ---------------------------------------------------------------------------
+
+export default function NotificationsPage() {
+  return (
+    <Suspense fallback={<div className="flex flex-col gap-4"><div className="h-8 w-48 rounded animate-pulse" style={{ background: "var(--surface)" }} /></div>}>
+      <NotificationsContent />
+    </Suspense>
   );
 }

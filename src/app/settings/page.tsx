@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
+import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import {
   getAppSetting, setAppSetting,
   saveNotificationConfig, getNotificationConfigs,
@@ -1238,73 +1239,6 @@ function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fie
   );
 }
 
-// ---------------------------------------------------------------------------
-// Notification Events section
-// ---------------------------------------------------------------------------
-
-const NOTIFICATION_TOGGLES = [
-  { key: "notify_server_start",    label: "Server Started",         desc: "Notify when a managed server successfully starts.",       defaultOn: true  },
-  { key: "notify_server_crash",    label: "Server Crashed",         desc: "Notify when a server exits unexpectedly.",               defaultOn: true  },
-  { key: "notify_server_stop",     label: "Server Stopped",         desc: "Notify when a server is manually stopped.",              defaultOn: false },
-  { key: "notify_update_available",label: "ASA Update Available",   desc: "Notify when a new ASA server build is detected on Steam.", defaultOn: true },
-];
-
-function NotificationEventsSection() {
-  const [desktopEnabled, setDesktopEnabled] = useState(true);
-  const [values, setValues] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    getAppSetting("desktop_notifications_enabled").then((v) => setDesktopEnabled(v !== "false"));
-    Promise.all(NOTIFICATION_TOGGLES.map((t) => getAppSetting(t.key))).then((results) => {
-      const v: Record<string, boolean> = {};
-      NOTIFICATION_TOGGLES.forEach((t, i) => { v[t.key] = results[i] !== null ? results[i] === "true" : t.defaultOn; });
-      setValues(v);
-    });
-  }, []);
-
-  const handleDesktopToggle = async (enabled: boolean) => {
-    setDesktopEnabled(enabled);
-    await setAppSetting("desktop_notifications_enabled", String(enabled));
-  };
-
-  const handleToggle = async (key: string, enabled: boolean) => {
-    setValues((prev) => ({ ...prev, [key]: enabled }));
-    await setAppSetting(key, String(enabled));
-  };
-
-  return (
-    <div className="space-y-4">
-      {/* Desktop notifications — separate from event list */}
-      <div className="pb-4 border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Desktop Notifications</p>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-              Show OS system notifications for server events.
-              <span className="block mt-0.5" style={{ color: "var(--text-subtle)" }}>
-                In-app toast notifications always appear regardless of this setting.
-              </span>
-            </p>
-          </div>
-          <SettingsToggle checked={desktopEnabled} onChange={handleDesktopToggle} />
-        </div>
-      </div>
-
-      {/* Per-event toggles */}
-      <div className="space-y-1">
-        {NOTIFICATION_TOGGLES.map((t) => (
-          <div key={t.key} className="flex items-start justify-between gap-4 py-3">
-            <div>
-              <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{t.label}</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{t.desc}</p>
-            </div>
-            <SettingsToggle checked={values[t.key] ?? t.defaultOn} onChange={(v) => handleToggle(t.key, v)} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Close-to-tray section
@@ -1445,11 +1379,11 @@ export default function SettingsPage() {
       {/* Notifications tab */}
       {activeTab === "notifications" && (
         <div className="flex flex-col gap-6">
-          <Section icon={Bell} title="Notification Channels" description="Default Discord and email channels for all server events.">
+          <Section icon={Bell} title="Notification Channels" description="Configure Discord webhook and SMTP email credentials. Configuring a channel unlocks it in the event matrix below.">
             <GlobalNotificationsSection />
           </Section>
-          <Section icon={Bell} title="Notification Events" description="Choose which events trigger notifications across all channels.">
-            <NotificationEventsSection />
+          <Section icon={Bell} title="Notification Events" description="Choose which events trigger each channel. Configure Discord and SMTP credentials above to unlock those columns.">
+            <NotificationMatrix />
           </Section>
         </div>
       )}

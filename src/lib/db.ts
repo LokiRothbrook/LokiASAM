@@ -778,6 +778,7 @@ export async function logNotification(input: LogNotificationInput): Promise<void
 export interface GetNotificationsFilter {
   serverId?: string | null;
   unreadOnly?: boolean;
+  eventType?: string;
   limit?: number;
   offset?: number;
 }
@@ -800,6 +801,10 @@ export async function getNotifications(
   }
   if (filter.unreadOnly) {
     conditions.push("read = 0");
+  }
+  if (filter.eventType) {
+    conditions.push("event_type = ?");
+    params.push(filter.eventType);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -834,6 +839,12 @@ export async function markAllNotificationsRead(): Promise<void> {
   await db.execute("UPDATE in_app_notifications SET read = 1 WHERE read = 0");
 }
 
+/** Delete a single notification by id. */
+export async function deleteNotification(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM in_app_notifications WHERE id = ?", [id]);
+}
+
 /** Delete notifications older than `days` days. */
 export async function pruneOldNotifications(days: number): Promise<void> {
   const db = await getDb();
@@ -842,6 +853,40 @@ export async function pruneOldNotifications(days: number): Promise<void> {
      WHERE created_at < datetime('now', '-' || ? || ' days')`,
     [days]
   );
+}
+
+export interface PruneNotificationsFilter {
+  /** Max age in days. Omit (or 0) to delete regardless of age. */
+  days?: number;
+  /** If set, only delete rows matching this severity. */
+  severity?: string;
+  /** If set, only delete rows matching this event_type. */
+  eventType?: string;
+}
+
+/** Bulk-delete notifications with optional age + severity + event type filters. */
+export async function pruneNotificationsWithFilter(
+  filter: PruneNotificationsFilter
+): Promise<void> {
+  const db = await getDb();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filter.days && filter.days > 0) {
+    conditions.push(`created_at < datetime('now', '-' || ? || ' days')`);
+    params.push(filter.days);
+  }
+  if (filter.severity) {
+    conditions.push("severity = ?");
+    params.push(filter.severity);
+  }
+  if (filter.eventType) {
+    conditions.push("event_type = ?");
+    params.push(filter.eventType);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  await db.execute(`DELETE FROM in_app_notifications ${where}`, params);
 }
 
 // ---------------------------------------------------------------------------
@@ -932,4 +977,32 @@ export async function saveNotificationConfig(
 export async function deleteNotificationConfig(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM notification_configs WHERE id = ?", [id]);
+}
+
+/** Get a single global (server_id IS NULL) notification config by channel. */
+export async function getGlobalChannelConfig(
+  channel: string
+): Promise<NotificationConfigRow | null> {
+  const db = await getDb();
+  const rows = await db.select<NotificationConfigRow[]>(
+    "SELECT * FROM notification_configs WHERE server_id IS NULL AND channel = ? LIMIT 1",
+    [channel]
+  );
+  return rows[0] ?? null;
+}
+
+/** Upsert just the events_json for a global channel config. Creates the row if missing. */
+export async function saveGlobalChannelEvents(
+  channel: string,
+  events: string[]
+): Promise<void> {
+  const existing = await getGlobalChannelConfig(channel);
+  await saveNotificationConfig({
+    id: existing?.id ?? crypto.randomUUID(),
+    serverId: null,
+    channel,
+    enabled: existing?.enabled === 1,
+    configJson: existing?.config_json ?? "{}",
+    eventsJson: JSON.stringify(events),
+  });
 }

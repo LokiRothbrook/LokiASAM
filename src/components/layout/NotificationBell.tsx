@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck } from "lucide-react";
+import { Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -12,6 +12,7 @@ import {
 import { useUnreadNotificationCount, useNotificationList } from "@/hooks/useNotifications";
 import { markAllNotificationsRead } from "@/lib/db";
 import { useAppStore } from "@/store/useAppStore";
+import { useQueryClient } from "@tanstack/react-query";
 import type { InAppNotificationRow } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
@@ -27,47 +28,6 @@ function severityColor(severity: string): string {
   }
 }
 
-function severityDot(severity: string) {
-  return (
-    <span
-      className="w-2 h-2 rounded-full shrink-0 mt-1"
-      style={{ background: severityColor(severity) }}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Notification item (mini)
-// ---------------------------------------------------------------------------
-
-function NotificationItemMini({ n }: { n: InAppNotificationRow }) {
-  const ts = new Date(n.created_at);
-  const ago = formatRelative(ts);
-
-  return (
-    <div
-      className="flex items-start gap-2.5 px-4 py-3 border-b last:border-0 transition-colors"
-      style={{
-        borderColor: "var(--border)",
-        background: n.read ? "transparent" : "rgba(191,0,255,0.04)",
-      }}
-    >
-      {severityDot(n.severity)}
-      <div className="flex-1 min-w-0">
-        <p
-          className="text-xs font-medium truncate"
-          style={{ color: n.read ? "var(--text-muted)" : "var(--text-primary)" }}
-        >
-          {n.title}
-        </p>
-        <p className="text-xs mt-0.5 truncate" style={{ color: "var(--text-subtle)" }}>
-          {ago}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function formatRelative(date: Date): string {
   const diffMs = Date.now() - date.getTime();
   const diffMin = Math.floor(diffMs / 60_000);
@@ -80,33 +40,78 @@ function formatRelative(date: Date): string {
 }
 
 // ---------------------------------------------------------------------------
+// Notification item (mini) — clickable
+// ---------------------------------------------------------------------------
+
+function NotificationItemMini({
+  n,
+  onClick,
+}: {
+  n: InAppNotificationRow;
+  onClick: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="w-full text-left flex items-start gap-2.5 px-4 py-3 border-b last:border-0 transition-colors hover:bg-white/5"
+      style={{ borderColor: "var(--border)" }}
+      onClick={() => onClick(n.id)}
+    >
+      <span
+        className="w-2 h-2 rounded-full shrink-0 mt-1.5"
+        style={{ background: severityColor(n.severity) }}
+      />
+      <div className="flex-1 min-w-0">
+        <p
+          className="text-xs font-medium truncate"
+          style={{ color: "var(--text-primary)" }}
+        >
+          {n.title}
+        </p>
+        <p className="text-xs mt-0.5 truncate" style={{ color: "var(--text-subtle)" }}>
+          {formatRelative(new Date(n.created_at))}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // NotificationBell
 // ---------------------------------------------------------------------------
 
 export function NotificationBell() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const resetUnreadBump = useAppStore((s) => s.resetUnreadBump);
 
   const { data: unreadCount = 0 } = useUnreadNotificationCount();
-  const { data: recent = [] } = useNotificationList({ limit: 10 });
+  // Show only unread notifications in the bell, newest first, capped at 10
+  const { data: unread = [] } = useNotificationList({ unreadOnly: true, limit: 10 });
 
-  async function handleOpen(value: boolean) {
+  async function handleOpenChange(value: boolean) {
     setOpen(value);
-    if (value && unreadCount > 0) {
-      // Mark all read when the user opens the bell
+    if (!value && unreadCount > 0) {
+      // Mark all as read when bell closes
       await markAllNotificationsRead();
       resetUnreadBump();
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     }
   }
 
-  const handleViewAll = () => {
+  function handleItemClick(id: string) {
+    setOpen(false);
+    router.push(`/notifications?highlight=${id}`);
+  }
+
+  function handleViewAll() {
     setOpen(false);
     router.push("/notifications");
-  };
+  }
 
   return (
-    <Popover open={open} onOpenChange={handleOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
@@ -145,36 +150,37 @@ export function NotificationBell() {
           style={{ borderColor: "var(--border)" }}
         >
           <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-            Notifications
+            Unread Notifications
           </span>
-          <div className="flex items-center gap-2">
-            {unreadCount > 0 && (
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                {unreadCount} unread
-              </span>
-            )}
-          </div>
+          {unreadCount > 0 && (
+            <span
+              className="text-xs px-1.5 py-0.5 rounded-full font-bold"
+              style={{ background: "var(--neon-red)", color: "#000" }}
+            >
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
         </div>
 
         {/* List */}
-        {recent.length === 0 ? (
+        {unread.length === 0 ? (
           <div className="py-8 flex flex-col items-center justify-center gap-2">
             <Bell className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              No notifications yet
+              All caught up
             </p>
           </div>
         ) : (
           <div className="max-h-80 overflow-y-auto">
-            {recent.map((n) => (
-              <NotificationItemMini key={n.id} n={n} />
+            {unread.map((n) => (
+              <NotificationItemMini key={n.id} n={n} onClick={handleItemClick} />
             ))}
           </div>
         )}
 
         {/* Footer */}
         <div
-          className="border-t px-4 py-2 flex items-center justify-between"
+          className="border-t px-4 py-2"
           style={{ borderColor: "var(--border)" }}
         >
           <button
@@ -182,21 +188,8 @@ export function NotificationBell() {
             className="text-xs transition-colors hover:underline"
             style={{ color: "var(--neon-purple)" }}
           >
-            View all →
+            View all notifications →
           </button>
-          {recent.some((n) => !n.read) && (
-            <button
-              onClick={async () => {
-                await markAllNotificationsRead();
-                resetUnreadBump();
-              }}
-              className="text-xs flex items-center gap-1 hover:opacity-80 transition-opacity"
-              style={{ color: "var(--text-muted)" }}
-            >
-              <CheckCheck className="w-3 h-3" />
-              Mark all read
-            </button>
-          )}
         </div>
       </PopoverContent>
     </Popover>

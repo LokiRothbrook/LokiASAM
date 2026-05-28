@@ -36,6 +36,7 @@ import { Switch } from "@/components/ui/switch";
 import { useSetupStore } from "@/store/useSetupStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { setAppSetting, initDb } from "@/lib/db";
+import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
@@ -1312,11 +1313,6 @@ function NotificationsStep() {
     smtpUseTls, setSmtpUseTls,
     smtpFrom, setSmtpFrom,
     smtpTo, setSmtpTo,
-    desktopNotificationsEnabled, setDesktopNotificationsEnabled,
-    notifyServerStart, setNotifyServerStart,
-    notifyServerCrash, setNotifyServerCrash,
-    notifyServerStop, setNotifyServerStop,
-    notifyUpdateAvailable, setNotifyUpdateAvailable,
   } = useSetupStore();
 
   const [testingDiscord, setTestingDiscord] = useState(false);
@@ -1370,31 +1366,6 @@ function NotificationsStep() {
         </p>
       </div>
 
-      {/* Desktop notifications — separated from events */}
-      <div
-        className="rounded-lg p-4"
-        style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.15)" }}
-      >
-        <ToggleRow
-          label="Desktop Notifications"
-          description="Show OS system notifications for server events. In-app toast notifications always appear regardless of this setting."
-          value={desktopNotificationsEnabled}
-          onChange={setDesktopNotificationsEnabled}
-        />
-      </div>
-
-      {/* Notification events */}
-      <div
-        className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
-      >
-        <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Notify me when…</p>
-        <ToggleRow label="Server starts up"     value={notifyServerStart}     onChange={setNotifyServerStart} />
-        <ToggleRow label="Server crashes"        value={notifyServerCrash}     onChange={setNotifyServerCrash} />
-        <ToggleRow label="Server stops (manual)" value={notifyServerStop}      onChange={setNotifyServerStop} />
-        <ToggleRow label="ASA update available"  value={notifyUpdateAvailable} onChange={setNotifyUpdateAvailable} />
-      </div>
-
       {/* Discord webhook */}
       <div
         className="rounded-lg p-4 space-y-3"
@@ -1436,7 +1407,7 @@ function NotificationsStep() {
         </p>
       </div>
 
-      {/* Email / SMTP — always visible, no collapsible */}
+      {/* Email / SMTP */}
       <div
         className="rounded-lg p-4 space-y-3"
         style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
@@ -1509,6 +1480,20 @@ function NotificationsStep() {
           </div>
         </div>
         <ToggleRow label="Use TLS / STARTTLS" value={smtpUseTls} onChange={setSmtpUseTls} />
+      </div>
+
+      {/* Notification event matrix */}
+      <div
+        className="rounded-lg p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+      >
+        <div>
+          <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Notification Events</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Choose which events trigger each channel. Configure credentials above to unlock Discord and SMTP columns.
+          </p>
+        </div>
+        <NotificationMatrix />
       </div>
     </div>
   );
@@ -1718,8 +1703,6 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     setProtonPath, setProtonValidated,
     discordWebhook,
     smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTls, smtpFrom, smtpTo,
-    desktopNotificationsEnabled,
-    notifyServerStart, notifyServerCrash, notifyServerStop, notifyUpdateAvailable,
     closeToTray,
     asaAutoUpdateEnabled, appAutoUpdateEnabled, protonAutoCheckEnabled,
     isLoading,
@@ -1829,13 +1812,6 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           await setAppSetting("proton_prefix_path", prefix);
         }
         if (discordWebhook) await setAppSetting("discord_webhook", discordWebhook);
-
-        // Notification preferences
-        await setAppSetting("desktop_notifications_enabled", String(desktopNotificationsEnabled));
-        await setAppSetting("notify_server_start",    String(notifyServerStart));
-        await setAppSetting("notify_server_crash",    String(notifyServerCrash));
-        await setAppSetting("notify_server_stop",     String(notifyServerStop));
-        await setAppSetting("notify_update_available", String(notifyUpdateAvailable));
 
         // SMTP (only if host is set)
         if (smtpHost) {
