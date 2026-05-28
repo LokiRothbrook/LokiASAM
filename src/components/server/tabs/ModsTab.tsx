@@ -58,7 +58,7 @@ export function ModsTab({ server }: Props) {
       const rows = await getServerMods(server.id);
       setMods(rows);
     } catch (e) {
-      console.error("Failed to load mods:", e);
+      toast.error("Failed to load mods", { description: String(e) });
     } finally {
       setLoading(false);
     }
@@ -105,7 +105,7 @@ export function ModsTab({ server }: Props) {
         );
         setModBrowserOpen(true);
       } catch (e) {
-        console.error("openModBrowser failed:", e);
+        toast.error("Failed to open mod browser", { description: String(e) });
         setModBrowserParams(null);
       }
     }
@@ -162,7 +162,7 @@ export function ModsTab({ server }: Props) {
       await removeServerMod(server.id, modId);
       await loadMods();
     } catch (e) {
-      console.error("Remove mod failed:", e);
+      toast.error("Failed to remove mod", { description: String(e) });
     }
   };
 
@@ -171,7 +171,7 @@ export function ModsTab({ server }: Props) {
       await toggleServerMod(server.id, modId, enabled);
       await loadMods();
     } catch (e) {
-      console.error("Toggle mod failed:", e);
+      toast.error("Failed to toggle mod", { description: String(e) });
     }
   };
 

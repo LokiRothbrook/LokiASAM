@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -78,6 +79,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
           <DialogTitle style={{ color: "var(--neon-purple)" }}>
             New Cluster
           </DialogTitle>
+          <DialogDescription className="sr-only">Create a new server cluster.</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-2">
@@ -178,6 +180,7 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
           <DialogTitle style={{ color: "var(--neon-red)" }}>
             Delete Cluster
           </DialogTitle>
+          <DialogDescription className="sr-only">Confirm cluster deletion.</DialogDescription>
         </DialogHeader>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Are you sure you want to delete{" "}

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -7,6 +8,15 @@ use tauri::{AppHandle, Emitter};
 pub struct ProtonEntry {
     pub path: String,
     pub version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtonUpdateInfo {
+    pub latest_version: String,
+    pub current_version: String,
+    pub update_available: bool,
+    pub download_url: String,
 }
 
 fn home_dir() -> PathBuf {
@@ -78,10 +88,24 @@ pub async fn validate_proton_path(path: String) -> Result<bool, String> {
 /// Download the latest GE-Proton release from GitHub, extract it to
 /// `target_dir`, and return the full path to the extracted directory.
 /// Progress is streamed to the `proton://output/download` event channel.
+/// Abort key: "proton_download" — call `abort_operation` to cancel.
+/// On abort, the partial download file is removed; the target_dir is left (may be empty).
 #[tauri::command]
 pub async fn download_proton_ge(
     app_handle: AppHandle,
     target_dir: String,
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<String, String> {
+    let abort = state.register_abort("proton_download");
+    let result = download_proton_ge_inner(&app_handle, &target_dir, &abort).await;
+    state.clear_abort("proton_download");
+    result
+}
+
+async fn download_proton_ge_inner(
+    app_handle: &AppHandle,
+    target_dir: &str,
+    abort: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<String, String> {
     use tokio::io::AsyncWriteExt;
 
@@ -167,6 +191,11 @@ pub async fn download_proton_ge(
         .await
         .map_err(|e| format!("Download chunk error: {e}"))?
     {
+        if abort.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err("Aborted".into());
+        }
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("Write error: {e}"))?;
@@ -199,6 +228,8 @@ pub async fn download_proton_ge(
 
     let tar_path_clone = tar_path.clone();
     let target_clone = target.clone();
+    let tag_clone = tag.clone();
+    let abort_extract = std::sync::Arc::clone(abort);
     tokio::task::spawn_blocking(move || {
         use flate2::read::GzDecoder;
         use tar::Archive;
@@ -207,9 +238,21 @@ pub async fn download_proton_ge(
             .map_err(|e| format!("Failed to open archive: {e}"))?;
         let gz = GzDecoder::new(f);
         let mut archive = Archive::new(gz);
-        archive
-            .unpack(&target_clone)
-            .map_err(|e| format!("Failed to extract archive: {e}"))?;
+
+        // Iterate entries one-by-one so we can check the abort flag between
+        // files. unpack() has no cancellation hook.
+        for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
+            if abort_extract.load(Ordering::Relaxed) {
+                let _ = std::fs::remove_file(&tar_path_clone);
+                let _ = std::fs::remove_dir_all(target_clone.join(&tag_clone));
+                return Err("Aborted".into());
+            }
+            let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
+            entry
+                .unpack_in(&target_clone)
+                .map_err(|e| format!("Failed to extract entry: {e}"))?;
+        }
+
         let _ = std::fs::remove_file(&tar_path_clone);
         Ok::<(), String>(())
     })
@@ -234,4 +277,62 @@ pub async fn download_proton_ge(
     );
 
     Ok(extracted_path.to_string_lossy().into_owned())
+}
+
+/// Query GitHub for the latest GE-Proton release without downloading.
+/// `current_path` is the currently configured proton_path (may be empty).
+#[tauri::command]
+pub async fn check_proton_ge_update(current_path: String) -> Result<ProtonUpdateInfo, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("LokiASAM/0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let release: serde_json::Value = client
+        .get("https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest")
+        .send()
+        .await
+        .map_err(|e| format!("GitHub API request failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub API response: {e}"))?;
+
+    let latest_version = release["tag_name"]
+        .as_str()
+        .ok_or("Release has no tag_name")?
+        .to_string();
+
+    let download_url = release["assets"]
+        .as_array()
+        .and_then(|a| {
+            a.iter().find(|asset| {
+                asset["name"]
+                    .as_str()
+                    .map(|n| n.ends_with(".tar.gz"))
+                    .unwrap_or(false)
+            })
+        })
+        .and_then(|asset| asset["browser_download_url"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Derive current version from the last path component of current_path.
+    let current_version = if current_path.is_empty() {
+        String::new()
+    } else {
+        Path::new(&current_path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    };
+
+    let update_available = !current_version.is_empty() && current_version != latest_version;
+
+    Ok(ProtonUpdateInfo {
+        latest_version,
+        current_version,
+        update_available,
+        download_url,
+    })
 }

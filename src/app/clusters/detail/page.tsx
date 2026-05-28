@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -90,6 +91,7 @@ function AddServerDialog({ cluster, open, onClose, onAdded }: AddServerDialogPro
           <DialogTitle style={{ color: "var(--neon-purple)" }}>
             Add Server to {cluster.name}
           </DialogTitle>
+          <DialogDescription className="sr-only">Select a server to add to this cluster.</DialogDescription>
         </DialogHeader>
 
         {eligible.length === 0 ? (
@@ -451,6 +453,7 @@ function ClusterDetailContent() {
             <DialogTitle style={{ color: "var(--neon-red)" }}>
               Remove from Cluster
             </DialogTitle>
+            <DialogDescription className="sr-only">Confirm removing this server from the cluster.</DialogDescription>
           </DialogHeader>
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>
             Remove{" "}

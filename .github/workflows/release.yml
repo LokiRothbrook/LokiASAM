@@ -68,6 +68,23 @@ jobs:
 
             LokiASAM is a desktop application for managing Ark Survival Ascended dedicated servers on Linux and Windows. It provides a full GUI for every aspect of running one or more ASA servers without needing to touch config files or the command line.
 
+            ### What's new in v0.10.0
+
+            - **Notification matrix** — fine-grained control over which events trigger which channels. Configure desktop, Discord, and email alerts independently for each event type (server start, stop, crash, player join/leave, install complete) from a single matrix view in Settings.
+            - **Close to tray** — clicking the window's X button now hides the app to the system tray instead of exiting, keeping scheduled tasks and background monitors running. A one-time hint notification appears the first time to confirm the app is still running. Configurable in Settings.
+            - **Install cancellation** — in-progress server installs and updates can now be cancelled mid-flight. The button changes to "Cancel" during the operation and restores the server state cleanly.
+            - **Close warning** — if you close the app (or choose Quit from the tray) while a server install or update is running, a dialog asks whether to cancel and exit or keep the app running.
+            - **Tray quit flow** — the tray "Quit LokiASAM" item now goes through the same install-aware warning path instead of force-exiting immediately.
+            - **Notification theme selection** — choose an accent color / theme for each notification event type so alerts are visually distinct at a glance.
+            - **Toast error notifications** — more operations (stop, restart, RCON, backup, etc.) now surface errors as in-app toast notifications instead of failing silently.
+
+            ### Bug fixes
+
+            - **Close to tray exits instead of hiding** — fixed a Tauri v2 race where the JS `onCloseRequested` wrapper would call `window.destroy()` after the Rust hide-to-tray handler ran, causing the process to exit. The window now hides correctly in all cases.
+            - **AppImage: server start works correctly** — the AppImage runtime was injecting its own Python environment into child processes, causing Proton to crash before Wine ran. The app now strips the AppImage environment before spawning server processes.
+            - **Server stuck in "Starting" after app restart** — servers left in Starting state from a previous session are now correctly reset to Stopped on launch.
+            - **Start failure notifications include error output** — the last lines of process output are now included in crash notifications so the cause is immediately visible.
+
             ### Features
 
             - **Server management** — create, start, stop, restart, and monitor multiple servers from a single dashboard. Live CPU/RAM stats and player counts update automatically.
@@ -78,27 +95,21 @@ jobs:
             - **Backups** — create, restore, and delete server backups; configurable retention with scheduled automatic backups.
             - **Automation** — schedule backups, updates, restarts, and broadcasts on a cron schedule with optional RCON warnings before restarts.
             - **Clusters** — group servers into clusters with shared player data directories.
-            - **Notifications** — configurable desktop, Discord webhook, and email alerts for server started, stopped, crashed, and player join/leave events.
+            - **Notifications** — configurable desktop, Discord webhook, and email alerts with per-event channel control.
             - **ASA server updates** — shared SteamCMD cache keeps downloads fast when managing multiple servers; update cache and apply to servers independently.
             - **Auto-update** — the app checks for new LokiASAM releases and can download and install them without leaving the app.
             - **Setup wizard** — guided first-run experience that installs SteamCMD and Proton (Linux) automatically.
-
-            ### Bug fixes since initial development
-
-            - **AppImage: server start works correctly** — the AppImage runtime was injecting its own Python environment into child processes, causing Proton to crash before Wine ran. The app now strips the AppImage environment before spawning server processes.
-            - **Server stuck in "Starting" after app restart** — servers left in Starting state from a previous session are now correctly reset to Stopped on launch.
-            - **Start failure notifications include error output** — the last lines of process output are now included in crash notifications so the cause is immediately visible.
 
             ### Installation
 
             **Linux:** Download the `.AppImage` from the assets below, make it executable, and run it.
             ```bash
-            chmod +x LokiASAM_0.9.0_amd64.AppImage
-            ./LokiASAM_0.9.0_amd64.AppImage
+            chmod +x LokiASAM_0.10.0_amd64.AppImage
+            ./LokiASAM_0.10.0_amd64.AppImage
             ```
             > The AppImage receives automatic update notifications. The `.deb` package does not.
 
-            **Windows:** Download and run `LokiASAM_0.9.0_x64-setup.exe` from the assets below.
+            **Windows:** Download and run `LokiASAM_0.10.0_x64-setup.exe` from the assets below.
 
             ### Notes
             - This is a public beta — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.

@@ -58,7 +58,7 @@ export function ModBrowserEventHandler() {
         incrementVerifyProgress();
       }
     } catch (e) {
-      console.error("mod://add-to-server error:", e);
+      toast.error("Failed to add mod to server", { description: String(e) });
     }
   });
 
@@ -77,7 +77,7 @@ export function ModBrowserEventHandler() {
       verifyFailsRef.current.push({ modId: data.modId, error: data.error });
       incrementVerifyProgress();
     } catch (e) {
-      console.error("mod://verify-fail error:", e);
+      toast.error("Mod verification error", { description: String(e) });
     }
   });
 
@@ -89,7 +89,7 @@ export function ModBrowserEventHandler() {
       verifySkipsRef.current.push(data.modId);
       incrementVerifyProgress();
     } catch (e) {
-      console.error("mod://verify-skip error:", e);
+      toast.error("Mod verification error", { description: String(e) });
     }
   });
 

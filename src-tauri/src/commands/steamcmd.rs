@@ -1,7 +1,8 @@
 use crate::events;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
-use super::utils::{build_steamcmd_cmd, copy_dir_recursive, emit_line, stream_process};
+use super::utils::{build_steamcmd_cmd, copy_dir_recursive, emit_line, stream_process, stream_process_abortable};
 
 /// ASA Dedicated Server Steam App ID.
 const ASA_SERVER_APP_ID: &str = "2430930";
@@ -118,12 +119,14 @@ struct SteamCheckResponse {
 
 /// Run SteamCMD `+force_install_dir {dir} +login anonymous +app_update {ASA_ID} +quit`
 /// with an optional `validate` flag. Retries once on non-zero exit (Windows self-update).
+/// Pass `abort = None` to run without cancellation support.
 pub async fn steamcmd_app_update(
     app: &tauri::AppHandle,
     steamcmd_path: &str,
     target_dir: &str,
     validate: bool,
     channel: &str,
+    abort: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(), String> {
     let validate_flag = if validate { "validate" } else { "" };
 
@@ -141,7 +144,11 @@ pub async fn steamcmd_app_update(
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let exit_code = stream_process(app, &mut child, channel).await?;
+    let exit_code = match &abort {
+        Some(flag) => stream_process_abortable(app, &mut child, channel, std::sync::Arc::clone(flag)).await?,
+        None       => stream_process(app, &mut child, channel).await?,
+    };
+
     if exit_code == 0 {
         return Ok(());
     }
@@ -153,7 +160,13 @@ pub async fn steamcmd_app_update(
     let mut child2 = build_steamcmd_cmd(steamcmd_path, &base_args)
         .spawn()
         .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
-    let exit_code2 = stream_process(app, &mut child2, channel).await?;
+    let exit_code2 = match &abort {
+        Some(flag) => {
+            if flag.load(Ordering::Relaxed) { return Err("Aborted".into()); }
+            stream_process_abortable(app, &mut child2, channel, std::sync::Arc::clone(flag)).await?
+        }
+        None => stream_process(app, &mut child2, channel).await?,
+    };
     if exit_code2 == 0 {
         Ok(())
     } else {
@@ -212,15 +225,38 @@ fn sync_shootergame(cache_sg: &Path, server_sg: &Path) -> std::io::Result<()> {
 /// Download and extract SteamCMD into `target_dir`.
 /// Emits progress to `steamcmd://output/setup`.
 /// Supports Windows (.zip) and Linux (.tar.gz).
+/// Abort key: "steamcmd_install" — call `abort_operation` with that key to cancel.
+/// On abort the target directory is cleaned up.
 #[tauri::command]
 pub async fn install_steamcmd(
     target_dir: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    let abort = state.register_abort("steamcmd_install");
     let channel = format!("{}/setup", events::STEAMCMD_OUTPUT);
     let dir = Path::new(&target_dir);
 
-    emit_line(&app_handle, &channel, "stdout", &format!("Creating directory: {}", dir.display()))?;
+    let result = install_steamcmd_inner(&app_handle, &channel, dir, &abort).await;
+
+    state.clear_abort("steamcmd_install");
+
+    if result.is_err() {
+        // Clean up on abort or error.
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+    result
+}
+
+async fn install_steamcmd_inner(
+    app_handle: &tauri::AppHandle,
+    channel: &str,
+    dir: &Path,
+    abort: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    emit_line(app_handle, channel, "stdout", &format!("Creating directory: {}", dir.display()))?;
     tokio::fs::create_dir_all(dir)
         .await
         .map_err(|e| format!("Failed to create target directory: {e}"))?;
@@ -236,38 +272,75 @@ pub async fn install_steamcmd(
         false,
     );
 
-    emit_line(&app_handle, &channel, "stdout", &format!("Downloading SteamCMD from {url}"))?;
+    emit_line(app_handle, channel, "stdout", &format!("Downloading SteamCMD from {url}"))?;
 
-    let response = reqwest::get(url)
+    let client = reqwest::Client::builder()
+        .user_agent("LokiASAM/0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut response = client
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("Download failed: {e}"))?;
 
     let total = response.content_length().unwrap_or(0);
-    let bytes = response
-        .bytes()
+    let tmp_path = dir.join("steamcmd_download.tmp");
+    let mut file = tokio::fs::File::create(&tmp_path)
         .await
-        .map_err(|e| format!("Failed to read download: {e}"))?;
+        .map_err(|e| format!("Failed to create temp file: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut last_pct: u64 = 0;
 
-    emit_line(
-        &app_handle,
-        &channel,
-        "stdout",
-        &format!("Downloaded {} / {} bytes. Extracting...", bytes.len(), total),
-    )?;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("Download chunk error: {e}"))? {
+        if abort.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err("Aborted".into());
+        }
+        file.write_all(&chunk).await.map_err(|e| format!("Write error: {e}"))?;
+        downloaded += chunk.len() as u64;
+        if total > 0 {
+            let pct = downloaded * 100 / total;
+            if pct / 10 > last_pct / 10 {
+                last_pct = pct;
+                emit_line(app_handle, channel, "stdout",
+                    &format!("  {}% ({:.0} / {:.0} KB)", pct, downloaded as f64 / 1024.0, total as f64 / 1024.0))?;
+            }
+        }
+    }
+    drop(file);
+
+    // Read back the temp file for extraction.
+    let bytes = tokio::fs::read(&tmp_path).await.map_err(|e| format!("Failed to read download: {e}"))?;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+    emit_line(app_handle, channel, "stdout", &format!("Downloaded {} bytes. Extracting...", bytes.len()))?;
 
     if is_zip {
         let cursor = std::io::Cursor::new(bytes);
         let mut archive = zip::ZipArchive::new(cursor)
             .map_err(|e| format!("Failed to open ZIP: {e}"))?;
-        archive
-            .extract(dir)
-            .map_err(|e| format!("Failed to extract ZIP: {e}"))?;
+        archive.extract(dir).map_err(|e| format!("Failed to extract ZIP: {e}"))?;
     } else {
-        let gz = flate2::read::GzDecoder::new(bytes.as_ref());
-        let mut archive = tar::Archive::new(gz);
-        archive
-            .unpack(dir)
-            .map_err(|e| format!("Failed to extract tar.gz: {e}"))?;
+        let dir_owned = dir.to_path_buf();
+        let abort_extract = std::sync::Arc::clone(abort);
+        tokio::task::spawn_blocking(move || {
+            use flate2::read::GzDecoder;
+            use tar::Archive;
+            let gz = GzDecoder::new(std::io::Cursor::new(bytes));
+            let mut archive = Archive::new(gz);
+            for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
+                if abort_extract.load(Ordering::Relaxed) {
+                    return Err("Aborted".into());
+                }
+                let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
+                entry.unpack_in(&dir_owned).map_err(|e| format!("Failed to extract entry: {e}"))?;
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| format!("Extraction task error: {e}"))??;
     }
 
     #[cfg(target_os = "windows")]
@@ -297,8 +370,8 @@ pub async fn install_steamcmd(
             .map_err(|e| e.to_string())?;
     }
 
-    emit_line(&app_handle, &channel, "stdout", "SteamCMD extracted successfully.")?;
-    emit_line(&app_handle, &channel, "stdout", &format!("Executable: {}", exe_path.display()))?;
+    emit_line(app_handle, channel, "stdout", "SteamCMD extracted successfully.")?;
+    emit_line(app_handle, channel, "stdout", &format!("Executable: {}", exe_path.display()))?;
     Ok(())
 }
 
@@ -306,23 +379,39 @@ pub async fn install_steamcmd(
 ///
 /// On Windows, SteamCMD self-updates on its very first run and exits with code 7.
 /// We detect this, log it, and automatically re-run once — the second run exits 0.
+/// Abort key: "steamcmd_install" (shared with install_steamcmd so Cancel works through both phases).
 #[tauri::command]
 pub async fn validate_steamcmd(
     path: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<bool, String> {
+    let abort = state.register_abort("steamcmd_install");
+    let result = validate_steamcmd_inner(&path, &app_handle, &abort).await;
+    state.clear_abort("steamcmd_install");
+    result
+}
+
+async fn validate_steamcmd_inner(
+    path: &str,
+    app_handle: &tauri::AppHandle,
+    abort: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<bool, String> {
     let channel = format!("{}/validate", events::STEAMCMD_OUTPUT);
-    emit_line(&app_handle, &channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
+    emit_line(app_handle, &channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
 
-    let mut child = build_steamcmd_cmd(&path, &["+quit"])
+    let mut child = build_steamcmd_cmd(path, &["+quit"])
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
+    let exit_code = stream_process_abortable(app_handle, &mut child, &channel, std::sync::Arc::clone(abort)).await?;
 
     if exit_code != 0 {
+        if abort.load(Ordering::Relaxed) {
+            return Err("Aborted".into());
+        }
         emit_line(
-            &app_handle,
+            app_handle,
             &channel,
             "stdout",
             &format!(
@@ -330,18 +419,18 @@ pub async fn validate_steamcmd(
             ),
         )?;
 
-        let mut child2 = build_steamcmd_cmd(&path, &["+quit"])
+        let mut child2 = build_steamcmd_cmd(path, &["+quit"])
             .spawn()
             .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
 
-        let exit_code2 = stream_process(&app_handle, &mut child2, &channel).await?;
+        let exit_code2 = stream_process_abortable(app_handle, &mut child2, &channel, std::sync::Arc::clone(abort)).await?;
 
         if exit_code2 == 0 {
-            emit_line(&app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
+            emit_line(app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
             return Ok(true);
         } else {
             emit_line(
-                &app_handle,
+                app_handle,
                 &channel,
                 "stderr",
                 &format!("SteamCMD exited with code {exit_code2} after retry. Validation failed."),
@@ -350,12 +439,14 @@ pub async fn validate_steamcmd(
         }
     }
 
-    emit_line(&app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
+    emit_line(app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
     Ok(true)
 }
 
 /// Install the ASA Dedicated Server using a shared cache directory to avoid
 /// re-downloading the ~15 GB game files for every new server.
+/// Abort key: "server_{server_id}" — call `abort_operation` to cancel.
+/// On abort the golden cache copy is preserved; only the individual server's install_path is cleaned.
 #[tauri::command]
 pub async fn install_server(
     server_id: String,
@@ -363,37 +454,49 @@ pub async fn install_server(
     cache_dir: String,
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    let op_key = format!("server_{server_id}");
+    let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
 
-    emit_line(&app_handle, &channel, "stdout",
-        &format!("Ensuring server cache at: {cache_dir}"))?;
-    tokio::fs::create_dir_all(&cache_dir).await
-        .map_err(|e| format!("Failed to create cache directory: {e}"))?;
+    let result = async {
+        emit_line(&app_handle, &channel, "stdout",
+            &format!("Ensuring server cache at: {cache_dir}"))?;
+        tokio::fs::create_dir_all(&cache_dir).await
+            .map_err(|e| format!("Failed to create cache directory: {e}"))?;
 
-    emit_line(&app_handle, &channel, "stdout",
-        "Updating server cache (SteamCMD will skip unchanged files)…")?;
-    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel).await?;
-    emit_line(&app_handle, &channel, "stdout", "Cache is up to date.")?;
+        emit_line(&app_handle, &channel, "stdout",
+            "Updating server cache (SteamCMD will skip unchanged files)…")?;
+        steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel,
+            Some(std::sync::Arc::clone(&abort))).await?;
+        emit_line(&app_handle, &channel, "stdout", "Cache is up to date.")?;
 
-    emit_line(&app_handle, &channel, "stdout",
-        &format!("Copying server files from cache to: {install_path}"))?;
-    tokio::fs::create_dir_all(&install_path).await
-        .map_err(|e| format!("Failed to create install directory: {e}"))?;
+        if abort.load(Ordering::Relaxed) { return Err("Aborted".into()); }
 
-    let src = std::path::PathBuf::from(&cache_dir);
-    let dst = std::path::PathBuf::from(&install_path);
+        emit_line(&app_handle, &channel, "stdout",
+            &format!("Copying server files from cache to: {install_path}"))?;
+        tokio::fs::create_dir_all(&install_path).await
+            .map_err(|e| format!("Failed to create install directory: {e}"))?;
 
-    tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst, &[]))
-        .await
-        .map_err(|e| format!("Copy task panicked: {e}"))?
-        .map_err(|e| format!("Failed to copy server files: {e}"))?;
+        let src = std::path::PathBuf::from(&cache_dir);
+        let dst = std::path::PathBuf::from(&install_path);
 
-    emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
-    Ok(())
+        tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst, &[]))
+            .await
+            .map_err(|e| format!("Copy task panicked: {e}"))?
+            .map_err(|e| format!("Failed to copy server files: {e}"))?;
+
+        emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
+        Ok(())
+    }.await;
+
+    state.clear_abort(&op_key);
+    result
 }
 
 /// Update an existing ASA server via the shared cache, preserving ShooterGame/Saved.
+/// Abort key: "server_{server_id}".
 #[tauri::command]
 pub async fn update_server(
     server_id: String,
@@ -401,28 +504,39 @@ pub async fn update_server(
     cache_dir: String,
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    let op_key = format!("server_{server_id}");
+    let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
 
-    emit_line(&app_handle, &channel, "stdout", "Checking for updates (cache)…")?;
-    tokio::fs::create_dir_all(&cache_dir).await
-        .map_err(|e| format!("Failed to ensure cache directory: {e}"))?;
-    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel).await?;
-    emit_line(&app_handle, &channel, "stdout", "Cache updated.")?;
+    let result = async {
+        emit_line(&app_handle, &channel, "stdout", "Checking for updates (cache)…")?;
+        tokio::fs::create_dir_all(&cache_dir).await
+            .map_err(|e| format!("Failed to ensure cache directory: {e}"))?;
+        steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel,
+            Some(std::sync::Arc::clone(&abort))).await?;
+        emit_line(&app_handle, &channel, "stdout", "Cache updated.")?;
 
-    emit_line(&app_handle, &channel, "stdout",
-        "Syncing updated files to server (preserving Saved/ data)…")?;
+        if abort.load(Ordering::Relaxed) { return Err("Aborted".into()); }
 
-    let cache_path = std::path::PathBuf::from(&cache_dir);
-    let server_path = std::path::PathBuf::from(&install_path);
+        emit_line(&app_handle, &channel, "stdout",
+            "Syncing updated files to server (preserving Saved/ data)…")?;
 
-    tokio::task::spawn_blocking(move || sync_cache_to_server(&cache_path, &server_path))
-        .await
-        .map_err(|e| format!("Sync task panicked: {e}"))?
-        .map_err(|e| format!("Failed to sync server files: {e}"))?;
+        let cache_path = std::path::PathBuf::from(&cache_dir);
+        let server_path = std::path::PathBuf::from(&install_path);
 
-    emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
-    Ok(())
+        tokio::task::spawn_blocking(move || sync_cache_to_server(&cache_path, &server_path))
+            .await
+            .map_err(|e| format!("Sync task panicked: {e}"))?
+            .map_err(|e| format!("Failed to sync server files: {e}"))?;
+
+        emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
+        Ok(())
+    }.await;
+
+    state.clear_abort(&op_key);
+    result
 }
 
 /// Validate and repair the server files in the shared cache, then re-copy to the server.
@@ -440,7 +554,7 @@ pub async fn validate_server_files(
     tokio::fs::create_dir_all(&cache_dir).await
         .map_err(|e| format!("Failed to ensure cache directory: {e}"))?;
 
-    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, true, &channel).await?;
+    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, true, &channel, None).await?;
     emit_line(&app_handle, &channel, "stdout", "Validation complete. Re-syncing to server…")?;
 
     let cache_path = std::path::PathBuf::from(&cache_dir);
@@ -526,7 +640,7 @@ pub async fn update_cache(
         .await
         .map_err(|e| format!("Failed to create cache directory: {e}"))?;
 
-    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel).await?;
+    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel, None).await?;
 
     let acf_path = Path::new(&cache_dir).join(ACF_REL_PATH);
     let build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());

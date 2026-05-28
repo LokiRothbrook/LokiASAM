@@ -640,12 +640,12 @@ export const NOTIFICATION_EVENTS = {
   UPDATE_AVAILABLE: "update_available",
   BACKUP_COMPLETED: "backup_completed",
   BACKUP_FAILED: "backup_failed",
-  PLAYER_JOINED: "player_joined",
-  PLAYER_LEFT: "player_left",
   SCHEDULED_RESTART: "scheduled_restart",
   RCON_FAILED: "rcon_failed",
   MOD_INSTALLED: "mod_installed",
   LOW_DISK_SPACE: "low_disk_space",
+  SERVER_INSTALL_COMPLETE: "server_install_complete",
+  SERVER_INSTALL_FAILED: "server_install_failed",
 } as const;
 
 export type NotificationEventType =
@@ -653,20 +653,20 @@ export type NotificationEventType =
 
 /** Human-readable labels for each notification event type. */
 export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = {
-  server_started: "Server Started",
-  server_stopped: "Server Stopped",
-  server_crashed: "Server Crashed",
+  server_started:     "Server Started",
+  server_stopped:     "Server Stopped",
+  server_crashed:     "Server Crashed",
   server_start_failed: "Server Failed to Start",
-  server_updated: "Server Updated",
-  update_available: "Update Available",
-  backup_completed: "Backup Completed",
-  backup_failed: "Backup Failed",
-  player_joined: "Player Joined",
-  player_left: "Player Left",
-  scheduled_restart: "Scheduled Restart",
-  rcon_failed: "RCON Connection Failed",
-  mod_installed: "Mod Installed",
-  low_disk_space: "Low Disk Space",
+  server_updated:     "Server Updated",
+  update_available:   "Update Available",
+  backup_completed:   "Backup Completed",
+  backup_failed:      "Backup Failed",
+  scheduled_restart:  "Scheduled Restart",
+  rcon_failed:        "RCON Connection Failed",
+  mod_installed:      "Mod Installed",
+  low_disk_space:     "Low Disk Space",
+  server_install_complete: "Server Install Complete",
+  server_install_failed:   "Server Install Failed",
 };
 
 // ---------------------------------------------------------------------------

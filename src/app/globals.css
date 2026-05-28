@@ -33,6 +33,15 @@
   --color-accent:             var(--accent);
   --color-accent-foreground:  var(--accent-foreground);
 
+  /* Primary — drives shadcn Switch checked state, focus rings, etc.
+     Overridden at runtime by applyThemeAccent() to match the chosen accent. */
+  --color-primary:            #bf00ff;
+  --color-primary-foreground: #050510;
+  --color-input:              rgba(191, 0, 255, 0.2);
+  --color-ring:               #bf00ff;
+  --color-muted:              rgba(10, 10, 30, 0.75);
+  --color-muted-foreground:   #5858a0;
+
   /* Fonts */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono), "JetBrains Mono", "Fira Code", monospace;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2,
@@ -77,6 +78,7 @@ function StatTile({
 }
 
 export function OverviewTab({ server }: Props) {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
 
@@ -91,6 +93,7 @@ export function OverviewTab({ server }: Props) {
 
   const isRunning = server.status === "running";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
+  const isStartFailed = server.status === "start-failed";
   const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
   // Force a re-render every 30 s so the uptime counter visually advances.
@@ -166,7 +169,7 @@ export function OverviewTab({ server }: Props) {
       await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
       const errMsg = typeof e === "string" ? e : String(e);
-      await updateServerStatus(server.id, "error", null);
+      await updateServerStatus(server.id, "start-failed", null);
       toast.error(`${server.name} failed to start — ${errMsg}`);
       await dispatchNotification({
         eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
@@ -189,7 +192,8 @@ export function OverviewTab({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       await tauriCmd.stopServer(server.id, true);
       await updateServerStatus(server.id, "stopped", null);
-    } catch {
+    } catch (err) {
+      toast.error(`Failed to stop ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -205,7 +209,8 @@ export function OverviewTab({ server }: Props) {
       const params = await buildStartParams();
       const pid = await tauriCmd.restartServer(params, true);
       await updateServerStatus(server.id, "running", pid);
-    } catch {
+    } catch (err) {
+      toast.error(`Failed to restart ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -233,14 +238,38 @@ export function OverviewTab({ server }: Props) {
     }
   };
 
+  const handleReinstall = async () => {
+    try {
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) return;
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+
+      await updateServerStatus(server.id, "installing", null);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      router.push("/");
+
+      tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath)
+        .then(() => updateServerStatus(server.id, "stopped", null))
+        .catch(() => updateServerStatus(server.id, "install_failed", null))
+        .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
+    } catch (err) {
+      toast.error(`Failed to start reinstall for ${server.name}`, { description: String(err) });
+    }
+  };
+
   const refreshPlayers = async () => {
     setPlayersLoading(true);
     try {
       await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
       const list = await tauriCmd.rconGetPlayers(server.id);
       setPlayers(list);
-    } catch {
+    } catch (err) {
       setPlayers([]);
+      toast.error("Failed to fetch player list via RCON", { description: String(err) });
     } finally {
       setPlayersLoading(false);
     }
@@ -256,25 +285,46 @@ export function OverviewTab({ server }: Props) {
         <span className="text-sm font-medium mr-2" style={{ color: "var(--text-muted)" }}>
           Actions
         </span>
-        {!isRunning ? (
+        {isStartFailed ? (
           <Button
             size="sm"
-            className="btn-neon-green"
-            onClick={handleStart}
-            disabled={actionPending || isTransitioning}
+            variant="outline"
+            onClick={handleReinstall}
+            className="gap-1.5"
+            style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
           >
-            <Play className="w-3.5 h-3.5 mr-1.5" />
-            Start
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reinstall
+          </Button>
+        ) : isRunning ? (
+          <Button
+            size="sm"
+            onClick={handleStop}
+            disabled={actionPending || isTransitioning}
+            className="gap-1.5"
+            style={{
+              background: "rgba(255,0,85,0.12)",
+              borderColor: "rgba(255,0,85,0.4)",
+              color: "var(--neon-red)",
+            }}
+          >
+            <Square className="w-3.5 h-3.5" />
+            Stop
           </Button>
         ) : (
           <Button
             size="sm"
-            className="btn-neon-red"
-            onClick={handleStop}
+            onClick={handleStart}
             disabled={actionPending || isTransitioning}
+            className="gap-1.5"
+            style={{
+              background: "rgba(0,255,136,0.12)",
+              borderColor: "rgba(0,255,136,0.4)",
+              color: "var(--neon-green)",
+            }}
           >
-            <Square className="w-3.5 h-3.5 mr-1.5" />
-            Stop
+            <Play className="w-3.5 h-3.5" />
+            {server.status === "starting" ? "Starting…" : "Start"}
           </Button>
         )}
         <Button

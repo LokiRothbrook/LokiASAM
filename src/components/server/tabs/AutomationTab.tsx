@@ -678,7 +678,9 @@ function NotificationConfigSection({ serverId }: NotificationConfigSectionProps)
     try {
       const rows = await getServerNotificationConfigs(serverId);
       setConfigs(rows);
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast.error("Failed to load notification configs", { description: String(err) });
+    }
   }, [serverId]);
 
   useEffect(() => {

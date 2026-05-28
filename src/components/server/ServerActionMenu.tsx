@@ -25,6 +25,7 @@ import { tauriCmd } from "@/lib/tauri-commands";
 import {
   deleteServerRecord,
   createServer,
+  updateServerStatus,
   getServerConfig,
   saveServerConfig,
   getServerMods,
@@ -139,7 +140,6 @@ function CloneDialog({
   const [port, setPort] = useState(server.port + 10);
   const [queryPort, setQueryPort] = useState(server.query_port + 10);
   const [rconPort, setRconPort] = useState(server.rcon_port + 10);
-  const [copyFiles, setCopyFiles] = useState(true);
   const [cloning, setCloning] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -150,6 +150,9 @@ function CloneDialog({
     setError("");
     setCloning(true);
 
+    let newId = "";
+    let newInstallPath = "";
+
     try {
       // Validate name uniqueness
       const taken = await isServerNameTaken(trimmedName);
@@ -158,8 +161,8 @@ function CloneDialog({
       const baseDir = await getAppSetting("base_dir");
       if (!baseDir) { setError("Base directory not configured."); return; }
       const sep = baseDir.includes("\\") ? "\\" : "/";
-      const newInstallPath = `${baseDir.replace(/[/\\]$/, "")}${sep}servers${sep}${trimmedName}`;
-      const newId = uuidv4();
+      newInstallPath = `${baseDir.replace(/[/\\]$/, "")}${sep}servers${sep}${trimmedName}`;
+      newId = uuidv4();
 
       // 1. Create DB record
       setStatus("Creating server record…");
@@ -212,10 +215,22 @@ function CloneDialog({
         });
       }
 
-      // 5. Copy game files (optional, slow step)
-      if (copyFiles) {
-        setStatus("Copying server files — this may take several minutes…");
+      // 5. Copy game files
+      setStatus("Copying server files — this may take several minutes…");
+      try {
         await tauriCmd.cloneServer(server.install_path, newInstallPath);
+      } catch (fileErr) {
+        const msg = String(fileErr);
+        if (msg.includes("Source path does not exist") || msg.includes("does not exist")) {
+          // Source server has no files — mark the clone as needing install.
+          // This is not an error; the user can reinstall from the server card.
+          await updateServerStatus(newId, "install_failed", null).catch(() => {});
+          queryClient.invalidateQueries({ queryKey: ["servers"] });
+          toast.success(`Server "${trimmedName}" cloned. Server files were not found — use Reinstall on the new server card.`);
+          onClose();
+          return;
+        }
+        throw fileErr;
       }
 
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -271,23 +286,6 @@ function CloneDialog({
               </div>
             ))}
           </div>
-
-          <label className="flex items-start gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={copyFiles}
-              onChange={(e) => setCopyFiles(e.target.checked)}
-              disabled={cloning}
-              className="w-4 h-4 mt-0.5"
-              style={{ accentColor: "var(--neon-purple)" }}
-            />
-            <span className="text-sm" style={{ color: "var(--text-primary)" }}>
-              Copy server files
-              <span className="block text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-                Copies the full installation (~20 GB). Uncheck to only copy settings — you&apos;ll need to reinstall the server.
-              </span>
-            </span>
-          </label>
 
           {cloning && status && (
             <p className="text-xs flex items-center gap-2" style={{ color: "var(--neon-purple)" }}>

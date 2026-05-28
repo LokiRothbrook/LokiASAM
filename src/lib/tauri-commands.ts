@@ -70,6 +70,13 @@ export interface ProtonEntry {
   version: string;
 }
 
+export interface ProtonUpdateInfo {
+  latestVersion: string;
+  currentVersion: string;
+  updateAvailable: boolean;
+  downloadUrl: string;
+}
+
 export interface ProcessStats {
   cpuPercent: number;
   memoryMb: number;
@@ -158,6 +165,12 @@ export interface DirCheckResult {
   writable: boolean;
   freeBytes: number;
   error: string | null;
+}
+
+export interface MigrateProgress {
+  phase: string;
+  message: string;
+  percent: number;
 }
 
 export interface ScheduleConfig {
@@ -389,13 +402,30 @@ export const tauriCmd = {
   checkFileExists: (path: string) => invoke<boolean>("check_file_exists", { path }),
   /** Recursively delete a directory. Idempotent — returns Ok if path doesn't exist. */
   deleteDirectory: (path: string) => invoke<void>("delete_directory", { path }),
+  /**
+   * Request cancellation of a running operation by key.
+   * Known keys: "steamcmd_install", "proton_download", "server_{serverId}".
+   */
+  abortOperation: (opId: string) => invoke<void>("abort_operation", { opId }),
+  /**
+   * Move the base directory from oldDir to newDir.
+   * Tries an atomic rename first; falls back to copy+delete for cross-volume moves.
+   * Streams progress to `base-dir://migrate-progress`.
+   * Returns the new DB path `{newDir}/lokiasam/lokiasam.db` on success.
+   */
+  moveBaseDir: (oldDir: string, newDir: string, createBackup: boolean) =>
+    invoke<string>("move_base_dir", { oldDir, newDir, createBackup }),
   getProcessStats:    (pid: number) => invoke<ProcessStats>("get_process_stats", { pid }),
   getPlatform:        () => invoke<string>("get_platform"),
   /** Tell the backend whether first-time setup is complete.
    *  Controls close-to-tray: if not done, the X button exits the process. */
   setSetupComplete:   (complete: boolean) => invoke<void>("set_setup_complete", { complete }),
+  /** Update the close-to-tray preference and show/hide the tray icon. */
+  setCloseToTray:     (enabled: boolean) => invoke<void>("set_close_to_tray", { enabled }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),
+  /** Exit the app immediately, bypassing close-to-tray logic. */
+  forceQuit: () => invoke<void>("force_quit"),
   /** Open a directory in the platform file manager (xdg-open / Explorer). */
   openFolder: (path: string) => invoke<void>("open_folder", { path }),
 
@@ -409,6 +439,9 @@ export const tauriCmd = {
    * extracted path. Streams progress to `proton://output/download`.
    */
   downloadProtonGe: (targetDir: string) => invoke<string>("download_proton_ge", { targetDir }),
+  /** Query GitHub for the latest GE-Proton release without downloading. */
+  checkProtonGeUpdate: (currentPath: string) =>
+    invoke<ProtonUpdateInfo>("check_proton_ge_update", { currentPath }),
 
   // Notifications
   sendDiscordNotification: (webhookUrl: string, payload: DiscordPayload) =>

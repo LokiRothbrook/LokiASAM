@@ -763,6 +763,8 @@ export interface LogNotificationInput {
   title: string;
   body: string;
   severity: "info" | "success" | "warning" | "error";
+  /** 0 = unread (shows in bell), 1 = pre-read (archived silently). Default 0. */
+  read?: 0 | 1;
 }
 
 /** Insert a new notification into the in_app_notifications log. */
@@ -770,14 +772,15 @@ export async function logNotification(input: LogNotificationInput): Promise<void
   const db = await getDb();
   await db.execute(
     `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read)
-     VALUES (?, ?, ?, ?, ?, ?, 0)`,
-    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity]
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity, input.read ?? 0]
   );
 }
 
 export interface GetNotificationsFilter {
   serverId?: string | null;
   unreadOnly?: boolean;
+  eventType?: string;
   limit?: number;
   offset?: number;
 }
@@ -800,6 +803,10 @@ export async function getNotifications(
   }
   if (filter.unreadOnly) {
     conditions.push("read = 0");
+  }
+  if (filter.eventType) {
+    conditions.push("event_type = ?");
+    params.push(filter.eventType);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -834,6 +841,12 @@ export async function markAllNotificationsRead(): Promise<void> {
   await db.execute("UPDATE in_app_notifications SET read = 1 WHERE read = 0");
 }
 
+/** Delete a single notification by id. */
+export async function deleteNotification(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM in_app_notifications WHERE id = ?", [id]);
+}
+
 /** Delete notifications older than `days` days. */
 export async function pruneOldNotifications(days: number): Promise<void> {
   const db = await getDb();
@@ -842,6 +855,40 @@ export async function pruneOldNotifications(days: number): Promise<void> {
      WHERE created_at < datetime('now', '-' || ? || ' days')`,
     [days]
   );
+}
+
+export interface PruneNotificationsFilter {
+  /** Max age in days. Omit (or 0) to delete regardless of age. */
+  days?: number;
+  /** If set, only delete rows matching this severity. */
+  severity?: string;
+  /** If set, only delete rows matching this event_type. */
+  eventType?: string;
+}
+
+/** Bulk-delete notifications with optional age + severity + event type filters. */
+export async function pruneNotificationsWithFilter(
+  filter: PruneNotificationsFilter
+): Promise<void> {
+  const db = await getDb();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filter.days && filter.days > 0) {
+    conditions.push(`created_at < datetime('now', '-' || ? || ' days')`);
+    params.push(filter.days);
+  }
+  if (filter.severity) {
+    conditions.push("severity = ?");
+    params.push(filter.severity);
+  }
+  if (filter.eventType) {
+    conditions.push("event_type = ?");
+    params.push(filter.eventType);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  await db.execute(`DELETE FROM in_app_notifications ${where}`, params);
 }
 
 // ---------------------------------------------------------------------------
@@ -896,20 +943,29 @@ export async function getServerNotificationConfigs(
   );
 }
 
-/** Upsert a notification config (insert or replace on server_id+channel conflict). */
+/** Upsert a notification config (insert or update on id conflict).
+ *  Pre-looks up by (server_id, channel) to reuse the stable row id,
+ *  avoiding the UNIQUE constraint error that occurs when ON CONFLICT targets
+ *  the wrong column (SQLite checks PRIMARY KEY before composite constraints). */
 export async function saveNotificationConfig(
   input: SaveNotificationConfigInput
 ): Promise<void> {
   const db = await getDb();
+  // Find the existing row's id (if any) to reuse it, preventing a PK conflict.
+  const existing = await db.select<{ id: string }[]>(
+    "SELECT id FROM notification_configs WHERE server_id IS ? AND channel = ?",
+    [input.serverId ?? null, input.channel]
+  );
+  const id = existing[0]?.id ?? input.id;
   await db.execute(
     `INSERT INTO notification_configs (id, server_id, channel, enabled, config_json, events_json)
      VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(server_id, channel) DO UPDATE SET
+     ON CONFLICT(id) DO UPDATE SET
        enabled     = excluded.enabled,
        config_json = excluded.config_json,
        events_json = excluded.events_json`,
     [
-      input.id,
+      id,
       input.serverId ?? null,
       input.channel,
       input.enabled ? 1 : 0,
@@ -923,4 +979,35 @@ export async function saveNotificationConfig(
 export async function deleteNotificationConfig(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM notification_configs WHERE id = ?", [id]);
+}
+
+/** Get a single global (server_id IS NULL) notification config by channel. */
+export async function getGlobalChannelConfig(
+  channel: string
+): Promise<NotificationConfigRow | null> {
+  const db = await getDb();
+  const rows = await db.select<NotificationConfigRow[]>(
+    "SELECT * FROM notification_configs WHERE server_id IS NULL AND channel = ? LIMIT 1",
+    [channel]
+  );
+  return rows[0] ?? null;
+}
+
+/** Upsert just the events_json for a global channel config. Creates the row if missing.
+ *  Bell and desktop channels are enabled by default (no credential setup required).
+ *  Discord and email preserve their existing enabled state (set by the credential card). */
+export async function saveGlobalChannelEvents(
+  channel: string,
+  events: string[]
+): Promise<void> {
+  const existing = await getGlobalChannelConfig(channel);
+  const defaultEnabled = channel === "bell" || channel === "desktop";
+  await saveNotificationConfig({
+    id: existing?.id ?? crypto.randomUUID(),
+    serverId: null,
+    channel,
+    enabled: existing != null ? existing.enabled === 1 : defaultEnabled,
+    configJson: existing?.config_json ?? "{}",
+    eventsJson: JSON.stringify(events),
+  });
 }
