@@ -763,6 +763,8 @@ export interface LogNotificationInput {
   title: string;
   body: string;
   severity: "info" | "success" | "warning" | "error";
+  /** 0 = unread (shows in bell), 1 = pre-read (archived silently). Default 0. */
+  read?: 0 | 1;
 }
 
 /** Insert a new notification into the in_app_notifications log. */
@@ -770,8 +772,8 @@ export async function logNotification(input: LogNotificationInput): Promise<void
   const db = await getDb();
   await db.execute(
     `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read)
-     VALUES (?, ?, ?, ?, ?, ?, 0)`,
-    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity]
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity, input.read ?? 0]
   );
 }
 
@@ -991,17 +993,20 @@ export async function getGlobalChannelConfig(
   return rows[0] ?? null;
 }
 
-/** Upsert just the events_json for a global channel config. Creates the row if missing. */
+/** Upsert just the events_json for a global channel config. Creates the row if missing.
+ *  Bell and desktop channels are enabled by default (no credential setup required).
+ *  Discord and email preserve their existing enabled state (set by the credential card). */
 export async function saveGlobalChannelEvents(
   channel: string,
   events: string[]
 ): Promise<void> {
   const existing = await getGlobalChannelConfig(channel);
+  const defaultEnabled = channel === "bell" || channel === "desktop";
   await saveNotificationConfig({
     id: existing?.id ?? crypto.randomUUID(),
     serverId: null,
     channel,
-    enabled: existing?.enabled === 1,
+    enabled: existing != null ? existing.enabled === 1 : defaultEnabled,
     configJson: existing?.config_json ?? "{}",
     eventsJson: JSON.stringify(events),
   });
