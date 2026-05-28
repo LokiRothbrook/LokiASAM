@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use tauri::Emitter;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -75,6 +76,62 @@ pub async fn stream_process(
     let _ = tokio::join!(stdout_task, stderr_task);
     let status = child.wait().await.map_err(|e| e.to_string())?;
     Ok(status.code().unwrap_or(-1))
+}
+
+/// Like `stream_process` but kills the child and returns an "Aborted" error if
+/// `abort` is set to true before the process exits.
+pub async fn stream_process_abortable(
+    app: &tauri::AppHandle,
+    child: &mut tokio::process::Child,
+    channel: &str,
+    abort: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<i32, String> {
+    use tokio::io::AsyncBufReadExt;
+    use std::sync::atomic::Ordering;
+
+    let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
+    let stderr = child.stderr.take().ok_or("failed to capture stderr")?;
+
+    let mut out_lines = BufReader::new(stdout).lines();
+    let mut err_lines = BufReader::new(stderr).lines();
+
+    let app_out = app.clone();
+    let ch_out = channel.to_string();
+    let stdout_task = tauri::async_runtime::spawn(async move {
+        while let Ok(Some(l)) = out_lines.next_line().await {
+            let _ = emit_line(&app_out, &ch_out, "stdout", &l);
+        }
+    });
+
+    let app_err = app.clone();
+    let ch_err = channel.to_string();
+    let stderr_task = tauri::async_runtime::spawn(async move {
+        while let Ok(Some(l)) = err_lines.next_line().await {
+            let _ = emit_line(&app_err, &ch_err, "stderr", &l);
+        }
+    });
+
+    loop {
+        if abort.load(Ordering::Relaxed) {
+            stdout_task.abort();
+            stderr_task.abort();
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err("Aborted".into());
+        }
+        // Poll for exit with a short sleep so we don't busy-wait.
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            child.wait(),
+        ).await {
+            Ok(Ok(status)) => {
+                let _ = tokio::join!(stdout_task, stderr_task);
+                return Ok(status.code().unwrap_or(-1));
+            }
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => { /* still running, loop */ }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

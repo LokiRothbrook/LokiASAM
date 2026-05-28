@@ -896,20 +896,29 @@ export async function getServerNotificationConfigs(
   );
 }
 
-/** Upsert a notification config (insert or replace on server_id+channel conflict). */
+/** Upsert a notification config (insert or update on id conflict).
+ *  Pre-looks up by (server_id, channel) to reuse the stable row id,
+ *  avoiding the UNIQUE constraint error that occurs when ON CONFLICT targets
+ *  the wrong column (SQLite checks PRIMARY KEY before composite constraints). */
 export async function saveNotificationConfig(
   input: SaveNotificationConfigInput
 ): Promise<void> {
   const db = await getDb();
+  // Find the existing row's id (if any) to reuse it, preventing a PK conflict.
+  const existing = await db.select<{ id: string }[]>(
+    "SELECT id FROM notification_configs WHERE server_id IS ? AND channel = ?",
+    [input.serverId ?? null, input.channel]
+  );
+  const id = existing[0]?.id ?? input.id;
   await db.execute(
     `INSERT INTO notification_configs (id, server_id, channel, enabled, config_json, events_json)
      VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(server_id, channel) DO UPDATE SET
+     ON CONFLICT(id) DO UPDATE SET
        enabled     = excluded.enabled,
        config_json = excluded.config_json,
        events_json = excluded.events_json`,
     [
-      input.id,
+      id,
       input.serverId ?? null,
       input.channel,
       input.enabled ? 1 : 0,

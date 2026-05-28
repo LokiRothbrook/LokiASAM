@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use super::utils::collect_subtree;
 
@@ -315,6 +315,20 @@ pub async fn delete_directory(path: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to delete directory: {e}"))
 }
 
+/// Request cancellation of a long-running operation registered under `op_id`.
+/// Known keys: "steamcmd_install", "proton_download", "server_{id}".
+/// Silently does nothing if no operation with that id is currently running.
+#[tauri::command]
+pub fn abort_operation(
+    state: tauri::State<'_, crate::state::AppState>,
+    op_id: String,
+) {
+    use std::sync::atomic::Ordering;
+    if let Some(flag) = state.abort_flags.lock().unwrap().get(&op_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Tell the backend whether first-time setup has been completed.
 /// Controls close-to-tray: if setup is not done, the X button exits the process normally.
 #[tauri::command]
@@ -384,6 +398,223 @@ pub async fn open_folder(path: String) -> Result<(), String> {
         .map_err(|e| format!("open failed: {e}"))?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Base directory migration
+// ---------------------------------------------------------------------------
+
+/// Progress event emitted during base directory migration.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateProgress {
+    pub phase:   String,  // "checking" | "backup" | "moving" | "finalizing" | "done" | "error"
+    pub message: String,
+    pub percent: u8,      // 0–100
+}
+
+fn emit_migrate(app: &tauri::AppHandle, phase: &str, message: &str, percent: u8) {
+    let _ = app.emit(
+        "base-dir://migrate-progress",
+        MigrateProgress {
+            phase:   phase.into(),
+            message: message.into(),
+            percent,
+        },
+    );
+}
+
+/// Count files under `dir` recursively (best-effort; used for progress reporting).
+fn count_files(dir: &std::path::Path) -> u64 {
+    let mut count = 0u64;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() { count += count_files(&p); }
+            else { count += 1; }
+        }
+    }
+    count
+}
+
+/// Copy `src` to `dst` recursively, emitting progress events every 500 files.
+fn copy_dir_recursive(
+    app: &tauri::AppHandle,
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    done: &mut u64,
+    total: u64,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create {}: {e}", dst.display()))?;
+    let rd = std::fs::read_dir(src)
+        .map_err(|e| format!("Failed to read {}: {e}", src.display()))?;
+    for entry in rd.flatten() {
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(app, &src_path, &dst_path, done, total)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)
+                .map_err(|e| format!("Failed to copy {}: {e}", src_path.display()))?;
+            *done += 1;
+            if total > 0 && *done % 500 == 0 {
+                let pct = (20 + (*done * 60 / total).min(60)) as u8;
+                emit_migrate(app, "moving",
+                    &format!("Copied {} / {} files…", done, total), pct);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Move the LokiASAM base directory from `old_dir` to `new_dir`.
+///
+/// Steps:
+/// 1. Space check.
+/// 2. Optional backup of `{old_dir}/lokiasam/` to `{old_dir}/lokiasam.bak_<ts>/`.
+/// 3. Try an atomic rename first (same volume). If EXDEV, fall back to copy + delete.
+/// 4. Update bootstrap.json to point to `new_dir`.
+/// 5. Emit progress events throughout via the `base-dir://migrate-progress` channel.
+///
+/// Returns the new DB path `{new_dir}/lokiasam/lokiasam.db` on success.
+#[tauri::command]
+pub async fn move_base_dir(
+    app: tauri::AppHandle,
+    old_dir: String,
+    new_dir: String,
+    create_backup: bool,
+) -> Result<String, String> {
+    use std::path::PathBuf;
+
+    let old = PathBuf::from(&old_dir);
+    let new = PathBuf::from(&new_dir);
+
+    // --- Phase 1: pre-flight checks ----------------------------------------
+    emit_migrate(&app, "checking", "Checking paths and available space…", 0);
+
+    if !old.exists() {
+        return Err(format!("Source directory does not exist: {old_dir}"));
+    }
+    if new.exists() && new.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+        return Err(format!("Destination already exists and is not empty: {new_dir}"));
+    }
+    if old == new {
+        return Err("Source and destination are the same directory.".into());
+    }
+
+    // Make sure new is not inside old (would cause infinite recursion).
+    if new.starts_with(&old) {
+        return Err("Destination is inside the source directory.".into());
+    }
+
+    // Space check on the destination volume.
+    {
+        let check_against = new.parent().unwrap_or(&new).to_path_buf();
+        let _ = tokio::fs::create_dir_all(&check_against).await;
+        let free_bytes = {
+            use sysinfo::Disks;
+            let disks = Disks::new_with_refreshed_list();
+            disks.iter()
+                .filter(|d| check_against.starts_with(d.mount_point()))
+                .max_by_key(|d| d.mount_point().components().count())
+                .map(|d| d.available_space())
+                .unwrap_or(0)
+        };
+        // Estimate source size by sampling (du-equivalent).
+        let src_size_est: u64 = {
+            let mut total = 0u64;
+            if let Ok(rd) = std::fs::read_dir(&old) {
+                for entry in rd.flatten() {
+                    if let Ok(meta) = entry.metadata() {
+                        total += meta.len();
+                    }
+                }
+            }
+            total * 10 // rough multiplier for subdirs
+        };
+        if free_bytes > 0 && free_bytes < src_size_est {
+            return Err(format!(
+                "Insufficient disk space at destination. Available: {:.1} GB",
+                free_bytes as f64 / 1_073_741_824.0
+            ));
+        }
+    }
+
+    emit_migrate(&app, "checking", "Space check passed.", 5);
+
+    // --- Phase 2: optional backup -------------------------------------------
+    if create_backup {
+        emit_migrate(&app, "backup", "Creating backup of lokiasam config/DB…", 8);
+        let lokiasam_src = old.join("lokiasam");
+        if lokiasam_src.exists() {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let bak_dir = old.join(format!("lokiasam.bak_{ts}"));
+            let mut done = 0u64;
+            let total = count_files(&lokiasam_src);
+            tokio::task::block_in_place(|| {
+                copy_dir_recursive(&app, &lokiasam_src, &bak_dir, &mut done, total)
+            })?;
+        }
+        emit_migrate(&app, "backup", "Backup complete.", 18);
+    }
+
+    // --- Phase 3: move -------------------------------------------------------
+    emit_migrate(&app, "moving", "Moving base directory…", 20);
+
+    if let Some(parent) = new.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create destination parent: {e}"))?;
+    }
+
+    // Try atomic rename first. Falls back to copy+delete on EXDEV.
+    let rename_result = tokio::fs::rename(&old, &new).await;
+
+    match rename_result {
+        Ok(_) => {
+            emit_migrate(&app, "moving", "Atomic rename succeeded.", 80);
+        }
+        Err(e) if e.raw_os_error() == Some(18) /* EXDEV */ || e.to_string().contains("cross-device") => {
+            emit_migrate(&app, "moving", "Cross-volume move: copying files…", 20);
+            let total = count_files(&old);
+            let mut done = 0u64;
+            let old_clone = old.clone();
+            let new_clone = new.clone();
+            let app_clone = app.clone();
+            tokio::task::block_in_place(|| {
+                copy_dir_recursive(&app_clone, &old_clone, &new_clone, &mut done, total)
+            })?;
+            emit_migrate(&app, "moving", "Copy complete. Removing old directory…", 85);
+            tokio::fs::remove_dir_all(&old)
+                .await
+                .map_err(|e| format!("Failed to remove old directory after copy: {e}"))?;
+        }
+        Err(e) => return Err(format!("Failed to move directory: {e}")),
+    }
+
+    // --- Phase 4: update bootstrap -------------------------------------------
+    emit_migrate(&app, "finalizing", "Updating configuration…", 90);
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to get config dir: {e}"))?;
+    let bootstrap = Bootstrap { base_dir: new_dir.clone() };
+    let text = serde_json::to_string(&bootstrap)
+        .map_err(|e| format!("Failed to serialize bootstrap: {e}"))?;
+    tokio::fs::write(config_dir.join("bootstrap.json"), text)
+        .await
+        .map_err(|e| format!("Failed to write bootstrap: {e}"))?;
+
+    let new_db_path = new.join("lokiasam").join("lokiasam.db")
+        .to_string_lossy()
+        .into_owned();
+
+    emit_migrate(&app, "done", "Migration complete. Restart the app to finish.", 100);
+    Ok(new_db_path)
 }
 
 /// Check whether a given TCP port is available (not currently bound) on localhost.

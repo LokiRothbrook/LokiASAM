@@ -316,6 +316,8 @@ pub fn run() {
             commands::system::check_dir,
             commands::system::check_file_exists,
             commands::system::delete_directory,
+            commands::system::move_base_dir,
+            commands::system::abort_operation,
             commands::system::get_process_stats,
             commands::system::get_platform,
             commands::system::set_setup_complete,
@@ -329,6 +331,7 @@ pub fn run() {
             commands::proton::scan_for_proton,
             commands::proton::validate_proton_path,
             commands::proton::download_proton_ge,
+            commands::proton::check_proton_ge_update,
             // Notifications (Phase 8)
             commands::notifications::send_discord_notification,
             commands::notifications::send_email_notification,

@@ -1,71 +1,132 @@
 /**
- * theme.ts — accent color switching via CSS custom property overrides.
- *
- * The app defaults to purple as the primary accent. Calling applyThemeAccent()
- * remaps --neon-purple (and its related glow/border variables) to the chosen
- * color so every component picks it up automatically.
+ * theme.ts — accent color + theme preset switching via CSS custom property overrides.
  */
 
-export type ThemeAccent = "purple" | "cyan" | "green";
+export type ThemeAccent =
+  | "purple" | "cyan" | "green" | "pink"
+  | "orange" | "red"  | "blue"  | "teal" | "yellow";
+
+export type ThemePreset = "neon" | "abyss" | "toxic" | "storm";
 
 interface AccentTokens {
-  neonPurple:  string;
-  border:      string;
-  borderHover: string;
-  glassBorder: string;
-  glowPurple:  string;
-  accent:      string;
-  scrollThumb: string;
-  scrollHover: string;
+  hex:         string;
+  r: number; g: number; b: number;
 }
 
+export const ACCENT_OPTIONS: { value: ThemeAccent; label: string }[] = [
+  { value: "purple", label: "Purple"  },
+  { value: "cyan",   label: "Cyan"    },
+  { value: "green",  label: "Green"   },
+  { value: "pink",   label: "Pink"    },
+  { value: "orange", label: "Orange"  },
+  { value: "red",    label: "Red"     },
+  { value: "blue",   label: "Blue"    },
+  { value: "teal",   label: "Teal"    },
+  { value: "yellow", label: "Yellow"  },
+];
+
 const ACCENT_TOKENS: Record<ThemeAccent, AccentTokens> = {
-  purple: {
-    neonPurple:  "#bf00ff",
-    border:      "rgba(191,0,255,0.15)",
-    borderHover: "rgba(191,0,255,0.4)",
-    glassBorder: "rgba(191,0,255,0.12)",
-    glowPurple:  "0 0 8px rgba(191,0,255,0.6), 0 0 24px rgba(191,0,255,0.2)",
-    accent:      "rgba(191,0,255,0.15)",
-    scrollThumb: "rgba(191,0,255,0.2)",
-    scrollHover: "rgba(191,0,255,0.4)",
+  purple: { hex: "#bf00ff", r: 191, g:   0, b: 255 },
+  cyan:   { hex: "#00ffff", r:   0, g: 255, b: 255 },
+  green:  { hex: "#00ff88", r:   0, g: 255, b: 136 },
+  pink:   { hex: "#ff0080", r: 255, g:   0, b: 128 },
+  orange: { hex: "#ff8800", r: 255, g: 136, b:   0 },
+  red:    { hex: "#ff0055", r: 255, g:   0, b:  85 },
+  blue:   { hex: "#4080ff", r:  64, g: 128, b: 255 },
+  teal:   { hex: "#00ffc8", r:   0, g: 255, b: 200 },
+  yellow: { hex: "#ffdc00", r: 255, g: 220, b:   0 },
+};
+
+interface PresetTokens {
+  label:       string;
+  background:  string;
+  surface:     string;
+  surfaceEl:   string;
+  glassBg:     string;
+  textMuted:   string;
+  textSubtle:  string;
+  defaultAccent: ThemeAccent;
+}
+
+export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
+  neon: {
+    label:        "Neon",
+    background:   "#050510",
+    surface:      "rgba(10, 10, 30, 0.75)",
+    surfaceEl:    "rgba(15, 15, 40, 0.9)",
+    glassBg:      "rgba(10, 10, 35, 0.6)",
+    textMuted:    "#5858a0",
+    textSubtle:   "#3a3a70",
+    defaultAccent: "purple",
   },
-  cyan: {
-    neonPurple:  "#00ffff",
-    border:      "rgba(0,255,255,0.15)",
-    borderHover: "rgba(0,255,255,0.4)",
-    glassBorder: "rgba(0,255,255,0.12)",
-    glowPurple:  "0 0 8px rgba(0,255,255,0.6), 0 0 24px rgba(0,255,255,0.2)",
-    accent:      "rgba(0,255,255,0.15)",
-    scrollThumb: "rgba(0,255,255,0.2)",
-    scrollHover: "rgba(0,255,255,0.4)",
+  abyss: {
+    label:        "Abyss",
+    background:   "#050814",
+    surface:      "rgba(5, 12, 25, 0.75)",
+    surfaceEl:    "rgba(8, 16, 35, 0.9)",
+    glassBg:      "rgba(5, 12, 30, 0.6)",
+    textMuted:    "#384060",
+    textSubtle:   "#263040",
+    defaultAccent: "blue",
   },
-  green: {
-    neonPurple:  "#00ff88",
-    border:      "rgba(0,255,136,0.15)",
-    borderHover: "rgba(0,255,136,0.4)",
-    glassBorder: "rgba(0,255,136,0.12)",
-    glowPurple:  "0 0 8px rgba(0,255,136,0.6), 0 0 24px rgba(0,255,136,0.2)",
-    accent:      "rgba(0,255,136,0.15)",
-    scrollThumb: "rgba(0,255,136,0.2)",
-    scrollHover: "rgba(0,255,136,0.4)",
+  toxic: {
+    label:        "Toxic",
+    background:   "#060d06",
+    surface:      "rgba(8, 18, 8, 0.75)",
+    surfaceEl:    "rgba(10, 24, 10, 0.9)",
+    glassBg:      "rgba(8, 18, 8, 0.6)",
+    textMuted:    "#3a5040",
+    textSubtle:   "#283530",
+    defaultAccent: "green",
+  },
+  storm: {
+    label:        "Storm",
+    background:   "#0e1018",
+    surface:      "rgba(18, 22, 35, 0.8)",
+    surfaceEl:    "rgba(24, 28, 44, 0.9)",
+    glassBg:      "rgba(18, 22, 38, 0.65)",
+    textMuted:    "#606880",
+    textSubtle:   "#464e64",
+    defaultAccent: "cyan",
   },
 };
 
 /** Apply (or reset) the accent color by overriding CSS custom properties on :root. */
 export function applyThemeAccent(accent: string): void {
   if (typeof document === "undefined") return;
-
-  const tokens = ACCENT_TOKENS[(accent as ThemeAccent)] ?? ACCENT_TOKENS.purple;
+  const t = ACCENT_TOKENS[(accent as ThemeAccent)] ?? ACCENT_TOKENS.purple;
+  const { r, g, b, hex } = t;
   const root = document.documentElement;
 
-  root.style.setProperty("--neon-purple",  tokens.neonPurple);
-  root.style.setProperty("--border",       tokens.border);
-  root.style.setProperty("--border-hover", tokens.borderHover);
-  root.style.setProperty("--glass-border", tokens.glassBorder);
-  root.style.setProperty("--glow-purple",  tokens.glowPurple);
-  root.style.setProperty("--accent",       tokens.accent);
-
-  // Store on the element so Settings page can read it without hitting the DB.
+  root.style.setProperty("--neon-purple",   hex);
+  root.style.setProperty("--border",        `rgba(${r},${g},${b},0.15)`);
+  root.style.setProperty("--border-hover",  `rgba(${r},${g},${b},0.4)`);
+  root.style.setProperty("--glass-border",  `rgba(${r},${g},${b},0.12)`);
+  root.style.setProperty("--glow-purple",   `0 0 8px rgba(${r},${g},${b},0.6), 0 0 24px rgba(${r},${g},${b},0.2)`);
+  root.style.setProperty("--accent",        `rgba(${r},${g},${b},0.15)`);
+  // Drive shadcn Switch checked state + focus rings
+  root.style.setProperty("--color-primary", hex);
+  root.style.setProperty("--color-ring",    hex);
+  root.style.setProperty("--color-input",   `rgba(${r},${g},${b},0.2)`);
   root.dataset.accent = accent;
+}
+
+/** Apply a theme preset (background/surface palette). Does NOT change the accent color. */
+export function applyThemePreset(preset: string): void {
+  if (typeof document === "undefined") return;
+  const p = THEME_PRESETS[(preset as ThemePreset)] ?? THEME_PRESETS.neon;
+  const root = document.documentElement;
+  root.style.setProperty("--background",        p.background);
+  root.style.setProperty("--surface",           p.surface);
+  root.style.setProperty("--surface-elevated",  p.surfaceEl);
+  root.style.setProperty("--glass-bg",          p.glassBg);
+  root.style.setProperty("--text-muted",        p.textMuted);
+  root.style.setProperty("--text-subtle",       p.textSubtle);
+  root.dataset.preset = preset;
+}
+
+/** Apply both preset and accent together. */
+export function applyTheme(preset: string, accent: string): void {
+  applyThemePreset(preset);
+  applyThemeAccent(accent);
 }

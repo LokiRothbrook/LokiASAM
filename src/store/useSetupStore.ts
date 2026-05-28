@@ -60,6 +60,11 @@ interface SetupState {
   // Tray step
   closeToTray: boolean;
 
+  // Auto-update step
+  asaAutoUpdateEnabled: boolean;
+  appAutoUpdateEnabled: boolean;
+  protonAutoCheckEnabled: boolean;
+
   // Internal: whether a long-running operation is in progress
   isLoading: boolean;
   loadingMessage: string;
@@ -95,6 +100,9 @@ interface SetupState {
   setNotifyServerStop: (v: boolean) => void;
   setNotifyUpdateAvailable: (v: boolean) => void;
   setCloseToTray: (v: boolean) => void;
+  setAsaAutoUpdateEnabled: (v: boolean) => void;
+  setAppAutoUpdateEnabled: (v: boolean) => void;
+  setProtonAutoCheckEnabled: (v: boolean) => void;
   setLoading: (loading: boolean, message?: string) => void;
   reset: () => void;
 }
@@ -128,6 +136,9 @@ const initialState = {
   notifyServerStop: false,
   notifyUpdateAvailable: true,
   closeToTray: true,
+  asaAutoUpdateEnabled: true,
+  appAutoUpdateEnabled: true,
+  protonAutoCheckEnabled: true,
   isLoading: false,
   loadingMessage: "",
 };
@@ -165,6 +176,9 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setNotifyServerStop: (notifyServerStop) => set({ notifyServerStop }),
   setNotifyUpdateAvailable: (notifyUpdateAvailable) => set({ notifyUpdateAvailable }),
   setCloseToTray: (closeToTray) => set({ closeToTray }),
+  setAsaAutoUpdateEnabled: (asaAutoUpdateEnabled) => set({ asaAutoUpdateEnabled }),
+  setAppAutoUpdateEnabled: (appAutoUpdateEnabled) => set({ appAutoUpdateEnabled }),
+  setProtonAutoCheckEnabled: (protonAutoCheckEnabled) => set({ protonAutoCheckEnabled }),
   setLoading: (isLoading, message = "") =>
     set({ isLoading, loadingMessage: message }),
   reset: () => set(initialState),

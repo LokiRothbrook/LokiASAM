@@ -23,13 +23,15 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
-  MonitorDown, Bell as BellIcon, BellOff, ToggleLeft, ToggleRight, Layers,
+  MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
+import { Switch } from "@/components/ui/switch";
 import { useSetupStore } from "@/store/useSetupStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { setAppSetting, initDb } from "@/lib/db";
@@ -51,6 +53,7 @@ const STEPS_WIN = [
   { label: "SteamCMD",      icon: Terminal },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
+  { label: "Updates",       icon: RefreshCw },
   { label: "Complete",      icon: CheckCircle2 },
 ];
 
@@ -62,6 +65,7 @@ const STEPS_LINUX = [
   { label: "Proton-GE",     icon: Cpu },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
+  { label: "Updates",       icon: RefreshCw },
   { label: "Complete",      icon: CheckCircle2 },
 ];
 
@@ -176,10 +180,171 @@ function WelcomeStep() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ImportVerifyPanel — shown after the import DB check passes
+// Shows missing tool inline install options.
+// ---------------------------------------------------------------------------
+
+function ImportVerifyPanel({
+  info,
+  importDir,
+}: {
+  info: { servers: number; steamcmd: string; proton?: string; steamcmdMissing?: boolean; protonMissing?: boolean };
+  importDir: string;
+}) {
+  const { setSteamcmdPath, setSteamcmdValidated, setProtonPath, setProtonValidated } = useSetupStore();
+  const [installingSteamcmd, setInstallingSteamcmd] = useState(false);
+  const [steamcmdDone, setSteamcmdDone]             = useState(false);
+  const [installingProton, setInstallingProton]     = useState(false);
+  const [protonDone, setProtonDone]                 = useState(false);
+
+  const handleInstallSteamcmd = async () => {
+    const sep = importDir.includes("\\") ? "\\" : "/";
+    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "steamcmd";
+    setInstallingSteamcmd(true);
+    try {
+      await tauriCmd.installSteamcmd(targetDir);
+      const exePath = targetDir + (navigator.userAgent.includes("Windows") ? sep + "steamcmd.exe" : sep + "steamcmd.sh");
+      setSteamcmdPath(exePath);
+      setSteamcmdValidated(true);
+      setSteamcmdDone(true);
+    } catch (e) {
+      if (!String(e).includes("Aborted")) toast.error(`SteamCMD install failed: ${e}`);
+    } finally { setInstallingSteamcmd(false); }
+  };
+
+  const handlePointSteamcmd = async () => {
+    try {
+      const selected = await open({ multiple: false, title: "Select SteamCMD Executable" });
+      if (typeof selected === "string" && selected) {
+        setSteamcmdPath(selected);
+        setSteamcmdValidated(true);
+        setSteamcmdDone(true);
+      }
+    } catch {/* */}
+  };
+
+  const handleDownloadProton = async () => {
+    const sep = importDir.includes("\\") ? "\\" : "/";
+    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "proton";
+    setInstallingProton(true);
+    try {
+      const path = await tauriCmd.downloadProtonGe(targetDir);
+      setProtonPath(path);
+      setProtonValidated(true);
+      setProtonDone(true);
+    } catch (e) {
+      if (!String(e).includes("Aborted")) toast.error(`Proton-GE download failed: ${e}`);
+    } finally { setInstallingProton(false); }
+  };
+
+  const handlePointProton = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "Select Proton-GE Directory" });
+      if (typeof selected === "string" && selected) {
+        setProtonPath(selected);
+        setProtonValidated(true);
+        setProtonDone(true);
+      }
+    } catch {/* */}
+  };
+
+  const allGood = !info.steamcmdMissing || steamcmdDone;
+  const protonAllGood = !info.protonMissing || protonDone;
+
+  return (
+    <div className="rounded-lg p-4 space-y-3"
+      style={{ background: "rgba(0,255,136,0.05)", border: `1px solid ${allGood && protonAllGood ? "rgba(0,255,136,0.2)" : "rgba(255,136,0,0.3)"}` }}>
+      <p className="text-xs font-semibold" style={{ color: "var(--neon-green)" }}>Found in database:</p>
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        <span style={{ color: "var(--text-primary)" }}>{info.servers}</span> server{info.servers !== 1 ? "s" : ""} registered
+      </p>
+
+      {/* SteamCMD row */}
+      {info.steamcmdMissing && !steamcmdDone ? (
+        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
+          <p className="text-xs font-medium" style={{ color: "var(--neon-orange)" }}>
+            SteamCMD not found at previous path
+          </p>
+          <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>{info.steamcmd}</p>
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={handleInstallSteamcmd} disabled={installingSteamcmd} size="sm" className="gap-1.5 h-7 text-xs"
+              style={{ background: "rgba(191,0,255,0.12)", border: "1px solid rgba(191,0,255,0.35)", color: "var(--neon-purple)" }}>
+              {installingSteamcmd ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              Install Now
+            </Button>
+            {installingSteamcmd && (
+              <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
+                style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+                <StopCircle className="w-3 h-3" /> Abort
+              </Button>
+            )}
+            {!installingSteamcmd && (
+              <Button onClick={handlePointSteamcmd} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs"
+                style={{ color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+                <FolderOpen className="w-3 h-3" /> Point to Existing
+              </Button>
+            )}
+          </div>
+          {installingSteamcmd && (
+            <CommandOutputPanel eventChannel="steamcmd://output/setup" label="Downloading SteamCMD" completed={false} bodyClassName="h-28" />
+          )}
+        </div>
+      ) : (
+        <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>
+          SteamCMD: <span style={{ color: steamcmdDone ? "var(--neon-green)" : "var(--text-primary)" }}>{steamcmdDone ? "✓ Installed" : info.steamcmd}</span>
+        </p>
+      )}
+
+      {/* Proton-GE row (Linux only) */}
+      {info.protonMissing && !protonDone ? (
+        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
+          <p className="text-xs font-medium" style={{ color: "var(--neon-orange)" }}>
+            Proton-GE not found at previous path
+          </p>
+          {info.proton && <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>{info.proton}</p>}
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={handleDownloadProton} disabled={installingProton} size="sm" className="gap-1.5 h-7 text-xs"
+              style={{ background: "rgba(191,0,255,0.12)", border: "1px solid rgba(191,0,255,0.35)", color: "var(--neon-purple)" }}>
+              {installingProton ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              Download Now
+            </Button>
+            {installingProton && (
+              <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
+                style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+                <StopCircle className="w-3 h-3" /> Abort
+              </Button>
+            )}
+            {!installingProton && (
+              <Button onClick={handlePointProton} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs"
+                style={{ color: "var(--text-muted)", border: "1px solid var(--border)" }}>
+                <FolderOpen className="w-3 h-3" /> Point to Existing
+              </Button>
+            )}
+          </div>
+          {installingProton && (
+            <CommandOutputPanel eventChannel="proton://output/download" label="Downloading Proton-GE" completed={false} bodyClassName="h-28" />
+          )}
+        </div>
+      ) : info.proton ? (
+        <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>
+          Proton-GE: <span style={{ color: protonDone ? "var(--neon-green)" : "var(--text-primary)" }}>{protonDone ? "✓ Installed" : info.proton}</span>
+        </p>
+      ) : null}
+
+      {allGood && protonAllGood && (
+        <p className="text-xs mt-1" style={{ color: "var(--neon-green)" }}>
+          ✓ Click &quot;Import &amp; Finish&quot; below to continue.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // BaseDirStep — includes "Import previous install" tab
 // ---------------------------------------------------------------------------
 
-function BaseDirStep({ onImportComplete }: { onImportComplete: () => void }) {
+function BaseDirStep() {
   const {
     baseDir, setBaseDir, setBackupDir, setBaseDirWritable,
     importMode, setImportMode, importDir, setImportDir, importValid, setImportValid,
@@ -188,7 +353,10 @@ function BaseDirStep({ onImportComplete }: { onImportComplete: () => void }) {
   const [checking, setChecking] = useState(false);
   const [importChecking, setImportChecking] = useState(false);
   const [importError, setImportError] = useState("");
-  const [importInfo, setImportInfo] = useState<{ servers: number; steamcmd: string; proton?: string } | null>(null);
+  const [importInfo, setImportInfo] = useState<{
+    servers: number; steamcmd: string; proton?: string;
+    steamcmdMissing?: boolean; protonMissing?: boolean;
+  } | null>(null);
 
   const validateDir = useCallback(async (path: string) => {
     if (!path.trim()) return;
@@ -272,10 +440,16 @@ function BaseDirStep({ onImportComplete }: { onImportComplete: () => void }) {
         getSetting("steamcmd_path"),
         getSetting("proton_path"),
       ]);
+      const [steamcmdExists, protonExists] = await Promise.all([
+        steamcmdPath ? tauriCmd.checkFileExists(steamcmdPath) : Promise.resolve(false),
+        protonPath   ? tauriCmd.checkFileExists(protonPath)   : Promise.resolve(false),
+      ]);
       setImportInfo({
         servers: servers.length,
         steamcmd: steamcmdPath ?? "(not set)",
         proton: protonPath ?? undefined,
+        steamcmdMissing: !steamcmdPath || !steamcmdExists,
+        protonMissing: typeof window !== "undefined" && !navigator.userAgent.includes("Windows") && (!protonPath || !protonExists),
       });
       setImportValid(true);
     } catch (e) {
@@ -283,13 +457,6 @@ function BaseDirStep({ onImportComplete }: { onImportComplete: () => void }) {
     } finally {
       setImportChecking(false);
     }
-  };
-
-  const handleImport = async () => {
-    if (!importValid) return;
-    // writeBootstrap handles copying the DB to its permanent location.
-    await tauriCmd.writeBootstrap(importDir);
-    onImportComplete();
   };
 
   const borderColor = dirResult
@@ -430,37 +597,7 @@ function BaseDirStep({ onImportComplete }: { onImportComplete: () => void }) {
           </div>
 
           {importInfo && (
-            <div
-              className="rounded-lg p-4 space-y-2"
-              style={{ background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.2)" }}
-            >
-              <p className="text-xs font-semibold" style={{ color: "var(--neon-green)" }}>Found in database:</p>
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                <span style={{ color: "var(--text-primary)" }}>{importInfo.servers}</span> server{importInfo.servers !== 1 ? "s" : ""} registered
-              </p>
-              <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>
-                SteamCMD: <span style={{ color: "var(--text-primary)" }}>{importInfo.steamcmd}</span>
-              </p>
-              {importInfo.proton && (
-                <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>
-                  Proton-GE: <span style={{ color: "var(--text-primary)" }}>{importInfo.proton}</span>
-                </p>
-              )}
-            </div>
-          )}
-
-          {importValid && (
-            <Button
-              onClick={handleImport}
-              className="w-full gap-2"
-              style={{
-                background: "rgba(0,255,136,0.12)",
-                border: "1px solid rgba(0,255,136,0.4)",
-                color: "var(--neon-green)",
-              }}
-            >
-              <CheckCircle2 className="w-4 h-4" /> Import &amp; Finish Setup
-            </Button>
+            <ImportVerifyPanel info={importInfo} importDir={importDir} />
           )}
         </>
       )}
@@ -697,24 +834,34 @@ function SteamCmdStep() {
       </div>
 
       {steamcmdMode === "auto" && (
-        <Button
-          onClick={handleAutoDownload}
-          disabled={isLoading || !baseDir || steamcmdValidated}
-          className="w-full gap-2"
-          style={{
-            background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-            border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
-            color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
-          }}
-        >
-          {isLoading ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
-          ) : steamcmdValidated ? (
-            <><CheckCircle2 className="w-4 h-4" /> SteamCMD Ready</>
-          ) : (
-            <><Terminal className="w-4 h-4" /> Download &amp; Validate SteamCMD</>
+        <div className="space-y-2">
+          <Button
+            onClick={handleAutoDownload}
+            disabled={isLoading || !baseDir || steamcmdValidated}
+            className="w-full gap-2"
+            style={{
+              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
+            }}
+          >
+            {isLoading ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
+            ) : steamcmdValidated ? (
+              <><CheckCircle2 className="w-4 h-4" /> SteamCMD Ready</>
+            ) : (
+              <><Terminal className="w-4 h-4" /> Download &amp; Validate SteamCMD</>
+            )}
+          </Button>
+          {isLoading && outputChannel === "install" && (
+            <Button
+              onClick={async () => { await tauriCmd.abortOperation("steamcmd_install"); }}
+              size="sm" variant="ghost" className="w-full gap-1.5"
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <StopCircle className="w-3 h-3" /> Abort Download
+            </Button>
           )}
-        </Button>
+        </div>
       )}
 
       {steamcmdMode === "manual" && (
@@ -916,24 +1063,34 @@ function ProtonGEStep() {
       </div>
 
       {protonMode === "managed" && (
-        <Button
-          onClick={handleDownload}
-          disabled={isLoading || !baseDir || protonValidated}
-          className="w-full gap-2"
-          style={{
-            background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-            border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
-            color: protonValidated ? "var(--neon-green)" : "var(--neon-purple)",
-          }}
-        >
-          {isLoading ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
-          ) : protonValidated ? (
-            <><CheckCircle2 className="w-4 h-4" /> {protonVersion || "Proton-GE"} Ready</>
-          ) : (
-            <><Cpu className="w-4 h-4" /> Download &amp; Install Proton-GE</>
+        <div className="space-y-2">
+          <Button
+            onClick={handleDownload}
+            disabled={isLoading || !baseDir || protonValidated}
+            className="w-full gap-2"
+            style={{
+              background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
+              border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              color: protonValidated ? "var(--neon-green)" : "var(--neon-purple)",
+            }}
+          >
+            {isLoading ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
+            ) : protonValidated ? (
+              <><CheckCircle2 className="w-4 h-4" /> {protonVersion || "Proton-GE"} Ready</>
+            ) : (
+              <><Cpu className="w-4 h-4" /> Download &amp; Install Proton-GE</>
+            )}
+          </Button>
+          {isLoading && showDownload && (
+            <Button
+              onClick={async () => { await tauriCmd.abortOperation("proton_download"); }}
+              size="sm" variant="ghost" className="w-full gap-1.5"
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <StopCircle className="w-3 h-3" /> Abort Download
+            </Button>
           )}
-        </Button>
+        </div>
       )}
 
       {protonMode === "managed" && showDownload && (
@@ -1107,7 +1264,45 @@ function NotificationsStep() {
     notifyUpdateAvailable, setNotifyUpdateAvailable,
   } = useSetupStore();
 
-  const [showSmtp, setShowSmtp] = useState(false);
+  const [testingDiscord, setTestingDiscord] = useState(false);
+  const [testingEmail,   setTestingEmail]   = useState(false);
+
+  const handleTestDiscord = async () => {
+    if (!discordWebhook.trim()) { toast.error("Enter a webhook URL first."); return; }
+    setTestingDiscord(true);
+    try {
+      await tauriCmd.sendDiscordNotification(discordWebhook.trim(), {
+        title: "LokiASAM Test", description: "Discord notifications are working!",
+        color: 0x00ff88, serverName: "Setup Wizard", eventType: "test",
+      });
+      toast.success("Test notification sent to Discord.");
+    } catch (e) {
+      toast.error(`Discord test failed: ${e}`);
+    } finally {
+      setTestingDiscord(false);
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!smtpHost.trim() || !smtpTo.trim()) { toast.error("Enter SMTP host and To address first."); return; }
+    setTestingEmail(true);
+    try {
+      await tauriCmd.sendEmailNotification(
+        {
+          host: smtpHost, port: Number(smtpPort || 587),
+          username: smtpUsername, password: smtpPassword,
+          fromAddress: smtpFrom || "noreply@lokiasam",
+          toAddress: smtpTo, useTls: smtpUseTls,
+        },
+        { subject: "LokiASAM Test", body: "Email notifications are working!" }
+      );
+      toast.success("Test email sent.");
+    } catch (e) {
+      toast.error(`Email test failed: ${e}`);
+    } finally {
+      setTestingEmail(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -1120,14 +1315,14 @@ function NotificationsStep() {
         </p>
       </div>
 
-      {/* Desktop notifications toggle */}
+      {/* Desktop notifications — separated from events */}
       <div
-        className="rounded-lg p-4 space-y-1"
+        className="rounded-lg p-4"
         style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.15)" }}
       >
         <ToggleRow
           label="Desktop Notifications"
-          description="Show OS toast notifications for important events."
+          description="Show OS system notifications for server events. In-app toast notifications always appear regardless of this setting."
           value={desktopNotificationsEnabled}
           onChange={setDesktopNotificationsEnabled}
         />
@@ -1139,18 +1334,36 @@ function NotificationsStep() {
         style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
       >
         <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Notify me when…</p>
-        <ToggleRow label="Server starts up"    value={notifyServerStart}    onChange={setNotifyServerStart} />
-        <ToggleRow label="Server crashes"       value={notifyServerCrash}    onChange={setNotifyServerCrash} />
-        <ToggleRow label="Server stops (manual)" value={notifyServerStop}   onChange={setNotifyServerStop} />
-        <ToggleRow label="Update available"     value={notifyUpdateAvailable} onChange={setNotifyUpdateAvailable} />
+        <ToggleRow label="Server starts up"     value={notifyServerStart}     onChange={setNotifyServerStart} />
+        <ToggleRow label="Server crashes"        value={notifyServerCrash}     onChange={setNotifyServerCrash} />
+        <ToggleRow label="Server stops (manual)" value={notifyServerStop}      onChange={setNotifyServerStop} />
+        <ToggleRow label="ASA update available"  value={notifyUpdateAvailable} onChange={setNotifyUpdateAvailable} />
       </div>
 
       {/* Discord webhook */}
-      <div className="space-y-2">
-        <Label htmlFor="discord-webhook" style={{ color: "var(--text-primary)" }}>
-          Discord Webhook URL
-          <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>(optional)</span>
-        </Label>
+      <div
+        className="rounded-lg p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+      >
+        <div className="flex items-center justify-between">
+          <Label htmlFor="discord-webhook" style={{ color: "var(--text-primary)" }}>
+            Discord Webhook
+            <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>(optional)</span>
+          </Label>
+          {discordWebhook.trim() && (
+            <Button
+              onClick={handleTestDiscord}
+              disabled={testingDiscord}
+              size="sm"
+              variant="ghost"
+              className="gap-1.5 h-7 text-xs"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {testingDiscord ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+              Test
+            </Button>
+          )}
+        </div>
         <Input
           id="discord-webhook"
           value={discordWebhook}
@@ -1164,98 +1377,83 @@ function NotificationsStep() {
           }}
         />
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Server Admin → Integrations → Webhooks in Discord to create one.
+          In Discord: Server Settings → Integrations → Webhooks.
         </p>
       </div>
 
-      {/* SMTP */}
-      <div>
-        <button
-          onClick={() => setShowSmtp(!showSmtp)}
-          className="flex items-center gap-2 text-sm font-semibold"
-          style={{ color: showSmtp ? "var(--neon-purple)" : "var(--text-muted)" }}
-        >
-          {showSmtp ? <BellIcon className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-          Email / SMTP
-          <span className="text-xs font-normal ml-1" style={{ color: "var(--text-subtle)" }}>(optional)</span>
-          <span className="ml-auto text-xs">{showSmtp ? "▲" : "▼"}</span>
-        </button>
-
-        {showSmtp && (
-          <div
-            className="mt-3 rounded-lg p-4 space-y-3"
-            style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.15)" }}
-          >
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>SMTP Host</Label>
-                <Input
-                  value={smtpHost}
-                  onChange={(e) => setSmtpHost(e.target.value)}
-                  placeholder="smtp.example.com"
-                  className="font-mono text-xs"
-                  style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Port</Label>
-                <Input
-                  value={smtpPort}
-                  onChange={(e) => setSmtpPort(e.target.value)}
-                  placeholder="587"
-                  className="font-mono text-xs"
-                  style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Username</Label>
-                <Input
-                  value={smtpUsername}
-                  onChange={(e) => setSmtpUsername(e.target.value)}
-                  placeholder="user@example.com"
-                  className="font-mono text-xs"
-                  style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Password</Label>
-                <Input
-                  type="password"
-                  value={smtpPassword}
-                  onChange={(e) => setSmtpPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="font-mono text-xs"
-                  style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>From Address</Label>
-                <Input
-                  value={smtpFrom}
-                  onChange={(e) => setSmtpFrom(e.target.value)}
-                  placeholder="noreply@example.com"
-                  className="font-mono text-xs"
-                  style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>To Address</Label>
-                <Input
-                  value={smtpTo}
-                  onChange={(e) => setSmtpTo(e.target.value)}
-                  placeholder="admin@example.com"
-                  className="font-mono text-xs"
-                  style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                />
-              </div>
-            </div>
-            <ToggleRow label="Use TLS / STARTTLS" value={smtpUseTls} onChange={setSmtpUseTls} />
+      {/* Email / SMTP — always visible, no collapsible */}
+      <div
+        className="rounded-lg p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+      >
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+            Email / SMTP
+            <span className="ml-2 text-xs font-normal" style={{ color: "var(--text-muted)" }}>(optional)</span>
+          </p>
+          {smtpHost.trim() && smtpTo.trim() && (
+            <Button
+              onClick={handleTestEmail}
+              disabled={testingEmail}
+              size="sm"
+              variant="ghost"
+              className="gap-1.5 h-7 text-xs"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {testingEmail ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+              Test
+            </Button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>SMTP Host</Label>
+            <Input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)}
+              placeholder="smtp.example.com" className="font-mono text-xs"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            />
           </div>
-        )}
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Port</Label>
+            <Input value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)}
+              placeholder="587" className="font-mono text-xs"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Username</Label>
+            <Input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)}
+              placeholder="user@example.com" className="font-mono text-xs"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Password</Label>
+            <Input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
+              placeholder="••••••••" className="font-mono text-xs"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>From Address</Label>
+            <Input value={smtpFrom} onChange={(e) => setSmtpFrom(e.target.value)}
+              placeholder="noreply@example.com" className="font-mono text-xs"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>To Address</Label>
+            <Input value={smtpTo} onChange={(e) => setSmtpTo(e.target.value)}
+              placeholder="admin@example.com" className="font-mono text-xs"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+        </div>
+        <ToggleRow label="Use TLS / STARTTLS" value={smtpUseTls} onChange={setSmtpUseTls} />
       </div>
     </div>
   );
@@ -1336,6 +1534,62 @@ function TrayStep() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// AutoUpdateStep — configure update check preferences before completing setup
+// ---------------------------------------------------------------------------
+
+function AutoUpdateStep() {
+  const {
+    asaAutoUpdateEnabled, setAsaAutoUpdateEnabled,
+    appAutoUpdateEnabled, setAppAutoUpdateEnabled,
+    protonAutoCheckEnabled, setProtonAutoCheckEnabled,
+  } = useSetupStore();
+
+  const rows = [
+    {
+      key: "asa", label: "ASA Server Updates",
+      desc: "Automatically check for ARK: Survival Ascended server updates via Steam.",
+      value: asaAutoUpdateEnabled, set: setAsaAutoUpdateEnabled,
+    },
+    {
+      key: "app", label: "LokiASAM App Updates",
+      desc: "Automatically check for LokiASAM application updates on startup.",
+      value: appAutoUpdateEnabled, set: setAppAutoUpdateEnabled,
+    },
+    ...(IS_LINUX ? [{
+      key: "proton", label: "Proton-GE Updates",
+      desc: "Automatically check GitHub for new GE-Proton releases once per day.",
+      value: protonAutoCheckEnabled, set: setProtonAutoCheckEnabled,
+    }] : []),
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+          Auto-Update Settings
+        </h2>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Choose which components LokiASAM checks for updates automatically. You can change these anytime in Settings.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {rows.map((row) => (
+          <div key={row.key} className="flex items-center justify-between py-3 px-4 rounded-xl"
+            style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.12)" }}>
+            <div className="flex-1 min-w-0 mr-4">
+              <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{row.label}</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{row.desc}</p>
+            </div>
+            <Switch checked={row.value} onCheckedChange={row.set} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CompleteStep({ onComplete }: { onComplete: () => void }) {
   const { baseDir, backupDir, steamcmdPath, protonPath } = useSetupStore();
 
@@ -1409,11 +1663,14 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     baseDir, backupDir, baseDirWritable, backupDirWritable,
     steamcmdPath, steamcmdValidated,
     protonPath, protonValidated,
+    setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
+    setProtonPath, setProtonValidated,
     discordWebhook,
     smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTls, smtpFrom, smtpTo,
     desktopNotificationsEnabled,
     notifyServerStart, notifyServerCrash, notifyServerStop, notifyUpdateAvailable,
     closeToTray,
+    asaAutoUpdateEnabled, appAutoUpdateEnabled, protonAutoCheckEnabled,
     isLoading,
     importMode, importValid, importDir,
   } = useSetupStore();
@@ -1426,6 +1683,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
+
+  // Scroll card to top on every step change
+  useEffect(() => {
+    if (scrollAreaRef.current) {
+      scrollAreaRef.current.scrollTop = 0;
+    }
+  }, [step]);
 
   // Scroll card to bottom when a long-running operation starts (SteamCMD / Proton)
   useEffect(() => {
@@ -1445,23 +1709,39 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case 2: return backupDirWritable;
       case 3: return steamcmdValidated;
       case 4: return IS_LINUX ? protonValidated : true; // proton on linux, notifications on windows
-      case 5: return IS_LINUX ? true : true;            // notifications / tray — always ok
-      case 6: return IS_LINUX ? true : true;            // tray / complete — always ok
+      case 5: return true;  // notifications — always ok
+      case 6: return true;  // tray / updates — always ok
+      case 7: return IS_LINUX ? true : true;            // updates / complete — always ok
       default: return false;
     }
   };
 
-  // Called when the user clicks "Import & Finish Setup" from the import tab
+  // Called when the user clicks "Import & Finish" from the bottom nav bar
   const handleImportComplete = async () => {
     setSaving(true);
     setSaveError("");
     try {
+      // Write bootstrap so the app knows where the DB lives on next launch
+      await tauriCmd.writeBootstrap(importDir);
+
       const sep = importDir.includes("\\") ? "\\" : "/";
       const dbPath = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "lokiasam.db";
-      // DB was already opened in BaseDirStep for validation — re-init is safe (idempotent).
-      await import("@/lib/db").then(({ initDb: _init }) => _init(dbPath).catch(() => {}));
+      const { initDb: _init, getAppSetting: getSetting } = await import("@/lib/db");
+      await _init(dbPath);
       await setAppSetting("setup_complete", "true");
-      // Jump straight to Complete step
+
+      // Read actual paths from the imported DB so the Complete step shows correct info
+      const [storedBase, storedBackup, storedScmd, storedProton] = await Promise.all([
+        getSetting("base_dir"),
+        getSetting("backup_dir"),
+        getSetting("steamcmd_path"),
+        getSetting("proton_path"),
+      ]);
+      if (storedBase)   setBaseDir(storedBase);
+      if (storedBackup) setBackupDir(storedBackup);
+      if (storedScmd)   { setSteamcmdPath(storedScmd);   setSteamcmdValidated(true); }
+      if (storedProton) { setProtonPath(storedProton);   setProtonValidated(true); }
+
       setDirection(1);
       setStep(TOTAL_STEPS - 1);
     } catch (err) {
@@ -1520,6 +1800,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         // Tray preference
         await setAppSetting("close_to_tray", String(closeToTray));
 
+        // Auto-update preferences
+        await setAppSetting("asa_auto_update_enabled",  String(asaAutoUpdateEnabled));
+        await setAppSetting("app_auto_update_enabled",  String(appAutoUpdateEnabled));
+        if (IS_LINUX) await setAppSetting("proton_ge_auto_check", String(protonAutoCheckEnabled));
+
         await setAppSetting("setup_complete", "true");
         setDirection(1);
         nextStep();
@@ -1546,21 +1831,23 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const stepComponents = IS_LINUX
     ? [
         <WelcomeStep key="welcome" />,
-        <BaseDirStep key="basedir" onImportComplete={handleImportComplete} />,
+        <BaseDirStep key="basedir" />,
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
         <NotificationsStep key="notifications" />,
         <TrayStep key="tray" />,
+        <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,
       ]
     : [
         <WelcomeStep key="welcome" />,
-        <BaseDirStep key="basedir" onImportComplete={handleImportComplete} />,
+        <BaseDirStep key="basedir" />,
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <NotificationsStep key="notifications" />,
         <TrayStep key="tray" />,
+        <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,
       ];
 

@@ -18,7 +18,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Server, Map, Network, GitBranch, Clock, Package,
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
-  CheckCircle2, Plus, X, ChevronRight,
+  CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -916,10 +916,18 @@ function InstallStep({
       )}
 
       {status === "installing" && (
-        <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-purple)" }}>
-          <Loader2 className="w-3 h-3 animate-spin" />
-          Installation in progress. This may take 15–30 minutes…
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-purple)" }}>
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Installation in progress. This may take 15–30 minutes…
+          </p>
+          <Button
+            onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }}
+            size="sm" variant="ghost" className="gap-1.5 h-7 text-xs shrink-0"
+            style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+            <StopCircle className="w-3 h-3" /> Abort
+          </Button>
+        </div>
       )}
 
       {status === "done" && (

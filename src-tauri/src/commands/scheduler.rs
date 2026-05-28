@@ -284,7 +284,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         .map_err(|e| format!("Failed to create cache dir: {e}"))?;
 
     crate::commands::steamcmd::steamcmd_app_update(
-        app, &entry.steamcmd_path, &cache_dir, false, &channel,
+        app, &entry.steamcmd_path, &cache_dir, false, &channel, None,
     ).await?;
 
     // Sync updated files to the server directory (preserving Saved/).
