@@ -113,6 +113,19 @@ pub async fn stream_process_abortable(
 
     loop {
         if abort.load(Ordering::Relaxed) {
+            // Kill the full process tree so SteamCMD child processes don't
+            // continue running after the parent is killed.
+            if let Some(raw_pid) = child.id() {
+                use sysinfo::{Pid, ProcessesToUpdate, System};
+                let mut sys = System::new();
+                sys.refresh_processes(ProcessesToUpdate::All, false);
+                let root = Pid::from_u32(raw_pid);
+                for pid in collect_subtree(&sys, root) {
+                    if let Some(proc) = sys.process(pid) {
+                        proc.kill();
+                    }
+                }
+            }
             stdout_task.abort();
             stderr_task.abort();
             let _ = child.kill().await;

@@ -5,7 +5,7 @@ import {
   Folder, Terminal, Info,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -70,6 +70,35 @@ function Section({
       </div>
       <div className="p-6 space-y-6">{children}</div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Icon-based toggle (matches the wizard's ToggleRow style)
+// ---------------------------------------------------------------------------
+
+function SettingsToggle({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
+      className="shrink-0 flex items-center disabled:opacity-50"
+      aria-label={checked ? "Disable" : "Enable"}
+    >
+      {checked ? (
+        <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+      ) : (
+        <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />
+      )}
+    </button>
   );
 }
 
@@ -412,45 +441,36 @@ function ToolPathField({
 const PRESET_ORDER: ThemePreset[] = ["neon", "abyss", "toxic", "storm"];
 
 function ThemesSection() {
-  const [preset,    setPresetState]  = useState<ThemePreset>("neon");
-  const [accent,    setAccentState]  = useState<ThemeAccent>("purple");
-  const [savedPreset, setSavedPreset] = useState<ThemePreset>("neon");
-  const [savedAccent, setSavedAccent] = useState<ThemeAccent>("purple");
-  const [saving, setSaving] = useState(false);
+  const [preset, setPresetState] = useState<ThemePreset>("neon");
+  const [accent, setAccentState] = useState<ThemeAccent>("purple");
 
   useEffect(() => {
     Promise.all([getAppSetting("theme_preset"), getAppSetting("theme_accent")]).then(([p, a]) => {
       const pr = (p as ThemePreset) ?? "neon";
       const ac = (a as ThemeAccent) ?? "purple";
-      setPresetState(pr); setSavedPreset(pr);
-      setAccentState(ac); setSavedAccent(ac);
+      setPresetState(pr);
+      setAccentState(ac);
+      // Re-apply on mount so navigating away and back restores the saved theme
+      applyTheme(pr, ac);
     });
   }, []);
 
-  const handlePreset = (p: ThemePreset) => {
-    setPresetState(p);
+  const handlePreset = async (p: ThemePreset) => {
     const defaultAccent = THEME_PRESETS[p].defaultAccent;
+    setPresetState(p);
     setAccentState(defaultAccent);
     applyTheme(p, defaultAccent);
+    try {
+      await setAppSetting("theme_preset", p);
+      await setAppSetting("theme_accent", defaultAccent);
+    } catch { /* silent */ }
   };
 
-  const handleAccent = (a: ThemeAccent) => {
+  const handleAccent = async (a: ThemeAccent) => {
     setAccentState(a);
     applyThemeAccent(a);
+    try { await setAppSetting("theme_accent", a); } catch { /* silent */ }
   };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await setAppSetting("theme_preset", preset);
-      await setAppSetting("theme_accent", accent);
-      setSavedPreset(preset); setSavedAccent(accent);
-      toast.success("Theme saved.");
-    } catch { toast.error("Failed to save theme."); }
-    finally { setSaving(false); }
-  };
-
-  const dirty = preset !== savedPreset || accent !== savedAccent;
 
   return (
     <div className="space-y-6">
@@ -513,16 +533,6 @@ function ThemesSection() {
         </div>
       </div>
 
-      <Button onClick={handleSave} disabled={saving || !dirty} size="sm" className="gap-1.5"
-        style={{
-          background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
-          border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
-          color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
-        }}
-      >
-        {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-        Save Theme
-      </Button>
     </div>
   );
 }
@@ -592,7 +602,6 @@ function ServerUpdatesSection() {
   const [latestBuild, setLatest]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
   const [autoCheckHours, setAutoCheck] = useState("0");
-  const [autoSaved, setAutoSaved]     = useState(false);
 
   const load = useCallback(async () => {
     const [avail, cached, latest, checked, hours] = await Promise.all([
@@ -639,10 +648,9 @@ function ServerUpdatesSection() {
     }
   };
 
-  const handleSaveAutoCheck = async () => {
-    await setAppSetting("asa_auto_check_hours", autoCheckHours);
-    setAutoSaved(true); setTimeout(() => setAutoSaved(false), 2000);
-    toast.success("Auto-check interval saved.");
+  const handleAutoCheckChange = async (value: string) => {
+    setAutoCheck(value);
+    await setAppSetting("asa_auto_check_hours", value);
   };
 
   return (
@@ -686,7 +694,7 @@ function ServerUpdatesSection() {
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>Automatically check for ASA updates via the Rust scheduler (immune to tray throttling).</p>
         <div className="flex gap-2 flex-wrap">
           {AUTO_CHECK_OPTIONS.map((opt) => (
-            <button key={opt.value} onClick={() => setAutoCheck(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
+            <button key={opt.value} onClick={() => handleAutoCheckChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
                 background: autoCheckHours === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
                 border: `1px solid ${autoCheckHours === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
@@ -696,14 +704,6 @@ function ServerUpdatesSection() {
             </button>
           ))}
         </div>
-        <Button onClick={handleSaveAutoCheck} size="sm" className="gap-1.5"
-          style={{
-            background: autoSaved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-            border: `1px solid ${autoSaved ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
-            color: autoSaved ? "var(--neon-green)" : "var(--neon-purple)",
-          }}>
-          {autoSaved ? <><CheckCircle2 className="w-3 h-3" /> Saved</> : <><Save className="w-3 h-3" /> Save</>}
-        </Button>
       </div>
     </div>
   );
@@ -721,16 +721,15 @@ const APP_UPDATE_MODE_OPTIONS = [
 
 function AppUpdateSection() {
   const [mode, setMode]      = useState("startup");
-  const [saved, setSaved]    = useState("startup");
   const [checking, setCheck] = useState(false);
 
   useEffect(() => {
-    getAppSetting("app_update_check_mode").then((v) => { const m = v ?? "startup"; setMode(m); setSaved(m); });
+    getAppSetting("app_update_check_mode").then((v) => setMode(v ?? "startup"));
   }, []);
 
-  const handleSave = async () => {
-    await setAppSetting("app_update_check_mode", mode); setSaved(mode);
-    toast.success("Update check preference saved.");
+  const handleModeChange = async (value: string) => {
+    setMode(value);
+    await setAppSetting("app_update_check_mode", value);
   };
 
   const handleCheckNow = async () => {
@@ -764,7 +763,6 @@ function AppUpdateSection() {
     finally { setCheck(false); }
   };
 
-  const dirty = mode !== saved;
   return (
     <div className="space-y-5">
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -774,7 +772,7 @@ function AppUpdateSection() {
         <Label style={{ color: "var(--text-primary)" }}>Check Frequency</Label>
         <div className="flex gap-2 flex-wrap">
           {APP_UPDATE_MODE_OPTIONS.map((opt) => (
-            <button key={opt.value} onClick={() => setMode(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
+            <button key={opt.value} onClick={() => handleModeChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
                 background: mode === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
                 border: `1px solid ${mode === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
@@ -784,14 +782,6 @@ function AppUpdateSection() {
             </button>
           ))}
         </div>
-        <Button onClick={handleSave} disabled={!dirty} size="sm" className="gap-1.5"
-          style={{
-            background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
-            border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
-            color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
-          }}>
-          <Save className="w-3 h-3" /> Save
-        </Button>
       </div>
       <Separator style={{ background: "var(--border)" }} />
       <Button onClick={handleCheckNow} disabled={checking} size="sm" className="gap-1.5"
@@ -1016,14 +1006,14 @@ function ProtonGeUpdateSection() {
       </div>
 
       {/* Auto-check toggle */}
-      <div className="flex items-center justify-between py-2">
+      <div className="flex items-start justify-between gap-4 py-2">
         <div>
-          <p className="text-sm" style={{ color: "var(--foreground)" }}>Daily Auto-Check</p>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Daily Auto-Check</p>
           <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
             Automatically check GitHub for new GE-Proton releases once per day.
           </p>
         </div>
-        <Switch checked={autoCheck} onCheckedChange={handleAutoCheckToggle} />
+        <SettingsToggle checked={autoCheck} onChange={handleAutoCheckToggle} />
       </div>
 
       {/* Download output */}
@@ -1093,24 +1083,24 @@ function GlobalNotificationsSection() {
     finally { setSaving(null); }
   }
 
-  async function handleTest(channelId: string) {
-    const config = getConfig(channelId);
-    const cfg = JSON.parse(config?.config_json ?? "{}") as Record<string, string | boolean | number>;
+  async function handleTest(channelId: string, cfgJson: string): Promise<boolean> {
+    const cfg = JSON.parse(cfgJson) as Record<string, string | boolean | number>;
     try {
       if (channelId === "discord") {
         const url = cfg.webhookUrl as string | undefined;
-        if (!url) { toast.error("Enter a webhook URL first."); return; }
+        if (!url) { toast.error("Enter a webhook URL first."); return false; }
         await tauriCmd.sendDiscordNotification(url, { title: "LokiASAM Test", description: "Discord notifications are working.", color: 0x00ff88, serverName: "Global", eventType: "test" });
       } else if (channelId === "email") {
         const to = cfg.toAddress as string | undefined;
-        if (!to) { toast.error("Enter a To address first."); return; }
+        if (!to) { toast.error("Enter a To address first."); return false; }
         await tauriCmd.sendEmailNotification(
           { host: (cfg.host as string) ?? "", port: Number(cfg.port ?? 587), username: (cfg.username as string) ?? "", password: (cfg.password as string) ?? "", fromAddress: (cfg.fromAddress as string) ?? "noreply@lokiasam", toAddress: to, useTls: Boolean(cfg.useTls ?? false) },
           { subject: "LokiASAM Test", body: "Email notifications are working." }
         );
       }
       toast.success("Test notification sent.");
-    } catch (e) { toast.error(`Test failed: ${e}`); }
+      return true;
+    } catch (e) { toast.error(`Test failed: ${e}`); return false; }
   }
 
   return (
@@ -1129,7 +1119,7 @@ function GlobalNotificationsSection() {
             fields={ch.fields} enabled={enabled} cfg={cfg} saving={saving === ch.id}
             onToggle={(v) => handleToggle(ch.id, v)}
             onSave={(cfgJson) => handleSaveConfig(ch.id, cfgJson)}
-            onTest={() => handleTest(ch.id)}
+            onTest={(cfgJson) => handleTest(ch.id, cfgJson)}
           />
         );
       })}
@@ -1145,17 +1135,38 @@ interface GlobalChannelCardProps {
   enabled: boolean; cfg: Record<string, string>; saving: boolean;
   onToggle: (v: boolean) => void;
   onSave: (cfgJson: string) => void;
-  onTest: () => void;
+  onTest: (cfgJson: string) => Promise<boolean>;
 }
 
-function GlobalChannelCard({ channelId, icon: Icon, label, desc, fields, enabled, cfg, saving, onToggle, onSave, onTest }: GlobalChannelCardProps) {
+function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fields, enabled, cfg, saving, onToggle, onSave, onTest }: GlobalChannelCardProps) {
   const [localCfg, setLocalCfg] = useState<Record<string, string>>(cfg);
-  const [expanded, setExpanded] = useState(false);
+  const [testing, setTesting]   = useState(false);
+  const [testPassed, setTestPassed] = useState(false);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setLocalCfg(cfg); }, [JSON.stringify(cfg)]);
 
-  const isConfigured = Object.values(cfg).some((v) => v && v.trim());
+  const handleTestClick = async () => {
+    setTesting(true);
+    try {
+      const passed = await onTest(JSON.stringify(localCfg));
+      if (passed) {
+        setTestPassed(true);
+        await onSave(JSON.stringify(localCfg));
+        if (!enabled) onToggle(true);
+      }
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleToggleAttempt = (v: boolean) => {
+    if (v && !enabled && !testPassed) {
+      toast.info("Test the connection first to enable this channel.");
+      return;
+    }
+    onToggle(v);
+  };
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
@@ -1164,48 +1175,42 @@ function GlobalChannelCard({ channelId, icon: Icon, label, desc, fields, enabled
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>{desc}</p>
-          {!isConfigured && (
-            <p className="text-xs mt-0.5" style={{ color: "#ffa500" }}>Not configured — click Configure to set up.</p>
-          )}
         </div>
-        <div className="flex items-center gap-2">
-          {enabled && isConfigured && (
-            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={onTest} title="Send test">
-              <Send className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
-            </Button>
-          )}
-          <button onClick={() => setExpanded((v) => !v)} className="text-xs" style={{ color: "var(--neon-purple)" }}>
-            {expanded ? "Hide" : "Configure"}
-          </button>
-          <Switch checked={enabled && isConfigured} onCheckedChange={(v) => { if (!isConfigured && v) { setExpanded(true); return; } onToggle(v); }} />
-        </div>
+        <SettingsToggle checked={enabled} onChange={handleToggleAttempt} />
       </div>
-      {expanded && (
-        <div className="px-4 pb-4 pt-2 space-y-3 border-t" style={{ borderColor: "var(--border)" }}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {fields.map((f) => (
-              <div key={f.key} className="flex flex-col gap-1">
-                <Label className="text-[10px]" style={{ color: "var(--text-muted)" }}>{f.label}</Label>
-                <Input type={f.type} value={localCfg[f.key] ?? ""} onChange={(e) => setLocalCfg((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                  placeholder={f.placeholder} className="h-7 text-xs"
-                  style={{ background: "var(--surface)", borderColor: "var(--border)" }}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => onSave(JSON.stringify(localCfg))} disabled={saving}
-              className="h-7 text-xs"
-              style={{ background: "transparent", border: "1px solid var(--neon-purple)", color: "var(--neon-purple)" }}>
-              {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
-            </Button>
-            <Button size="sm" onClick={onTest} className="h-7 text-xs gap-1"
-              style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
-              <Send className="w-3 h-3" /> Test
-            </Button>
-          </div>
+      <div className="px-4 pb-4 pt-2 space-y-3 border-t" style={{ borderColor: "var(--border)" }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {fields.map((f) => (
+            <div key={f.key} className="flex flex-col gap-1">
+              <Label className="text-[10px]" style={{ color: "var(--text-muted)" }}>{f.label}</Label>
+              <Input type={f.type} value={localCfg[f.key] ?? ""} onChange={(e) => setLocalCfg((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                placeholder={f.placeholder} className="h-7 text-xs"
+                style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+              />
+            </div>
+          ))}
         </div>
-      )}
+        <div className="flex gap-2">
+          <Button size="sm" onClick={handleTestClick} disabled={testing || saving} className="h-7 text-xs gap-1"
+            style={{
+              background: testPassed ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.12)",
+              border: `1px solid ${testPassed ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.35)"}`,
+              color: testPassed ? "var(--neon-green)" : "var(--neon-purple)",
+            }}>
+            {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : testPassed ? <CheckCircle2 className="w-3 h-3" /> : <Send className="w-3 h-3" />}
+            {testing ? "Testing…" : testPassed ? "Test Passed" : "Test"}
+          </Button>
+          <Button size="sm" onClick={() => onSave(JSON.stringify(localCfg))} disabled={saving} className="h-7 text-xs"
+            style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
+          </Button>
+        </div>
+        {!enabled && !testPassed && (
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Click Test to verify and enable this channel.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -1247,28 +1252,30 @@ function NotificationEventsSection() {
   return (
     <div className="space-y-4">
       {/* Desktop notifications — separate from event list */}
-      <div className="flex items-start justify-between gap-4 pb-4 border-b" style={{ borderColor: "var(--border)" }}>
-        <div>
-          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Desktop Notifications</p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-            Show OS system notifications for server events.
-            <span className="block mt-0.5" style={{ color: "var(--text-subtle)" }}>
-              In-app toast notifications always appear regardless of this setting.
-            </span>
-          </p>
+      <div className="pb-4 border-b" style={{ borderColor: "var(--border)" }}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Desktop Notifications</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Show OS system notifications for server events.
+              <span className="block mt-0.5" style={{ color: "var(--text-subtle)" }}>
+                In-app toast notifications always appear regardless of this setting.
+              </span>
+            </p>
+          </div>
+          <SettingsToggle checked={desktopEnabled} onChange={handleDesktopToggle} />
         </div>
-        <Switch checked={desktopEnabled} onCheckedChange={handleDesktopToggle} />
       </div>
 
       {/* Per-event toggles */}
-      <div className="divide-y" style={{ borderColor: "var(--border)" }}>
+      <div className="space-y-1">
         {NOTIFICATION_TOGGLES.map((t) => (
-          <div key={t.key} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+          <div key={t.key} className="flex items-start justify-between gap-4 py-3">
             <div>
-              <p className="text-sm" style={{ color: "var(--text-primary)" }}>{t.label}</p>
+              <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{t.label}</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{t.desc}</p>
             </div>
-            <Switch checked={values[t.key] ?? t.defaultOn} onCheckedChange={(v) => handleToggle(t.key, v)} />
+            <SettingsToggle checked={values[t.key] ?? t.defaultOn} onChange={(v) => handleToggle(t.key, v)} />
           </div>
         ))}
       </div>
@@ -1305,7 +1312,7 @@ function CloseToTraySection() {
             </p>
           )}
         </div>
-        <Switch checked={closeToTray} onCheckedChange={handleToggle} />
+        <SettingsToggle checked={closeToTray} onChange={handleToggle} />
       </div>
     </div>
   );

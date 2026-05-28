@@ -228,6 +228,7 @@ async fn download_proton_ge_inner(
 
     let tar_path_clone = tar_path.clone();
     let target_clone = target.clone();
+    let abort_extract = std::sync::Arc::clone(abort);
     tokio::task::spawn_blocking(move || {
         use flate2::read::GzDecoder;
         use tar::Archive;
@@ -236,9 +237,20 @@ async fn download_proton_ge_inner(
             .map_err(|e| format!("Failed to open archive: {e}"))?;
         let gz = GzDecoder::new(f);
         let mut archive = Archive::new(gz);
-        archive
-            .unpack(&target_clone)
-            .map_err(|e| format!("Failed to extract archive: {e}"))?;
+
+        // Iterate entries one-by-one so we can check the abort flag between
+        // files. unpack() has no cancellation hook.
+        for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
+            if abort_extract.load(Ordering::Relaxed) {
+                let _ = std::fs::remove_file(&tar_path_clone);
+                return Err("Aborted".into());
+            }
+            let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
+            entry
+                .unpack_in(&target_clone)
+                .map_err(|e| format!("Failed to extract entry: {e}"))?;
+        }
+
         let _ = std::fs::remove_file(&tar_path_clone);
         Ok::<(), String>(())
     })

@@ -925,7 +925,7 @@ function InstallStep({
             onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }}
             size="sm" variant="ghost" className="gap-1.5 h-7 text-xs shrink-0"
             style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
-            <StopCircle className="w-3 h-3" /> Abort
+            <StopCircle className="w-3 h-3" /> Cancel Install
           </Button>
         </div>
       )}

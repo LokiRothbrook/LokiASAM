@@ -19,6 +19,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
@@ -276,7 +277,7 @@ function ImportVerifyPanel({
             {installingSteamcmd && (
               <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
                 style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
-                <StopCircle className="w-3 h-3" /> Abort
+                <StopCircle className="w-3 h-3" /> Cancel Install
               </Button>
             )}
             {!installingSteamcmd && (
@@ -312,7 +313,7 @@ function ImportVerifyPanel({
             {installingProton && (
               <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
                 style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
-                <StopCircle className="w-3 h-3" /> Abort
+                <StopCircle className="w-3 h-3" /> Cancel Install
               </Button>
             )}
             {!installingProton && (
@@ -853,12 +854,12 @@ function SteamCmdStep() {
               <><Terminal className="w-4 h-4" /> Download &amp; Validate SteamCMD</>
             )}
           </Button>
-          {isLoading && outputChannel === "install" && (
+          {isLoading && outputChannel !== null && (
             <Button
               onClick={async () => { await tauriCmd.abortOperation("steamcmd_install"); }}
               size="sm" variant="ghost" className="w-full gap-1.5"
               style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
-              <StopCircle className="w-3 h-3" /> Abort Download
+              <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           )}
         </div>
@@ -942,6 +943,7 @@ function ProtonGEStep() {
   const [showDownload, setShowDownload] = useState(false);
   const [error, setError] = useState("");
   const [protonVersion, setProtonVersion] = useState("");
+  const [protonPhase, setProtonPhase] = useState<"downloading" | "extracting">("downloading");
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -983,7 +985,16 @@ function ProtonGEStep() {
     const targetDir = baseDir.replace(/[/\\]$/, "") + "/proton";
     setError("");
     setShowDownload(true);
+    setProtonPhase("downloading");
     setLoading(true, "Downloading Proton-GE…");
+
+    // Listen for the extraction phase so the button label can update
+    const unlisten = await listen<{ line: string }>("proton://output/download", (e) => {
+      if (e.payload.line.toLowerCase().includes("extracting")) {
+        setProtonPhase("extracting");
+      }
+    });
+
     try {
       const path = await tauriCmd.downloadProtonGe(targetDir);
       setProtonPath(path);
@@ -994,6 +1005,8 @@ function ProtonGEStep() {
       setError(String(e));
     } finally {
       setLoading(false);
+      setProtonPhase("downloading");
+      unlisten();
     }
   };
 
@@ -1075,7 +1088,9 @@ function ProtonGEStep() {
             }}
           >
             {isLoading ? (
-              <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
+              protonPhase === "extracting"
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Extracting…</>
+                : <><Loader2 className="w-4 h-4 animate-spin" /> Downloading…</>
             ) : protonValidated ? (
               <><CheckCircle2 className="w-4 h-4" /> {protonVersion || "Proton-GE"} Ready</>
             ) : (
@@ -1087,7 +1102,7 @@ function ProtonGEStep() {
               onClick={async () => { await tauriCmd.abortOperation("proton_download"); }}
               size="sm" variant="ghost" className="w-full gap-1.5"
               style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
-              <StopCircle className="w-3 h-3" /> Abort Download
+              <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           )}
         </div>
@@ -1576,13 +1591,9 @@ function AutoUpdateStep() {
 
       <div className="space-y-4">
         {rows.map((row) => (
-          <div key={row.key} className="flex items-center justify-between py-3 px-4 rounded-xl"
+          <div key={row.key} className="rounded-xl px-4 py-3"
             style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.12)" }}>
-            <div className="flex-1 min-w-0 mr-4">
-              <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{row.label}</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{row.desc}</p>
-            </div>
-            <Switch checked={row.value} onCheckedChange={row.set} />
+            <ToggleRow label={row.label} description={row.desc} value={row.value} onChange={row.set} />
           </div>
         ))}
       </div>
