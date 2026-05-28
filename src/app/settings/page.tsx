@@ -551,7 +551,7 @@ function AboutSection() {
   const [appVersion, setAppVersion] = useState("…");
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => setAppVersion("0.9.1"));
+    getVersion().then(setAppVersion).catch(() => setAppVersion("0.10.0"));
     (async () => {
       const baseDir = (await getAppSetting("base_dir")) ?? "";
       if (!baseDir) return;
