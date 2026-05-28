@@ -394,6 +394,8 @@ export const tauriCmd = {
   /** Tell the backend whether first-time setup is complete.
    *  Controls close-to-tray: if not done, the X button exits the process. */
   setSetupComplete:   (complete: boolean) => invoke<void>("set_setup_complete", { complete }),
+  /** Update the close-to-tray preference and show/hide the tray icon. */
+  setCloseToTray:     (enabled: boolean) => invoke<void>("set_close_to_tray", { enabled }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),
   /** Open a directory in the platform file manager (xdg-open / Explorer). */

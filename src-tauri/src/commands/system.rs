@@ -16,16 +16,33 @@ pub struct Bootstrap {
 
 fn bootstrap_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
-        .app_data_dir()
+        .app_config_dir()
         .map(|d| d.join("bootstrap.json"))
-        .map_err(|e| format!("Failed to get app data dir: {e}"))
+        .map_err(|e| format!("Failed to get app config dir: {e}"))
 }
 
-/// Read the bootstrap file from the OS-standard app data directory.
+/// Read the bootstrap file from the OS-standard app config directory.
+/// Migrates automatically from the old app_data_dir location on first read.
 /// Returns None if setup has never been completed (file does not exist).
 #[tauri::command]
 pub async fn read_bootstrap(app: tauri::AppHandle) -> Result<Option<Bootstrap>, String> {
     let path = bootstrap_path(&app)?;
+
+    // One-time migration: move bootstrap.json from the old app_data_dir
+    // location to the new app_config_dir location.
+    if !path.exists() {
+        if let Ok(old_dir) = app.path().app_data_dir() {
+            let old_path = old_dir.join("bootstrap.json");
+            if old_path.exists() {
+                if let Some(parent) = path.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                let _ = tokio::fs::copy(&old_path, &path).await;
+                let _ = tokio::fs::remove_file(&old_path).await;
+            }
+        }
+    }
+
     if !path.exists() {
         return Ok(None);
     }
@@ -36,15 +53,15 @@ pub async fn read_bootstrap(app: tauri::AppHandle) -> Result<Option<Bootstrap>, 
     Ok(Some(b))
 }
 
-/// Persist the base directory to the bootstrap file, create the
-/// {base_dir}/lokiasam/ folder, and copy the old database (if it exists
-/// at app_data_dir/lokiasam.db) to {base_dir}/lokiasam/lokiasam.db.
+/// Persist the base directory to the bootstrap file (in app_config_dir), create
+/// {base_dir}/lokiasam/, and copy the old database (if it exists at
+/// app_data_dir/lokiasam.db) to {base_dir}/lokiasam/lokiasam.db.
 #[tauri::command]
 pub async fn write_bootstrap(app: tauri::AppHandle, base_dir: String) -> Result<(), String> {
-    let data_dir = app
+    let config_dir = app
         .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        .app_config_dir()
+        .map_err(|e| format!("Failed to get app config dir: {e}"))?;
 
     // Ensure {base_dir}/lokiasam/ exists.
     let lokiasam_dir = std::path::Path::new(&base_dir).join("lokiasam");
@@ -53,21 +70,21 @@ pub async fn write_bootstrap(app: tauri::AppHandle, base_dir: String) -> Result<
         .map_err(|e| format!("Failed to create lokiasam dir: {e}"))?;
 
     // Copy old DB if present and new location is still empty.
-    let old_db = data_dir.join("lokiasam.db");
-    let new_db = lokiasam_dir.join("lokiasam.db");
-    if old_db.exists() && !new_db.exists() {
-        tokio::fs::copy(&old_db, &new_db)
-            .await
-            .map_err(|e| format!("Failed to copy database: {e}"))?;
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let old_db = data_dir.join("lokiasam.db");
+        let new_db = lokiasam_dir.join("lokiasam.db");
+        if old_db.exists() && !new_db.exists() {
+            let _ = tokio::fs::copy(&old_db, &new_db).await;
+        }
     }
 
-    // Write bootstrap.json.
-    tokio::fs::create_dir_all(&data_dir)
+    // Write bootstrap.json to config dir.
+    tokio::fs::create_dir_all(&config_dir)
         .await
-        .map_err(|e| format!("Failed to create data dir: {e}"))?;
+        .map_err(|e| format!("Failed to create config dir: {e}"))?;
     let text = serde_json::to_string(&Bootstrap { base_dir })
         .map_err(|e| format!("Failed to serialize bootstrap: {e}"))?;
-    tokio::fs::write(data_dir.join("bootstrap.json"), text)
+    tokio::fs::write(config_dir.join("bootstrap.json"), text)
         .await
         .map_err(|e| format!("Failed to write bootstrap: {e}"))?;
 
@@ -109,22 +126,37 @@ pub struct DirCheckResult {
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Validate a directory path for use as the LokiASAM base or backup directory.
-/// Creates the directory (and parents) if it does not exist, performs a write
-/// test, and reports available disk space on that volume.
+/// Check whether a directory path is suitable for use as the LokiASAM base or
+/// backup directory.  Does NOT create the directory — it walks up the tree to
+/// the deepest existing ancestor, performs a write test there, and reports the
+/// available disk space.  Directory creation only happens when the user confirms
+/// the wizard (via write_bootstrap / the actual install commands).
 #[tauri::command]
 pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
     let p = Path::new(&path);
 
-    if let Err(e) = std::fs::create_dir_all(p) {
-        return Ok(DirCheckResult {
-            writable: false,
-            free_bytes: 0,
-            error: Some(format!("Cannot create directory: {e}")),
-        });
-    }
+    // Find the deepest existing ancestor (may be p itself).
+    let check_against = {
+        let mut cursor = p;
+        loop {
+            if cursor.exists() {
+                break cursor.to_path_buf();
+            }
+            match cursor.parent() {
+                Some(parent) => cursor = parent,
+                None => {
+                    return Ok(DirCheckResult {
+                        writable: false,
+                        free_bytes: 0,
+                        error: Some("Cannot find any existing parent directory.".into()),
+                    });
+                }
+            }
+        }
+    };
 
-    let test_file = p.join(".lokiasam_write_test");
+    // Write test against the existing ancestor.
+    let test_file = check_against.join(".lokiasam_write_test");
     let write_ok = std::fs::write(&test_file, b"ok").is_ok();
     let _ = std::fs::remove_file(&test_file);
 
@@ -132,7 +164,10 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
         return Ok(DirCheckResult {
             writable: false,
             free_bytes: 0,
-            error: Some("Directory exists but is not writable (check permissions).".into()),
+            error: Some(format!(
+                "Location is not writable (check permissions on {}).",
+                check_against.display()
+            )),
         });
     }
 
@@ -141,7 +176,7 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
         let disks = Disks::new_with_refreshed_list();
         disks
             .iter()
-            .filter(|d| p.starts_with(d.mount_point()))
+            .filter(|d| check_against.starts_with(d.mount_point()))
             .max_by_key(|d| d.mount_point().components().count())
             .map(|d| d.available_space())
             .unwrap_or(0)
@@ -290,6 +325,23 @@ pub fn set_setup_complete(
     state
         .setup_complete
         .store(complete, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Update the close-to-tray preference and show/hide the tray icon accordingly.
+/// Called from the frontend after setup completes or when the setting changes.
+#[tauri::command]
+pub fn set_close_to_tray(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+    enabled: bool,
+) {
+    state
+        .close_to_tray
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    // Show or hide the tray icon to match the setting.
+    if let Some(tray) = app.tray_by_id("lokiasam-tray") {
+        let _ = tray.set_visible(enabled);
+    }
 }
 
 /// Return the current OS platform identifier: "windows", "linux", or "macos".

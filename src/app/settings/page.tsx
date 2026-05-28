@@ -5,6 +5,7 @@ import {
   Folder, Terminal, Palette, Info,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
+  Server,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { getAppSetting, setAppSetting, saveNotificationConfig, getNotificationConfigs, type NotificationConfigRow } from "@/lib/db";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
@@ -392,7 +394,7 @@ function AboutSection() {
   }, []);
 
   const bootstrapHint = IS_LINUX
-    ? "~/.local/share/xyz.lokisoft.lokiasam/bootstrap.json"
+    ? "~/.config/xyz.lokisoft.lokiasam/bootstrap.json"
     : "%APPDATA%\\xyz.lokisoft.lokiasam\\bootstrap.json";
 
   const rows = [
@@ -421,7 +423,7 @@ function AboutSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Server Updates section
+// ASA Server Updates section
 // ---------------------------------------------------------------------------
 
 const AUTO_CHECK_OPTIONS = [
@@ -475,7 +477,7 @@ function ServerUpdatesSection() {
       if (result.updateAvailable) {
         toast.info(`Update available — build ${result.latestBuildId} (cache is at ${result.cachedBuildId}).`);
       } else {
-        toast.success("Cache is up to date.");
+        toast.success("ASA server cache is up to date.");
       }
     } catch (e) {
       toast.error(`Update check failed: ${e}`);
@@ -493,6 +495,12 @@ function ServerUpdatesSection() {
 
   return (
     <div className="space-y-5">
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Compares the locally cached build ID against the latest build on Steam. Does not run
+        SteamCMD or alter any files — apply updates per-server from the server Overview tab or
+        via an Auto-Update schedule.
+      </p>
+
       {/* Status row */}
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex flex-col gap-0.5">
@@ -541,7 +549,7 @@ function ServerUpdatesSection() {
         }}
       >
         {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        Check for Updates Now
+        Check for ASA Server Update
       </Button>
 
       <Separator style={{ background: "var(--border)" }} />
@@ -550,7 +558,7 @@ function ServerUpdatesSection() {
       <div className="space-y-2">
         <Label style={{ color: "var(--text-primary)" }}>Auto-Check Interval</Label>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Automatically check for updates via the Rust scheduler (immune to tray throttling).
+          Automatically check for ASA updates via the Rust scheduler (immune to tray throttling).
         </p>
         <div className="flex gap-2 flex-wrap">
           {AUTO_CHECK_OPTIONS.map((opt) => (
@@ -580,17 +588,13 @@ function ServerUpdatesSection() {
         >
           {autoSaved ? <><CheckCircle2 className="w-3 h-3" /> Saved</> : <><Save className="w-3 h-3" /> Save</>}
         </Button>
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Auto-check only queries the Steam API — it does not run SteamCMD or alter any files.
-          Apply updates manually via the server Overview tab or via an Auto-Update schedule.
-        </p>
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// App Updates section
+// LokiASAM App Updates section
 // ---------------------------------------------------------------------------
 
 const APP_UPDATE_MODE_OPTIONS = [
@@ -625,7 +629,32 @@ function AppUpdateSection() {
       if (!update) {
         toast.success("LokiASAM is up to date.");
       } else {
-        toast.info(`LokiASAM ${update.version} is available. Click the notification to install.`);
+        const toastId = `app-update-${update.version}`;
+        const firstLine = (update.body ?? "").split("\n").find((l) => l.trim()) ?? "";
+        const description = firstLine.length > 120
+          ? firstLine.slice(0, 120) + "…"
+          : firstLine || "A new version is ready to install.";
+        toast.info(`LokiASAM ${update.version} is available`, {
+          id: toastId,
+          description,
+          duration: Infinity,
+          action: {
+            label: "Download & Install",
+            onClick: async () => {
+              toast.dismiss(toastId);
+              const loadingId = toast.loading("Downloading update…");
+              try {
+                await update.downloadAndInstall();
+                toast.dismiss(loadingId);
+                toast.success("Update installed. Restart LokiASAM to apply it.", { duration: Infinity });
+              } catch (e) {
+                toast.dismiss(loadingId);
+                toast.error(`Update failed: ${e}`);
+              }
+            },
+          },
+          cancel: { label: "Later", onClick: () => {} },
+        });
       }
     } catch (e) {
       toast.error(`Update check failed: ${e}`);
@@ -638,11 +667,13 @@ function AppUpdateSection() {
 
   return (
     <div className="space-y-5">
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Automatic update checks for LokiASAM itself. When an update is found, a notification
+        appears with a Download &amp; Install button.
+      </p>
+
       <div className="space-y-2">
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Automatic update checks for LokiASAM itself. When an update is found, a notification
-          appears with an option to download and install it.
-        </p>
+        <Label style={{ color: "var(--text-primary)" }}>Check Frequency</Label>
         <div className="flex gap-2 flex-wrap">
           {APP_UPDATE_MODE_OPTIONS.map((opt) => (
             <button
@@ -689,8 +720,92 @@ function AppUpdateSection() {
         }}
       >
         {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        Check for App Update Now
+        Check for LokiASAM Update
       </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Proton-GE Update section (Linux only)
+// ---------------------------------------------------------------------------
+
+function ProtonGeUpdateSection() {
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    getAppSetting("proton_path").then((p) => {
+      if (p) {
+        const parts = p.replace(/[/\\]$/, "").split(/[/\\]/);
+        setCurrentVersion(parts[parts.length - 1] ?? "");
+      }
+    });
+  }, []);
+
+  const handleUpdate = async () => {
+    const baseDir = await getAppSetting("base_dir");
+    if (!baseDir) { toast.error("Base directory not configured."); return; }
+    const sep = baseDir.includes("\\") ? "\\" : "/";
+    const targetDir = `${baseDir.replace(/[/\\]$/, "")}${sep}proton`;
+
+    setDownloading(true);
+    setDone(false);
+    try {
+      const newPath = await tauriCmd.downloadProtonGe(targetDir);
+      await setAppSetting("proton_path", newPath);
+      const parts = newPath.replace(/[/\\]$/, "").split(/[/\\]/);
+      setCurrentVersion(parts[parts.length - 1] ?? "");
+      setDone(true);
+      toast.success("Proton-GE updated successfully.");
+    } catch (e) {
+      toast.error(`Proton-GE update failed: ${e}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {currentVersion && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Installed:</span>
+          <span
+            className="font-mono text-xs px-2 py-0.5 rounded"
+            style={{ background: "rgba(0,255,136,0.1)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.3)" }}
+          >
+            {currentVersion}
+          </span>
+        </div>
+      )}
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Downloads and installs the latest GE-Proton release from GitHub. The proton path in
+        settings will be updated automatically.
+      </p>
+      <Button
+        onClick={handleUpdate}
+        disabled={downloading}
+        size="sm"
+        className="gap-1.5"
+        style={{
+          background: done ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
+          border: `1px solid ${done ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+          color: done ? "var(--neon-green)" : "var(--neon-purple)",
+        }}
+      >
+        {downloading ? <Loader2 className="w-3 h-3 animate-spin" /> : done ? <CheckCircle2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+        {done ? "Update Complete" : "Update Proton-GE to Latest"}
+      </Button>
+
+      {(downloading || done) && (
+        <CommandOutputPanel
+          eventChannel="proton://output/download"
+          label="Proton-GE Download"
+          completed={done}
+          bodyClassName="h-48"
+        />
+      )}
     </div>
   );
 }
@@ -929,10 +1044,145 @@ function GlobalChannelCard({
 }
 
 // ---------------------------------------------------------------------------
+// Notification Events section
+// ---------------------------------------------------------------------------
+
+const NOTIFICATION_TOGGLES = [
+  {
+    key: "desktop_notifications_enabled",
+    label: "Desktop Notifications",
+    desc: "Show OS system notifications for server events.",
+    defaultOn: true,
+  },
+  {
+    key: "notify_server_start",
+    label: "Server Started",
+    desc: "Notify when a managed server successfully starts.",
+    defaultOn: true,
+  },
+  {
+    key: "notify_server_crash",
+    label: "Server Crashed",
+    desc: "Notify when a server exits unexpectedly.",
+    defaultOn: true,
+  },
+  {
+    key: "notify_server_stop",
+    label: "Server Stopped",
+    desc: "Notify when a server is manually stopped.",
+    defaultOn: false,
+  },
+  {
+    key: "notify_update_available",
+    label: "ASA Update Available",
+    desc: "Notify when a new ASA server build is detected on Steam.",
+    defaultOn: true,
+  },
+];
+
+function NotificationEventsSection() {
+  const [values, setValues] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    Promise.all(NOTIFICATION_TOGGLES.map((t) => getAppSetting(t.key))).then((results) => {
+      const v: Record<string, boolean> = {};
+      NOTIFICATION_TOGGLES.forEach((t, i) => {
+        v[t.key] = results[i] !== null ? results[i] === "true" : t.defaultOn;
+      });
+      setValues(v);
+    });
+  }, []);
+
+  const handleToggle = async (key: string, enabled: boolean) => {
+    setValues((prev) => ({ ...prev, [key]: enabled }));
+    await setAppSetting(key, String(enabled));
+  };
+
+  return (
+    <div className="divide-y" style={{ borderColor: "var(--border)" }}>
+      {NOTIFICATION_TOGGLES.map((t) => (
+        <div
+          key={t.key}
+          className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0"
+        >
+          <div>
+            <p className="text-sm" style={{ color: "var(--text-primary)" }}>{t.label}</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{t.desc}</p>
+          </div>
+          <Switch
+            checked={values[t.key] ?? t.defaultOn}
+            onCheckedChange={(v) => handleToggle(t.key, v)}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Close-to-tray section
+// ---------------------------------------------------------------------------
+
+function CloseToTraySection() {
+  const [closeToTray, setCloseToTrayState] = useState(true);
+
+  useEffect(() => {
+    getAppSetting("close_to_tray").then((v) => {
+      setCloseToTrayState(v !== "false");
+    });
+  }, []);
+
+  const handleToggle = async (enabled: boolean) => {
+    setCloseToTrayState(enabled);
+    await setAppSetting("close_to_tray", String(enabled));
+    tauriCmd.setCloseToTray(enabled).catch(() => {});
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-6">
+        <div className="space-y-1.5 flex-1">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            Minimize to Tray on Close
+          </p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            When enabled, clicking the close button hides LokiASAM to the system tray instead of
+            exiting. Servers and schedules continue running in the background. Click the tray icon
+            to restore the window.
+          </p>
+          {!closeToTray && (
+            <p className="text-xs mt-1" style={{ color: "#ffa500" }}>
+              Closing the window will exit LokiASAM. Running servers will remain running but
+              schedules and monitoring will stop.
+            </p>
+          )}
+        </div>
+        <Switch checked={closeToTray} onCheckedChange={handleToggle} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tab navigation
+// ---------------------------------------------------------------------------
+
+const TABS = [
+  { id: "general",       label: "General" },
+  { id: "updates",       label: "Updates" },
+  { id: "notifications", label: "Notifications" },
+  { id: "advanced",      label: "Advanced" },
+] as const;
+
+type TabId = typeof TABS[number]["id"];
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState<TabId>("general");
+
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
       <div>
@@ -947,65 +1197,146 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <Section icon={Folder} title="Directories" description="File system paths for servers, backups, and tools.">
-        <PathField
-          label="Base Directory"
-          settingKey="base_dir"
-          placeholder="/path/to/ArkServers"
-          hint="Root folder for all server installs. To change, re-run the setup wizard."
-          readOnly
-        />
-        <Separator style={{ background: "var(--border)" }} />
-        <PathField
-          label="Backup Directory"
-          settingKey="backup_dir"
-          placeholder="/path/to/Backups"
-          hint="Where scheduled and manual backup zips are stored."
-          validateDir
-        />
-      </Section>
+      {/* Tab bar */}
+      <div
+        className="flex gap-0 border-b"
+        style={{ borderColor: "var(--border)" }}
+      >
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className="px-4 py-2.5 text-sm font-medium transition-colors relative"
+            style={{
+              color: activeTab === tab.id ? "var(--neon-purple)" : "var(--text-muted)",
+              borderBottom: activeTab === tab.id
+                ? "2px solid var(--neon-purple)"
+                : "2px solid transparent",
+              marginBottom: "-1px",
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      <Section icon={Terminal} title="Tools" description="Paths to SteamCMD and (on Linux) Proton-GE.">
-        <PathField
-          label="SteamCMD Path"
-          settingKey="steamcmd_path"
-          placeholder="/path/to/steamcmd"
-          hint="Path to the steamcmd executable. Used for all server installs and updates."
-          pickDirectory={false}
-          validateSteamcmd
-        />
-        {IS_LINUX && (
-          <>
+      {/* General tab */}
+      {activeTab === "general" && (
+        <div className="flex flex-col gap-6">
+          <Section icon={Folder} title="Directories" description="File system paths for servers and backups.">
+            <PathField
+              label="Base Directory"
+              settingKey="base_dir"
+              placeholder="/path/to/LokiASAM"
+              hint="Root folder for all server installs. To change, re-run the setup wizard."
+              readOnly
+            />
             <Separator style={{ background: "var(--border)" }} />
             <PathField
-              label="Proton-GE Directory"
-              settingKey="proton_path"
-              placeholder="/path/to/GE-Proton9-x"
-              hint="Proton-GE installation used to run the Windows ASA server binary on Linux."
+              label="Backup Directory"
+              settingKey="backup_dir"
+              placeholder="/path/to/Backups"
+              hint="Where scheduled and manual backup zips are stored."
+              validateDir
             />
-          </>
-        )}
-      </Section>
+          </Section>
 
-      <Section icon={ArrowUp} title="Server Updates" description="Check for ASA dedicated server updates via the Steam API.">
-        <ServerUpdatesSection />
-      </Section>
+          <Section icon={Terminal} title="Tools" description="Paths to SteamCMD and (on Linux) Proton-GE.">
+            <PathField
+              label="SteamCMD Path"
+              settingKey="steamcmd_path"
+              placeholder="/path/to/steamcmd"
+              hint="Path to the steamcmd executable. Used for all server installs and updates."
+              pickDirectory={false}
+              validateSteamcmd
+            />
+            {IS_LINUX && (
+              <>
+                <Separator style={{ background: "var(--border)" }} />
+                <PathField
+                  label="Proton-GE Directory"
+                  settingKey="proton_path"
+                  placeholder="/path/to/GE-Proton9-x"
+                  hint="Proton-GE installation used to run the Windows ASA server binary on Linux."
+                />
+              </>
+            )}
+          </Section>
 
-      <Section icon={Bell} title="Global Notification Channels" description="Default Discord and email channels for all server events.">
-        <GlobalNotificationsSection />
-      </Section>
+          <Section icon={Palette} title="Appearance" description="Customize the interface accent color.">
+            <AppearanceSection />
+          </Section>
+        </div>
+      )}
 
-      <Section icon={Palette} title="Appearance" description="Customize the interface accent color.">
-        <AppearanceSection />
-      </Section>
+      {/* Updates tab */}
+      {activeTab === "updates" && (
+        <div className="flex flex-col gap-6">
+          <Section
+            icon={Server}
+            title="ASA Server Updates"
+            description="Check for ARK: Survival Ascended dedicated server updates via the Steam API."
+          >
+            <ServerUpdatesSection />
+          </Section>
 
-      <Section icon={Download} title="App Updates" description="Automatic update checks for LokiASAM itself.">
-        <AppUpdateSection />
-      </Section>
+          <Section
+            icon={Download}
+            title="LokiASAM App Updates"
+            description="Check for and install updates to LokiASAM itself."
+          >
+            <AppUpdateSection />
+          </Section>
 
-      <Section icon={Info} title="About" description="Application version and data paths.">
-        <AboutSection />
-      </Section>
+          {IS_LINUX && (
+            <Section
+              icon={Terminal}
+              title="Proton-GE"
+              description="Update the Proton-GE compatibility layer to the latest release."
+            >
+              <ProtonGeUpdateSection />
+            </Section>
+          )}
+        </div>
+      )}
+
+      {/* Notifications tab */}
+      {activeTab === "notifications" && (
+        <div className="flex flex-col gap-6">
+          <Section
+            icon={Bell}
+            title="Notification Channels"
+            description="Default Discord and email channels for all server events."
+          >
+            <GlobalNotificationsSection />
+          </Section>
+
+          <Section
+            icon={Bell}
+            title="Notification Events"
+            description="Choose which events trigger notifications across all channels."
+          >
+            <NotificationEventsSection />
+          </Section>
+        </div>
+      )}
+
+      {/* Advanced tab */}
+      {activeTab === "advanced" && (
+        <div className="flex flex-col gap-6">
+          <Section
+            icon={Monitor}
+            title="System Tray"
+            description="Control how LokiASAM behaves when minimized or closed."
+          >
+            <CloseToTraySection />
+          </Section>
+
+          <Section icon={Info} title="About" description="Application version and data paths.">
+            <AboutSection />
+          </Section>
+        </div>
+      )}
     </div>
   );
 }

@@ -61,9 +61,10 @@ export function SetupGuard({ children }: SetupGuardProps) {
           sep + "lokiasam" + sep + "lokiasam.db";
         await initDb(dbPath);
 
-        const [value, accent] = await Promise.all([
+        const [value, accent, closeToTraySetting] = await Promise.all([
           getAppSetting("setup_complete"),
           getAppSetting("theme_accent"),
+          getAppSetting("close_to_tray"),
         ]);
         if (accent) applyThemeAccent(accent);
         const complete = value === "true";
@@ -71,6 +72,8 @@ export function SetupGuard({ children }: SetupGuardProps) {
         setSetupChecked(true);
         if (complete) {
           tauriCmd.setSetupComplete(true).catch(() => {});
+          // Default close_to_tray to true for existing installs that predate the setting.
+          tauriCmd.setCloseToTray(closeToTraySetting !== "false").catch(() => {});
           syncSchedulesToRust();
         }
       } catch {
@@ -81,9 +84,10 @@ export function SetupGuard({ children }: SetupGuardProps) {
     })();
   }, [setSetupChecked, setSetupComplete]);
 
-  const handleSetupComplete = () => {
+  const handleSetupComplete = (closeToTray: boolean) => {
     setSetupComplete(true);
     tauriCmd.setSetupComplete(true).catch(() => {});
+    tauriCmd.setCloseToTray(closeToTray).catch(() => {});
     syncSchedulesToRust();
   };
 
@@ -124,10 +128,12 @@ export function SetupGuard({ children }: SetupGuardProps) {
 
   return (
     <>
-      {children}
+      {/* Only mount DB-dependent children once setup is confirmed — prevents
+          UpdateManager / page.tsx from calling getDb() before initDb() runs. */}
+      {(setupComplete || !isTauri) && children}
       {/* First-time setup wizard overlay */}
       {isTauri && !setupComplete && (
-        <SetupWizard onComplete={handleSetupComplete} />
+        <SetupWizard onComplete={(closeToTray) => handleSetupComplete(closeToTray)} />
       )}
       {/* New server creation wizard overlay */}
       {showNewServerWizard && (

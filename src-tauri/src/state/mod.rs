@@ -27,6 +27,8 @@ pub struct AppState {
     pub setup_complete: AtomicBool,
     /// Guards the one-time "tray hint" toast shown when the user first hides the window.
     pub tray_hint_shown: AtomicBool,
+    /// Whether closing the main window should hide to tray (true) or exit (false).
+    pub close_to_tray: AtomicBool,
     /// Shared HTTP client — reuses connections and TLS sessions across all outbound requests.
     pub http_client: reqwest::Client,
 }
@@ -38,6 +40,7 @@ impl AppState {
             stopping_servers: Mutex::new(HashSet::new()),
             setup_complete: AtomicBool::new(false),
             tray_hint_shown: AtomicBool::new(false),
+            close_to_tray: AtomicBool::new(true),
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()

@@ -112,7 +112,7 @@ pub fn run() {
             // reflects the current icon file, even in dev hot-reload mode.
             let tray_icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
-            let tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::with_id("lokiasam-tray")
                 .icon(tray_icon)
                 .tooltip("LokiASAM")
                 .menu(&tray_menu)
@@ -135,25 +135,31 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Hidden by default — shown once the frontend confirms setup + close_to_tray=true.
+            let _ = tray.set_visible(false);
+
             // Keep the TrayIcon alive for the duration of the app.
             app.manage(tray);
             // Keep menu item handles alive for dynamic text/enabled updates.
             app.manage(TrayMenuState { show_item: show_i, hide_item: hide_i });
 
             // ── Close-to-tray handler ─────────────────────────────────────
-            // If setup is complete, intercept the close button and hide the
-            // window instead of exiting. During the setup wizard the close
-            // button behaves normally (process exits).
+            // If setup is complete AND close_to_tray is enabled, intercept the
+            // close button and hide to tray instead of exiting.
+            // During setup or when close_to_tray=false, the X button exits normally.
             let handle_for_close = app.handle().clone();
             app.get_webview_window("main")
                 .unwrap()
                 .on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         let app_state = handle_for_close.state::<state::AppState>();
-                        if app_state
+                        let setup_done = app_state
                             .setup_complete
-                            .load(std::sync::atomic::Ordering::Relaxed)
-                        {
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        let close_to_tray = app_state
+                            .close_to_tray
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if setup_done && close_to_tray {
                             api.prevent_close();
                             hide_main_window(&handle_for_close);
                         }
@@ -313,6 +319,7 @@ pub fn run() {
             commands::system::get_process_stats,
             commands::system::get_platform,
             commands::system::set_setup_complete,
+            commands::system::set_close_to_tray,
             commands::system::query_server,
             commands::system::check_port_available,
             commands::system::read_bootstrap,

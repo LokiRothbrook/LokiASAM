@@ -18,9 +18,14 @@ export function UpdateManager() {
       if (!update) return;
 
       const toastId = `app-update-${update.version}`;
+      // Trim release notes to the first line so the toast stays readable.
+      const firstLine = (update.body ?? "").split("\n").find((l) => l.trim()) ?? "";
+      const description = firstLine.length > 120
+        ? firstLine.slice(0, 120) + "…"
+        : firstLine || "A new version is ready to install.";
       toast.info(`LokiASAM ${update.version} is available`, {
         id: toastId,
-        description: update.body ?? "A new version is ready to install.",
+        description,
         duration: Infinity,
         action: {
           label: "Download & Install",
