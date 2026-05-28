@@ -466,13 +466,15 @@ function ThemesSection() {
     try {
       await setAppSetting("theme_preset", p);
       await setAppSetting("theme_accent", defaultAccent);
-    } catch { /* silent */ }
+    } catch (err) {
+      toast.error("Failed to save theme", { description: String(err) });
+    }
   };
 
   const handleAccent = async (a: ThemeAccent) => {
     setAccentState(a);
     applyThemeAccent(a);
-    try { await setAppSetting("theme_accent", a); } catch { /* silent */ }
+    try { await setAppSetting("theme_accent", a); } catch (err) { toast.error("Failed to save theme accent", { description: String(err) }); }
   };
 
   return (
@@ -1077,7 +1079,7 @@ function GlobalNotificationsSection() {
   const [saving, setSaving]   = useState<string | null>(null);
 
   const loadConfigs = useCallback(async () => {
-    try { setConfigs(await getNotificationConfigs(null)); } catch { /* ignore */ }
+    try { setConfigs(await getNotificationConfigs(null)); } catch (err) { toast.error("Failed to load notification configs", { description: String(err) }); }
   }, []);
 
   useEffect(() => { loadConfigs(); }, [loadConfigs]);

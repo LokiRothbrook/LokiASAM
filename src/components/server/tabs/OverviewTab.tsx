@@ -192,7 +192,8 @@ export function OverviewTab({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       await tauriCmd.stopServer(server.id, true);
       await updateServerStatus(server.id, "stopped", null);
-    } catch {
+    } catch (err) {
+      toast.error(`Failed to stop ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -208,7 +209,8 @@ export function OverviewTab({ server }: Props) {
       const params = await buildStartParams();
       const pid = await tauriCmd.restartServer(params, true);
       await updateServerStatus(server.id, "running", pid);
-    } catch {
+    } catch (err) {
+      toast.error(`Failed to restart ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -254,8 +256,8 @@ export function OverviewTab({ server }: Props) {
         .then(() => updateServerStatus(server.id, "stopped", null))
         .catch(() => updateServerStatus(server.id, "install_failed", null))
         .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
-    } catch {
-      // Settings unavailable
+    } catch (err) {
+      toast.error(`Failed to start reinstall for ${server.name}`, { description: String(err) });
     }
   };
 
@@ -265,8 +267,9 @@ export function OverviewTab({ server }: Props) {
       await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
       const list = await tauriCmd.rconGetPlayers(server.id);
       setPlayers(list);
-    } catch {
+    } catch (err) {
       setPlayers([]);
+      toast.error("Failed to fetch player list via RCON", { description: String(err) });
     } finally {
       setPlayersLoading(false);
     }

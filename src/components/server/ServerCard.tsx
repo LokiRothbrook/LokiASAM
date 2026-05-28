@@ -222,7 +222,7 @@ export function ServerCard({ server }: Props) {
       await tauriCmd.stopServer(server.id, true);
       // Actual "stopped" status comes via the server://any-change event from Rust.
     } catch (err) {
-      console.error("Stop failed:", err);
+      toast.error(`Failed to stop ${server.name}`, { description: String(err) });
     } finally {
       setActionPending(false);
     }
@@ -240,7 +240,7 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "running", newPid);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (err) {
-      console.error("Restart failed:", err);
+      toast.error(`Failed to restart ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } finally {

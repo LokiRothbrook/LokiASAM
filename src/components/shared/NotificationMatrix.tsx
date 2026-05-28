@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { Loader2, Bell, Monitor, MessageSquare, Mail } from "lucide-react";
 import {
   getNotificationConfigs,
@@ -116,7 +117,9 @@ export function NotificationMatrix({ onSaved }: NotificationMatrixProps) {
       next.add(event);
     }
     setChannelEvents((prev) => ({ ...prev, [channel]: next }));
-    saveGlobalChannelEvents(channel, [...next]).then(() => onSaved?.()).catch(console.error);
+    saveGlobalChannelEvents(channel, [...next])
+      .then(() => onSaved?.())
+      .catch((err) => toast.error("Failed to save notification settings", { description: String(err) }));
   }, [channelEvents, onSaved]);
 
   if (loading) {
