@@ -644,6 +644,8 @@ export const NOTIFICATION_EVENTS = {
   RCON_FAILED: "rcon_failed",
   MOD_INSTALLED: "mod_installed",
   LOW_DISK_SPACE: "low_disk_space",
+  SERVER_INSTALL_COMPLETE: "server_install_complete",
+  SERVER_INSTALL_FAILED: "server_install_failed",
 } as const;
 
 export type NotificationEventType =
@@ -663,6 +665,8 @@ export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = 
   rcon_failed:        "RCON Connection Failed",
   mod_installed:      "Mod Installed",
   low_disk_space:     "Low Disk Space",
+  server_install_complete: "Server Install Complete",
+  server_install_failed:   "Server Install Failed",
 };
 
 // ---------------------------------------------------------------------------

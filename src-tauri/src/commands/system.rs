@@ -627,6 +627,14 @@ pub async fn check_port_available(port: u16) -> Result<bool, String> {
     }
 }
 
+/// Exit the app immediately, bypassing close-to-tray logic.
+/// Called by the frontend after the user confirms they want to quit
+/// while a background install is running.
+#[tauri::command]
+pub fn force_quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 // ---------------------------------------------------------------------------
 // A2S_INFO response parser
 // ---------------------------------------------------------------------------

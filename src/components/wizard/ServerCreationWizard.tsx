@@ -30,9 +30,11 @@ import { LokiIcon } from "@/components/shared/LokiIcon";
 import {
   getReleasedMaps,
   SERVER_PRESETS,
+  NOTIFICATION_EVENTS,
   type ArkMap,
   type ServerPreset,
 } from "@/data/game-data";
+import { dispatchNotification } from "@/lib/notifications";
 import {
   getAppSetting,
   createServer,
@@ -882,6 +884,15 @@ function InstallStep({
       await updateServerStatus(serverId, "stopped", null);
       queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
 
+      dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_COMPLETE,
+        serverId,
+        serverName: data.name,
+        title:      `${data.name} installed successfully`,
+        body:       "Server files are ready. You can start the server now.",
+        severity:   "success",
+      });
+
       if (!backgroundRef.current) {
         setStatus("done");
       } else {
@@ -898,6 +909,16 @@ function InstallStep({
         // Mark server as install_failed in DB so the dashboard card reflects it
         await updateServerStatus(serverId, "install_failed", null).catch(() => {});
         queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
+
+        dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_FAILED,
+          serverId,
+          serverName: data.name,
+          title:      `${data.name} install failed`,
+          body:       msg,
+          severity:   "error",
+        });
+
         if (!backgroundRef.current) {
           setError(msg);
           setStatus("error");

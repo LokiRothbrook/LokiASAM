@@ -75,7 +75,17 @@ export function NotificationMatrix({ onSaved }: NotificationMatrixProps) {
   const loadState = useCallback(async () => {
     setLoading(true);
     try {
-      const globalConfigs = await getNotificationConfigs(null);
+      let globalConfigs: Awaited<ReturnType<typeof getNotificationConfigs>>;
+      try {
+        globalConfigs = await getNotificationConfigs(null);
+      } catch (err) {
+        if (String(err).includes("Database not initialized")) {
+          // DB not yet created (first-run wizard) — use in-memory defaults
+          setLoading(false);
+          return;
+        }
+        throw err;
+      }
       const byChannel = Object.fromEntries(globalConfigs.map((c) => [c.channel, c]));
 
       const next = { ...channelEvents };

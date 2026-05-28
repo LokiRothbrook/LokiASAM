@@ -24,7 +24,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
-  MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle,
+  MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -35,6 +35,7 @@ import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { Switch } from "@/components/ui/switch";
 import { useSetupStore } from "@/store/useSetupStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
+import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb } from "@/lib/db";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -50,6 +51,7 @@ const IS_LINUX =
 
 const STEPS_WIN = [
   { label: "Welcome",       icon: LokiIcon },
+  { label: "Theme",         icon: Palette },
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
@@ -61,6 +63,7 @@ const STEPS_WIN = [
 
 const STEPS_LINUX = [
   { label: "Welcome",       icon: LokiIcon },
+  { label: "Theme",         icon: Palette },
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
@@ -177,6 +180,119 @@ function WelcomeStep() {
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Let&apos;s get you set up. This will only take a minute.
       </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ThemeStep
+// ---------------------------------------------------------------------------
+
+const PRESET_ORDER: ThemePreset[] = ["neon", "abyss", "toxic", "storm"];
+
+function ThemeStep() {
+  const { themePreset, themeAccent, setThemePreset, setThemeAccent } = useSetupStore();
+
+  const handlePreset = (p: ThemePreset) => {
+    const defaultAccent = THEME_PRESETS[p].defaultAccent;
+    setThemePreset(p);
+    setThemeAccent(defaultAccent);
+    applyTheme(p, defaultAccent);
+  };
+
+  const handleAccent = (a: ThemeAccent) => {
+    setThemeAccent(a);
+    applyTheme(themePreset, a);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+          Choose Your Theme
+        </h2>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Pick a background preset and accent color. You can change these at any time in Settings.
+        </p>
+      </div>
+
+      {/* Preset selector */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+          Background Preset
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {PRESET_ORDER.map((p) => {
+            const preset = THEME_PRESETS[p];
+            const selected = themePreset === p;
+            return (
+              <button
+                key={p}
+                onClick={() => handlePreset(p)}
+                className="rounded-lg p-3 text-left transition-all"
+                style={{
+                  background: selected ? "rgba(191,0,255,0.12)" : preset.background,
+                  border: `1px solid ${selected ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+                  boxShadow: selected ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+                }}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "00ffff"}` }} />
+                  <span className="text-sm font-semibold" style={{ color: selected ? "var(--neon-purple)" : "#fff" }}>
+                    {preset.label}
+                    {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(191,0,255,0.2)", color: "var(--neon-purple)" }}>Active</span>}
+                  </span>
+                </div>
+                <div className="flex gap-1 mt-1">
+                  {[preset.background, preset.surface, preset.textMuted].map((c, i) => (
+                    <div key={i} className="h-2 flex-1 rounded" style={{ background: c }} />
+                  ))}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Accent selector */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+          Accent Color
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {ACCENT_OPTIONS.map(({ value, label }) => {
+            const selected = themeAccent === value;
+            const hexMap: Record<ThemeAccent, string> = {
+              purple: "#bf00ff", cyan: "#00ffff", green: "#00ff88", pink: "#ff0080",
+              orange: "#ff8800", red: "#ff0055", blue: "#4080ff", teal: "#00ffc8", yellow: "#ffdc00",
+            };
+            const hex = hexMap[value as ThemeAccent] ?? "#bf00ff";
+            return (
+              <button
+                key={value}
+                onClick={() => handleAccent(value as ThemeAccent)}
+                title={label}
+                className="w-8 h-8 rounded-full transition-all"
+                style={{
+                  background: hex,
+                  boxShadow: selected ? `0 0 0 2px #000, 0 0 0 4px ${hex}` : "none",
+                  transform: selected ? "scale(1.15)" : "scale(1)",
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
+      >
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Tip: </span>
+          Changes apply instantly — what you see right now is exactly what you&apos;ll get.
+        </p>
+      </div>
     </div>
   );
 }
@@ -769,6 +885,8 @@ function SteamCmdStep() {
       const msg = String(err);
       if (msg === "Aborted") {
         setCanceled(true);
+        // Clean up any partial steamcmd files
+        tauriCmd.deleteDirectory(autoSteamcmdTarget).catch(() => {});
       } else {
         setError(msg);
       }
@@ -928,16 +1046,6 @@ function SteamCmdStep() {
           canceled={canceled}
           className="mt-2"
         />
-      )}
-
-      {canceled && !isLoading && (
-        <Button
-          onClick={handleAutoDownload}
-          variant="outline" size="sm" className="gap-1.5"
-          style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
-        >
-          <RefreshCw className="w-3 h-3" /> Reinstall SteamCMD
-        </Button>
       )}
 
       {error && (
@@ -1561,14 +1669,25 @@ function TrayStep() {
         ))}
       </div>
 
-      <div
-        className="rounded-lg p-3"
-        style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
-      >
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Note: </span>
-          You can change this at any time in Settings. The first time you minimize to tray, you&apos;ll get a desktop notification confirming the app is still running.
-        </p>
+      <div className="space-y-2">
+        <div
+          className="rounded-lg p-3"
+          style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
+        >
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Note: </span>
+            You can change this at any time in Settings. The first time you minimize to tray, you&apos;ll get a desktop notification confirming the app is still running.
+          </p>
+        </div>
+        <div
+          className="rounded-lg p-3"
+          style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.2)" }}
+        >
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            <span className="font-semibold" style={{ color: "#ffa500" }}>Desktop notifications: </span>
+            OS desktop notifications (the pop-up alerts from your system) only appear when LokiASAM is minimized to the system tray. While the window is open or the app is fully closed, notifications are shown as in-app toasts instead.
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -1698,6 +1817,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     step, nextStep, prevStep, setStep,
     baseDir, backupDir, baseDirWritable, backupDirWritable,
     steamcmdPath, steamcmdValidated,
+    themePreset, themeAccent,
     protonPath, protonValidated,
     setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
     setProtonPath, setProtonValidated,
@@ -1736,16 +1856,17 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   }, [isLoading]);
 
   const canAdvance = () => {
-    if (step === 1 && importMode) return importValid; // import tab needs a valid DB
+    if (step === 2 && importMode) return importValid; // import tab needs a valid DB (step shifted +1)
     switch (step) {
-      case 0: return true;
-      case 1: return baseDirWritable;
-      case 2: return backupDirWritable;
-      case 3: return steamcmdValidated;
-      case 4: return IS_LINUX ? protonValidated : true; // proton on linux, notifications on windows
-      case 5: return true;  // notifications — always ok
-      case 6: return true;  // tray / updates — always ok
-      case 7: return IS_LINUX ? true : true;            // updates / complete — always ok
+      case 0: return true;  // Welcome
+      case 1: return true;  // Theme — always ok
+      case 2: return baseDirWritable;
+      case 3: return backupDirWritable;
+      case 4: return steamcmdValidated;
+      case 5: return IS_LINUX ? protonValidated : true; // proton on linux, notifications on windows
+      case 6: return true;  // notifications — always ok
+      case 7: return true;  // tray — always ok
+      case 8: return true;  // updates — always ok
       default: return false;
     }
   };
@@ -1786,8 +1907,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   };
 
   const handleNext = async () => {
-    // Handle import mode on step 1 — skip to Complete after saving
-    if (step === 1 && importMode && importValid) {
+    // Handle import mode on step 2 — skip to Complete after saving
+    if (step === 2 && importMode && importValid) {
       await handleImportComplete();
       return;
     }
@@ -1832,6 +1953,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("app_auto_update_enabled",  String(appAutoUpdateEnabled));
         if (IS_LINUX) await setAppSetting("proton_ge_auto_check", String(protonAutoCheckEnabled));
 
+        // Theme
+        await setAppSetting("theme_preset", themePreset);
+        await setAppSetting("theme_accent", themeAccent);
+
         await setAppSetting("setup_complete", "true");
         setDirection(1);
         nextStep();
@@ -1858,6 +1983,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const stepComponents = IS_LINUX
     ? [
         <WelcomeStep key="welcome" />,
+        <ThemeStep key="theme" />,
         <BaseDirStep key="basedir" />,
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
@@ -1869,6 +1995,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       ]
     : [
         <WelcomeStep key="welcome" />,
+        <ThemeStep key="theme" />,
         <BaseDirStep key="basedir" />,
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
@@ -1981,7 +2108,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </span>
 
                 {/* Hide the default Next button when import mode is showing its own button */}
-                {!(step === 1 && importMode && importValid) && (
+                {!(step === 2 && importMode && importValid) && (
                   <Button
                     onClick={handleNext}
                     disabled={!canAdvance() || isLoading || saving}
@@ -2003,7 +2130,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 )}
 
                 {/* Import mode: show an Import button in place of Next */}
-                {step === 1 && importMode && importValid && (
+                {step === 2 && importMode && importValid && (
                   <Button
                     onClick={handleNext}
                     disabled={saving}

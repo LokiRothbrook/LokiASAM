@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { getServers } from "@/lib/db";
+import { getServers, getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 
 export function CloseWarningManager() {
@@ -18,35 +19,72 @@ export function CloseWarningManager() {
   const installingIds = useRef<string[]>([]);
   const allowClose = useRef(false);
 
+  const checkActiveInstalls = async (): Promise<{ count: number; ids: string[] }> => {
+    const servers = await getServers().catch(() => []);
+    const active = servers.filter(
+      (s) => s.status === "installing" || s.status === "updating"
+    );
+    return { count: active.length, ids: active.map((s) => s.id) };
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    let unlisten: (() => void) | undefined;
+    let unlistenClose: (() => void) | undefined;
+    let unlistenTrayQuit: (() => void) | undefined;
 
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
       getCurrentWindow()
         .onCloseRequested(async (event) => {
+          // Always prevent the auto-destroy() that the onCloseRequested wrapper
+          // would fire if we don't call preventDefault(). The Rust on_window_event
+          // handler manages hide-to-tray via api.prevent_close(); destroy() would
+          // bypass that and kill the window even when it's supposed to hide.
+          event.preventDefault();
+
           if (allowClose.current) return;
 
-          const servers = await getServers().catch(() => []);
-          const active = servers.filter(
-            (s) => s.status === "installing" || s.status === "updating"
-          );
+          const [closeToTray, setupDone] = await Promise.all([
+            getAppSetting("close_to_tray").catch(() => null),
+            getAppSetting("setup_complete").catch(() => null),
+          ]);
 
-          if (active.length > 0) {
-            event.preventDefault();
-            installingIds.current = active.map((s) => s.id);
-            setInstallingCount(active.length);
+          // If close-to-tray is active, the Rust handler already hid the window.
+          // Nothing more to do here — silently swallow the close event.
+          if (closeToTray !== "false" && setupDone === "true") return;
+
+          // close_to_tray is off (or setup not done): check for active installs.
+          const { count, ids } = await checkActiveInstalls();
+          if (count > 0) {
+            installingIds.current = ids;
+            setInstallingCount(count);
             setShowWarning(true);
+            return;
           }
+
+          // No active installs, close_to_tray is off → exit the app.
+          await tauriCmd.forceQuit();
         })
-        .then((fn) => {
-          unlisten = fn;
-        });
+        .then((fn) => { unlistenClose = fn; });
+    });
+
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<unknown>("tray-quit-requested", async () => {
+        const { count, ids } = await checkActiveInstalls();
+        if (count > 0) {
+          installingIds.current = ids;
+          setInstallingCount(count);
+          setShowWarning(true);
+        } else {
+          // No active installs — exit immediately
+          await tauriCmd.forceQuit();
+        }
+      }).then((fn) => { unlistenTrayQuit = fn; });
     });
 
     return () => {
-      unlisten?.();
+      unlistenClose?.();
+      unlistenTrayQuit?.();
     };
   }, []);
 
@@ -56,8 +94,7 @@ export function CloseWarningManager() {
     }
     setShowWarning(false);
     allowClose.current = true;
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().close();
+    await tauriCmd.forceQuit();
   };
 
   const handleKeepRunning = () => {
@@ -69,6 +106,9 @@ export function CloseWarningManager() {
       <DialogContent showCloseButton={false} className="max-w-sm">
         <DialogHeader>
           <DialogTitle>Install in Progress</DialogTitle>
+          <DialogDescription className="sr-only">
+            A server installation is running. Choose to cancel it and exit, or keep the app running.
+          </DialogDescription>
         </DialogHeader>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           {installingCount === 1

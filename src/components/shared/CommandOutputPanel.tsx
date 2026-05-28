@@ -4,9 +4,15 @@
  * CommandOutputPanel — live terminal-style output panel for long-running commands.
  *
  * Subscribes to a Tauri event channel and appends lines as they arrive.
- * Used during SteamCMD install/update and other long-running operations.
+ * Lines are also stored in a module-level buffer so they survive the panel being
+ * unmounted (e.g. dialog closed). When the panel re-mounts it reads from the buffer
+ * and picks up where it left off.
  *
- * Each event payload must match: { line: string; stream: "stdout" | "stderr" }
+ * Buffer lifecycle:
+ *   - Accumulates as events arrive, regardless of dialog state.
+ *   - Cleared when the panel unmounts AND the process has completed (completed=true).
+ *   - Also cleared on unmount when clearBufferOnUnmount=true (used by wizard "Go to Dashboard").
+ *   - Buffer is NOT cleared on unmount while a process is still running.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -27,6 +33,24 @@ interface SteamCmdLinePayload {
   stream: "stdout" | "stderr";
 }
 
+// ── Module-level log buffer ───────────────────────────────────────────────────
+// Persists output across panel mount/unmount cycles.
+
+let lineIdCounter = 0;
+
+const _buffers = new Map<string, OutputLine[]>();
+
+function bufferAdd(channel: string, line: OutputLine, maxLines: number): void {
+  const buf = _buffers.get(channel) ?? [];
+  buf.push(line);
+  if (buf.length > maxLines) buf.splice(0, buf.length - maxLines);
+  _buffers.set(channel, buf);
+}
+
+export function clearOutputBuffer(channel: string): void {
+  _buffers.delete(channel);
+}
+
 export interface CommandOutputPanelProps {
   /** The Tauri event channel to subscribe to, e.g. "steamcmd://output/setup". */
   eventChannel: string;
@@ -42,11 +66,15 @@ export interface CommandOutputPanelProps {
   bodyClassName?: string;
   /** Set to true once the process finishes. Stops the timer and shows "Completed in: Xs". */
   completed?: boolean;
-  /** Set to true when the operation was explicitly canceled. Shows "Install Canceled" instead of "Completed in". */
+  /** Set to true when the operation was explicitly canceled. Shows "Install Canceled" instead. */
   canceled?: boolean;
+  /**
+   * When true, clears the channel buffer on unmount only if the process is complete.
+   * Use this for dialogs that should "forget" the log after the user dismisses them.
+   * Default: false (wizard-embedded panels keep the buffer alive for the session).
+   */
+  clearBufferOnClose?: boolean;
 }
-
-let lineIdCounter = 0;
 
 export function CommandOutputPanel({
   eventChannel,
@@ -57,8 +85,9 @@ export function CommandOutputPanel({
   bodyClassName,
   completed = false,
   canceled = false,
+  clearBufferOnClose = false,
 }: CommandOutputPanelProps) {
-  const [lines, setLines] = useState<OutputLine[]>([]);
+  const [lines, setLines] = useState<OutputLine[]>(() => _buffers.get(eventChannel) ?? []);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [copied, setCopied] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -67,26 +96,47 @@ export function CommandOutputPanel({
   const [elapsed, setElapsed] = useState("0s");
   const [finalElapsed, setFinalElapsed] = useState<string | null>(null);
   const completedRef = useRef(false);
+  const completedProp = useRef(completed);
+
+  // Keep ref in sync for the cleanup function
+  completedProp.current = completed;
+
+  // On mount: scroll to bottom if there are already lines from the buffer
+  useEffect(() => {
+    if (scrollRef.current && (_buffers.get(eventChannel)?.length ?? 0) > 0) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // On unmount: clear buffer if process is done (or clearBufferOnClose is set)
+  useEffect(() => {
+    return () => {
+      if (clearBufferOnClose && completedProp.current) {
+        clearOutputBuffer(eventChannel);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventChannel, clearBufferOnClose]);
 
   // Subscribe to the Tauri event channel
   const handleLine = useCallback((payload: SteamCmdLinePayload) => {
+    const line: OutputLine = {
+      id: lineIdCounter++,
+      text: payload.line,
+      stream: payload.stream,
+      timestamp: new Date(),
+    };
+    bufferAdd(eventChannel, line, maxLines);
     setLines((prev) => {
-      const next = [
-        ...prev,
-        {
-          id: lineIdCounter++,
-          text: payload.line,
-          stream: payload.stream,
-          timestamp: new Date(),
-        },
-      ];
+      const next = [...prev, line];
       return next.length > maxLines ? next.slice(next.length - maxLines) : next;
     });
-  }, [maxLines]);
+  }, [eventChannel, maxLines]);
 
   useTauriEvent<SteamCmdLinePayload>(eventChannel, handleLine);
 
-  // Auto-scroll to bottom when new lines arrive
+  // Auto-scroll to bottom when new lines arrive (instant, not smooth)
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -195,7 +245,6 @@ export function CommandOutputPanel({
           ref={scrollRef}
           onScroll={handleScroll}
           className={cn("overflow-y-auto p-3 terminal", bodyClassName ?? "h-64")}
-          style={{ scrollBehavior: "smooth" }}
         >
           {lines.length === 0 ? (
             <span style={{ color: "var(--text-subtle)" }}>

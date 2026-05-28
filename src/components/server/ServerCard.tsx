@@ -25,11 +25,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
+import { CommandOutputPanel, clearOutputBuffer } from "@/components/shared/CommandOutputPanel";
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
 import { useServerStats } from "@/hooks/useServerStats";
@@ -265,8 +266,24 @@ export function ServerCard({ server }: Props) {
       try {
         await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
         await updateServerStatus(server.id, "stopped", null);
+        dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_COMPLETE,
+          serverId:   server.id,
+          serverName: server.name,
+          title:      `${server.name} installed successfully`,
+          body:       "Server files are ready. You can start the server now.",
+          severity:   "success",
+        });
       } catch {
         await updateServerStatus(server.id, "install_failed", null).catch(() => {});
+        dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_FAILED,
+          serverId:   server.id,
+          serverName: server.name,
+          title:      `${server.name} install failed`,
+          body:       "The server installation was canceled or failed.",
+          severity:   "error",
+        });
       }
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch {
@@ -421,7 +438,11 @@ export function ServerCard({ server }: Props) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => tauriCmd.abortOperation(`server_${server.id}`)}
+              onClick={async () => {
+                await tauriCmd.abortOperation(`server_${server.id}`).catch(() => {});
+                await updateServerStatus(server.id, "install_failed", null).catch(() => {});
+                queryClient.invalidateQueries({ queryKey: ["servers"] });
+              }}
               className="gap-1.5"
               style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
             >
@@ -524,8 +545,17 @@ export function ServerCard({ server }: Props) {
       </div>
 
       {/* ── View Progress modal ── */}
-      <Dialog open={showProgress} onOpenChange={setShowProgress}>
-        <DialogContent showCloseButton={false} className="max-w-4xl w-full">
+      <Dialog
+        open={showProgress}
+        onOpenChange={(open) => {
+          if (!open && !isActiveInstall) {
+            // Clear the output buffer when closing after process is done
+            clearOutputBuffer(`steamcmd://output/${server.id}`);
+          }
+          setShowProgress(open);
+        }}
+      >
+        <DialogContent showCloseButton={false} className="max-w-6xl w-full">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {isActiveInstall && (
@@ -533,20 +563,42 @@ export function ServerCard({ server }: Props) {
               )}
               {isUpdating ? "Update Progress" : "Install Progress"} — {server.name}
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Live terminal output for the {isUpdating ? "update" : "install"} process for {server.name}.
+            </DialogDescription>
           </DialogHeader>
           {showProgress && (
             <CommandOutputPanel
               eventChannel={`steamcmd://output/${server.id}`}
               label={isUpdating ? "Update Output" : "Install Output"}
-              bodyClassName="h-80"
+              bodyClassName="h-96"
               completed={!isActiveInstall && server.status === "stopped"}
               canceled={!isActiveInstall && isInstallFailed}
             />
           )}
           <DialogFooter>
+            {isActiveInstall && (
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  await tauriCmd.abortOperation(`server_${server.id}`).catch(() => {});
+                  await updateServerStatus(server.id, "install_failed", null).catch(() => {});
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                  setShowProgress(false);
+                }}
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+              >
+                Cancel Install
+              </Button>
+            )}
             <Button
               variant={isActiveInstall ? "outline" : "default"}
-              onClick={() => setShowProgress(false)}
+              onClick={() => {
+                if (!isActiveInstall) {
+                  clearOutputBuffer(`steamcmd://output/${server.id}`);
+                }
+                setShowProgress(false);
+              }}
               style={isActiveInstall ? { color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" } : undefined}
             >
               {isActiveInstall ? "Continue in Background" : "Close"}

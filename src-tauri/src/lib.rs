@@ -120,7 +120,12 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
                     "hide" => hide_main_window(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // Show the window first so the frontend dialog is visible,
+                        // then ask the frontend to handle quit (may have active installs).
+                        show_main_window(app);
+                        let _ = app.emit("tray-quit-requested", ());
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -324,6 +329,7 @@ pub fn run() {
             commands::system::set_close_to_tray,
             commands::system::query_server,
             commands::system::check_port_available,
+            commands::system::force_quit,
             commands::system::read_bootstrap,
             commands::system::write_bootstrap,
             commands::system::open_folder,

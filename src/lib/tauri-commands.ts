@@ -424,6 +424,8 @@ export const tauriCmd = {
   setCloseToTray:     (enabled: boolean) => invoke<void>("set_close_to_tray", { enabled }),
   queryServer:        (ip: string, port: number) => invoke<ServerQueryResult>("query_server", { ip, port }),
   checkPortAvailable: (port: number) => invoke<boolean>("check_port_available", { port }),
+  /** Exit the app immediately, bypassing close-to-tray logic. */
+  forceQuit: () => invoke<void>("force_quit"),
   /** Open a directory in the platform file manager (xdg-open / Explorer). */
   openFolder: (path: string) => invoke<void>("open_folder", { path }),
 

@@ -65,6 +65,10 @@ interface SetupState {
   appAutoUpdateEnabled: boolean;
   protonAutoCheckEnabled: boolean;
 
+  // Theme step
+  themePreset: string;
+  themeAccent: string;
+
   // Internal: whether a long-running operation is in progress
   isLoading: boolean;
   loadingMessage: string;
@@ -103,6 +107,8 @@ interface SetupState {
   setAsaAutoUpdateEnabled: (v: boolean) => void;
   setAppAutoUpdateEnabled: (v: boolean) => void;
   setProtonAutoCheckEnabled: (v: boolean) => void;
+  setThemePreset: (v: string) => void;
+  setThemeAccent: (v: string) => void;
   setLoading: (loading: boolean, message?: string) => void;
   reset: () => void;
 }
@@ -139,6 +145,8 @@ const initialState = {
   asaAutoUpdateEnabled: true,
   appAutoUpdateEnabled: true,
   protonAutoCheckEnabled: true,
+  themePreset: "neon",
+  themeAccent: "purple",
   isLoading: false,
   loadingMessage: "",
 };
@@ -179,6 +187,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setAsaAutoUpdateEnabled: (asaAutoUpdateEnabled) => set({ asaAutoUpdateEnabled }),
   setAppAutoUpdateEnabled: (appAutoUpdateEnabled) => set({ appAutoUpdateEnabled }),
   setProtonAutoCheckEnabled: (protonAutoCheckEnabled) => set({ protonAutoCheckEnabled }),
+  setThemePreset: (themePreset) => set({ themePreset }),
+  setThemeAccent: (themeAccent) => set({ themeAccent }),
   setLoading: (isLoading, message = "") =>
     set({ isLoading, loadingMessage: message }),
   reset: () => set(initialState),
