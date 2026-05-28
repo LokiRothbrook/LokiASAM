@@ -717,6 +717,8 @@ function SteamCmdStep() {
   } = useSetupStore();
   const [error, setError] = useState("");
   const [outputChannel, setOutputChannel] = useState<"install" | "validate" | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [canceled, setCanceled] = useState(false);
 
   const autoSteamcmdTarget = baseDir
     ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/steamcmd"
@@ -727,6 +729,8 @@ function SteamCmdStep() {
 
   const handleAutoDownload = async () => {
     setError("");
+    setCanceled(false);
+    setAttempt((a) => a + 1);
     setSteamcmdValidated(false);
     setLoading(true, "Checking for existing SteamCMD...");
 
@@ -761,7 +765,12 @@ function SteamCmdStep() {
         setError("SteamCMD validation failed. Check output above for details.");
       }
     } catch (err) {
-      setError(String(err));
+      const msg = String(err);
+      if (msg === "Aborted") {
+        setCanceled(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -911,11 +920,23 @@ function SteamCmdStep() {
 
       {outputChannel && (
         <CommandOutputPanel
+          key={attempt}
           eventChannel={outputChannel === "install" ? "steamcmd://output/setup" : "steamcmd://output/validate"}
           label={outputChannel === "install" ? "Downloading SteamCMD" : "Validating SteamCMD"}
           completed={!isLoading}
+          canceled={canceled}
           className="mt-2"
         />
+      )}
+
+      {canceled && !isLoading && (
+        <Button
+          onClick={handleAutoDownload}
+          variant="outline" size="sm" className="gap-1.5"
+          style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+        >
+          <RefreshCw className="w-3 h-3" /> Reinstall SteamCMD
+        </Button>
       )}
 
       {error && (
@@ -944,6 +965,8 @@ function ProtonGEStep() {
   const [error, setError] = useState("");
   const [protonVersion, setProtonVersion] = useState("");
   const [protonPhase, setProtonPhase] = useState<"downloading" | "extracting">("downloading");
+  const [attempt, setAttempt] = useState(0);
+  const [canceled, setCanceled] = useState(false);
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -984,6 +1007,8 @@ function ProtonGEStep() {
   const handleDownload = async () => {
     const targetDir = baseDir.replace(/[/\\]$/, "") + "/proton";
     setError("");
+    setCanceled(false);
+    setAttempt((a) => a + 1);
     setShowDownload(true);
     setProtonPhase("downloading");
     setLoading(true, "Downloading Proton-GE…");
@@ -1002,7 +1027,12 @@ function ProtonGEStep() {
       // Extract version name from path (e.g. GE-Proton9-27)
       setProtonVersion(path.split("/").pop() || path.split("\\").pop() || "Proton-GE");
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      if (msg === "Aborted") {
+        setCanceled(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
       setProtonPhase("downloading");
@@ -1109,12 +1139,21 @@ function ProtonGEStep() {
       )}
 
       {protonMode === "managed" && showDownload && (
-        <CommandOutputPanel
-          eventChannel="proton://output/download"
-          label="Proton-GE Download"
-          completed={!isLoading}
-          className="mt-1"
-        />
+        <>
+          <CommandOutputPanel
+            key={attempt}
+            eventChannel="proton://output/download"
+            label="Proton-GE Download"
+            completed={!isLoading}
+            canceled={canceled}
+            className="mt-1"
+          />
+          {error && !isLoading && (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}>
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
+            </p>
+          )}
+        </>
       )}
 
       {protonMode === "existing" && (
@@ -1214,7 +1253,8 @@ function ProtonGEStep() {
         </div>
       )}
 
-      {error && (
+      {/* Show error for "existing" mode (managed shows inline in its own block) */}
+      {error && protonMode === "existing" && (
         <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}>
           <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
         </p>

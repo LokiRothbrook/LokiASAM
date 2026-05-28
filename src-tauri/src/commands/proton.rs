@@ -228,6 +228,7 @@ async fn download_proton_ge_inner(
 
     let tar_path_clone = tar_path.clone();
     let target_clone = target.clone();
+    let tag_clone = tag.clone();
     let abort_extract = std::sync::Arc::clone(abort);
     tokio::task::spawn_blocking(move || {
         use flate2::read::GzDecoder;
@@ -243,6 +244,7 @@ async fn download_proton_ge_inner(
         for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
             if abort_extract.load(Ordering::Relaxed) {
                 let _ = std::fs::remove_file(&tar_path_clone);
+                let _ = std::fs::remove_dir_all(target_clone.join(&tag_clone));
                 return Err("Aborted".into());
             }
             let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;

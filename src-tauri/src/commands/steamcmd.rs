@@ -323,9 +323,24 @@ async fn install_steamcmd_inner(
             .map_err(|e| format!("Failed to open ZIP: {e}"))?;
         archive.extract(dir).map_err(|e| format!("Failed to extract ZIP: {e}"))?;
     } else {
-        let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
-        let mut archive = tar::Archive::new(gz);
-        archive.unpack(dir).map_err(|e| format!("Failed to extract tar.gz: {e}"))?;
+        let dir_owned = dir.to_path_buf();
+        let abort_extract = std::sync::Arc::clone(abort);
+        tokio::task::spawn_blocking(move || {
+            use flate2::read::GzDecoder;
+            use tar::Archive;
+            let gz = GzDecoder::new(std::io::Cursor::new(bytes));
+            let mut archive = Archive::new(gz);
+            for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
+                if abort_extract.load(Ordering::Relaxed) {
+                    return Err("Aborted".into());
+                }
+                let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
+                entry.unpack_in(&dir_owned).map_err(|e| format!("Failed to extract entry: {e}"))?;
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| format!("Extraction task error: {e}"))??;
     }
 
     #[cfg(target_os = "windows")]
@@ -364,23 +379,39 @@ async fn install_steamcmd_inner(
 ///
 /// On Windows, SteamCMD self-updates on its very first run and exits with code 7.
 /// We detect this, log it, and automatically re-run once — the second run exits 0.
+/// Abort key: "steamcmd_install" (shared with install_steamcmd so Cancel works through both phases).
 #[tauri::command]
 pub async fn validate_steamcmd(
     path: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<bool, String> {
+    let abort = state.register_abort("steamcmd_install");
+    let result = validate_steamcmd_inner(&path, &app_handle, &abort).await;
+    state.clear_abort("steamcmd_install");
+    result
+}
+
+async fn validate_steamcmd_inner(
+    path: &str,
+    app_handle: &tauri::AppHandle,
+    abort: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<bool, String> {
     let channel = format!("{}/validate", events::STEAMCMD_OUTPUT);
-    emit_line(&app_handle, &channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
+    emit_line(app_handle, &channel, "stdout", &format!("Validating SteamCMD at: {path}"))?;
 
-    let mut child = build_steamcmd_cmd(&path, &["+quit"])
+    let mut child = build_steamcmd_cmd(path, &["+quit"])
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-    let exit_code = stream_process(&app_handle, &mut child, &channel).await?;
+    let exit_code = stream_process_abortable(app_handle, &mut child, &channel, std::sync::Arc::clone(abort)).await?;
 
     if exit_code != 0 {
+        if abort.load(Ordering::Relaxed) {
+            return Err("Aborted".into());
+        }
         emit_line(
-            &app_handle,
+            app_handle,
             &channel,
             "stdout",
             &format!(
@@ -388,18 +419,18 @@ pub async fn validate_steamcmd(
             ),
         )?;
 
-        let mut child2 = build_steamcmd_cmd(&path, &["+quit"])
+        let mut child2 = build_steamcmd_cmd(path, &["+quit"])
             .spawn()
             .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
 
-        let exit_code2 = stream_process(&app_handle, &mut child2, &channel).await?;
+        let exit_code2 = stream_process_abortable(app_handle, &mut child2, &channel, std::sync::Arc::clone(abort)).await?;
 
         if exit_code2 == 0 {
-            emit_line(&app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
+            emit_line(app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
             return Ok(true);
         } else {
             emit_line(
-                &app_handle,
+                app_handle,
                 &channel,
                 "stderr",
                 &format!("SteamCMD exited with code {exit_code2} after retry. Validation failed."),
@@ -408,7 +439,7 @@ pub async fn validate_steamcmd(
         }
     }
 
-    emit_line(&app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
+    emit_line(app_handle, &channel, "stdout", "SteamCMD validation successful.")?;
     Ok(true)
 }
 

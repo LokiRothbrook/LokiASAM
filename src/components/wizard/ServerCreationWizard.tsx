@@ -41,10 +41,12 @@ import {
   createSchedule,
   getClusters,
   isServerNameTaken,
+  updateServerStatus,
   type ClusterRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 
 // ---------------------------------------------------------------------------
 // Wizard state
@@ -689,16 +691,21 @@ function InstallStep({
   data,
   serverId,
   onInstallComplete,
+  onGoToDashboard,
   onStatusChange,
   onCleanupReady,
 }: {
   data: WizardData;
   serverId: string;
   onInstallComplete: () => void;
+  onGoToDashboard: () => void;
   onStatusChange: (status: string) => void;
   onCleanupReady: (fn: () => Promise<void>) => void;
 }) {
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<"idle" | "installing" | "done" | "error">("idle");
+  const [canceled, setCanceled] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState("");
   const dbSavedRef = useRef(false);
   const installPathRef = useRef("");
@@ -706,6 +713,9 @@ function InstallStep({
   const cacheDirRef = useRef("");
   const terminalRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // When true the install continues running after the wizard closes; skip React state updates.
+  const backgroundRef = useRef(false);
+  const queryClientRef = useRef(queryClient);
 
   const scrollToBottom = useCallback(() => {
     sentinelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -746,6 +756,9 @@ function InstallStep({
   ];
 
   const startInstall = async () => {
+    backgroundRef.current = false;
+    setCanceled(false);
+    setAttempt((a) => a + 1);
     setStatus("installing");
     setError("");
 
@@ -768,7 +781,7 @@ function InstallStep({
         steamcmdPath = scmdPath;
         cacheDirRef.current = `${baseDir}${sep}lokiasam${sep}cache${sep}asa-server`;
 
-        // Persist server record to SQLite
+        // Persist server record to SQLite with "installing" status
         await createServer({
           id: serverId,
           name: data.name,
@@ -784,6 +797,7 @@ function InstallStep({
           clusterId: data.clusterId || undefined,
           presetId: data.presetId,
         });
+        await updateServerStatus(serverId, "installing", null);
 
         // Persist empty config record (will be written to disk after install)
         await saveServerConfig(serverId, "{}", "{}", "{}");
@@ -812,6 +826,9 @@ function InstallStep({
         installPathRef.current = installPath;
         steamcmdPathRef.current = steamcmdPath;
         dbSavedRef.current = true;
+
+        // Show the server on the dashboard as "installing" immediately
+        queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
 
         // Register the cleanup function so the wizard can call it on cancel/close after failure
         onCleanupReady(async () => {
@@ -861,10 +878,31 @@ function InstallStep({
       // Update server_config with the written values
       await saveServerConfig(serverId, JSON.stringify(gusJson), "{}", "{}");
 
-      setStatus("done");
+      // Mark server as stopped (ready to start)
+      await updateServerStatus(serverId, "stopped", null);
+      queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
+
+      if (!backgroundRef.current) {
+        setStatus("done");
+      } else {
+        // Wizard already closed — nothing more to do
+      }
     } catch (err) {
-      setError(String(err));
-      setStatus("error");
+      const msg = String(err);
+      if (msg === "Aborted") {
+        if (!backgroundRef.current) {
+          setCanceled(true);
+          setStatus("error");
+        }
+      } else {
+        // Mark server as install_failed in DB so the dashboard card reflects it
+        await updateServerStatus(serverId, "install_failed", null).catch(() => {});
+        queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
+        if (!backgroundRef.current) {
+          setError(msg);
+          setStatus("error");
+        }
+      }
     }
   };
 
@@ -908,25 +946,35 @@ function InstallStep({
       {(status === "installing" || status === "done" || status === "error") && (
         <div ref={terminalRef}>
           <CommandOutputPanel
+            key={attempt}
             eventChannel={`steamcmd://output/${serverId}`}
             label="SteamCMD — Installing ASA Server"
             completed={status === "done" || status === "error"}
+            canceled={canceled}
           />
         </div>
       )}
 
       {status === "installing" && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-purple)" }}>
             <Loader2 className="w-3 h-3 animate-spin" />
             Installation in progress. This may take 15–30 minutes…
           </p>
-          <Button
-            onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }}
-            size="sm" variant="ghost" className="gap-1.5 h-7 text-xs shrink-0"
-            style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
-            <StopCircle className="w-3 h-3" /> Cancel Install
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              onClick={() => { backgroundRef.current = true; onGoToDashboard(); }}
+              size="sm" variant="ghost" className="gap-1.5 h-7 text-xs"
+              style={{ color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.3)" }}>
+              <ArrowRight className="w-3 h-3" /> Continue in Background
+            </Button>
+            <Button
+              onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }}
+              size="sm" variant="ghost" className="gap-1.5 h-7 text-xs"
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <StopCircle className="w-3 h-3" /> Cancel Install
+            </Button>
+          </div>
         </div>
       )}
 
@@ -952,18 +1000,20 @@ function InstallStep({
 
       {status === "error" && (
         <div className="space-y-2">
-          <p className="text-xs flex items-start gap-1.5" style={{ color: "var(--neon-red)" }}>
-            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            {error}
-          </p>
+          {!canceled && (
+            <p className="text-xs flex items-start gap-1.5" style={{ color: "var(--neon-red)" }}>
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              {error}
+            </p>
+          )}
           <Button
             onClick={startInstall}
             variant="outline"
             size="sm"
             className="gap-1"
-            style={{ borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+            style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
           >
-            Retry Install
+            <RefreshCw className="w-3 h-3" /> Retry Install
           </Button>
         </div>
       )}
@@ -1012,7 +1062,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
 
   const handleClose = () => {
     const onInstallStep = step === STEPS.length - 1;
-    if (onInstallStep && installStatus === "installing") return; // disabled during download
+    // Closing during active install is only blocked if not going to background
     if (onInstallStep && installStatus === "error") { setShowCancelConfirm(true); return; }
     onClose();
   };
@@ -1035,6 +1085,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       data={data}
       serverId={serverId}
       onInstallComplete={onClose}
+      onGoToDashboard={onClose}
       onStatusChange={setInstallStatus}
       onCleanupReady={(fn) => { cleanupFnRef.current = fn; }}
     />,
@@ -1069,10 +1120,9 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
           variant="ghost"
           size="sm"
           onClick={handleClose}
-          disabled={step === STEPS.length - 1 && installStatus === "installing"}
           className="h-8 w-8 p-0"
           style={{ color: "var(--text-muted)" }}
-          title={step === STEPS.length - 1 && installStatus === "installing" ? "Installation in progress…" : "Close"}
+          title="Close"
         >
           <X className="w-4 h-4" />
         </Button>

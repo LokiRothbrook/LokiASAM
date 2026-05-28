@@ -29,6 +29,8 @@ import {
   type ThemeAccent, type ThemePreset,
 } from "@/lib/theme";
 import { open } from "@tauri-apps/plugin-dialog";
+import { dispatchNotification } from "@/lib/notifications";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -602,17 +604,27 @@ function ServerUpdatesSection() {
   const [latestBuild, setLatest]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
   const [autoCheckHours, setAutoCheck] = useState("0");
+  const [hasCacheInstalled, setHasCacheInstalled] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
-    const [avail, cached, latest, checked, hours] = await Promise.all([
+    const [avail, cached, latest, checked, hours, baseDir] = await Promise.all([
       getAppSetting("asa_update_available"),
       getAppSetting("asa_cached_build_id"),
       getAppSetting("asa_latest_build_id"),
       getAppSetting("asa_last_checked"),
       getAppSetting("asa_auto_check_hours"),
+      getAppSetting("base_dir"),
     ]);
     setUpdate(avail === "true"); setCached(cached ?? ""); setLatest(latest ?? "");
     setLastChecked(checked ?? ""); setAutoCheck(hours ?? "0");
+    if (baseDir) {
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const has = await tauriCmd.checkDir(cacheDir).then((r) => r.writable).catch(() => false);
+      setHasCacheInstalled(has);
+    } else {
+      setHasCacheInstalled(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -624,11 +636,6 @@ function ServerUpdatesSection() {
       if (!baseDir) { toast.error("Base directory not configured."); return; }
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const hasCacheDir = await tauriCmd.checkDir(cacheDir).then((r) => r.writable).catch(() => false);
-      if (!hasCacheDir) {
-        toast.info("No server cache yet — install a server first, then check for updates.");
-        return;
-      }
       const result = await tauriCmd.checkAsaUpdate(cacheDir);
       const now = new Date().toISOString();
       await setAppSetting("asa_update_available", String(result.updateAvailable));
@@ -642,7 +649,16 @@ function ServerUpdatesSection() {
         toast.success("ASA server cache is up to date.");
       }
     } catch (e) {
-      toast.error(`Update check failed: ${e}`);
+      const msg = `Update check failed: ${e}`;
+      toast.error(msg);
+      dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+        serverId:   null,
+        serverName: "ASA Cache",
+        title:      "ASA Update Check Failed",
+        body:       msg,
+        severity:   "error",
+      });
     } finally {
       setChecking(false);
     }
@@ -683,11 +699,18 @@ function ServerUpdatesSection() {
           </span>
         )}
       </div>
-      <Button onClick={handleCheck} disabled={checking} size="sm" className="gap-1.5"
-        style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
-        {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        Check for ASA Server Update
-      </Button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <Button onClick={handleCheck} disabled={checking || hasCacheInstalled === false} size="sm" className="gap-1.5"
+          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+          {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+          Check for ASA Server Update
+        </Button>
+        {hasCacheInstalled === false && (
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            No server cache installed yet — install a server first.
+          </span>
+        )}
+      </div>
       <Separator style={{ background: "var(--border)" }} />
       <div className="space-y-2">
         <Label style={{ color: "var(--text-primary)" }}>Auto-Check Interval</Label>

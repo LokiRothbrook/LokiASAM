@@ -10,6 +10,7 @@ import { ModBrowserEventHandler } from "@/components/layout/ModBrowserEventHandl
 import { SchedulerManager } from "@/components/layout/SchedulerManager";
 import { NotificationManager } from "@/components/layout/NotificationManager";
 import { UpdateManager } from "@/components/layout/UpdateManager";
+import { CloseWarningManager } from "@/components/layout/CloseWarningManager";
 import { Toaster } from "sonner";
 
 const geistSans = Geist({
@@ -52,6 +53,7 @@ export default function RootLayout({
             <SchedulerManager />
             <NotificationManager />
             <UpdateManager />
+            <CloseWarningManager />
             <Toaster
               position="bottom-right"
               toastOptions={{

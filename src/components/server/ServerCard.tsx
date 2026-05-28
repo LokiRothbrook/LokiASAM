@@ -15,9 +15,21 @@ import {
   HardDrive,
   ChevronRight,
   ArrowUp,
+  AlertCircle,
+  XCircle,
+  Terminal,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
 import { useServerStats } from "@/hooks/useServerStats";
@@ -31,8 +43,10 @@ import {
   getNextScheduledRestart,
   getAppSetting,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type { ServerRow } from "@/lib/db";
 
 interface Props {
@@ -88,12 +102,19 @@ export function ServerCard({ server }: Props) {
   const [nextRestart, setNextRestart] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [hasUpdateAvailable, setHasUpdateAvailable] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
 
   const mapDisplay =
     ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   const isRunning = server.status === "running";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
+  const isInstalling = server.status === "installing";
+  const isUpdating = server.status === "updating";
+  const isActiveInstall = isInstalling || isUpdating;
+  const isInstallFailed = server.status === "install_failed";
+  const isStartFailed = server.status === "start-failed";
+  const isReinstallable = isInstallFailed || isStartFailed;
 
   // Load secondary card data (mod count, backup, schedule, update badge).
   useEffect(() => {
@@ -176,9 +197,18 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "starting", pid);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (err) {
-      console.error("Start failed:", err);
-      await updateServerStatus(server.id, "error", null);
+      const errMsg = typeof err === "string" ? err : String(err);
+      await updateServerStatus(server.id, "start-failed", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.error(`${server.name} failed to start — ${errMsg}`);
+      dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
+        serverId:   server.id,
+        serverName: server.name,
+        title:      `${server.name} failed to start`,
+        body:       errMsg,
+        severity:   "error",
+      });
     } finally {
       setActionPending(false);
     }
@@ -218,11 +248,37 @@ export function ServerCard({ server }: Props) {
     }
   };
 
+  const handleReinstall = async () => {
+    try {
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) return;
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+
+      await updateServerStatus(server.id, "installing", null);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      setShowProgress(true);
+
+      try {
+        await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
+        await updateServerStatus(server.id, "stopped", null);
+      } catch {
+        await updateServerStatus(server.id, "install_failed", null).catch(() => {});
+      }
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    } catch {
+      // Settings unavailable — cannot reinstall
+    }
+  };
+
   // ── Border glow based on status ───────────────────────────────────────────
 
   const borderColor = isRunning
     ? "rgba(0,255,136,0.35)"
-    : server.status === "error" || server.status === "crashed"
+    : server.status === "error" || server.status === "crashed" || isReinstallable
     ? "rgba(255,0,85,0.35)"
     : "rgba(191,0,255,0.2)";
 
@@ -359,65 +415,145 @@ export function ServerCard({ server }: Props) {
 
       {/* ── Action buttons ── */}
       <div className="flex items-center gap-2 pt-1 border-t" style={{ borderColor: "rgba(191,0,255,0.1)" }}>
-        {/* Start / Stop toggle */}
-        {isRunning || isTransitioning ? (
-          <Button
-            size="sm"
-            disabled={isTransitioning || actionPending}
-            onClick={handleStop}
-            className="gap-1.5 flex-1"
-            style={{
-              background: "rgba(255,0,85,0.12)",
-              borderColor: "rgba(255,0,85,0.4)",
-              color: "var(--neon-red)",
-            }}
-          >
-            <Square className="w-3.5 h-3.5" />
-            {server.status === "stopping" ? "Stopping…" : "Stop"}
-          </Button>
+        {isActiveInstall ? (
+          /* Installing/Updating — Cancel and View Progress */
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => tauriCmd.abortOperation(`server_${server.id}`)}
+              className="gap-1.5"
+              style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowProgress(true)}
+              className="gap-1.5 flex-1"
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              View Progress
+            </Button>
+          </>
+        ) : isReinstallable ? (
+          /* Install/Start failed — offer Reinstall */
+          <>
+            <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--neon-red)" }}>
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {isInstallFailed ? "Install Failed" : "Start Failed"}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleReinstall}
+              className="gap-1.5 flex-1"
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reinstall
+            </Button>
+          </>
         ) : (
-          <Button
-            size="sm"
-            disabled={actionPending}
-            onClick={handleStart}
-            className="gap-1.5 flex-1"
-            style={{
-              background: "rgba(0,255,136,0.12)",
-              borderColor: "rgba(0,255,136,0.4)",
-              color: "var(--neon-green)",
-            }}
-          >
-            <Play className="w-3.5 h-3.5" />
-            {server.status === "starting" ? "Starting…" : "Start"}
-          </Button>
+          <>
+            {/* Start / Stop toggle */}
+            {isRunning || isTransitioning ? (
+              <Button
+                size="sm"
+                disabled={isTransitioning || actionPending}
+                onClick={handleStop}
+                className="gap-1.5 flex-1"
+                style={{
+                  background: "rgba(255,0,85,0.12)",
+                  borderColor: "rgba(255,0,85,0.4)",
+                  color: "var(--neon-red)",
+                }}
+              >
+                <Square className="w-3.5 h-3.5" />
+                {server.status === "stopping" ? "Stopping…" : "Stop"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={actionPending}
+                onClick={handleStart}
+                className="gap-1.5 flex-1"
+                style={{
+                  background: "rgba(0,255,136,0.12)",
+                  borderColor: "rgba(0,255,136,0.4)",
+                  color: "var(--neon-green)",
+                }}
+              >
+                <Play className="w-3.5 h-3.5" />
+                {server.status === "starting" ? "Starting…" : "Start"}
+              </Button>
+            )}
+
+            {/* Restart */}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!isRunning || actionPending}
+              onClick={handleRestart}
+              className="gap-1.5"
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Restart
+            </Button>
+          </>
         )}
 
-        {/* Restart */}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!isRunning || actionPending}
-          onClick={handleRestart}
-          className="gap-1.5"
-          style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          Restart
-        </Button>
-
-        {/* Open Detail */}
-        <Button
-          asChild
-          size="sm"
-          variant="outline"
-          className="gap-1"
-          style={{ color: "var(--neon-cyan)", borderColor: "rgba(0,255,255,0.3)" }}
-        >
-          <Link href={`/servers/detail?id=${server.id}`}>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </Link>
-        </Button>
+        {/* Open Detail — hidden while installing/updating/failed */}
+        {!isActiveInstall && !isReinstallable && (
+          <Button
+            asChild
+            size="sm"
+            variant="outline"
+            className="gap-1"
+            style={{ color: "var(--neon-cyan)", borderColor: "rgba(0,255,255,0.3)" }}
+          >
+            <Link href={`/servers/detail?id=${server.id}`}>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </Link>
+          </Button>
+        )}
       </div>
+
+      {/* ── View Progress modal ── */}
+      <Dialog open={showProgress} onOpenChange={setShowProgress}>
+        <DialogContent showCloseButton={false} className="max-w-4xl w-full">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {isActiveInstall && (
+                <Loader2 className="w-4 h-4 animate-spin" style={{ color: "var(--neon-purple)" }} />
+              )}
+              {isUpdating ? "Update Progress" : "Install Progress"} — {server.name}
+            </DialogTitle>
+          </DialogHeader>
+          {showProgress && (
+            <CommandOutputPanel
+              eventChannel={`steamcmd://output/${server.id}`}
+              label={isUpdating ? "Update Output" : "Install Output"}
+              bodyClassName="h-80"
+              completed={!isActiveInstall && server.status === "stopped"}
+              canceled={!isActiveInstall && isInstallFailed}
+            />
+          )}
+          <DialogFooter>
+            <Button
+              variant={isActiveInstall ? "outline" : "default"}
+              onClick={() => setShowProgress(false)}
+              style={isActiveInstall ? { color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" } : undefined}
+            >
+              {isActiveInstall ? "Continue in Background" : "Close"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

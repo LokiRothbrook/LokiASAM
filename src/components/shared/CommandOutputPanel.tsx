@@ -42,6 +42,8 @@ export interface CommandOutputPanelProps {
   bodyClassName?: string;
   /** Set to true once the process finishes. Stops the timer and shows "Completed in: Xs". */
   completed?: boolean;
+  /** Set to true when the operation was explicitly canceled. Shows "Install Canceled" instead of "Completed in". */
+  canceled?: boolean;
 }
 
 let lineIdCounter = 0;
@@ -54,6 +56,7 @@ export function CommandOutputPanel({
   className,
   bodyClassName,
   completed = false,
+  canceled = false,
 }: CommandOutputPanelProps) {
   const [lines, setLines] = useState<OutputLine[]>([]);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -149,8 +152,8 @@ export function CommandOutputPanel({
           <span className="text-xs font-mono font-semibold" style={{ color: "var(--neon-purple)" }}>
             {label}
           </span>
-          <span className="text-xs font-mono" style={{ color: finalElapsed ? "var(--neon-green)" : "var(--text-subtle)" }}>
-            {lines.length} lines · {finalElapsed ? `Completed in: ${finalElapsed}` : elapsed}
+          <span className="text-xs font-mono" style={{ color: canceled ? "var(--neon-red)" : finalElapsed ? "var(--neon-green)" : "var(--text-subtle)" }}>
+            {lines.length} lines · {canceled ? "Install Canceled" : finalElapsed ? `Completed in: ${finalElapsed}` : elapsed}
           </span>
         </div>
 

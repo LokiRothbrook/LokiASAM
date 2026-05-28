@@ -7,7 +7,10 @@ export type ServerStatusValue =
   | "stopping"
   | "updating"
   | "error"
-  | "crashed";
+  | "crashed"
+  | "installing"
+  | "install_failed"
+  | "start-failed";
 
 interface StatusConfig {
   label: string;
@@ -16,13 +19,16 @@ interface StatusConfig {
 }
 
 const STATUS_MAP: Record<ServerStatusValue, StatusConfig> = {
-  running:  { label: "Running",  color: "var(--neon-green)",  pulse: true  },
-  starting: { label: "Starting", color: "var(--neon-cyan)",   pulse: true  },
-  stopping: { label: "Stopping", color: "var(--neon-purple)", pulse: true  },
-  updating: { label: "Updating", color: "var(--neon-cyan)",   pulse: true  },
-  stopped:  { label: "Stopped",  color: "var(--text-muted)",  pulse: false },
-  error:    { label: "Error",    color: "var(--neon-red)",    pulse: false },
-  crashed:  { label: "Crashed",  color: "var(--neon-red)",    pulse: false },
+  running:        { label: "Running",         color: "var(--neon-green)",  pulse: true  },
+  starting:       { label: "Starting",        color: "var(--neon-cyan)",   pulse: true  },
+  stopping:       { label: "Stopping",        color: "var(--neon-purple)", pulse: true  },
+  updating:       { label: "Updating",        color: "var(--neon-cyan)",   pulse: true  },
+  stopped:        { label: "Stopped",         color: "var(--text-muted)",  pulse: false },
+  error:          { label: "Error",           color: "var(--neon-red)",    pulse: false },
+  crashed:        { label: "Crashed",         color: "var(--neon-red)",    pulse: false },
+  installing:     { label: "Installing",      color: "var(--neon-purple)", pulse: true  },
+  install_failed: { label: "Install Failed",  color: "var(--neon-red)",    pulse: false },
+  "start-failed": { label: "Start Failed",    color: "var(--neon-red)",    pulse: false },
 };
 
 interface Props {
