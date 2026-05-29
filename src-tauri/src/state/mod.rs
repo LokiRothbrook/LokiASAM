@@ -13,6 +13,10 @@ pub struct RunningServer {
     /// Monotonic timestamp of when this session started the server.
     /// Used to calculate uptime. Approximate for re-registered servers.
     pub started_at: Instant,
+    /// Absolute path to the server install directory.
+    /// On Linux, used to locate Wine processes that were launched inside the Steam
+    /// Runtime container (and therefore not visible in the proton PID's subtree).
+    pub install_path: String,
 }
 
 /// Global application state shared across all Tauri commands via `tauri::State`.

@@ -207,7 +207,7 @@ function useStartupReconciliation() {
           transitioning.map(async (s) => {
             if (!s.pid) return;
             try {
-              const alive = await tauriCmd.registerRunningServer(s.id, s.pid);
+              const alive = await tauriCmd.registerRunningServer(s.id, s.pid, s.install_path);
               if (!alive) {
                 const deadStatus = s.status === "running" ? "crashed" : "stopped";
                 await updateServerStatus(s.id, deadStatus, null);

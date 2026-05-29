@@ -48,7 +48,7 @@ zip = { version = "2" }
 # Email / SMTP notifications
 lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"], default-features = false }
 
-# System process stats (CPU / RAM per PID)
+# System process stats (CPU / RAM per PID, cross-platform)
 sysinfo = { version = "0.32" }
 
 # INI file parsing
@@ -63,3 +63,8 @@ url = { version = "2" }
 
 # Logging
 log = "0.4"
+
+# Linux /proc reader — process discovery, PSS memory, thread detection
+# Replaces hand-rolled /proc string parsing with a tested, maintained library.
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = { version = "0.17", default-features = false }

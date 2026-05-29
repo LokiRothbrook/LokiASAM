@@ -32,8 +32,13 @@ export function useServerStats(server: ServerRow | null): ServerStats {
   serverRef.current = server;
 
   // ── Process stats (CPU / RAM) — every 10 s ────────────────────────────────
+  // Poll during both "starting" and "running": on Linux the Wine game process
+  // appears 15–30 s after Proton launches, well before RCON confirms "running".
+  // The backend resolves the real game PID and re-emits "starting" with it, so
+  // we start seeing accurate stats while the server is still loading the map.
   useEffect(() => {
-    if (!server || server.status !== "running" || !server.pid) {
+    const active = server?.status === "running" || server?.status === "starting";
+    if (!server || !active || !server.pid) {
       setStats((s) => ({ ...s, cpuPercent: null, memoryMb: null }));
       return;
     }
@@ -42,9 +47,10 @@ export function useServerStats(server: ServerRow | null): ServerStats {
 
     const poll = async () => {
       const s = serverRef.current;
-      if (!s || s.status !== "running" || !s.pid) return;
+      const isActive = s?.status === "running" || s?.status === "starting";
+      if (!s || !isActive || !s.pid) return;
       try {
-        const ps = await tauriCmd.getProcessStats(s.pid);
+        const ps = await tauriCmd.getProcessStats(s.pid, s.install_path);
         if (!cancelled) {
           setStats((prev) => ({
             ...prev,
@@ -53,7 +59,7 @@ export function useServerStats(server: ServerRow | null): ServerStats {
           }));
         }
       } catch {
-        // Process may have just stopped — next poll will be a no-op.
+        // Process may not have appeared yet — next poll will retry.
       }
     };
 

@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useServerStats } from "@/hooks/useServerStats";
 import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
+import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup, setAppSetting,
@@ -24,9 +25,7 @@ interface Props {
   server: ServerRow;
 }
 
-function formatUptime(updatedAt: string): string {
-  const startMs = new Date(updatedAt).getTime();
-  if (isNaN(startMs)) return "—";
+function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
   if (elapsed < 0) return "0m";
   const h = Math.floor(elapsed / 3_600_000);
@@ -81,6 +80,7 @@ export function OverviewTab({ server }: Props) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
+  const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -92,17 +92,19 @@ export function OverviewTab({ server }: Props) {
   const [applyingUpdate, setApplyingUpdate] = useState(false);
 
   const isRunning = server.status === "running";
+  const isStarting = server.status === "starting";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
   const isStartFailed = server.status === "start-failed";
   const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
   // Force a re-render every 30 s so the uptime counter visually advances.
+  // Run during both "starting" and "running" so loading time is visible.
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isRunning && !isStarting) return;
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
-  }, [isRunning]);
+  }, [isRunning, isStarting]);
 
   useEffect(() => {
     let cancelled = false;
@@ -286,16 +288,32 @@ export function OverviewTab({ server }: Props) {
           Actions
         </span>
         {isStartFailed ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleReinstall}
-            className="gap-1.5"
-            style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reinstall
-          </Button>
+          <>
+            <Button
+              size="sm"
+              onClick={handleStart}
+              disabled={actionPending}
+              className="gap-1.5"
+              style={{
+                background: "rgba(0,255,136,0.12)",
+                borderColor: "rgba(0,255,136,0.4)",
+                color: "var(--neon-green)",
+              }}
+            >
+              <Play className="w-3.5 h-3.5" />
+              Retry Start
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleReinstall}
+              className="gap-1.5"
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reinstall
+            </Button>
+          </>
         ) : isRunning ? (
           <Button
             size="sm"
@@ -392,14 +410,20 @@ export function OverviewTab({ server }: Props) {
         <StatTile
           icon={MemoryStick}
           label="RAM"
-          value={stats.memoryMb != null ? Math.round(stats.memoryMb) : null}
-          unit="MB"
+          value={stats.memoryMb != null ? (stats.memoryMb / 1024).toFixed(2) : null}
+          unit="GB"
           neonColor="var(--neon-purple)"
         />
         <StatTile
           icon={Clock}
-          label="Uptime"
-          value={isRunning ? formatUptime(server.updated_at) : null}
+          label={isStarting ? "Starting…" : "Uptime"}
+          value={
+            startTime != null
+              ? formatUptime(startTime)
+              : isRunning
+              ? formatUptime(new Date(server.updated_at).getTime())
+              : null
+          }
           neonColor="var(--neon-green)"
         />
         <StatTile

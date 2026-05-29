@@ -38,6 +38,16 @@ interface AppState {
    */
   unreadBump: number;
 
+  /**
+   * Wall-clock timestamp (ms since epoch) when each server process first started.
+   * Keyed by server ID.  Set when the first "starting" event arrives; cleared on
+   * "stopped" or "crashed".  Used to display uptime from process-start, not from
+   * the "running" status change (which happens minutes later when RCON confirms).
+   */
+  serverStartTimes: Record<string, number>;
+  setServerStartTime: (id: string, ts: number) => void;
+  clearServerStartTime: (id: string) => void;
+
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
   setNotificationBellOpen: (open: boolean) => void;
@@ -68,6 +78,15 @@ export const useAppStore = create<AppState>((set) => ({
   verifyTotal: 0,
   verifyProgress: 0,
   unreadBump: 0,
+  serverStartTimes: {},
+  setServerStartTime: (id, ts) =>
+    set((s) => ({ serverStartTimes: { ...s.serverStartTimes, [id]: ts } })),
+  clearServerStartTime: (id) =>
+    set((s) => {
+      const next = { ...s.serverStartTimes };
+      delete next[id];
+      return { serverStartTimes: next };
+    }),
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
