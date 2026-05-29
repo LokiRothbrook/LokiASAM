@@ -47,6 +47,7 @@ import {
 import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAppStore } from "@/store/useAppStore";
 import { toast } from "sonner";
 import type { ServerRow } from "@/lib/db";
 
@@ -56,9 +57,7 @@ interface Props {
 
 // ── Utility helpers ──────────────────────────────────────────────────────────
 
-function formatUptime(updatedAt: string): string {
-  const startMs = new Date(updatedAt).getTime();
-  if (isNaN(startMs)) return "—";
+function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
   if (elapsed < 0) return "0m";
   const h = Math.floor(elapsed / 3_600_000);
@@ -97,6 +96,7 @@ function formatFutureTime(iso: string | null): string {
 export function ServerCard({ server }: Props) {
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
+  const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -104,6 +104,15 @@ export function ServerCard({ server }: Props) {
   const [actionPending, setActionPending] = useState(false);
   const [hasUpdateAvailable, setHasUpdateAvailable] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
+
+  // Force a re-render every 30 s so the uptime counter advances visually.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const active = server.status === "running" || server.status === "starting";
+    if (!active) return;
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [server.status]);
 
   const mapDisplay =
     ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
@@ -364,10 +373,12 @@ export function ServerCard({ server }: Props) {
         <div className="flex items-center gap-2">
           <Clock className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Uptime
+            {server.status === "starting" ? "Starting" : "Uptime"}
           </span>
           <span className="text-xs font-semibold ml-auto" style={{ color: "var(--text-primary)" }}>
-            {isRunning ? formatUptime(server.updated_at) : "—"}
+            {startTime != null
+              ? formatUptime(startTime)
+              : (isRunning ? formatUptime(new Date(server.updated_at).getTime()) : "—")}
           </span>
         </div>
 
@@ -378,7 +389,7 @@ export function ServerCard({ server }: Props) {
             CPU
           </span>
           <span className="text-xs font-semibold ml-auto" style={{ color: "var(--text-primary)" }}>
-            {isRunning && stats.cpuPercent !== null
+            {(isRunning || server.status === "starting") && stats.cpuPercent !== null
               ? `${stats.cpuPercent.toFixed(1)}%`
               : "—"}
           </span>
@@ -391,8 +402,8 @@ export function ServerCard({ server }: Props) {
             RAM
           </span>
           <span className="text-xs font-semibold ml-auto" style={{ color: "var(--text-primary)" }}>
-            {isRunning && stats.memoryMb !== null
-              ? `${Math.round(stats.memoryMb)} MB`
+            {(isRunning || server.status === "starting") && stats.memoryMb !== null
+              ? `${(stats.memoryMb / 1024).toFixed(2)} GB`
               : "—"}
           </span>
         </div>
@@ -461,12 +472,29 @@ export function ServerCard({ server }: Props) {
             </Button>
           </>
         ) : isReinstallable ? (
-          /* Install/Start failed — offer Reinstall */
+          /* Install/Start failed */
           <>
             <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--neon-red)" }}>
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
               {isInstallFailed ? "Install Failed" : "Start Failed"}
             </div>
+            {/* For start-failed only: Retry Start avoids a full re-download */}
+            {isStartFailed && (
+              <Button
+                size="sm"
+                disabled={actionPending}
+                onClick={handleStart}
+                className="gap-1.5"
+                style={{
+                  background: "rgba(0,255,136,0.12)",
+                  borderColor: "rgba(0,255,136,0.4)",
+                  color: "var(--neon-green)",
+                }}
+              >
+                <Play className="w-3.5 h-3.5" />
+                Retry
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"

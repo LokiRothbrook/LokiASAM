@@ -238,8 +238,8 @@ export const tauriCmd = {
     invoke<ServerStatus>("get_server_status", { serverId }),
   /** Re-register a PID from a previous session. Returns false if the process
    *  already exited (crashed while the app was closed). */
-  registerRunningServer: (serverId: string, pid: number) =>
-    invoke<boolean>("register_running_server", { serverId, pid }),
+  registerRunningServer: (serverId: string, pid: number, installPath: string) =>
+    invoke<boolean>("register_running_server", { serverId, pid, installPath }),
   /**
    * Copy server installation files from sourceInstallPath to destInstallPath.
    * ShooterGame/Saved is excluded so player data is not carried over.
@@ -415,7 +415,7 @@ export const tauriCmd = {
    */
   moveBaseDir: (oldDir: string, newDir: string, createBackup: boolean) =>
     invoke<string>("move_base_dir", { oldDir, newDir, createBackup }),
-  getProcessStats:    (pid: number) => invoke<ProcessStats>("get_process_stats", { pid }),
+  getProcessStats:    (pid: number, installPath?: string) => invoke<ProcessStats>("get_process_stats", { pid, installPath: installPath ?? null }),
   getPlatform:        () => invoke<string>("get_platform"),
   /** Tell the backend whether first-time setup is complete.
    *  Controls close-to-tray: if not done, the X button exits the process. */
