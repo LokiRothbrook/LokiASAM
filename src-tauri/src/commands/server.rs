@@ -491,6 +491,25 @@ async fn inner_start_server_with_state(
         "{}/ShooterGame/Saved/Logs/ShooterGame.log",
         params.install_path
     );
+
+    // Snapshot the inode/file-ID of ShooterGame.log before the server starts.
+    // UE rotates the log on startup (renames old → timestamped backup, creates
+    // fresh copy). Recording the pre-spawn inode lets the watcher below wait
+    // until rotation is complete before opening the file, preventing a stale
+    // file descriptor on the archived copy that will never receive new content.
+    #[cfg(unix)]
+    let pre_spawn_ino: Option<u64> = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&log_path2).ok().map(|m| m.ino())
+    };
+    #[cfg(windows)]
+    let pre_spawn_ino: Option<u64> = {
+        use std::os::windows::fs::MetadataExt;
+        std::fs::metadata(&log_path2).ok().and_then(|m| m.file_index())
+    };
+    #[cfg(not(any(unix, windows)))]
+    let pre_spawn_ino: Option<u64> = None;
+
     let confirmed2 = Arc::clone(&confirmed_running);
     tauri::async_runtime::spawn(async move {
         use std::io::SeekFrom;
@@ -530,8 +549,13 @@ async fn inner_start_server_with_state(
             true
         };
 
-        // ── Wait for the log file to appear ──────────────────────────────────
-        // The server creates it within the first few seconds of startup.
+        // ── Wait for the log file to appear and be rotated ───────────────────
+        // UE rotates ShooterGame.log on startup: it renames the old file to a
+        // timestamped backup and creates a fresh one. We wait until the file
+        // exists with a different inode than the pre-spawn snapshot, guaranteeing
+        // we tail the current session's log and not the archived copy. Falls back
+        // after 60 s for configs where UE appends rather than rotates.
+        let mut same_ino_polls = 0u32;
         let file = loop {
             if Instant::now() >= deadline { return; }
 
@@ -544,13 +568,36 @@ async fn inner_start_server_with_state(
             if !still_tracked { return; }
 
             match tokio::fs::File::open(&log_path2).await {
-                Ok(f) => break f,
+                Ok(f) => {
+                    // No pre-existing file — this is definitely the fresh log.
+                    let Some(expected_ino) = pre_spawn_ino else { break f; };
+
+                    // Check whether UE has rotated to a new inode yet.
+                    let rotated = tokio::fs::metadata(&log_path2).await.ok().map_or(false, |m| {
+                        #[cfg(unix)]
+                        let changed = { use std::os::unix::fs::MetadataExt; m.ino() != expected_ino };
+                        #[cfg(windows)]
+                        let changed = { use std::os::windows::fs::MetadataExt; m.file_index().map_or(false, |id| id != expected_ino) };
+                        #[cfg(not(any(unix, windows)))]
+                        let changed = { let _ = m; false };
+                        changed
+                    });
+
+                    if rotated { break f; }
+
+                    // Same inode — rotation not yet complete. Fall through after
+                    // 60 s in case UE appends instead of rotating on this config.
+                    same_ino_polls += 1;
+                    if same_ino_polls >= 300 { break f; }
+                    sleep(Duration::from_millis(200)).await;
+                }
                 Err(_) => sleep(Duration::from_secs(1)).await,
             }
         };
 
-        // Seek to end so we only see lines from this server session (not a
-        // previous run that left the log file on disk).
+        // Seek past any content written before we opened the file. For a freshly
+        // rotated log this lands near position 0; for the 60-second fallback it
+        // skips stale content from a prior run.
         let mut file = file;
         let _ = file.seek(SeekFrom::End(0)).await;
         let mut reader = BufReader::new(file);
