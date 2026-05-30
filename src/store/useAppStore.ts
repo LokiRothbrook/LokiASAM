@@ -48,6 +48,15 @@ interface AppState {
   setServerStartTime: (id: string, ts: number) => void;
   clearServerStartTime: (id: string) => void;
 
+  /**
+   * Server IDs where the last start-failed was due to a missing executable.
+   * These servers hide the Retry button — only Reinstall makes sense.
+   * Cleared when the user retries or reinstall completes.
+   */
+  noRetryServerIds: Record<string, true>;
+  setNoRetryServer: (id: string) => void;
+  clearNoRetryServer: (id: string) => void;
+
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
   setNotificationBellOpen: (open: boolean) => void;
@@ -86,6 +95,15 @@ export const useAppStore = create<AppState>((set) => ({
       const next = { ...s.serverStartTimes };
       delete next[id];
       return { serverStartTimes: next };
+    }),
+  noRetryServerIds: {},
+  setNoRetryServer: (id) =>
+    set((s) => ({ noRetryServerIds: { ...s.noRetryServerIds, [id]: true } })),
+  clearNoRetryServer: (id) =>
+    set((s) => {
+      const next = { ...s.noRetryServerIds };
+      delete next[id];
+      return { noRetryServerIds: next };
     }),
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),

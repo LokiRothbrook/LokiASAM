@@ -273,9 +273,19 @@ async fn inner_start_server_with_state(
         cmd.env_remove("PYTHONPATH");
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start server process: {e}"))?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+                // The server executable is missing — reinstall is the only fix.
+                // Prefix lets the frontend detect this case and hide the Retry button.
+                "exe_missing: ArkAscendedServer.exe was not found. Please reinstall the server.".to_string()
+            } else {
+                format!("Failed to start server process: {e}")
+            };
+            return Err(msg);
+        }
+    };
 
     let pid = child.id().ok_or("Spawned process has no PID")?;
 
@@ -296,6 +306,7 @@ async fn inner_start_server_with_state(
                 pid,
                 started_at: Instant::now(),
                 install_path: params.install_path.clone(),
+                confirmed_running: false,
             },
         );
     }
@@ -523,16 +534,19 @@ async fn inner_start_server_with_state(
 
         let deadline = Instant::now() + TIMEOUT;
 
-        // Read current PID and uptime from running_servers and emit "running".
+        // Mark the server as confirmed-running, read its PID/uptime, and emit "running".
+        // Sets confirmed_running = true so the crash monitor emits "crashed" (not
+        // "start-failed") if the process dies after this point.
         // Returns false if the server was already removed from the map.
         let confirm_running = |handle: &tauri::AppHandle, sid: &str| -> bool {
-            let pid_uptime = handle
-                .state::<AppState>()
-                .running_servers
-                .lock()
-                .unwrap()
-                .get(sid)
-                .map(|rs| (rs.pid, rs.started_at.elapsed().as_secs()));
+            let pid_uptime = {
+                let state = handle.state::<AppState>();
+                let mut registry = state.running_servers.lock().unwrap();
+                registry.get_mut(sid).map(|rs| {
+                    rs.confirmed_running = true;
+                    (rs.pid, rs.started_at.elapsed().as_secs())
+                })
+            };
 
             let Some((game_pid, uptime)) = pid_uptime else { return false; };
 
@@ -797,6 +811,8 @@ pub async fn register_running_server(
                 // will read from SQLite updated_at on the frontend instead.
                 started_at: Instant::now(),
                 install_path,
+                // A re-registered server was already running before the app restarted.
+                confirmed_running: true,
             },
         );
         Ok(true)

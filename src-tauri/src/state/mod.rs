@@ -17,6 +17,10 @@ pub struct RunningServer {
     /// On Linux, used to locate Wine processes that were launched inside the Steam
     /// Runtime container (and therefore not visible in the proton PID's subtree).
     pub install_path: String,
+    /// Set to true once the log watcher sees the readiness line and emits "running".
+    /// The crash monitor uses this to distinguish a startup failure (false → "start-failed")
+    /// from a genuine runtime crash (true → "crashed").
+    pub confirmed_running: bool,
 }
 
 /// Global application state shared across all Tauri commands via `tauri::State`.

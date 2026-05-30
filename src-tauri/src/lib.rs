@@ -220,21 +220,35 @@ pub fn run() {
                                 .unwrap()
                                 .remove(server_id);
 
-                            app_state
-                                .running_servers
-                                .lock()
-                                .unwrap()
-                                .remove(server_id);
+                            let confirmed_running = {
+                                let mut registry = app_state.running_servers.lock().unwrap();
+                                let confirmed = registry
+                                    .get(server_id)
+                                    .map_or(false, |rs| rs.confirmed_running);
+                                registry.remove(server_id);
+                                confirmed
+                            };
 
-                            let status_str =
-                                if was_intentional { "stopped" } else { "crashed" };
+                            let status_str = if was_intentional {
+                                "stopped"
+                            } else if confirmed_running {
+                                "crashed"
+                            } else {
+                                "start-failed"
+                            };
+
+                            let error_msg = if status_str == "start-failed" {
+                                Some("Server process exited before completing startup. Try disabling mods — if the problem persists, reinstall the server.".to_string())
+                            } else {
+                                None
+                            };
 
                             let payload = commands::server::ServerStatus {
                                 server_id: server_id.clone(),
                                 status: status_str.into(),
                                 pid: None,
                                 uptime_seconds: None,
-                                error: None,
+                                error: error_msg,
                             };
 
                             let _ = handle.emit(

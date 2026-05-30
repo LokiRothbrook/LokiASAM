@@ -97,6 +97,9 @@ export function ServerCard({ server }: Props) {
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
+  const noRetry = useAppStore((s) => !!s.noRetryServerIds[server.id]);
+  const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
+  const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -195,6 +198,7 @@ export function ServerCard({ server }: Props) {
 
   const handleStart = async () => {
     setActionPending(true);
+    clearNoRetryServer(server.id);
     try {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -207,16 +211,23 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "starting", pid);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (err) {
-      const errMsg = typeof err === "string" ? err : String(err);
+      const raw = typeof err === "string" ? err : String(err);
+      const isExeMissing = raw.startsWith("exe_missing:");
+      const userMsg = isExeMissing
+        ? raw.slice("exe_missing: ".length)
+        : raw;
+
+      if (isExeMissing) setNoRetryServer(server.id);
+
       await updateServerStatus(server.id, "start-failed", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.error(`${server.name} failed to start — ${errMsg}`);
+      toast.error(`${server.name} failed to start`, { description: userMsg });
       dispatchNotification({
         eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
         serverId:   server.id,
         serverName: server.name,
         title:      `${server.name} failed to start`,
-        body:       errMsg,
+        body:       userMsg,
         severity:   "error",
       });
     } finally {
@@ -478,8 +489,10 @@ export function ServerCard({ server }: Props) {
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
               {isInstallFailed ? "Install Failed" : "Start Failed"}
             </div>
-            {/* For start-failed only: Retry Start avoids a full re-download */}
-            {isStartFailed && (
+            {/* For start-failed only: Retry Start avoids a full re-download.
+                Hidden when the failure was a missing executable — retry would
+                immediately fail again, only reinstall can fix it. */}
+            {isStartFailed && !noRetry && (
               <Button
                 size="sm"
                 disabled={actionPending}

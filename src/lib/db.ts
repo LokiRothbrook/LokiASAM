@@ -12,6 +12,20 @@ import Database from "@tauri-apps/plugin-sql";
 let _db: Database | null = null;
 
 /**
+ * Parse a SQLite datetime string as UTC.
+ * SQLite's CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" with no timezone
+ * marker. JavaScript's Date constructor treats that format as local time in
+ * most engines, causing displayed times to be off by the user's UTC offset.
+ * Normalising to ISO UTC ("T" separator + "Z") fixes the parse.
+ */
+export function parseDbDate(ts: string): Date {
+  if (!ts.includes("T")) {
+    return new Date(ts.replace(" ", "T") + "Z");
+  }
+  return new Date(ts);
+}
+
+/**
  * Open (or reuse) the database at an absolute filesystem path and apply
  * all schema migrations idempotently.  Must be called before any other
  * function in this module.
@@ -771,9 +785,9 @@ export interface LogNotificationInput {
 export async function logNotification(input: LogNotificationInput): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity, input.read ?? 0]
+    `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity, input.read ?? 0, new Date().toISOString()]
   );
 }
 
