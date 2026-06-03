@@ -23,14 +23,14 @@ import {
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
-  ChevronDown, ChevronUp, LayoutList,
+  ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
+import { NumberField } from "@/components/shared/NumberField";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import {
   getReleasedMaps, getOfficialMaps, getModMaps, getMapById,
@@ -61,6 +61,7 @@ interface GuidedRates {
   resourceRespawnMultiplier: number;
   playerDamageMultiplier: number;
   nightSpeedMultiplier: number;
+  wildDinoMaxLevel: number;
   enhanceSkillGains: boolean;
 }
 
@@ -107,6 +108,7 @@ const DEFAULT_GUIDED_RATES: GuidedRates = {
   resourceRespawnMultiplier: 0.5,
   playerDamageMultiplier: 1.0,
   nightSpeedMultiplier: 2.0,
+  wildDinoMaxLevel: 150,
   enhanceSkillGains: false,
 };
 
@@ -622,13 +624,23 @@ function GuidedRatesStep({ data, onChange }: { data: WizardData; onChange: (patc
         <RateSlider label="Resource Respawn" description="Lower = faster respawn. 0.5 = twice as fast." value={r.resourceRespawnMultiplier} min={0.05} max={2.0} step={0.05} onChange={(v) => set("resourceRespawnMultiplier", v)} formatValue={(v) => `${v}×`} />
         <RateSlider label="Player Damage" description="Damage output multiplier for players." value={r.playerDamageMultiplier} min={0.5} max={5.0} step={0.1} onChange={(v) => set("playerDamageMultiplier", v)} />
         <RateSlider label="Night Speed" description="Higher = nights pass faster." value={r.nightSpeedMultiplier} min={1.0} max={10} step={0.5} onChange={(v) => set("nightSpeedMultiplier", v)} />
+        <RateSlider label="Wild Dino Max Level" description="Highest level wild dinos can spawn. 150 is the standard for most community servers." value={r.wildDinoMaxLevel} min={30} max={300} step={30} onChange={(v) => set("wildDinoMaxLevel", v)} formatValue={(v) => `Level ${v}`} />
 
         <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(191,0,255,0.12)" }}>
           <div>
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Enhance Skill Gains</p>
             <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>Boosts per-level stat gains for players (increases health, stamina, and damage points per level).</p>
           </div>
-          <Switch checked={r.enhanceSkillGains} onCheckedChange={(v) => set("enhanceSkillGains", v)} />
+          <button
+            type="button"
+            onClick={() => set("enhanceSkillGains", !r.enhanceSkillGains)}
+            className="shrink-0 flex items-center"
+            aria-label={r.enhanceSkillGains ? "Disable" : "Enable"}
+          >
+            {r.enhanceSkillGains
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
         </div>
       </div>
     </div>
@@ -662,12 +674,12 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
       },
       ServerSettings: {},
     };
-    const skip = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort"]);
+    const skip = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort", "MaxPlayers"]);
     for (const [k, v] of Object.entries(preset)) {
       if (!skip.has(k)) result.ServerSettings[k] = String(v);
     }
     result.ServerSettings.ServerAdminPassword = data.adminPassword || "changeme";
-    result.ServerSettings.MaxPlayers = String(data.maxPlayers);
+    result["/Script/Engine.GameSession"] = { MaxPlayers: String(data.maxPlayers) };
     return result;
   }, [data.fullCustomGus, data.gameMode, data.name, data.serverPassword, data.rconPort, data.adminPassword, data.maxPlayers]);
 
@@ -726,17 +738,29 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                           )}
                         </div>
                         {field.type === "boolean" ? (
-                          <Switch
-                            checked={val.toLowerCase() === "true"}
-                            onCheckedChange={(v) => setValue(field.iniSection, field.key, v ? "True" : "False")}
-                          />
-                        ) : (
-                          <Input
-                            type={field.type === "number" ? "number" : "text"}
-                            value={val}
+                          <button
+                            type="button"
+                            onClick={() => setValue(field.iniSection, field.key, val.toLowerCase() === "true" ? "False" : "True")}
+                            className="shrink-0 flex items-center"
+                            aria-label={val.toLowerCase() === "true" ? "Disable" : "Enable"}
+                          >
+                            {val.toLowerCase() === "true"
+                              ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+                              : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+                          </button>
+                        ) : field.type === "number" && field.min !== undefined && field.max !== undefined ? (
+                          <NumberField
+                            value={parseFloat(val) || 0}
+                            onChange={(v) => setValue(field.iniSection, field.key, String(v))}
                             min={field.min}
                             max={field.max}
                             step={field.step}
+                            defaultValue={field.defaultValue}
+                          />
+                        ) : (
+                          <Input
+                            type="text"
+                            value={val}
                             placeholder={field.placeholder}
                             onChange={(e) => setValue(field.iniSection, field.key, e.target.value)}
                             className="h-7 text-xs font-mono"
@@ -843,7 +867,16 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Join a Cluster</p>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>Enable cross-server travel</p>
         </div>
-        <Switch checked={joinCluster} onCheckedChange={(v) => { setJoinCluster(v); if (!v) onChange({ clusterId: "" }); }} />
+        <button
+          type="button"
+          onClick={() => { const v = !joinCluster; setJoinCluster(v); if (!v) onChange({ clusterId: "" }); }}
+          className="shrink-0 flex items-center"
+          aria-label={joinCluster ? "Disable cluster" : "Enable cluster"}
+        >
+          {joinCluster
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
       </div>
       {joinCluster && (
         <div className="space-y-2">
@@ -915,7 +948,16 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
               <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{desc}</p>
             </div>
-            <Switch checked={data[key] as boolean} onCheckedChange={(v) => onChange({ [key]: v })} />
+            <button
+              type="button"
+              onClick={() => onChange({ [key]: !data[key] })}
+              className="shrink-0 flex items-center"
+              aria-label={(data[key] as boolean) ? "Disable" : "Enable"}
+            >
+              {(data[key] as boolean)
+                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+            </button>
           </div>
           {data[key] && <CronPicker value={data[cronKey] as string} onChange={(v) => onChange({ [cronKey]: v })} />}
         </div>
@@ -1130,6 +1172,7 @@ function InstallStep({
         ResourcesRespawnPeriodMultiplier: r.resourceRespawnMultiplier,
         PlayerDamageMultiplier: r.playerDamageMultiplier,
         NightTimeSpeedScale: r.nightSpeedMultiplier,
+        OverrideOfficialDifficulty: r.wildDinoMaxLevel / 30,
       };
     }
 

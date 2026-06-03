@@ -340,6 +340,7 @@ export interface GameUserSettingsConfig {
   DayTimeSpeedScale: number;
   DayCycleSpeedScale: number;
   DifficultyOffset: number;
+  OverrideOfficialDifficulty: number;
 
   // [ServerSettings] — spoilage / decomposition
   GlobalSpoilingTimeMultiplier: number;
@@ -444,7 +445,8 @@ export const DEFAULT_GAME_USER_SETTINGS: GameUserSettingsConfig = {
   NightTimeSpeedScale: 1.0,
   DayTimeSpeedScale: 1.0,
   DayCycleSpeedScale: 1.0,
-  DifficultyOffset: 0.2,
+  DifficultyOffset: 1.0,
+  OverrideOfficialDifficulty: 5.0,
 
   GlobalSpoilingTimeMultiplier: 1.0,
   GlobalItemDecompositionTimeMultiplier: 1.0,
@@ -787,6 +789,7 @@ export interface IniFieldDef {
   min?: number;
   max?: number;
   step?: number;
+  defaultValue?: number;
   description?: string;
 }
 
@@ -803,7 +806,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     fields: [
       { section: "gus", iniSection: "SessionSettings", key: "SessionName", label: "Server Name", type: "string", placeholder: "My ASA Server", description: "The name shown in the server browser." },
       // MaxPlayers lives in [/Script/Engine.GameSession] in ASA's GameUserSettings.ini
-      { section: "gus", iniSection: "/Script/Engine.GameSession", key: "MaxPlayers", label: "Max Players", type: "number", min: 1, max: 200, description: "Maximum concurrent players allowed." },
+      { section: "gus", iniSection: "/Script/Engine.GameSession", key: "MaxPlayers", label: "Max Players", type: "number", min: 1, max: 200, defaultValue: 70, description: "Maximum concurrent players allowed." },
       { section: "gus", iniSection: "SessionSettings", key: "ServerPassword", label: "Join Password", type: "string", placeholder: "(no password)", description: "Players must enter this to join. Leave empty for public." },
     ],
   },
@@ -813,7 +816,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     fields: [
       { section: "gus", iniSection: "ServerSettings", key: "ServerAdminPassword", label: "Admin Password", type: "string", placeholder: "required", description: "Password for in-game admin commands and RCON." },
       { section: "gus", iniSection: "ServerSettings", key: "RCONEnabled", label: "RCON Enabled", type: "boolean", description: "Enable the RCON remote console interface." },
-      { section: "gus", iniSection: "ServerSettings", key: "RCONPort", label: "RCON Port", type: "number", min: 1024, max: 65535, description: "TCP port the RCON server listens on." },
+      { section: "gus", iniSection: "ServerSettings", key: "RCONPort", label: "RCON Port", type: "number", min: 1024, max: 65535, defaultValue: 27020, description: "TCP port the RCON server listens on." },
       { section: "gus", iniSection: "ServerSettings", key: "AdminLogging", label: "Admin Logging", type: "boolean", description: "Log all admin commands to in-game chat (visible to admins only)." },
     ],
   },
@@ -821,23 +824,24 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     id: "rates",
     title: "Rates",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "XPMultiplier", label: "XP Multiplier", type: "number", min: 0.1, max: 100, step: 0.1, description: "Global XP gain multiplier." },
-      { section: "gus", iniSection: "ServerSettings", key: "TamingSpeedMultiplier", label: "Taming Speed", type: "number", min: 0.1, max: 100, step: 0.1, description: "How fast taming effectiveness increases." },
-      { section: "gus", iniSection: "ServerSettings", key: "HarvestAmountMultiplier", label: "Harvest Amount", type: "number", min: 0.1, max: 100, step: 0.1, description: "Resource yield per harvest." },
-      { section: "gus", iniSection: "ServerSettings", key: "ResourcesRespawnPeriodMultiplier", label: "Resource Respawn", type: "number", min: 0.01, max: 10, step: 0.1, description: "Lower = faster respawn. 0.5 = twice as fast." },
-      { section: "gus", iniSection: "ServerSettings", key: "DifficultyOffset", label: "Difficulty Offset", type: "number", min: 0, max: 1, step: 0.05, description: "Controls wild dino level cap. 1.0 = max difficulty." },
+      { section: "gus", iniSection: "ServerSettings", key: "OverrideOfficialDifficulty", label: "Wild Dino Max Level", type: "number", min: 0.1, max: 20, step: 0.5, defaultValue: 5.0, description: "Directly sets difficulty. Value × 30 = max wild dino level (5.0 = level 150). Overrides Difficulty Offset when set." },
+      { section: "gus", iniSection: "ServerSettings", key: "DifficultyOffset", label: "Difficulty Offset", type: "number", min: 0, max: 1, step: 0.05, defaultValue: 1.0, description: "Fallback difficulty scale (0–1). Ignored when Override Official Difficulty is set." },
+      { section: "gus", iniSection: "ServerSettings", key: "XPMultiplier", label: "XP Multiplier", type: "number", min: 0, max: 100, step: 0.1, defaultValue: 1.0, description: "Global XP gain multiplier." },
+      { section: "gus", iniSection: "ServerSettings", key: "TamingSpeedMultiplier", label: "Taming Speed", type: "number", min: 0, max: 100, step: 0.1, defaultValue: 1.0, description: "How fast taming effectiveness increases." },
+      { section: "gus", iniSection: "ServerSettings", key: "HarvestAmountMultiplier", label: "Harvest Amount", type: "number", min: 0, max: 100, step: 0.1, defaultValue: 1.0, description: "Resource yield per harvest." },
+      { section: "gus", iniSection: "ServerSettings", key: "ResourcesRespawnPeriodMultiplier", label: "Resource Respawn", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = faster respawn. 0.5 = twice as fast." },
     ],
   },
   {
     id: "breeding",
     title: "Taming & Breeding",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "MatingIntervalMultiplier", label: "Mating Interval", type: "number", min: 0.01, max: 10, step: 0.1, description: "Lower = dinos can mate more often." },
-      { section: "gus", iniSection: "ServerSettings", key: "EggHatchSpeedMultiplier", label: "Egg Hatch Speed", type: "number", min: 0.1, max: 100, step: 0.5, description: "Higher = eggs hatch faster." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyMatureSpeedMultiplier", label: "Baby Mature Speed", type: "number", min: 0.1, max: 100, step: 0.5, description: "Higher = babies grow up faster." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyCuddleIntervalMultiplier", label: "Imprint Interval", type: "number", min: 0.01, max: 10, step: 0.1, description: "Lower = imprinting cuddles required less often." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyImprintingStatScaleMultiplier", label: "Imprint Stat Scale", type: "number", min: 0.1, max: 10, step: 0.1, description: "Multiplier on imprinting stat bonuses." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyImprintAmountMultiplier", label: "Imprint Amount", type: "number", min: 0.1, max: 10, step: 0.1, description: "Higher = each cuddle gives more imprint %." },
+      { section: "gus", iniSection: "ServerSettings", key: "MatingIntervalMultiplier", label: "Mating Interval", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = dinos can mate more often." },
+      { section: "gus", iniSection: "ServerSettings", key: "EggHatchSpeedMultiplier", label: "Egg Hatch Speed", type: "number", min: 0, max: 100, step: 0.5, defaultValue: 1.0, description: "Higher = eggs hatch faster." },
+      { section: "gus", iniSection: "ServerSettings", key: "BabyMatureSpeedMultiplier", label: "Baby Mature Speed", type: "number", min: 0, max: 100, step: 0.5, defaultValue: 1.0, description: "Higher = babies grow up faster." },
+      { section: "gus", iniSection: "ServerSettings", key: "BabyCuddleIntervalMultiplier", label: "Imprint Interval", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = imprinting cuddles required less often." },
+      { section: "gus", iniSection: "ServerSettings", key: "BabyImprintingStatScaleMultiplier", label: "Imprint Stat Scale", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Multiplier on imprinting stat bonuses." },
+      { section: "gus", iniSection: "ServerSettings", key: "BabyImprintAmountMultiplier", label: "Imprint Amount", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = each cuddle gives more imprint %." },
       { section: "gus", iniSection: "ServerSettings", key: "AllowAnyoneBabyImprintCuddle", label: "Anyone Can Imprint", type: "boolean", description: "Allow any player (not just the imprinter) to cuddle babies." },
     ],
   },
@@ -845,17 +849,17 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     id: "player_dino",
     title: "Player & Dino Tuning",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "PlayerDamageMultiplier", label: "Player Damage", type: "number", min: 0.1, max: 10, step: 0.1, description: "Damage dealt by players." },
-      { section: "gus", iniSection: "ServerSettings", key: "PlayerResistanceMultiplier", label: "Player Resistance", type: "number", min: 0.1, max: 10, step: 0.1, description: "Damage received by players (lower = tankier)." },
-      { section: "gus", iniSection: "ServerSettings", key: "DinoDamageMultiplier", label: "Dino Damage", type: "number", min: 0.1, max: 10, step: 0.1, description: "Damage dealt by dinos." },
-      { section: "gus", iniSection: "ServerSettings", key: "DinoResistanceMultiplier", label: "Dino Resistance", type: "number", min: 0.1, max: 10, step: 0.1, description: "Damage received by dinos (lower = tankier)." },
-      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterFoodDrainMultiplier", label: "Food Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterWaterDrainMultiplier", label: "Water Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterStaminaDrainMultiplier", label: "Stamina Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterHealthRecoveryMultiplier", label: "Player Health Regen", type: "number", min: 0.1, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "DinoCharacterFoodDrainMultiplier", label: "Dino Food Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "DinoCharacterStaminaDrainMultiplier", label: "Dino Stamina Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "DinoCharacterHealthRecoveryMultiplier", label: "Dino Health Regen", type: "number", min: 0.1, max: 10, step: 0.1 },
+      { section: "gus", iniSection: "ServerSettings", key: "PlayerDamageMultiplier", label: "Player Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Damage dealt by players." },
+      { section: "gus", iniSection: "ServerSettings", key: "PlayerResistanceMultiplier", label: "Player Resistance", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Damage received by players (lower = tankier)." },
+      { section: "gus", iniSection: "ServerSettings", key: "DinoDamageMultiplier", label: "Dino Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Damage dealt by dinos." },
+      { section: "gus", iniSection: "ServerSettings", key: "DinoResistanceMultiplier", label: "Dino Resistance", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Damage received by dinos (lower = tankier)." },
+      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterFoodDrainMultiplier", label: "Food Drain", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterWaterDrainMultiplier", label: "Water Drain", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterStaminaDrainMultiplier", label: "Stamina Drain", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "PlayerCharacterHealthRecoveryMultiplier", label: "Player Health Regen", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "DinoCharacterFoodDrainMultiplier", label: "Dino Food Drain", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "DinoCharacterStaminaDrainMultiplier", label: "Dino Stamina Drain", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "DinoCharacterHealthRecoveryMultiplier", label: "Dino Health Regen", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
     ],
   },
   {
@@ -865,7 +869,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
       { section: "gus", iniSection: "ServerSettings", key: "AllowPvP", label: "Allow PvP", type: "boolean", description: "Enable player-vs-player combat." },
       { section: "gus", iniSection: "ServerSettings", key: "EnablePvPGamma", label: "PvP Gamma", type: "boolean", description: "Allow gamma adjustment in PvP (gives night vision advantage)." },
       { section: "gus", iniSection: "ServerSettings", key: "PreventOfflinePvP", label: "Offline Raid Protection", type: "boolean", description: "Protect structures/tames when the owner tribe is offline." },
-      { section: "gus", iniSection: "ServerSettings", key: "PreventOfflinePvPInterval", label: "ORP Grace Period (s)", type: "number", min: 0, max: 86400, step: 60, description: "Seconds after last tribe member logs off before protection kicks in." },
+      { section: "gus", iniSection: "ServerSettings", key: "PreventOfflinePvPInterval", label: "ORP Grace Period (s)", type: "number", min: 0, max: 86400, step: 60, defaultValue: 900, description: "Seconds after last tribe member logs off before protection kicks in." },
       { section: "gus", iniSection: "ServerSettings", key: "AllowCaveBuildingPvE", label: "Cave Building (PvE)", type: "boolean", description: "Allow structure placement inside caves in PvE mode." },
       { section: "gus", iniSection: "ServerSettings", key: "AllowCaveBuildingPvP", label: "Cave Building (PvP)", type: "boolean", description: "Allow structure placement inside caves in PvP mode." },
       { section: "gus", iniSection: "ServerSettings", key: "AllowFlyerCarryPvE", label: "Flyer Carry (PvE)", type: "boolean", description: "Allow flyers to pick up wild dinos and players in PvE." },
@@ -877,26 +881,26 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     id: "tribe",
     title: "Tribes & Structures",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "MaxNumberOfPlayersInTribe", label: "Max Tribe Size", type: "number", min: 0, max: 200, description: "0 = unlimited." },
-      { section: "gus", iniSection: "ServerSettings", key: "TribeNameChangeCooldown", label: "Tribe Rename Cooldown (min)", type: "number", min: 0, max: 1440 },
-      { section: "gus", iniSection: "ServerSettings", key: "StructureDamageMultiplier", label: "Structure Damage", type: "number", min: 0.1, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "StructureResistanceMultiplier", label: "Structure Resistance", type: "number", min: 0.1, max: 10, step: 0.1, description: "Lower = structures take more damage." },
-      { section: "gus", iniSection: "ServerSettings", key: "PvEStructureDecayDestructionPeriod", label: "PvE Decay Period (days)", type: "number", min: 0, max: 90, description: "0 = disabled. Days before abandoned structures are destroyed." },
-      { section: "gus", iniSection: "ServerSettings", key: "PvEStructureDecayPeriodMultiplier", label: "PvE Decay Multiplier", type: "number", min: 0.1, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "AutoDestroyOldStructuresMultiplier", label: "Auto-Destroy Old Structures", type: "number", min: 0.0, max: 10, step: 0.1, description: "0 = disabled. Higher = faster auto-destruction of old structures." },
+      { section: "gus", iniSection: "ServerSettings", key: "MaxNumberOfPlayersInTribe", label: "Max Tribe Size", type: "number", min: 0, max: 200, defaultValue: 0, description: "0 = unlimited." },
+      { section: "gus", iniSection: "ServerSettings", key: "TribeNameChangeCooldown", label: "Tribe Rename Cooldown (min)", type: "number", min: 0, max: 1440, defaultValue: 15 },
+      { section: "gus", iniSection: "ServerSettings", key: "StructureDamageMultiplier", label: "Structure Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "StructureResistanceMultiplier", label: "Structure Resistance", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Lower = structures take more damage." },
+      { section: "gus", iniSection: "ServerSettings", key: "PvEStructureDecayDestructionPeriod", label: "PvE Decay Period (days)", type: "number", min: 0, max: 90, defaultValue: 0, description: "0 = disabled. Days before abandoned structures are destroyed." },
+      { section: "gus", iniSection: "ServerSettings", key: "PvEStructureDecayPeriodMultiplier", label: "PvE Decay Multiplier", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "AutoDestroyOldStructuresMultiplier", label: "Auto-Destroy Old Structures", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 0, description: "0 = disabled. Higher = faster auto-destruction of old structures." },
     ],
   },
   {
     id: "world",
     title: "World & Time",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "DayCycleSpeedScale", label: "Day Cycle Speed", type: "number", min: 0.1, max: 10, step: 0.1, description: "Overall day/night cycle speed." },
-      { section: "gus", iniSection: "ServerSettings", key: "DayTimeSpeedScale", label: "Daytime Speed", type: "number", min: 0.1, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "NightTimeSpeedScale", label: "Nighttime Speed", type: "number", min: 0.1, max: 10, step: 0.1, description: "Higher = nights pass faster." },
-      { section: "gus", iniSection: "ServerSettings", key: "GlobalSpoilingTimeMultiplier", label: "Spoiling Time", type: "number", min: 0.1, max: 10, step: 0.1, description: "Higher = food/items spoil slower." },
-      { section: "gus", iniSection: "ServerSettings", key: "GlobalItemDecompositionTimeMultiplier", label: "Item Decay Time", type: "number", min: 0.1, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "GlobalCorpseDecompositionTimeMultiplier", label: "Corpse Decay Time", type: "number", min: 0.1, max: 10, step: 0.1 },
-      { section: "gus", iniSection: "ServerSettings", key: "AutoSavePeriodMinutes", label: "Auto-Save Interval (min)", type: "number", min: 1, max: 120, description: "How often the server saves to disk." },
+      { section: "gus", iniSection: "ServerSettings", key: "DayCycleSpeedScale", label: "Day Cycle Speed", type: "number", min: 0.1, max: 10, step: 0.1, defaultValue: 1.0, description: "Overall day/night cycle speed." },
+      { section: "gus", iniSection: "ServerSettings", key: "DayTimeSpeedScale", label: "Daytime Speed", type: "number", min: 0.1, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "NightTimeSpeedScale", label: "Nighttime Speed", type: "number", min: 0.1, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = nights pass faster." },
+      { section: "gus", iniSection: "ServerSettings", key: "GlobalSpoilingTimeMultiplier", label: "Spoiling Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = food/items spoil slower." },
+      { section: "gus", iniSection: "ServerSettings", key: "GlobalItemDecompositionTimeMultiplier", label: "Item Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "GlobalCorpseDecompositionTimeMultiplier", label: "Corpse Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
+      { section: "gus", iniSection: "ServerSettings", key: "AutoSavePeriodMinutes", label: "Auto-Save Interval (min)", type: "number", min: 1, max: 120, defaultValue: 15, description: "How often the server saves to disk." },
     ],
   },
   {

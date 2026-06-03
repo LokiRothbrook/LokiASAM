@@ -32,7 +32,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
-import { Switch } from "@/components/ui/switch";
 import { useSetupStore } from "@/store/useSetupStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";

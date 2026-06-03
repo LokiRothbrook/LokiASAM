@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import {
@@ -228,7 +227,16 @@ function BaseDirMigrationSection() {
               <p className="text-sm" style={{ color: "var(--foreground)" }}>Create backup before moving</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Backs up the lokiasam config/DB folder inside the current base dir.</p>
             </div>
-            <Switch checked={createBackup} onCheckedChange={setCreateBackup} />
+            <button
+              type="button"
+              onClick={() => setCreateBackup((v) => !v)}
+              className="shrink-0 flex items-center"
+              aria-label={createBackup ? "Disable backup" : "Enable backup"}
+            >
+              {createBackup
+                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+            </button>
           </div>
 
           <div className="rounded-lg p-3" style={{ background: "rgba(255,136,0,0.06)", border: "1px solid rgba(255,136,0,0.2)" }}>
@@ -1267,7 +1275,10 @@ function AppImageIntegrationSection() {
     try {
       await tauriCmd.installAppimageIntegration();
       refresh();
-      toast.success("LokiASAM added to your application menu.");
+      toast.success("LokiASAM added to your application menu.", {
+        description: "If it doesn't appear right away, log out and back in.",
+        duration: 6000,
+      });
     } catch (e) {
       toast.error("Installation failed", { description: String(e) });
     } finally {
@@ -1297,6 +1308,7 @@ function AppImageIntegrationSection() {
         Removing it restores the system to its original state.
       </p>
       {status.isInstalled ? (
+        <div className="space-y-2">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <span className="text-sm flex items-center gap-2" style={{ color: "var(--neon-green)" }}>
             <CheckCircle2 className="w-4 h-4" />
@@ -1315,6 +1327,10 @@ function AppImageIntegrationSection() {
               : <StopCircle className="w-3.5 h-3.5" />}
             Remove from Menu
           </Button>
+        </div>
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          If the icon doesn't appear in your launcher, log out and back in (or reboot).
+        </p>
         </div>
       ) : (
         <Button

@@ -17,7 +17,6 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { CronBuilder, getNextCronDate, CRON_PRESETS } from "@/components/shared/CronBuilder";
 import {
@@ -889,10 +888,16 @@ function ChannelCard({
           >
             {expanded ? "Hide" : "Configure"}
           </button>
-          <Switch
-            checked={enabled}
-            onCheckedChange={onToggle}
-          />
+          <button
+            type="button"
+            onClick={() => onToggle(!enabled)}
+            className="shrink-0 flex items-center"
+            aria-label={enabled ? "Disable" : "Enable"}
+          >
+            {enabled
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
         </div>
       </div>
 

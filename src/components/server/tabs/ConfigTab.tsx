@@ -3,15 +3,15 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
-  Settings2, X, AlertCircle,
+  Settings2, X, AlertCircle, ToggleLeft, ToggleRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import { INI_FIELD_GROUPS, type IniFieldDef } from "@/data/game-data";
 import { getServerConfig, saveServerConfig, type ServerRow } from "@/lib/db";
+import { NumberField } from "@/components/shared/NumberField";
 
 interface Props {
   server: ServerRow;
@@ -102,7 +102,41 @@ function FieldRow({
             <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
           )}
         </div>
-        <Switch checked={checked} onCheckedChange={(v) => onChange(v ? "True" : "False")} />
+        <button
+          type="button"
+          onClick={() => onChange(checked ? "False" : "True")}
+          className="shrink-0 flex items-center"
+          aria-label={checked ? "Disable" : "Enable"}
+        >
+          {checked
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
+      </div>
+    );
+  }
+
+  if (field.type === "number" && field.min !== undefined && field.max !== undefined) {
+    const numVal = parseFloat(value) || 0;
+    return (
+      <div className="py-2 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <Label className="text-sm" style={{ color: "var(--text-primary)" }} title={`[${field.iniSection}] ${field.key}`}>
+            {field.label}
+            <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>{field.key}</span>
+          </Label>
+        </div>
+        {field.description && (
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
+        )}
+        <NumberField
+          value={numVal}
+          onChange={(v) => onChange(String(v))}
+          min={field.min}
+          max={field.max}
+          step={field.step}
+          defaultValue={field.defaultValue}
+        />
       </div>
     );
   }
@@ -119,13 +153,10 @@ function FieldRow({
         )}
       </div>
       <Input
-        type={field.type === "number" ? "number" : "text"}
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={field.placeholder}
-        min={field.min}
-        max={field.max}
-        step={field.step}
         className="h-8 text-sm max-w-xs"
         style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
       />
