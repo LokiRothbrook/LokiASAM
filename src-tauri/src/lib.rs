@@ -2,6 +2,36 @@ mod commands;
 mod events;
 mod state;
 
+// Suppress the "libayatana-appindicator is deprecated" stderr warning that the
+// library emits unconditionally when the tray icon is initialized on Linux.
+// The warning is informational only (Tauri still works correctly); we silence
+// it by registering a no-op GLib log handler for that specific domain before
+// the tray is created.
+#[cfg(target_os = "linux")]
+#[link(name = "glib-2.0")]
+extern "C" {
+    fn g_log_set_handler(
+        log_domain: *const std::ffi::c_char,
+        log_levels: u32,
+        log_func: unsafe extern "C" fn(
+            *const std::ffi::c_char,
+            u32,
+            *const std::ffi::c_char,
+            *mut std::ffi::c_void,
+        ),
+        user_data: *mut std::ffi::c_void,
+    ) -> u32;
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn noop_log(
+    _domain: *const std::ffi::c_char,
+    _level: u32,
+    _message: *const std::ffi::c_char,
+    _user_data: *mut std::ffi::c_void,
+) {
+}
+
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -79,6 +109,16 @@ fn hide_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        // G_LOG_LEVEL_WARNING = 1 << 4
+        g_log_set_handler(
+            b"libayatana-appindicator\0".as_ptr() as *const std::ffi::c_char,
+            1u32 << 4,
+            noop_log,
+            std::ptr::null_mut(),
+        );
+    }
 
     tauri::Builder::default()
         // ── Single-instance guard ──────────────────────────────────────────
