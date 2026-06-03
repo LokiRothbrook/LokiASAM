@@ -332,6 +332,9 @@ pub fn run() {
             commands::mods::start_mod_verification,
             commands::mods::close_mod_verify,
             // System stats
+            commands::system::check_appimage_integration,
+            commands::system::install_appimage_integration,
+            commands::system::uninstall_appimage_integration,
             commands::system::check_dir,
             commands::system::check_file_exists,
             commands::system::delete_directory,

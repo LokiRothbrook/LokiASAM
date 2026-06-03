@@ -146,9 +146,6 @@ export function OverviewTab({ server }: Props) {
       port: server.port,
       queryPort: server.query_port,
       rconPort: server.rcon_port,
-      maxPlayers: server.max_players,
-      serverPassword: server.server_password ?? undefined,
-      adminPassword: server.admin_password,
       extraArgs,
       modIds: enabledModIds,
     };

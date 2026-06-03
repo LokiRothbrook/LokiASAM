@@ -50,6 +50,10 @@ fn strip_ansi(s: &str) -> String {
 /// Full parameter set for starting an ASA dedicated server.
 /// The frontend reads all values from SQLite and passes them here — Rust does
 /// no DB access of its own.
+///
+/// Server name, passwords, rates, RCON, and MaxPlayers all live in
+/// GameUserSettings.ini — they are NOT passed on the command line.
+/// Only map path, ports, mods, and CLI-only flags are handled here.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StartServerParams {
@@ -58,23 +62,20 @@ pub struct StartServerParams {
     pub install_path: String,
     /// ASA map identifier, e.g. "TheIsland_WP".
     pub map_path: String,
+    /// Game UDP port that clients connect to (CLI only, must be ?Port=).
     pub port: u16,
+    /// Steam query UDP port (CLI only, must be ?QueryPort=).
     pub query_port: u16,
+    /// RCON TCP port — NOT passed on CLI; used internally for readiness polling.
+    /// The actual value is read by the server from GameUserSettings.ini [ServerSettings].
     pub rcon_port: u16,
-    pub max_players: u32,
-    /// Optional join password shown to connecting players.
-    pub server_password: Option<String>,
-    pub admin_password: String,
-    /// Additional command-line flags, e.g. ["-NoBattlEye", "-servergamelog"].
+    /// Additional CLI-only flags, e.g. ["-NoBattlEye", "-ForceRespawnDinos"].
     pub extra_args: Vec<String>,
-    /// CurseForge mod IDs to load. Passed as `-mods=id1,id2,...` — the server
-    /// downloads and applies them on startup automatically.
+    /// CurseForge mod IDs to load. Passed as `-mods=id1,id2,...`.
     pub mod_ids: Vec<String>,
-    /// Linux only: path to the Proton-GE installation directory (must contain `proton` script).
-    /// Typically {base_dir}/proton/GE-ProtonX-Y/
+    /// Linux only: path to the Proton-GE installation directory.
     pub proton_path: Option<String>,
     /// Linux only: WINEPREFIX path where Proton creates its fake C: drive.
-    /// Stored at {base_dir}/proton/prefix/ so everything Proton-related is co-located.
     pub prefix_path: Option<String>,
 }
 
@@ -179,20 +180,15 @@ async fn inner_start_server_with_state(
     params: StartServerParams,
 ) -> Result<u32, String> {
     // Build the ?-delimited query string that follows the map name.
-    let mut query_string = format!(
-        "{}?listen?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?MaxPlayers={}?ServerAdminPassword={}",
+    // Passwords, RCON, MaxPlayers, and all gameplay settings are read by the
+    // server from GameUserSettings.ini — they must NOT be duplicated on the CLI
+    // or they will override INI values on every restart.
+    let query_string = format!(
+        "{}?listen?Port={}?QueryPort={}",
         params.map_path,
         params.port,
         params.query_port,
-        params.rcon_port,
-        params.max_players,
-        params.admin_password,
     );
-    if let Some(pw) = &params.server_password {
-        if !pw.is_empty() {
-            query_string.push_str(&format!("?ServerPassword={}", pw));
-        }
-    }
 
     // Build the platform-specific Command.
     // Windows: run the Win64 exe directly.

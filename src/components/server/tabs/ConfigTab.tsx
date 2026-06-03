@@ -1,103 +1,52 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
+import {
+  Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
+  Settings2, X, AlertCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
-import type { ServerRow } from "@/lib/db";
+import { INI_FIELD_GROUPS, type IniFieldDef } from "@/data/game-data";
+import { getServerConfig, saveServerConfig, type ServerRow } from "@/lib/db";
 
 interface Props {
   server: ServerRow;
 }
 
-// ---------------------------------------------------------------------------
-// Field definitions — the structured view of the most important ASA INI keys.
-// Section keys must exactly match what the INI parser produces.
-// ---------------------------------------------------------------------------
-
-interface FieldDef {
-  section: string;
-  key: string;
-  label: string;
-  type: "string" | "number" | "boolean";
-  placeholder?: string;
-  min?: number;
-  max?: number;
-  step?: number;
-  file: "gus" | "game";
-}
-
-const FIELD_GROUPS: { title: string; fields: FieldDef[] }[] = [
-  {
-    title: "Session",
-    fields: [
-      { file: "gus", section: "SessionSettings", key: "SessionName", label: "Server Name", type: "string", placeholder: "My ASA Server" },
-      { file: "gus", section: "ServerSettings", key: "MaxPlayers", label: "Max Players", type: "number", min: 1, max: 70 },
-      { file: "gus", section: "SessionSettings", key: "ServerPassword", label: "Join Password", type: "string", placeholder: "(no password)" },
-    ],
-  },
-  {
-    title: "Admin & RCON",
-    fields: [
-      { file: "gus", section: "ServerSettings", key: "ServerAdminPassword", label: "Admin Password", type: "string", placeholder: "required" },
-      { file: "gus", section: "SessionSettings", key: "RCONEnabled", label: "RCON Enabled", type: "boolean" },
-      { file: "gus", section: "SessionSettings", key: "RCONPort", label: "RCON Port", type: "number", min: 1024, max: 65535 },
-    ],
-  },
-  {
-    title: "Rates",
-    fields: [
-      { file: "gus", section: "ServerSettings", key: "XPMultiplier", label: "XP Multiplier", type: "number", min: 0.1, max: 100, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "TamingSpeedMultiplier", label: "Taming Speed", type: "number", min: 0.1, max: 100, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "HarvestAmountMultiplier", label: "Harvest Amount", type: "number", min: 0.1, max: 100, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "ResourcesRespawnPeriodMultiplier", label: "Resource Respawn Multiplier", type: "number", min: 0.1, max: 100, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "PlayerCharacterWaterDrainMultiplier", label: "Water Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "PlayerCharacterFoodDrainMultiplier", label: "Food Drain", type: "number", min: 0.0, max: 10, step: 0.1 },
-    ],
-  },
-  {
-    title: "Taming & Breeding",
-    fields: [
-      { file: "gus", section: "ServerSettings", key: "BabyMatureSpeedMultiplier", label: "Baby Mature Speed", type: "number", min: 0.1, max: 100, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "EggHatchSpeedMultiplier", label: "Egg Hatch Speed", type: "number", min: 0.1, max: 100, step: 0.1 },
-      { file: "gus", section: "ServerSettings", key: "BabyCuddleIntervalMultiplier", label: "Imprint Interval", type: "number", min: 0.1, max: 100, step: 0.1 },
-    ],
-  },
-  {
-    title: "PvP / PvE",
-    fields: [
-      { file: "gus", section: "ServerSettings", key: "DifficultyOffset", label: "Difficulty Offset", type: "number", min: 0, max: 1, step: 0.05 },
-      { file: "gus", section: "ServerSettings", key: "AllowThirdPersonPlayer", label: "Allow Third Person", type: "boolean" },
-      { file: "gus", section: "ServerSettings", key: "AlwaysNotifyPlayerLeft", label: "Notify Player Left", type: "boolean" },
-      { file: "gus", section: "ServerSettings", key: "AlwaysNotifyPlayerJoined", label: "Notify Player Joined", type: "boolean" },
-      { file: "gus", section: "ServerSettings", key: "GlobalVoiceChat", label: "Global Voice Chat", type: "boolean" },
-      { file: "gus", section: "ServerSettings", key: "ProximityChat", label: "Proximity Chat", type: "boolean" },
-    ],
-  },
-];
+// Keys excluded from the "Full INI Editor" — handled on the server overview/setup pages.
+const OVERVIEW_KEYS = new Set([
+  "SessionName", "ServerPassword", "ServerAdminPassword",
+  "Port", "QueryPort", "RCONPort", "RCONEnabled", "MaxPlayers",
+]);
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getIniValue(config: ServerConfigJson, file: "gus" | "game", section: string, key: string): string {
-  const src = file === "gus" ? config.gameUserSettings : config.gameIni;
-  return src?.[section]?.[key] ?? "";
+function getIniValue(
+  config: ServerConfigJson,
+  section: "gus" | "game",
+  iniSection: string,
+  key: string
+): string {
+  const src = section === "gus" ? config.gameUserSettings : config.gameIni;
+  return src?.[iniSection]?.[key] ?? "";
 }
 
 function setIniValue(
   config: ServerConfigJson,
-  file: "gus" | "game",
-  section: string,
+  section: "gus" | "game",
+  iniSection: string,
   key: string,
   value: string,
 ): ServerConfigJson {
-  const src = file === "gus" ? { ...config.gameUserSettings } : { ...config.gameIni };
-  src[section] = { ...(src[section] ?? {}), [key]: value };
-  if (file === "gus") return { ...config, gameUserSettings: src };
+  const src = section === "gus" ? { ...config.gameUserSettings } : { ...config.gameIni };
+  src[iniSection] = { ...(src[iniSection] ?? {}), [key]: value };
+  if (section === "gus") return { ...config, gameUserSettings: src };
   return { ...config, gameIni: src };
 }
 
@@ -128,11 +77,15 @@ function rawTextToSections(text: string): Record<string, Record<string, string>>
 }
 
 // ---------------------------------------------------------------------------
-// FieldRow
+// Field row
 // ---------------------------------------------------------------------------
 
-function FieldRow({ field, value, onChange }: {
-  field: FieldDef;
+function FieldRow({
+  field,
+  value,
+  onChange,
+}: {
+  field: IniFieldDef;
   value: string;
   onChange: (val: string) => void;
 }) {
@@ -140,36 +93,31 @@ function FieldRow({ field, value, onChange }: {
     const checked = value === "True" || value === "true" || value === "1";
     return (
       <div className="flex items-center justify-between py-2">
-        <Label
-          className="text-sm cursor-pointer"
-          style={{ color: "var(--text-primary)" }}
-          title={`[${field.section}] ${field.key}`}
-        >
-          {field.label}
-          <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>
-            {field.key}
-          </span>
-        </Label>
-        <Switch
-          checked={checked}
-          onCheckedChange={(v) => onChange(v ? "True" : "False")}
-        />
+        <div>
+          <Label className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }} title={`[${field.iniSection}] ${field.key}`}>
+            {field.label}
+            <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>{field.key}</span>
+          </Label>
+          {field.description && (
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
+          )}
+        </div>
+        <Switch checked={checked} onCheckedChange={(v) => onChange(v ? "True" : "False")} />
       </div>
     );
   }
 
   return (
     <div className="flex items-center justify-between py-2 gap-4">
-      <Label
-        className="text-sm shrink-0 w-48"
-        style={{ color: "var(--text-primary)" }}
-        title={`[${field.section}] ${field.key}`}
-      >
-        {field.label}
-        <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>
-          {field.key}
-        </span>
-      </Label>
+      <div className="shrink-0 w-52">
+        <Label className="text-sm" style={{ color: "var(--text-primary)" }} title={`[${field.iniSection}] ${field.key}`}>
+          {field.label}
+          <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>{field.key}</span>
+        </Label>
+        {field.description && (
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
+        )}
+      </div>
       <Input
         type={field.type === "number" ? "number" : "text"}
         value={value}
@@ -179,41 +127,39 @@ function FieldRow({ field, value, onChange }: {
         max={field.max}
         step={field.step}
         className="h-8 text-sm max-w-xs"
-        style={{
-          background: "rgba(0,0,0,0.3)",
-          borderColor: "rgba(191,0,255,0.2)",
-          color: "var(--text-primary)",
-        }}
+        style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
       />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Section accordion
+// Accordion group
 // ---------------------------------------------------------------------------
 
-function SectionGroup({ title, fields, config, onChange }: {
+function SectionGroup({
+  title,
+  fields,
+  config,
+  onChange,
+  defaultOpen = true,
+}: {
   title: string;
-  fields: FieldDef[];
+  fields: IniFieldDef[];
   config: ServerConfigJson;
-  onChange: (f: FieldDef, val: string) => void;
+  onChange: (f: IniFieldDef, val: string) => void;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div
-      className="glass-card rounded-xl overflow-hidden"
-      style={{ borderColor: "rgba(191,0,255,0.15)" }}
-    >
+    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
       <button
         type="button"
         className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>
-          {title}
-        </span>
+        <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>{title}</span>
         {open
           ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
           : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
@@ -222,9 +168,9 @@ function SectionGroup({ title, fields, config, onChange }: {
         <div className="px-4 pb-3 divide-y" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
           {fields.map((f) => (
             <FieldRow
-              key={`${f.section}.${f.key}`}
+              key={`${f.iniSection}.${f.key}`}
               field={f}
-              value={getIniValue(config, f.file, f.section, f.key)}
+              value={getIniValue(config, f.section, f.iniSection, f.key)}
               onChange={(val) => onChange(f, val)}
             />
           ))}
@@ -233,6 +179,125 @@ function SectionGroup({ title, fields, config, onChange }: {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Full INI Editor Modal
+// ---------------------------------------------------------------------------
+
+function FullIniModal({
+  config,
+  onSave,
+  onClose,
+}: {
+  config: ServerConfigJson;
+  onSave: (updated: ServerConfigJson) => void;
+  onClose: () => void;
+}) {
+  const [local, setLocal] = useState<ServerConfigJson>(config);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["rates", "breeding"]));
+
+  const toggleGroup = (id: string) =>
+    setExpandedGroups((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+
+  const handleChange = (f: IniFieldDef, val: string) => {
+    setLocal((prev) => setIniValue(prev, f.section, f.iniSection, f.key, val));
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+    >
+      <div
+        className="w-full max-w-3xl mx-4 flex flex-col rounded-2xl overflow-hidden"
+        style={{
+          background: "rgba(8,8,25,0.98)",
+          border: "1px solid rgba(191,0,255,0.25)",
+          boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
+          maxHeight: "90vh",
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+          <div className="flex items-center gap-2">
+            <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+            <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>Full INI Editor</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0" style={{ color: "var(--text-muted)" }}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+
+        <div className="px-3 py-2 shrink-0" style={{ background: "rgba(191,0,255,0.04)", borderBottom: "1px solid rgba(191,0,255,0.1)" }}>
+          <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+            <AlertCircle className="w-3 h-3" style={{ color: "var(--neon-purple)" }} />
+            Server name, passwords, and ports are managed on the overview page and are excluded here.
+            Changes take effect on the next server restart.
+          </p>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+          {INI_FIELD_GROUPS.map((group) => {
+            const visibleFields = group.fields.filter(
+              (f) => f.section === "gus" && !OVERVIEW_KEYS.has(f.key)
+            );
+            if (visibleFields.length === 0) return null;
+            const open = expandedGroups.has(group.id);
+            return (
+              <div key={group.id} className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.15)" }}>
+                <button
+                  onClick={() => toggleGroup(group.id)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
+                  style={{ background: "rgba(10,10,30,0.7)" }}
+                >
+                  <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>{group.title}</span>
+                  {open
+                    ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+                    : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
+                </button>
+                {open && (
+                  <div className="px-4 pb-3 divide-y" style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(5,5,20,0.5)" }}>
+                    {visibleFields.map((f) => (
+                      <FieldRow
+                        key={`${f.iniSection}.${f.key}`}
+                        field={f}
+                        value={getIniValue(local, f.section, f.iniSection, f.key)}
+                        onChange={(val) => handleChange(f, val)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+          <Button variant="ghost" onClick={onClose} size="sm" style={{ color: "var(--text-muted)" }}>Cancel</Button>
+          <Button
+            onClick={() => { onSave(local); onClose(); }}
+            size="sm"
+            style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+          >
+            <Save className="w-3.5 h-3.5 mr-1.5" /> Apply Changes
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Quick-edit groups shown in the structured tab (subset of all groups)
+// ---------------------------------------------------------------------------
+
+const QUICK_EDIT_GROUP_IDS = ["session", "admin", "rates", "breeding"];
 
 // ---------------------------------------------------------------------------
 // Main ConfigTab
@@ -245,11 +310,43 @@ export function ConfigTab({ server }: Props) {
   const [rawMode, setRawMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [readingIni, setReadingIni] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showFullModal, setShowFullModal] = useState(false);
 
-  const loadConfig = useCallback(async () => {
+  // Load from DB on mount — reflects what we last saved, not what the server may have overwritten
+  const loadFromDb = useCallback(async () => {
     setLoading(true);
+    setError(null);
+    try {
+      const row = await getServerConfig(server.id);
+      if (row) {
+        const gus = JSON.parse(row.game_user_settings_json || "{}");
+        const game = JSON.parse(row.game_ini_json || "{}");
+        const cfg: ServerConfigJson = { gameUserSettings: gus, gameIni: game, launchArgs: {} };
+        setConfig(cfg);
+        setRawGus(configToRawText(gus));
+        setRawGame(configToRawText(game));
+      } else {
+        // No saved config yet — show empty
+        const empty: ServerConfigJson = { gameUserSettings: {}, gameIni: {}, launchArgs: {} };
+        setConfig(empty);
+        setRawGus("");
+        setRawGame("");
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [server.id]);
+
+  useEffect(() => { loadFromDb(); }, [loadFromDb]);
+
+  // Explicitly read from the INI files on disk — overwrites UI state with what the server has on disk
+  const readFromIni = useCallback(async () => {
+    setReadingIni(true);
     setError(null);
     try {
       const cfg = await tauriCmd.readServerConfig(server.install_path);
@@ -259,32 +356,42 @@ export function ConfigTab({ server }: Props) {
     } catch (e) {
       setError(String(e));
     } finally {
-      setLoading(false);
+      setReadingIni(false);
     }
   }, [server.install_path]);
 
-  useEffect(() => { loadConfig(); }, [loadConfig]);
-
-  const handleFieldChange = (field: FieldDef, value: string) => {
+  const handleFieldChange = (field: IniFieldDef, value: string) => {
     if (!config) return;
-    setConfig(setIniValue(config, field.file, field.section, field.key, value));
+    setConfig(setIniValue(config, field.section, field.iniSection, field.key, value));
   };
 
-  const handleSave = async () => {
-    if (!config) return;
+  // Save to disk AND update DB so our settings survive server restarts
+  const handleSave = async (cfg?: ServerConfigJson) => {
+    const toWrite = cfg ?? config;
+    if (!toWrite) return;
     setSaving(true);
     setError(null);
     try {
-      let toSave = config;
-      if (rawMode) {
+      let toSave = toWrite;
+      if (rawMode && !cfg) {
         toSave = {
-          ...config,
+          ...toWrite,
           gameUserSettings: rawTextToSections(rawGus),
           gameIni: rawTextToSections(rawGame),
         };
         setConfig(toSave);
+      } else if (cfg) {
+        setConfig(cfg);
       }
+      // Write to disk
       await tauriCmd.writeServerConfig(server.install_path, toSave);
+      // Persist to DB so Config tab loads our version next time, not the server's overwrite
+      await saveServerConfig(
+        server.id,
+        JSON.stringify(toSave.gameUserSettings),
+        JSON.stringify(toSave.gameIni),
+        JSON.stringify(toSave.launchArgs ?? {}),
+      );
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
     } catch (e) {
@@ -313,46 +420,55 @@ export function ConfigTab({ server }: Props) {
     return (
       <div className="flex items-center justify-center py-20">
         <RefreshCw className="w-6 h-6 animate-spin" style={{ color: "var(--neon-purple)" }} />
-        <span className="ml-3 text-sm" style={{ color: "var(--text-muted)" }}>
-          Reading INI files…
-        </span>
+        <span className="ml-3 text-sm" style={{ color: "var(--text-muted)" }}>Loading saved config…</span>
       </div>
     );
   }
 
+  // Quick-edit: only show a curated subset of groups
+  const quickGroups = INI_FIELD_GROUPS.filter((g) => QUICK_EDIT_GROUP_IDS.includes(g.id));
+
   return (
     <div className="flex flex-col gap-4">
-      {/* ── Toolbar ── */}
+      {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant={rawMode ? "ghost" : "outline"}
-            className={rawMode ? "" : "btn-neon-purple"}
-            onClick={switchToStructured}
-          >
-            <LayoutList className="w-3.5 h-3.5 mr-1.5" />
-            Structured
+          <Button size="sm" variant={rawMode ? "ghost" : "outline"} className={rawMode ? "" : "btn-neon-purple"} onClick={switchToStructured}>
+            <LayoutList className="w-3.5 h-3.5 mr-1.5" /> Structured
           </Button>
-          <Button
-            size="sm"
-            variant={rawMode ? "outline" : "ghost"}
-            className={rawMode ? "btn-neon-cyan" : ""}
-            onClick={switchToRaw}
-          >
-            <Code className="w-3.5 h-3.5 mr-1.5" />
-            Raw INI
+          <Button size="sm" variant={rawMode ? "outline" : "ghost"} className={rawMode ? "btn-neon-cyan" : ""} onClick={switchToRaw}>
+            <Code className="w-3.5 h-3.5 mr-1.5" /> Raw INI
           </Button>
+          {!rawMode && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowFullModal(true)}
+              disabled={!config}
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+            >
+              <Settings2 className="w-3.5 h-3.5 mr-1.5" /> Full INI Editor
+            </Button>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={loadConfig} disabled={loading}>
-            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-            Reload
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={readFromIni}
+            disabled={readingIni}
+            title="Overwrite UI with the current GameUserSettings.ini on disk"
+            style={{ color: "var(--text-muted)" }}
+          >
+            {readingIni
+              ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+            Read from INI
           </Button>
           <Button
             size="sm"
             className={savedFlash ? "btn-neon-green" : "btn-neon-purple"}
-            onClick={handleSave}
+            onClick={() => handleSave()}
             disabled={saving || !config}
           >
             <Save className="w-3.5 h-3.5 mr-1.5" />
@@ -362,69 +478,65 @@ export function ConfigTab({ server }: Props) {
       </div>
 
       {error && (
-        <div
-          className="text-sm px-4 py-3 rounded-lg"
-          style={{ background: "rgba(255,0,85,0.08)", border: "1px solid rgba(255,0,85,0.3)", color: "#ff6688" }}
-        >
+        <div className="text-sm px-4 py-3 rounded-lg" style={{ background: "rgba(255,0,85,0.08)", border: "1px solid rgba(255,0,85,0.3)", color: "#ff6688" }}>
           {error}
         </div>
       )}
 
-      {/* ── Structured editor ── */}
+      {/* Structured editor — quick groups */}
       {!rawMode && config && (
         <div className="flex flex-col gap-4">
-          {FIELD_GROUPS.map((g) => (
+          {quickGroups.map((g, idx) => (
             <SectionGroup
-              key={g.title}
+              key={g.id}
               title={g.title}
               fields={g.fields}
               config={config}
               onChange={handleFieldChange}
+              defaultOpen={idx < 3}
             />
           ))}
+          <p className="text-xs text-center" style={{ color: "var(--text-subtle)" }}>
+            Click <strong style={{ color: "var(--neon-purple)" }}>Full INI Editor</strong> in the toolbar to access all server settings.
+          </p>
         </div>
       )}
 
-      {/* ── Raw INI editor ── */}
+      {/* Raw INI editor */}
       {rawMode && (
         <div className="flex flex-col gap-4">
           <div>
-            <p className="text-xs font-semibold mb-2" style={{ color: "var(--neon-cyan)" }}>
-              GameUserSettings.ini
-            </p>
+            <p className="text-xs font-semibold mb-2" style={{ color: "var(--neon-cyan)" }}>GameUserSettings.ini</p>
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={20}
-              style={{
-                background: "#000008",
-                border: "1px solid rgba(0,255,255,0.2)",
-                color: "#e0e0ff",
-                outline: "none",
-              }}
+              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGus}
               onChange={(e) => setRawGus(e.target.value)}
               spellCheck={false}
             />
           </div>
           <div>
-            <p className="text-xs font-semibold mb-2" style={{ color: "var(--neon-cyan)" }}>
-              Game.ini
-            </p>
+            <p className="text-xs font-semibold mb-2" style={{ color: "var(--neon-cyan)" }}>Game.ini</p>
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={10}
-              style={{
-                background: "#000008",
-                border: "1px solid rgba(0,255,255,0.2)",
-                color: "#e0e0ff",
-                outline: "none",
-              }}
+              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGame}
               onChange={(e) => setRawGame(e.target.value)}
               spellCheck={false}
             />
           </div>
         </div>
+      )}
+
+      {/* Full INI Editor modal */}
+      {showFullModal && config && (
+        <FullIniModal
+          config={config}
+          onSave={(updated) => handleSave(updated)}
+          onClose={() => setShowFullModal(false)}
+        />
       )}
     </div>
   );

@@ -776,3 +776,125 @@ fn read_cstring(data: &[u8], cursor: &mut usize) -> Result<String, String> {
     *cursor += 1; // consume the null byte
     Ok(s)
 }
+
+// ---------------------------------------------------------------------------
+// AppImage desktop integration (Linux only)
+//
+// Writes a .desktop file and icon to the user's XDG local directories so the
+// app appears in application menus and launchers.  Nothing is written
+// automatically — the user triggers this explicitly from the setup wizard or
+// settings page.  Uninstall removes only the files we created; it does not
+// touch the AppImage itself or the user's base/config directories.
+// ---------------------------------------------------------------------------
+
+const APP_INTEGRATION_ID: &str = "xyz.lokisoft.lokiasam";
+const APP_ICON_PNG: &[u8] = include_bytes!("../../icons/icon.png");
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppImageIntegrationStatus {
+    /// True when the process is running as a packaged AppImage.
+    pub is_appimage: bool,
+    /// True when our .desktop file already exists in ~/.local/share/applications/.
+    pub is_installed: bool,
+}
+
+/// Check whether LokiASAM is running as an AppImage and whether it is already
+/// registered in the user's application menu.
+#[tauri::command]
+pub fn check_appimage_integration() -> AppImageIntegrationStatus {
+    let is_appimage = std::env::var("APPIMAGE").is_ok();
+    let is_installed = std::env::var("HOME").map_or(false, |home| {
+        std::path::Path::new(&format!(
+            "{home}/.local/share/applications/{APP_INTEGRATION_ID}.desktop"
+        ))
+        .exists()
+    });
+    AppImageIntegrationStatus { is_appimage, is_installed }
+}
+
+/// Install LokiASAM into the user's application menu by writing a .desktop
+/// file and icon to ~/.local/share/.  Only available when running as an AppImage.
+#[tauri::command]
+pub fn install_appimage_integration() -> Result<(), String> {
+    let appimage_path = std::env::var("APPIMAGE")
+        .map_err(|_| "Not running as an AppImage.".to_string())?;
+    let home = std::env::var("HOME")
+        .map_err(|_| "HOME environment variable not set.".to_string())?;
+
+    // ── Icons ─────────────────────────────────────────────────────────────────
+    for size in ["512x512", "256x256", "128x128"] {
+        let dir = format!("{home}/.local/share/icons/hicolor/{size}/apps");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create icon directory: {e}"))?;
+        std::fs::write(
+            format!("{dir}/{APP_INTEGRATION_ID}.png"),
+            APP_ICON_PNG,
+        )
+        .map_err(|e| format!("Failed to write icon: {e}"))?;
+    }
+
+    // ── Desktop file ──────────────────────────────────────────────────────────
+    let desktop_dir = format!("{home}/.local/share/applications");
+    std::fs::create_dir_all(&desktop_dir)
+        .map_err(|e| format!("Failed to create applications directory: {e}"))?;
+
+    let desktop_content = format!(
+        "[Desktop Entry]\n\
+         Name=LokiASAM\n\
+         Comment=ARK Survival Ascended Dedicated Server Manager\n\
+         Exec={appimage_path} %U\n\
+         Icon={APP_INTEGRATION_ID}\n\
+         Type=Application\n\
+         Categories=Game;Utility;\n\
+         StartupWMClass={APP_INTEGRATION_ID}\n\
+         Terminal=false\n"
+    );
+    std::fs::write(
+        format!("{desktop_dir}/{APP_INTEGRATION_ID}.desktop"),
+        desktop_content,
+    )
+    .map_err(|e| format!("Failed to write desktop file: {e}"))?;
+
+    // ── Rebuild caches ────────────────────────────────────────────────────────
+    let icon_theme_dir = format!("{home}/.local/share/icons/hicolor");
+    let _ = std::process::Command::new("update-desktop-database").arg(&desktop_dir).status();
+    let _ = std::process::Command::new("gtk-update-icon-cache").args(["-f", "-t", &icon_theme_dir]).status();
+    let _ = std::process::Command::new("kbuildsycoca6").arg("--incremental").status();
+    let _ = std::process::Command::new("kbuildsycoca5").arg("--incremental").status();
+
+    Ok(())
+}
+
+/// Remove the .desktop file and icons that were installed by
+/// `install_appimage_integration`.  Does not touch the AppImage itself.
+#[tauri::command]
+pub fn uninstall_appimage_integration() -> Result<(), String> {
+    let home = std::env::var("HOME")
+        .map_err(|_| "HOME environment variable not set.".to_string())?;
+
+    let desktop_path = format!(
+        "{home}/.local/share/applications/{APP_INTEGRATION_ID}.desktop"
+    );
+    if std::path::Path::new(&desktop_path).exists() {
+        std::fs::remove_file(&desktop_path)
+            .map_err(|e| format!("Failed to remove desktop file: {e}"))?;
+    }
+
+    for size in ["512x512", "256x256", "128x128"] {
+        let icon_path = format!(
+            "{home}/.local/share/icons/hicolor/{size}/apps/{APP_INTEGRATION_ID}.png"
+        );
+        let _ = std::fs::remove_file(&icon_path); // ignore — may not exist for all sizes
+    }
+
+    // ── Rebuild caches ────────────────────────────────────────────────────────
+    let desktop_dir = format!("{home}/.local/share/applications");
+    let icon_theme_dir = format!("{home}/.local/share/icons/hicolor");
+    let _ = std::process::Command::new("update-desktop-database").arg(&desktop_dir).status();
+    let _ = std::process::Command::new("gtk-update-icon-cache").args(["-f", "-t", &icon_theme_dir]).status();
+    let _ = std::process::Command::new("kbuildsycoca6").arg("--incremental").status();
+    let _ = std::process::Command::new("kbuildsycoca5").arg("--incremental").status();
+
+    Ok(())
+}

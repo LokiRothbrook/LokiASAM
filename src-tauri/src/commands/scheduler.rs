@@ -126,7 +126,7 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
         .as_str()
         .unwrap_or("Server broadcast.")
         .to_string();
-    transient_rcon_send(entry.rcon_port, &entry.admin_password, &format!("Broadcast {message}")).await;
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("Broadcast {message}")).await;
     let _ = app; // no app events needed for broadcast
     Ok(())
 }
@@ -167,7 +167,7 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
             .unwrap_or("Server restarting in {minutes} minutes.")
             .to_string();
         let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.admin_password, &format!("Broadcast {msg}")).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("Broadcast {msg}")).await;
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 
@@ -225,7 +225,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         if let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await {
             let _ = stream.set_nodelay(true);
             let mut conn = RconConn { stream, next_id: 1 };
-            if conn.send_packet(1, RCON_AUTH, &entry.admin_password).await.is_ok() {
+            if conn.send_packet(1, RCON_AUTH, &entry.rcon_password).await.is_ok() {
                 for _ in 0..3 {
                     match tokio::time::timeout(Duration::from_secs(3), conn.recv_packet()).await {
                         Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
@@ -260,7 +260,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             .unwrap_or("Server updating in {minutes} minutes.")
             .to_string();
         let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.admin_password, &format!("Broadcast {msg}")).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("Broadcast {msg}")).await;
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 
@@ -320,9 +320,6 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
         port: entry.port,
         query_port: entry.query_port,
         rcon_port: entry.rcon_port,
-        max_players: entry.max_players,
-        server_password: entry.server_password.clone(),
-        admin_password: entry.admin_password.clone(),
         extra_args: entry.extra_args.clone(),
         mod_ids: entry.mod_ids.clone(),
         proton_path: entry.proton_path.clone(),

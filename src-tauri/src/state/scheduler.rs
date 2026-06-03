@@ -3,6 +3,9 @@ use std::sync::Mutex;
 
 /// One schedule entry with all data needed to fire the action — no DB access required.
 /// The frontend builds this from SQLite and sends it via `sync_schedules`.
+///
+/// Server passwords, MaxPlayers, and gameplay settings are NOT included here —
+/// they are in GameUserSettings.ini and read by the server process directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleEntry {
@@ -19,9 +22,6 @@ pub struct ScheduleEntry {
     pub rcon_port: u16,
     /// RCON/admin password — used for in-game broadcast warnings before restart/update.
     pub rcon_password: String,
-    pub max_players: u32,
-    pub server_password: Option<String>,
-    pub admin_password: String,
     pub extra_args: Vec<String>,
     pub mod_ids: Vec<String>,
     /// Linux only: path to Proton-GE directory.

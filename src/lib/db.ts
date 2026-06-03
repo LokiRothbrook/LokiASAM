@@ -186,6 +186,15 @@ async function runMigrations(db: Database): Promise<void> {
   } catch {
     // Column already exists — safe to ignore.
   }
+
+  // ── Migration 003: add locked_by_map to server_mods (old DBs) ───────────
+  // When a mod-based map is selected, the required map mod is locked so the
+  // user cannot remove it without changing the map first.
+  try {
+    await db.execute("ALTER TABLE server_mods ADD COLUMN locked_by_map INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +554,8 @@ export interface ModRow {
   mod_thumbnail_url: string | null;
   install_order: number;
   enabled: number;
+  /** 1 if this mod is required by the server's map and cannot be removed without changing the map. */
+  locked_by_map: number;
   added_at: string;
 }
 
@@ -562,10 +573,10 @@ export async function addServerMod(
   serverId: string,
   modId: string,
   modName: string,
-  thumbnailUrl?: string | null
+  thumbnailUrl?: string | null,
+  lockedByMap?: boolean
 ): Promise<void> {
   const db = await getDb();
-  // Find the current max install_order to append at the end.
   const rows = await db.select<{ max_order: number | null }[]>(
     "SELECT MAX(install_order) as max_order FROM server_mods WHERE server_id = ?",
     [serverId]
@@ -574,9 +585,22 @@ export async function addServerMod(
   const id = crypto.randomUUID();
   await db.execute(
     `INSERT OR IGNORE INTO server_mods
-       (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`,
-    [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder]
+       (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled, locked_by_map)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder, lockedByMap ? 1 : 0]
+  );
+}
+
+/** Update the locked_by_map flag on an existing mod entry. */
+export async function setModMapLock(
+  serverId: string,
+  modId: string,
+  locked: boolean
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_mods SET locked_by_map = ? WHERE server_id = ? AND mod_id = ?",
+    [locked ? 1 : 0, serverId, modId]
   );
 }
 

@@ -5,7 +5,7 @@ import {
   Folder, Terminal, Info,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -1246,6 +1246,94 @@ function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fie
 // Close-to-tray section
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// AppImage integration (Linux AppImage only)
+// ---------------------------------------------------------------------------
+
+function AppImageIntegrationSection() {
+  const [status, setStatus]   = useState<{ isAppimage: boolean; isInstalled: boolean } | null>(null);
+  const [working, setWorking] = useState(false);
+
+  const refresh = useCallback(() => {
+    tauriCmd.checkAppimageIntegration().then(setStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (!status?.isAppimage) return null;
+
+  const handleInstall = async () => {
+    setWorking(true);
+    try {
+      await tauriCmd.installAppimageIntegration();
+      refresh();
+      toast.success("LokiASAM added to your application menu.");
+    } catch (e) {
+      toast.error("Installation failed", { description: String(e) });
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const handleUninstall = async () => {
+    setWorking(true);
+    try {
+      await tauriCmd.uninstallAppimageIntegration();
+      refresh();
+      toast.success("Removed from application menu.");
+    } catch (e) {
+      toast.error("Removal failed", { description: String(e) });
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Adds LokiASAM to your desktop application launcher so you can find, launch, and pin it
+        without navigating to the AppImage file each time. Writes a <code>.desktop</code> file and
+        icon to <code>~/.local/share/</code> only — no files are placed outside that folder.
+        Removing it restores the system to its original state.
+      </p>
+      {status.isInstalled ? (
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <span className="text-sm flex items-center gap-2" style={{ color: "var(--neon-green)" }}>
+            <CheckCircle2 className="w-4 h-4" />
+            Installed in application menu
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleUninstall}
+            disabled={working}
+            className="gap-1.5"
+            style={{ borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+          >
+            {working
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <StopCircle className="w-3.5 h-3.5" />}
+            Remove from Menu
+          </Button>
+        </div>
+      ) : (
+        <Button
+          size="sm"
+          onClick={handleInstall}
+          disabled={working}
+          className="gap-2"
+          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+        >
+          {working
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Download className="w-3.5 h-3.5" />}
+          Install to Application Menu
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function CloseToTraySection() {
   const [closeToTray, setCloseToTrayState] = useState(true);
 
@@ -1358,6 +1446,16 @@ export default function SettingsPage() {
           <Section icon={Monitor} title="System Tray" description="Control how LokiASAM behaves when minimized or closed.">
             <CloseToTraySection />
           </Section>
+
+          {IS_LINUX && (
+            <Section
+              icon={Layers}
+              title="Application Menu Integration"
+              description="Install LokiASAM into your desktop launcher (AppImage only)."
+            >
+              <AppImageIntegrationSection />
+            </Section>
+          )}
         </div>
       )}
 

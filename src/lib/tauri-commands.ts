@@ -43,7 +43,11 @@ export interface ServerStatus {
   error?: string;
 }
 
-/** Full parameter set passed to `start_server`. All values come from SQLite. */
+/**
+ * Full parameter set passed to `start_server`.
+ * Passwords, RCON, MaxPlayers, and gameplay settings all live in
+ * GameUserSettings.ini — they are NOT included here.
+ */
 export interface StartServerParams {
   serverId: string;
   installPath: string;
@@ -51,11 +55,9 @@ export interface StartServerParams {
   mapPath: string;
   port: number;
   queryPort: number;
+  /** NOT passed on CLI — used internally by Rust for RCON readiness polling. */
   rconPort: number;
-  maxPlayers: number;
-  serverPassword?: string;
-  adminPassword: string;
-  /** Additional CLI flags like ["-NoBattlEye", "-servergamelog"]. */
+  /** Additional CLI-only flags like ["-NoBattlEye", "-ForceRespawnDinos"]. */
   extraArgs: string[];
   /** CurseForge mod IDs to pass as -mods=id1,id2,... on startup. */
   modIds: string[];
@@ -192,9 +194,6 @@ export interface ScheduleEntry {
   queryPort: number;
   rconPort: number;
   rconPassword: string;
-  maxPlayers: number;
-  serverPassword?: string;
-  adminPassword: string;
   extraArgs: string[];
   modIds: string[];
   protonPath?: string;
@@ -468,6 +467,18 @@ export const tauriCmd = {
   /** Atomically replace all active schedule entries in the Rust scheduler. */
   syncSchedules: (entries: ScheduleEntry[]) =>
     invoke<void>("sync_schedules", { entries }),
+
+  // AppImage desktop integration (Linux only)
+  /**
+   * Check whether LokiASAM is running as an AppImage and whether it is
+   * already registered in the user's application menu.
+   */
+  checkAppimageIntegration: () =>
+    invoke<{ isAppimage: boolean; isInstalled: boolean }>("check_appimage_integration"),
+  /** Install the .desktop file and icon to ~/.local/share/ (AppImage only). */
+  installAppimageIntegration: () => invoke<void>("install_appimage_integration"),
+  /** Remove the .desktop file and icons installed by installAppimageIntegration. */
+  uninstallAppimageIntegration: () => invoke<void>("uninstall_appimage_integration"),
 
   // Bootstrap
   /** Read the bootstrap file. Returns null if first-time setup has never run. */
