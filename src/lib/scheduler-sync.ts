@@ -12,7 +12,7 @@ import { tauriCmd, type ScheduleEntry } from "@/lib/tauri-commands";
 import {
   getServers, getServerSchedules, getServerMods, getServerConfig, getAppSetting,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { ARK_MAPS, LAUNCH_PARAMETERS } from "@/data/game-data";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 
 function isTauriEnv(): boolean {
@@ -58,9 +58,13 @@ export async function syncSchedulesToRust(): Promise<void> {
       const launchArgs: Record<string, string> = config
         ? JSON.parse(config.launch_args_json)
         : {};
-      const extraArgs = Object.entries(launchArgs)
-        .filter(([, v]) => v === "true" || v === "1")
-        .map(([k]) => `-${k}`);
+      const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
+        if (!v || v === "false" || v === "0") return [];
+        const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
+        if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
+        if (param) return v ? [`${param.flag}${v}`] : [];
+        return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
+      });
 
       const modIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 

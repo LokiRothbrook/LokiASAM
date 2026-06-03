@@ -3,13 +3,13 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
-  Settings2, X, AlertCircle, ToggleLeft, ToggleRight,
+  Settings2, X, AlertCircle, ToggleLeft, ToggleRight, Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
-import { INI_FIELD_GROUPS, type IniFieldDef } from "@/data/game-data";
+import { INI_FIELD_GROUPS, LAUNCH_PARAMETERS, type IniFieldDef, type LaunchParameter } from "@/data/game-data";
 import { getServerConfig, saveServerConfig, type ServerRow } from "@/lib/db";
 import { NumberField } from "@/components/shared/NumberField";
 
@@ -160,6 +160,102 @@ function FieldRow({
         className="h-8 text-sm max-w-xs"
         style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Launch parameter row
+// ---------------------------------------------------------------------------
+
+function LaunchParamRow({
+  param,
+  value,
+  onChange,
+}: {
+  param: LaunchParameter;
+  value: string;
+  onChange: (val: string) => void;
+}) {
+  if (param.type === "boolean") {
+    const on = value === "true" || value === "1";
+    return (
+      <div className="flex items-start justify-between py-2 gap-3">
+        <div className="flex-1 min-w-0">
+          <span className="text-xs font-mono font-medium" style={{ color: "var(--text-primary)" }}>{param.flag}</span>
+          {param.description && (
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>{param.description}</p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => onChange(on ? "false" : "true")}
+          className="shrink-0 flex items-center mt-0.5"
+          aria-label={on ? "Disable" : "Enable"}
+        >
+          {on
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="py-2 space-y-1">
+      <span className="text-xs font-mono font-medium" style={{ color: "var(--text-primary)" }}>{param.flag}</span>
+      {param.description && (
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>{param.description}</p>
+      )}
+      <Input
+        type="text"
+        value={value}
+        placeholder={String(param.defaultValue) || "(empty = disabled)"}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 text-xs font-mono"
+        style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+      />
+    </div>
+  );
+}
+
+function LaunchParamGroup({
+  config,
+  onChange,
+}: {
+  config: ServerConfigJson;
+  onChange: (key: string, val: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const args = (config.launchArgs ?? {}) as Record<string, string>;
+
+  return (
+    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>
+          <Terminal className="w-3.5 h-3.5" />
+          Launch Parameters
+        </span>
+        {open
+          ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+          : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
+      </button>
+      {open && (
+        <div className="px-4 pb-3 divide-y" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+          {LAUNCH_PARAMETERS.filter((p) => p.category !== "cluster").map((p) => (
+            <LaunchParamRow
+              key={p.key}
+              param={p}
+              value={args[p.key] ?? String(p.defaultValue)}
+              onChange={(val) => onChange(p.key, val)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -355,7 +451,8 @@ export function ConfigTab({ server }: Props) {
       if (row) {
         const gus = JSON.parse(row.game_user_settings_json || "{}");
         const game = JSON.parse(row.game_ini_json || "{}");
-        const cfg: ServerConfigJson = { gameUserSettings: gus, gameIni: game, launchArgs: {} };
+        const launchArgs = JSON.parse(row.launch_args_json || "{}");
+        const cfg: ServerConfigJson = { gameUserSettings: gus, gameIni: game, launchArgs };
         setConfig(cfg);
         setRawGus(configToRawText(gus));
         setRawGame(configToRawText(game));
@@ -394,6 +491,11 @@ export function ConfigTab({ server }: Props) {
   const handleFieldChange = (field: IniFieldDef, value: string) => {
     if (!config) return;
     setConfig(setIniValue(config, field.section, field.iniSection, field.key, value));
+  };
+
+  const handleLaunchArgChange = (key: string, val: string) => {
+    if (!config) return;
+    setConfig({ ...config, launchArgs: { ...(config.launchArgs as Record<string, string> ?? {}), [key]: val } });
   };
 
   // Save to disk AND update DB so our settings survive server restarts
@@ -527,6 +629,7 @@ export function ConfigTab({ server }: Props) {
               defaultOpen={idx < 3}
             />
           ))}
+          <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />
           <p className="text-xs text-center" style={{ color: "var(--text-subtle)" }}>
             Click <strong style={{ color: "var(--neon-purple)" }}>Full INI Editor</strong> in the toolbar to access all server settings.
           </p>

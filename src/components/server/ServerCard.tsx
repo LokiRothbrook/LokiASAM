@@ -44,7 +44,7 @@ import {
   getNextScheduledRestart,
   getAppSetting,
 } from "@/lib/db";
-import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
@@ -167,9 +167,13 @@ export function ServerCard({ server }: Props) {
       ? JSON.parse(config.launch_args_json)
       : {};
 
-    const extraArgs = Object.entries(launchArgs)
-      .filter(([, v]) => v === "true" || v === "1")
-      .map(([k]) => `-${k}`);
+    const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
+      if (!v || v === "false" || v === "0") return [];
+      const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
+      if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
+      if (param) return v ? [`${param.flag}${v}`] : [];
+      return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
+    });
 
     const map = ARK_MAPS.find((m) => m.id === server.map_id);
     const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);

@@ -930,7 +930,8 @@ export type LaunchParamCategory =
   | "gameplay"
   | "admin"
   | "performance"
-  | "cluster";
+  | "cluster"
+  | "access";
 
 export interface LaunchParameter {
   key: string;
@@ -947,12 +948,13 @@ export interface LaunchParameter {
  */
 export const LAUNCH_PARAMETERS: LaunchParameter[] = [
   // Performance / anti-cheat
+  // Anti-cheat
   {
     key: "NoBattlEye",
     flag: "-NoBattlEye",
     type: "boolean",
     defaultValue: true,
-    description: "Disable BattlEye anti-cheat (recommended for private servers).",
+    description: "Disable BattlEye anti-cheat. Recommended for private/community servers.",
     category: "performance",
   },
   {
@@ -960,7 +962,16 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-UseBattlEye",
     type: "boolean",
     defaultValue: false,
-    description: "Enable BattlEye anti-cheat. Requires players to also have it enabled.",
+    description: "Enable BattlEye anti-cheat. Players must also have it enabled to join.",
+    category: "performance",
+  },
+  // Performance
+  {
+    key: "lowmemory",
+    flag: "-lowmemory",
+    type: "boolean",
+    defaultValue: false,
+    description: "Enable low-memory mode. Reduces RAM usage — useful on 4–8 GB systems but lowers quality.",
     category: "performance",
   },
   {
@@ -968,31 +979,49 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-nosteamclient",
     type: "boolean",
     defaultValue: false,
-    description: "Start without Steam client integration (LAN/offline mode).",
+    description: "Start without Steam client integration (LAN / offline mode).",
     category: "performance",
   },
   {
     key: "culture",
     flag: "-culture=",
     type: "string",
-    defaultValue: "en",
-    description: "Server locale / language code (e.g. en, de, fr).",
+    defaultValue: "",
+    description: "Server locale / language code (e.g. en, de, fr). Leave blank for default.",
     category: "performance",
   },
+  // Admin / logging
   {
     key: "servergamelog",
     flag: "-servergamelog",
     type: "boolean",
     defaultValue: false,
-    description: "Enable server-side game log (logs admin commands).",
+    description: "Enable server-side game log file (logs kills, tames, admin commands).",
     category: "admin",
   },
+  {
+    key: "ServerRCONOutputTribeLogs",
+    flag: "-ServerRCONOutputTribeLogs",
+    type: "boolean",
+    defaultValue: false,
+    description: "Output tribe log events to the RCON connection.",
+    category: "admin",
+  },
+  {
+    key: "NotifyAdminCommandsInChat",
+    flag: "-NotifyAdminCommandsInChat",
+    type: "boolean",
+    defaultValue: false,
+    description: "Broadcast admin commands to all players in chat.",
+    category: "admin",
+  },
+  // Gameplay
   {
     key: "ForceRespawnDinos",
     flag: "-ForceRespawnDinos",
     type: "boolean",
     defaultValue: false,
-    description: "Destroy all wild dinos on server startup (forces a fresh spawn).",
+    description: "Destroy all wild dinos on startup and force a fresh spawn.",
     category: "gameplay",
   },
   {
@@ -1000,8 +1029,41 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-NoDinos",
     type: "boolean",
     defaultValue: false,
-    description: "Prevent wild dinos from spawning.",
+    description: "Prevent wild dinos from spawning entirely.",
     category: "gameplay",
+  },
+  {
+    key: "ActiveEvent",
+    flag: "-ActiveEvent=",
+    type: "string",
+    defaultValue: "",
+    description: "Enable a seasonal event (e.g. Summer, Winter, Easter, Eggcellent, FearEvolved). Leave blank for none.",
+    category: "gameplay",
+  },
+  // Access control
+  {
+    key: "crossplay",
+    flag: "-crossplay",
+    type: "boolean",
+    defaultValue: false,
+    description: "Enable crossplay — allows Xbox, PlayStation, and PC players to join the same server.",
+    category: "access",
+  },
+  {
+    key: "epiconly",
+    flag: "-epiconly",
+    type: "boolean",
+    defaultValue: false,
+    description: "Restrict server to Epic Games Store players only.",
+    category: "access",
+  },
+  {
+    key: "exclusivejoin",
+    flag: "-exclusivejoin",
+    type: "boolean",
+    defaultValue: false,
+    description: "Whitelist-only mode — only players on the server whitelist can join.",
+    category: "access",
   },
   // Cluster
   {
@@ -1018,6 +1080,14 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     type: "string",
     defaultValue: "",
     description: "Absolute path to the shared cluster data directory.",
+    category: "cluster",
+  },
+  {
+    key: "NoTransferFromFiltering",
+    flag: "-NoTransferFromFiltering",
+    type: "boolean",
+    defaultValue: false,
+    description: "Prevent character/dino/item uploads from servers outside this cluster.",
     category: "cluster",
   },
 ];

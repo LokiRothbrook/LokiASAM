@@ -23,7 +23,7 @@ import {
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
-  ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight,
+  ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,8 +36,8 @@ import {
   getReleasedMaps, getOfficialMaps, getModMaps, getMapById,
   GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS, buildPresetConfig,
   DEFAULT_GAME_USER_SETTINGS, DEFAULT_GAME_INI,
-  NOTIFICATION_EVENTS,
-  type ArkMap, type GameModeConfig, type PresetStyle,
+  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS,
+  type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter,
 } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import {
@@ -74,6 +74,7 @@ interface WizardData {
   adminPassword: string;
   // Step 1 — Game Mode
   gameMode: "pvp" | "pve";
+  flyerCarryPvE: boolean;
   // Step 2 — Style
   presetStyle: "official" | "casual" | "boosted" | "guided_custom" | "full_custom";
   // Step 2a — Guided Custom rates
@@ -81,6 +82,8 @@ interface WizardData {
   // Step 2b — Full Custom INI (raw section maps)
   fullCustomGus: Record<string, Record<string, string>>;
   fullCustomGameIni: Record<string, Record<string, string>>;
+  // Launch parameters (CLI args)
+  launchArgs: Record<string, string>;
   // Network
   port: number;
   queryPort: number;
@@ -119,10 +122,12 @@ const DEFAULT_DATA: WizardData = {
   serverPassword: "",
   adminPassword: "",
   gameMode: "pve",
+  flyerCarryPvE: true,
   presetStyle: "casual",
   guidedRates: DEFAULT_GUIDED_RATES,
   fullCustomGus: {},
   fullCustomGameIni: {},
+  launchArgs: { NoBattlEye: "true" },
   port: 7777,
   queryPort: 27015,
   rconPort: 27020,
@@ -164,6 +169,7 @@ function computeSteps(data: WizardData): StepDef[] {
     { id: "network",    label: "Network",    icon: Network },
     { id: "cluster",    label: "Cluster",    icon: GitBranch },
     { id: "automation", label: "Automation", icon: Clock },
+    { id: "launch",     label: "Launch Args", icon: Terminal },
     { id: "mods",       label: "Mods",       icon: Package },
     { id: "install",    label: "Install",    icon: Download },
   );
@@ -495,6 +501,29 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
           );
         })}
       </div>
+
+      {/* PvE-specific options shown when PvE is selected */}
+      {data.gameMode === "pve" && (
+        <div className="rounded-xl p-4 space-y-2" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.15)" }}>
+          <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>PvE Options</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm" style={{ color: "var(--text-primary)" }}>Flyer Carry (PvE)</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow flyers to pick up wild dinos and players. On by default for PvE.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onChange({ flyerCarryPvE: !data.flyerCarryPvE })}
+              className="shrink-0 flex items-center"
+              aria-label={data.flyerCarryPvE ? "Disable flyer carry" : "Enable flyer carry"}
+            >
+              {data.flyerCarryPvE
+                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -931,6 +960,98 @@ function CronPicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+// ---------------------------------------------------------------------------
+// Launch Parameters Step
+// ---------------------------------------------------------------------------
+
+const LAUNCH_PARAM_CATEGORY_LABELS: Record<string, string> = {
+  performance: "Performance & Anti-Cheat",
+  admin:       "Admin & Logging",
+  gameplay:    "Gameplay",
+  access:      "Access Control",
+  cluster:     "Cluster",
+  network:     "Network",
+};
+
+function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const args = data.launchArgs;
+
+  const setArg = (key: string, value: string) =>
+    onChange({ launchArgs: { ...args, [key]: value } });
+
+  // Group params by category, skip cluster (handled in cluster step)
+  const categories = ["performance", "admin", "gameplay", "access"] as const;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        Configure command-line arguments passed when starting the server. These cannot be set in INI files.
+        All settings can be changed later from the server's Config tab.
+      </p>
+      <div className="space-y-3 max-h-105 overflow-y-auto pr-1">
+        {categories.map((cat) => {
+          const params = LAUNCH_PARAMETERS.filter((p: LaunchParameter) => p.category === cat);
+          if (params.length === 0) return null;
+          return (
+            <div key={cat} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.15)" }}>
+              <div className="px-3 py-2" style={{ background: "rgba(10,10,30,0.7)" }}>
+                <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>
+                  {LAUNCH_PARAM_CATEGORY_LABELS[cat]}
+                </p>
+              </div>
+              <div className="p-3 space-y-2.5" style={{ background: "rgba(5,5,20,0.5)" }}>
+                {params.map((p: LaunchParameter) => {
+                  const val = args[p.key] ?? String(p.defaultValue);
+                  if (p.type === "boolean") {
+                    const on = val === "true" || val === "1";
+                    return (
+                      <div key={p.key} className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium font-mono" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
+                          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>{p.description}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setArg(p.key, on ? "false" : "true")}
+                          className="shrink-0 flex items-center mt-0.5"
+                          aria-label={on ? "Disable" : "Enable"}
+                        >
+                          {on
+                            ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+                            : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+                        </button>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={p.key} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium font-mono" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
+                      </div>
+                      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{p.description}</p>
+                      <Input
+                        value={val}
+                        placeholder={String(p.defaultValue) || "(empty = disabled)"}
+                        onChange={(e) => setArg(p.key, e.target.value)}
+                        className="h-7 text-xs font-mono"
+                        style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Automation Step
+// ---------------------------------------------------------------------------
+
 function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const schedules = [
     { key: "autoUpdate" as const, cronKey: "autoUpdateCron" as const, label: "Auto-Update", desc: "Download and apply ASA server updates automatically" },
@@ -1176,6 +1297,11 @@ function InstallStep({
       };
     }
 
+    // Apply game-mode-specific overrides the user may have toggled
+    if (data.gameMode === "pve") {
+      config = { ...config, AllowFlyerCarryPvE: data.flyerCarryPvE };
+    }
+
     // Keys that go in specific sections or are port/network (handled separately)
     const skipKeys = new Set(["QueryPort", "Port", "MaxPlayers", "SessionName", "ServerPassword", "ServerAdminPassword", "RCONEnabled", "RCONPort"]);
 
@@ -1293,10 +1419,10 @@ function InstallStep({
       await tauriCmd.writeServerConfig(installPath, {
         gameUserSettings: gusJson,
         gameIni: {},
-        launchArgs: {},
+        launchArgs: data.launchArgs,
       });
 
-      await saveServerConfig(serverId, JSON.stringify(gusJson), "{}", "{}");
+      await saveServerConfig(serverId, JSON.stringify(gusJson), "{}", JSON.stringify(data.launchArgs));
       await updateServerStatus(serverId, "stopped", null);
       queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
 
@@ -1485,6 +1611,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       case "network":    return <NetworkStep data={data} onChange={onChange} />;
       case "cluster":    return <ClusterStep data={data} onChange={onChange} />;
       case "automation": return <AutomationStep data={data} onChange={onChange} />;
+      case "launch":     return <LaunchParamsStep data={data} onChange={onChange} />;
       case "mods":       return <ModsStep data={data} onChange={onChange} />;
       case "install":    return (
         <InstallStep
