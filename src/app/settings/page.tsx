@@ -616,9 +616,7 @@ const AUTO_CHECK_OPTIONS = [
 
 function ServerUpdatesSection() {
   const [checking, setChecking]       = useState(false);
-  const [updateAvailable, setUpdate]  = useState(false);
   const [cachedBuild, setCached]      = useState("");
-  const [latestBuild, setLatest]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
   const [autoCheckHours, setAutoCheck] = useState("0");
   const [hasCacheInstalled, setHasCacheInstalled] = useState<boolean | null>(null);
@@ -627,16 +625,13 @@ function ServerUpdatesSection() {
   const [applyingAll, setApplyingAll] = useState(false);
 
   const load = useCallback(async () => {
-    const [avail, cached, latest, checked, hours, baseDir] = await Promise.all([
-      getAppSetting("asa_update_available"),
+    const [cached, checked, hours, baseDir] = await Promise.all([
       getAppSetting("asa_cached_build_id"),
-      getAppSetting("asa_latest_build_id"),
       getAppSetting("asa_last_checked"),
       getAppSetting("asa_auto_check_hours"),
       getAppSetting("base_dir"),
     ]);
-    setUpdate(avail === "true"); setCached(cached ?? ""); setLatest(latest ?? "");
-    setLastChecked(checked ?? ""); setAutoCheck(hours ?? "0");
+    setCached(cached ?? ""); setLastChecked(checked ?? ""); setAutoCheck(hours ?? "0");
     if (baseDir) {
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
@@ -686,8 +681,16 @@ function ServerUpdatesSection() {
       load();
 
       if (cacheUpdated) {
-        toast.success(`Cache updated to build ${newBuild}${oldBuild ? ` (was ${oldBuild})` : ""}.`);
+        await dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+          serverId:   null,
+          serverName: "ASA Cache",
+          title:      "Cache Updated",
+          body:       `Cache updated to build ${newBuild}${oldBuild ? ` (was ${oldBuild})` : ""}. Outdated servers have been flagged.`,
+          severity:   "info",
+        });
       } else {
+        // "Already up to date" is purely informational — toast only, no bell.
         toast.success(`Cache is up to date (build ${newBuild}).`);
       }
 
@@ -726,17 +729,36 @@ function ServerUpdatesSection() {
             undefined,
           );
         } catch (err) {
-          // restartNeeded signal — server was restarted inside applyUpdateToServer
-          // (the outer caller handles restart, but here we skip it since we have
-          // no start params; the server was stopped and updated successfully).
+          // restartNeeded signal — server updated successfully, restart handled inside.
           if (!(err && typeof err === "object" && "restartNeeded" in err)) {
-            toast.error(`Failed to update ${server.name}: ${err}`);
+            await dispatchNotification({
+              eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+              serverId:   server.id,
+              serverName: server.name,
+              title:      `${server.name} Update Failed`,
+              body:       `Failed to update ${server.name}: ${err}`,
+              severity:   "error",
+            });
           }
         }
       }
-      toast.success(`Updated ${outdated.length} server${outdated.length !== 1 ? "s" : ""}.`);
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
+        serverId:   null,
+        serverName: "All Servers",
+        title:      `${outdated.length} Server${outdated.length !== 1 ? "s" : ""} Updated`,
+        body:       `${outdated.length} server${outdated.length !== 1 ? "s have" : " has"} been updated from the cache.`,
+        severity:   "success",
+      });
     } catch (e) {
-      toast.error(`Apply all failed: ${e}`);
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+        serverId:   null,
+        serverName: "ASA Cache",
+        title:      "Apply All Failed",
+        body:       `Failed to apply updates: ${e}`,
+        severity:   "error",
+      });
     } finally {
       setApplyingAll(false);
     }
@@ -750,32 +772,17 @@ function ServerUpdatesSection() {
   return (
     <div className="space-y-5">
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Compares the locally cached build ID against the latest build on Steam. Does not run SteamCMD or alter any files — apply updates per-server from the server Overview tab or via an Auto-Update schedule.
+        Runs SteamCMD to update the shared server cache. If a new version is available it will be downloaded automatically. Servers are then compared against the updated cache and marked for update if behind.
       </p>
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex flex-col gap-0.5">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Cache Build</span>
           <span className="font-mono text-sm" style={{ color: "var(--text-primary)" }}>{cachedBuild || "—"}</span>
         </div>
-        {updateAvailable && latestBuild && (
-          <>
-            <div className="text-xs" style={{ color: "var(--text-muted)" }}>→</div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Steam Build</span>
-              <span className="font-mono text-sm" style={{ color: "#ffa500" }}>{latestBuild}</span>
-            </div>
-          </>
-        )}
         <div className="flex flex-col gap-0.5">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Last Checked</span>
           <span className="text-sm" style={{ color: "var(--text-primary)" }}>{lastChecked ? new Date(lastChecked).toLocaleString() : "Never"}</span>
         </div>
-        {updateAvailable && (
-          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium"
-            style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}>
-            <ArrowUp className="w-3 h-3" /> Update Available
-          </span>
-        )}
       </div>
       <div className="flex items-center gap-3 flex-wrap">
         <Button onClick={handleCheck} disabled={checking || hasCacheInstalled === false} size="sm" className="gap-1.5"
@@ -792,7 +799,7 @@ function ServerUpdatesSection() {
       <Separator style={{ background: "var(--border)" }} />
       <div className="space-y-2">
         <Label style={{ color: "var(--text-primary)" }}>Auto-Check Interval</Label>
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>Automatically check for ASA updates via the Rust scheduler (immune to tray throttling).</p>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>Automatically runs the cache update on an interval — immune to tray throttling. If a new version is downloaded, outdated servers are marked automatically.</p>
         <div className="flex gap-2 flex-wrap">
           {AUTO_CHECK_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => handleAutoCheckChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
@@ -1067,7 +1074,7 @@ function ProtonGeUpdateSection() {
       {looksExternal && !isManaged && (
         <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
           <div className="flex items-start gap-2">
-            <Link className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: "var(--neon-orange)" }} />
+            <Link className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
             <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
               This Proton-GE path is outside LokiASAM's managed directory. Automatic updates are suppressed.
             </p>

@@ -45,35 +45,37 @@ function eventEnabled(eventsJson: string, eventType: string): boolean {
 export async function dispatchNotification(
   params: DispatchNotificationParams
 ): Promise<void> {
-  // ── 1. Always fire an in-app toast ─────────────────────────────────────────
-  switch (params.severity) {
-    case "success": toast.success(params.title, { description: params.body }); break;
-    case "warning": toast.warning(params.title, { description: params.body }); break;
-    case "error":   toast.error(params.title,   { description: params.body }); break;
-    default:        toast.info(params.title,    { description: params.body }); break;
-  }
-
-  // ── 2. Load channel configs ─────────────────────────────────────────────────
+  // ── 1. Load channel configs first so we can gate the toast ─────────────────
   let configs;
   try {
     configs = await getNotificationConfigs(params.serverId);
   } catch (err) {
     console.error("[notifications] Failed to load notification configs:", err);
+    // Fall back to firing the toast so failures are never silently swallowed.
+    toast.error(params.title, { description: params.body });
     return;
   }
 
   // server-specific rows come first; per-server takes precedence over global
   const seen = new Set<string>();
-  let bellEnabled = true; // default: show in bell if no config row exists
+  // Defaults: show toast and bell if no config row exists yet.
+  let inAppEnabled = true;
+  let desktopEnabled = false; // will be set by config loop
+  let bellEnabled = true;
 
   for (const config of configs) {
     const channel = config.channel;
     if (seen.has(channel)) continue;
     if (config.server_id !== null) seen.add(channel);
 
+    if (channel === "in_app") {
+      inAppEnabled = config.enabled === 1 && eventEnabled(config.events_json, params.eventType);
+      continue;
+    }
+
     if (channel === "bell") {
-      // Bell is always "enabled" as a channel — the events_json controls which
-      // events show as unread. Disabled bell row means nothing ever bumps the badge.
+      // Bell badge only bumps when bell is enabled AND in-app or desktop is on —
+      // if the user silenced both visible channels, treat it as already read.
       bellEnabled = config.enabled === 1 && eventEnabled(config.events_json, params.eventType);
       continue;
     }
@@ -84,6 +86,7 @@ export async function dispatchNotification(
     const cfg = JSON.parse(config.config_json || "{}") as Record<string, string | boolean | number>;
 
     if (channel === "desktop") {
+      desktopEnabled = true;
       tauriCmd
         .sendOsNotification(params.title, params.body)
         .catch((err) => { console.error("[notifications] OS notification failed:", err); });
@@ -122,8 +125,24 @@ export async function dispatchNotification(
     }
   }
 
+  // ── 2. Fire in-app toast if in_app channel is enabled ─────────────────────
+  if (inAppEnabled) {
+    switch (params.severity) {
+      case "success": toast.success(params.title, { description: params.body }); break;
+      case "warning": toast.warning(params.title, { description: params.body }); break;
+      case "error":   toast.error(params.title,   { description: params.body }); break;
+      default:        toast.info(params.title,    { description: params.body }); break;
+    }
+  }
+
   // ── 3. Log to DB ────────────────────────────────────────────────────────────
-  // read=0 → shows as unread in bell; read=1 → silently archived
+  // Bell shows as unread only when bell is enabled AND at least one visible
+  // channel (in_app or desktop) is also on. If the user silenced all visible
+  // channels the notification is still archived but marked already-read so the
+  // badge doesn't bump.
+  const visibleChannelActive = inAppEnabled || desktopEnabled;
+  const showUnread = bellEnabled && visibleChannelActive;
+
   const id = crypto.randomUUID();
   try {
     await logNotification({
@@ -133,9 +152,9 @@ export async function dispatchNotification(
       title:     params.title,
       body:      params.body,
       severity:  params.severity,
-      read:      bellEnabled ? 0 : 1,
+      read:      showUnread ? 0 : 1,
     });
-    if (bellEnabled) {
+    if (showUnread) {
       useAppStore.getState().incrementUnread();
     }
   } catch (err) {

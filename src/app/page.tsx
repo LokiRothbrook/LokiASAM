@@ -11,6 +11,8 @@ import { useServers } from "@/hooks/useServers";
 import { getTransitioningServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
 import { runPerServerUpdateCheck } from "@/lib/update-utils";
+import { dispatchNotification } from "@/lib/notifications";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -89,12 +91,26 @@ function UpdateStatusChip() {
       await runPerServerUpdateCheck();
       load();
       if (cacheUpdated) {
-        toast.success(`Cache updated to build ${newBuild}.`);
+        await dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+          serverId:   null,
+          serverName: "ASA Cache",
+          title:      "Cache Updated",
+          body:       `Cache updated to build ${newBuild}. Outdated servers have been flagged.`,
+          severity:   "info",
+        });
       } else {
         toast.success(`Cache is up to date (build ${newBuild}).`);
       }
     } catch (e) {
-      toast.error(`Update check failed: ${e}`);
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+        serverId:   null,
+        serverName: "ASA Cache",
+        title:      "Cache Update Failed",
+        body:       `Failed to update cache: ${e}`,
+        severity:   "error",
+      });
     } finally {
       setChecking(false);
     }
