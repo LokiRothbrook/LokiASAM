@@ -107,57 +107,6 @@ fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Open (or focus) the RCON console pop-out window for a specific server.
-/// Only one RCON window per server is allowed; subsequent calls focus the existing one.
-#[tauri::command]
-fn open_rcon_window(
-    app: tauri::AppHandle,
-    server_id: String,
-    server_name: String,
-) -> Result<(), String> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-    let label = format!("rcon-{server_id}");
-    let title = format!("{server_name} — RCON");
-
-    if let Some(existing) = app.get_webview_window(&label) {
-        let is_min = existing.is_minimized().unwrap_or(false);
-        if is_min { let _ = existing.unminimize(); }
-        let _ = existing.show();
-        let w2 = existing.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = w2.set_always_on_top(true);
-            let _ = w2.set_focus();
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = w2.set_always_on_top(false);
-        });
-        return Ok(());
-    }
-
-    let url = format!("/rcon?serverId={server_id}");
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title(&title)
-        .inner_size(900.0, 700.0)
-        .min_inner_size(700.0, 500.0)
-        .resizable(true)
-        .decorations(true)
-        .center()
-        .build()
-        .map_err(|e| format!("Failed to open RCON window: {e}"))?;
-
-    Ok(())
-}
-
-/// Close the RCON pop-out window for a specific server (if open).
-#[tauri::command]
-fn close_rcon_window(app: tauri::AppHandle, server_id: String) -> Result<(), String> {
-    let label = format!("rcon-{server_id}");
-    if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.close();
-    }
-    Ok(())
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -419,6 +368,13 @@ pub fn run() {
                             }
                             drop(conn);
                             for line in resp.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+                                let tl = line.to_lowercase();
+                                if tl == "(no response)"
+                                    || tl.contains("server received, but no response")
+                                    || tl.contains("server received but no response")
+                                {
+                                    continue;
+                                }
                                 let log_line = state::rcon_pool::RconLogLine {
                                     timestamp_ms: state::rcon_pool::RconPool::now_ms(),
                                     text: line.to_string(),
@@ -433,12 +389,12 @@ pub fn run() {
             });
 
             // ── RCON player list refresh background task ───────────────────
-            // Polls listplayers every 60 s for every server with an active RCON
+            // Polls listplayers every 30 s for every server with an active RCON
             // connection, caches the result, and emits rcon://players/{server_id}.
             let rcon_pl_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval =
-                    tokio::time::interval(std::time::Duration::from_secs(60));
+                    tokio::time::interval(std::time::Duration::from_secs(30));
                 interval.tick().await;
                 loop {
                     interval.tick().await;
@@ -551,8 +507,6 @@ pub fn run() {
             commands::rcon::rcon_disable_chat_poll,
             commands::rcon::rcon_read_ban_list,
             commands::rcon::rcon_read_whitelist,
-            open_rcon_window,
-            close_rcon_window,
             // Log watcher
             commands::logs::watch_server_log,
             commands::logs::stop_log_watch,

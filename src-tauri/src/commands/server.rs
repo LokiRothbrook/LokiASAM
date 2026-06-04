@@ -1001,14 +1001,17 @@ pub async fn graceful_stop_server(
         error: None,
     });
 
-    // Optional player countdown
-    if warn_players && warn_minutes > 0 {
-        let players_online = transient_rcon_command(rcon_port, &rcon_password, "listplayers")
-            .await
-            .map(|r| !r.is_empty() && !r.to_lowercase().contains("no players"))
-            .unwrap_or(false);
+    // Helper: returns true if at least one player is connected right now.
+    let has_players = |resp: &str| -> bool {
+        !resp.trim().is_empty() && !resp.to_lowercase().contains("no players")
+    };
 
-        if players_online {
+    // Optional player countdown — re-checks player count before each message
+    // so we skip straight to save+exit the moment the server empties.
+    if warn_players && warn_minutes > 0 {
+        let initial_check = transient_rcon_command(rcon_port, &rcon_password, "listplayers").await.unwrap_or_default();
+
+        if has_players(&initial_check) {
             let total_secs = warn_minutes * 60;
             let mut elapsed: u64 = 0;
 
@@ -1018,12 +1021,18 @@ pub async fn graceful_stop_server(
             );
             let _ = transient_rcon_command(rcon_port, &rcon_password, &format!("ServerChat {initial_msg}")).await;
 
-            while elapsed < total_secs {
+            'countdown: while elapsed < total_secs {
                 let remaining = total_secs - elapsed;
                 let interval_secs: u64 = if remaining <= 5 { 1 } else if remaining <= 30 { 5 } else { 60 };
 
                 sleep(Duration::from_secs(interval_secs)).await;
                 elapsed += interval_secs;
+
+                // If server is now empty, skip the rest of the countdown.
+                let check = transient_rcon_command(rcon_port, &rcon_password, "listplayers").await.unwrap_or_default();
+                if !has_players(&check) {
+                    break 'countdown;
+                }
 
                 let still_remaining = total_secs.saturating_sub(elapsed);
                 if still_remaining == 0 { break; }

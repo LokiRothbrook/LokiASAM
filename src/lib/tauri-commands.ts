@@ -336,9 +336,6 @@ export const tauriCmd = {
   // RCON — file-based lists
   rconReadBanList:   (installPath: string) => invoke<string[]>("rcon_read_ban_list", { installPath }),
   rconReadWhitelist: (installPath: string) => invoke<string[]>("rcon_read_whitelist", { installPath }),
-  // RCON — pop-out window
-  openRconWindow:  (serverId: string, serverName: string) => invoke<void>("open_rcon_window", { serverId, serverName }),
-  closeRconWindow: (serverId: string) => invoke<void>("close_rcon_window", { serverId }),
   // Graceful shutdown
   gracefulStopServer: (
     serverId: string,

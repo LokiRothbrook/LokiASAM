@@ -354,7 +354,6 @@ export function OverviewTab({ server }: Props) {
           <Button
             size="sm"
             onClick={handleForceStop}
-            disabled={actionPending}
             className="gap-1.5"
             style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
           >
@@ -365,7 +364,6 @@ export function OverviewTab({ server }: Props) {
           <Button
             size="sm"
             onClick={handleForceStop}
-            disabled={actionPending}
             className="gap-1.5"
             style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
           >

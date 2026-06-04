@@ -188,15 +188,24 @@ export default function ServerDetailPage() {
       </div>
 
       {/* ── Tab content ── */}
-      <div className="mt-2">
-        {activeTab === "overview"   && <OverviewTab server={server} />}
-        {activeTab === "config"     && <ConfigTab   server={server} />}
-        {activeTab === "rcon"       && <RconTab      server={server} />}
-        {activeTab === "logs"       && <LogsTab      server={server} />}
-        {activeTab === "mods"       && <ModsTab server={server} />}
-        {activeTab === "backups"    && <BackupsTab    server={server} />}
-        {activeTab === "automation" && <AutomationTab server={server} />}
-      </div>
+      {activeTab === "rcon" ? (
+        // RCON console fills all remaining viewport height so the log scrolls
+        // internally rather than pushing the page. The magic number accounts for
+        // TopBar (57 px) + page padding-top (24 px) + header block (~90 px) +
+        // tab bar (~46 px) + gap (8 px) + page padding-bottom (24 px) = ~249 px.
+        <div style={{ height: "calc(100vh - 249px)" }} className="mt-2">
+          <RconTab server={server} />
+        </div>
+      ) : (
+        <div className="mt-2">
+          {activeTab === "overview"   && <OverviewTab server={server} />}
+          {activeTab === "config"     && <ConfigTab   server={server} />}
+          {activeTab === "logs"       && <LogsTab      server={server} />}
+          {activeTab === "mods"       && <ModsTab      server={server} />}
+          {activeTab === "backups"    && <BackupsTab   server={server} />}
+          {activeTab === "automation" && <AutomationTab server={server} />}
+        </div>
+      )}
     </div>
   );
 }

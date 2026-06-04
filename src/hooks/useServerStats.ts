@@ -72,10 +72,10 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     };
   }, [server?.pid, server?.status]);
 
-  // ── Player count via RCON player-list events ──────────────────────────────
-  // The background task in lib.rs emits rcon://players/{id} every 60 s for
-  // every server with an active RCON connection. Use that instead of Source
-  // Query, which is unreliable on ASA.
+  // ── Player count ──────────────────────────────────────────────────────────
+  // Primary: subscribe to rcon://players/{id} events emitted by RconManager's
+  // 30 s tick (and by any explicit rconGetPlayers call). This updates in real
+  // time whenever the event fires.
   useTauriEvent<ArkPlayer[]>(
     server ? `rcon://players/${server.id}` : "",
     (players) => {
@@ -87,20 +87,28 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     },
   );
 
-  // Seed the player count immediately from the RCON cache when the server
-  // becomes running (avoids showing null for up to 60 s after RCON connects).
+  // Secondary: poll the RCON cache every 30 s. This is purely a cache read
+  // (no RCON command sent) so it's free, and it guarantees the count stays
+  // current even if an event was missed. Also resets to null when not running.
   useEffect(() => {
     if (!server || server.status !== "running") {
-      setStats((s) => ({ ...s, playersOnline: null }));
+      setStats((s) => ({ ...s, playersOnline: null, maxPlayers: null }));
       return;
     }
-    tauriCmd.rconGetCachedPlayers(server.id).then((players) => {
-      setStats((prev) => ({
-        ...prev,
-        playersOnline: players.length,
-        maxPlayers: server.max_players,
-      }));
-    }).catch(() => null);
+
+    const poll = () => {
+      tauriCmd.rconGetCachedPlayers(server.id).then((players) => {
+        setStats((prev) => ({
+          ...prev,
+          playersOnline: players.length,
+          maxPlayers: serverRef.current?.max_players ?? prev.maxPlayers,
+        }));
+      }).catch(() => null);
+    };
+
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
   }, [server?.id, server?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return stats;

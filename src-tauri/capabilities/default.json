@@ -3,8 +3,7 @@
   "identifier": "default",
   "description": "enables the default permissions for LokiASAM",
   "windows": [
-    "main",
-    "rcon-*"
+    "main"
   ],
   "permissions": [
     "core:default",

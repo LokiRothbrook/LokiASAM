@@ -211,17 +211,23 @@ pub async fn rcon_send(
         }
     }
 
-    // Log the response (suppressed commands get no log entry at all)
+    // Log the response (suppressed commands and empty/noise responses get no entry)
     if !suppressed {
         let resp_trimmed = response.trim().to_string();
-        if !resp_trimmed.is_empty() {
-            for line in resp_trimmed.lines() {
-                emit_log(&app, &server_id, RconLogLine {
-                    timestamp_ms: now_ms(),
-                    text: line.to_string(),
-                    kind: "response".into(),
-                }).await;
-            }
+        for line in resp_trimmed.lines() {
+            let t = line.trim();
+            if t.is_empty() { continue; }
+            // ASA sends these literal strings for silent commands — drop them.
+            let tl = t.to_lowercase();
+            if tl == "(no response)"
+                || tl.contains("server received, but no response")
+                || tl.contains("server received but no response")
+            { continue; }
+            emit_log(&app, &server_id, RconLogLine {
+                timestamp_ms: now_ms(),
+                text: t.to_string(),
+                kind: "response".into(),
+            }).await;
         }
     }
 
@@ -257,7 +263,7 @@ pub async fn rcon_get_players(
     server_id: String,
     pool: State<'_, RconPool>,
 ) -> Result<Vec<ArkPlayer>, String> {
-    let raw = rcon_send(app, server_id.clone(), "listplayers".into(), pool.clone()).await?;
+    let raw = rcon_send(app.clone(), server_id.clone(), "listplayers".into(), pool.clone()).await?;
 
     let players: Vec<ArkPlayer> = raw
         .lines()
@@ -279,11 +285,13 @@ pub async fn rcon_get_players(
         })
         .collect();
 
-    // Update the pool's player cache
+    // Update pool cache and notify every subscriber (stats tiles, server cards).
     pool.player_cache
         .lock()
         .await
-        .insert(server_id, players.clone());
+        .insert(server_id.clone(), players.clone());
+
+    let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
 
     Ok(players)
 }

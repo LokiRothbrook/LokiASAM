@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Terminal, Send, RefreshCw, Trash2, Copy, AlertCircle,
-  ExternalLink, Users, ShieldX, Shield, ChevronDown, ChevronUp, Clock,
+  Users, ShieldX, Shield, ChevronDown, ChevronUp, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,6 @@ import type { ServerRow } from "@/lib/db";
 
 interface Props {
   server: ServerRow;
-  isPopout?: boolean;
 }
 
 // ── Time of day presets ───────────────────────────────────────────────────────
@@ -62,7 +61,7 @@ const PLAYER_ACTIONS: PlayerAction[] = [
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export function RconConsole({ server, isPopout }: Props) {
+export function RconConsole({ server }: Props) {
   const [connected, setConnected]     = useState(false);
   const [connecting, setConnecting]   = useState(false);
   const [error, setError]             = useState<string | null>(null);
@@ -182,20 +181,13 @@ export function RconConsole({ server, isPopout }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load players + lists once connected
-  useEffect(() => {
-    if (connected) {
-      refreshPlayers();
-      refreshLists();
-    }
-  }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Poll players every 60 s ───────────────────────────────────────────────
+  // Seed player list from cache (no RCON command) and load file-based lists once connected.
+  // Subsequent updates come from rcon://players/{id} events via RconManager's 30 s tick.
   useEffect(() => {
     if (!connected) return;
-    const id = setInterval(() => refreshPlayers(), 60_000);
-    return () => clearInterval(id);
-  }, [connected, refreshPlayers]);
+    tauriCmd.rconGetCachedPlayers(server.id).then(setPlayers).catch(() => null);
+    refreshLists();
+  }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Send a raw RCON command ───────────────────────────────────────────────
   const sendCommand = useCallback(async (cmd: string) => {
@@ -275,11 +267,6 @@ export function RconConsole({ server, isPopout }: Props) {
     : server.status !== "running" ? "Server not running"
     : "Disconnected";
 
-  // ── Pop-out button (only shown in the embedded tab, not the pop-out window) ─
-  const handlePopout = async () => {
-    await tauriCmd.openRconWindow(server.id, server.name);
-  };
-
   // ── Accordion helpers ─────────────────────────────────────────────────────
   const toggleBan = () => { setBanOpen((v) => !v); if (!banOpen) setWlOpen(false); };
   const toggleWl  = () => { setWlOpen((v) => !v);  if (!wlOpen)  setBanOpen(false); };
@@ -323,11 +310,6 @@ export function RconConsole({ server, isPopout }: Props) {
             onClick={() => { setLines([]); tauriCmd.rconClearLog(server.id).catch(() => null); }}>
             <Trash2 className="w-3.5 h-3.5" />
           </Button>
-          {!isPopout && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Pop out into separate window" onClick={handlePopout}>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </Button>
-          )}
         </div>
       </div>
 

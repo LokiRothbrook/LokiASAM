@@ -171,20 +171,24 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 
-    let _ = inner_stop_server(app, &entry.server_id, true);
+    // Clean shutdown via RCON: save then exit.
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
+    sleep(Duration::from_secs(2)).await;
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
 
-    // Wait up to 15 s for the process to exit.
-    for _ in 0..30 {
+    // Wait up to 30 s for the process to exit gracefully.
+    for _ in 0..60 {
         sleep(Duration::from_millis(500)).await;
-        let running = {
+        let still_running = {
             let state = app.state::<AppState>();
             let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
             r
         };
-        if !running {
-            break;
-        }
+        if !still_running { break; }
     }
+
+    // Force-kill if still alive.
+    let _ = inner_stop_server(app, &entry.server_id, false);
 
     let params = entry_to_start_params(entry);
     inner_start_server(app.clone(), params).await.map(|_| ())
@@ -299,16 +303,23 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     }
 
     if is_running {
-        let _ = inner_stop_server(app, &entry.server_id, true);
-        for _ in 0..30 {
+        // Clean shutdown via RCON: save then exit.
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
+        sleep(Duration::from_secs(2)).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
+
+        for _ in 0..60 {
             sleep(Duration::from_millis(500)).await;
-            let running = {
+            let still_running = {
                 let state = app.state::<AppState>();
                 let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
                 r
             };
-            if !running { break; }
+            if !still_running { break; }
         }
+
+        // Force-kill if still alive.
+        let _ = inner_stop_server(app, &entry.server_id, false);
     }
 
     // Update shared cache via SteamCMD.

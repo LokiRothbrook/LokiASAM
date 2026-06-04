@@ -257,6 +257,17 @@ export function ServerCard({ server }: Props) {
     }
   };
 
+  const handleForceStop = async () => {
+    setActionPending(true);
+    try {
+      await tauriCmd.stopServer(server.id, false);
+    } catch (err) {
+      toast.error(`Force stop failed: ${err}`);
+    } finally {
+      setActionPending(false);
+    }
+  };
+
   const handleRestart = async () => {
     setActionPending(true);
     try {
@@ -559,21 +570,37 @@ export function ServerCard({ server }: Props) {
           </>
         ) : (
           <>
-            {/* Start / Stop toggle */}
-            {isRunning || isTransitioning ? (
+            {/* Start / Stop / Force Stop */}
+            {server.status === "stopping" ? (
               <Button
                 size="sm"
-                disabled={isTransitioning || actionPending}
-                onClick={handleStop}
+                onClick={handleForceStop}
                 className="gap-1.5 flex-1"
-                style={{
-                  background: "rgba(255,0,85,0.12)",
-                  borderColor: "rgba(255,0,85,0.4)",
-                  color: "var(--neon-red)",
-                }}
+                style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
+              >
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Force Stop
+              </Button>
+            ) : server.status === "starting" ? (
+              <Button
+                size="sm"
+                onClick={handleForceStop}
+                className="gap-1.5 flex-1"
+                style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
               >
                 <Square className="w-3.5 h-3.5" />
-                {server.status === "stopping" ? "Stopping…" : "Stop"}
+                Force Stop
+              </Button>
+            ) : isRunning ? (
+              <Button
+                size="sm"
+                disabled={actionPending}
+                onClick={handleStop}
+                className="gap-1.5 flex-1"
+                style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+              >
+                <Square className="w-3.5 h-3.5" />
+                Stop
               </Button>
             ) : (
               <Button
@@ -581,29 +608,27 @@ export function ServerCard({ server }: Props) {
                 disabled={actionPending}
                 onClick={handleStart}
                 className="gap-1.5 flex-1"
-                style={{
-                  background: "rgba(0,255,136,0.12)",
-                  borderColor: "rgba(0,255,136,0.4)",
-                  color: "var(--neon-green)",
-                }}
+                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
               >
                 <Play className="w-3.5 h-3.5" />
-                {server.status === "starting" ? "Starting…" : "Start"}
+                Start
               </Button>
             )}
 
-            {/* Restart */}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!isRunning || actionPending}
-              onClick={handleRestart}
-              className="gap-1.5"
-              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Restart
-            </Button>
+            {/* Restart — only shown when fully running */}
+            {isRunning && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={actionPending}
+                onClick={handleRestart}
+                className="gap-1.5"
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Restart
+              </Button>
+            )}
 
             {/* Update — shown only when update is available */}
             {hasUpdateAvailable && (
