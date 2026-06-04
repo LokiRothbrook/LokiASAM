@@ -313,6 +313,7 @@ export interface GameUserSettingsConfig {
   DisablePvEGoodBerryGlobalSpoilingTime: boolean;
   PreventOfflinePvP: boolean;
   PreventOfflinePvPInterval: number;
+  EnableCryoSicknessPVE: boolean;
 
   // [ServerSettings] — admin / RCON
   ServerCrosshair: boolean;
@@ -422,6 +423,7 @@ export const DEFAULT_GAME_USER_SETTINGS: GameUserSettingsConfig = {
   DisablePvEGoodBerryGlobalSpoilingTime: false,
   PreventOfflinePvP: false,
   PreventOfflinePvPInterval: 900,
+  EnableCryoSicknessPVE: true,
 
   ServerCrosshair: true,
   ShowMapPlayerLocation: false,
@@ -487,13 +489,14 @@ export const GAME_MODES: GameModeConfig[] = [
     displayName: "PvE",
     icon: "🌿",
     description:
-      "Player vs Environment. Cooperative gameplay — no player-vs-player combat. Ideal for friends building together or solo players.",
+      "Player vs Environment. Cooperative gameplay — no player-vs-player combat. Ideal for friends building together or solo players. Friendly fire and cryo sickness are disabled.",
     gameUserSettings: {
       AllowPvP: false,
       AllowCaveBuildingPvE: true,
       AllowFlyerCarryPvE: true,
       EnablePvPGamma: false,
       PreventOfflinePvP: false,
+      EnableCryoSicknessPVE: false,
     },
   },
   {
@@ -565,6 +568,8 @@ export const PRESET_STYLES: PresetStyle[] = [
       BabyCuddleIntervalMultiplier: 0.5,
       NightTimeSpeedScale: 2.0,
       GlobalSpoilingTimeMultiplier: 1.5,
+      PlayerCharacterFoodDrainMultiplier: 0.5,
+      PlayerCharacterWaterDrainMultiplier: 0.5,
     },
     gameIni: {},
   },
@@ -587,6 +592,8 @@ export const PRESET_STYLES: PresetStyle[] = [
       NightTimeSpeedScale: 3.0,
       GlobalSpoilingTimeMultiplier: 2.0,
       AllowAnyoneBabyImprintCuddle: true,
+      PlayerCharacterFoodDrainMultiplier: 0.25,
+      PlayerCharacterWaterDrainMultiplier: 0.25,
     },
     gameIni: {},
   },

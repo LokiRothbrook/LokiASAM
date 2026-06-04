@@ -75,6 +75,7 @@ interface WizardData {
   // Step 1 — Game Mode
   gameMode: "pvp" | "pve";
   flyerCarryPvE: boolean;
+  pvpFriendlyFire: boolean;
   // Step 2 — Style
   presetStyle: "official" | "casual" | "boosted" | "guided_custom" | "full_custom";
   // Step 2a — Guided Custom rates
@@ -123,6 +124,7 @@ const DEFAULT_DATA: WizardData = {
   adminPassword: "",
   gameMode: "pve",
   flyerCarryPvE: true,
+  pvpFriendlyFire: true,
   presetStyle: "casual",
   guidedRates: DEFAULT_GUIDED_RATES,
   fullCustomGus: {},
@@ -521,6 +523,35 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
                 ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
                 : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* PvP-specific options shown when PvP is selected */}
+      {data.gameMode === "pvp" && (
+        <div className="rounded-xl p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(255,0,85,0.2)" }}>
+          <p className="text-xs font-semibold" style={{ color: "var(--neon-red)" }}>PvP Options</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm" style={{ color: "var(--text-primary)" }}>Friendly Fire</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow tribe members to damage each other. On by default for PvP.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onChange({ pvpFriendlyFire: !data.pvpFriendlyFire })}
+              className="shrink-0 flex items-center"
+              aria-label={data.pvpFriendlyFire ? "Disable friendly fire" : "Enable friendly fire"}
+            >
+              {data.pvpFriendlyFire
+                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-red)" }} />
+                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+            </button>
+          </div>
+          <div className="flex items-start gap-2 pt-1 border-t" style={{ borderColor: "rgba(255,0,85,0.15)" }}>
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--text-muted)" }} />
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Cryo sickness cannot be disabled on PvP servers via INI — it is hardcoded to PvP mode by the game. A mod is required to remove it on PvP.
+            </p>
           </div>
         </div>
       )}
@@ -1328,6 +1359,17 @@ function InstallStep({
     };
   };
 
+  /** Build the Game.ini section map from wizard data */
+  const buildGameIniJson = (): Record<string, Record<string, string>> => {
+    const shooterMode: Record<string, string> = {};
+    if (data.gameMode === "pve") {
+      shooterMode.bPvEDisableFriendlyFire = "True";
+    } else {
+      shooterMode.bDisableFriendlyFire = data.pvpFriendlyFire ? "False" : "True";
+    }
+    return { "/script/shootergame.shootergamemode": shooterMode };
+  };
+
   const startInstall = async () => {
     backgroundRef.current = false;
     setCanceled(false);
@@ -1415,14 +1457,15 @@ function InstallStep({
 
       // Write comprehensive INI from wizard data
       const gusJson = buildGusJson();
+      const gameIniJson = buildGameIniJson();
 
       await tauriCmd.writeServerConfig(installPath, {
         gameUserSettings: gusJson,
-        gameIni: {},
+        gameIni: gameIniJson,
         launchArgs: data.launchArgs,
       });
 
-      await saveServerConfig(serverId, JSON.stringify(gusJson), "{}", JSON.stringify(data.launchArgs));
+      await saveServerConfig(serverId, JSON.stringify(gusJson), JSON.stringify(gameIniJson), JSON.stringify(data.launchArgs));
       await updateServerStatus(serverId, "stopped", null);
       queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
 
