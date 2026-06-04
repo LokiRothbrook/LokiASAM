@@ -274,8 +274,9 @@ function ThemeStep() {
                 className="w-8 h-8 rounded-full transition-all"
                 style={{
                   background: hex,
-                  boxShadow: selected ? `0 0 0 2px #000, 0 0 0 4px ${hex}` : "none",
-                  transform: selected ? "scale(1.15)" : "scale(1)",
+                  boxShadow: selected
+                    ? `0 0 0 2px #050510, 0 0 0 4px ${hex}, 0 0 10px ${hex}`
+                    : "none",
                 }}
               />
             );
