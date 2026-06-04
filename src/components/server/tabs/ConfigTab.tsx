@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import { INI_FIELD_GROUPS, LAUNCH_PARAMETERS, type IniFieldDef, type LaunchParameter } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, type ServerRow } from "@/lib/db";
+import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 
 interface Props {
@@ -430,6 +431,95 @@ const QUICK_EDIT_GROUP_IDS = ["session", "admin", "rates", "breeding"];
 // Main ConfigTab
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Shutdown Settings Card
+// ---------------------------------------------------------------------------
+
+function ShutdownSettingsCard({ server }: { server: ServerRow }) {
+  const [warnPlayers, setWarnPlayers] = useState(server.shutdown_warn_players !== 0);
+  const [warnMinutes, setWarnMinutes] = useState(server.shutdown_warn_minutes ?? 5);
+  const [message, setMessage]         = useState(
+    server.shutdown_message || "Server will shut down in {time}."
+  );
+  const [saving, setSaving]   = useState(false);
+  const [saved, setSaved]     = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateServerShutdownSettings(server.id, warnPlayers, warnMinutes, message);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      toast.error(`Failed to save shutdown settings: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="glass-card rounded-xl p-4 space-y-4"
+      style={{ border: "1px solid rgba(191,0,255,0.15)" }}
+    >
+      <div className="flex items-center gap-2">
+        <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Graceful Shutdown</h3>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={warnPlayers}
+          onChange={(e) => setWarnPlayers(e.target.checked)}
+          className="w-3.5 h-3.5 accent-purple-500"
+        />
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Warn online players before shutdown
+        </span>
+      </label>
+
+      <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
+        <div className="space-y-1">
+          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Warn time (minutes)</Label>
+          <Input
+            type="number" min={1} max={60}
+            value={warnMinutes}
+            onChange={(e) => setWarnMinutes(parseInt(e.target.value, 10) || 5)}
+            className="h-7 w-24 text-xs"
+            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Shutdown message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
+          </Label>
+          <Input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Server will shut down in {time}."
+            className="h-7 text-xs"
+            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+          />
+        </div>
+      </div>
+
+      <Button
+        size="sm"
+        onClick={handleSave}
+        disabled={saving}
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
+          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
+          color: saved ? "var(--neon-green)" : "var(--neon-purple)",
+        }}
+      >
+        {saving ? "Saving…" : saved ? "Saved" : "Save"}
+      </Button>
+    </div>
+  );
+}
+
 export function ConfigTab({ server }: Props) {
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
@@ -663,6 +753,9 @@ export function ConfigTab({ server }: Props) {
           </div>
         </div>
       )}
+
+      {/* Graceful shutdown settings */}
+      <ShutdownSettingsCard server={server} />
 
       {/* Full INI Editor modal */}
       {showFullModal && config && (

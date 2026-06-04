@@ -198,11 +198,31 @@ export function OverviewTab({ server }: Props) {
     try {
       await updateServerStatus(server.id, "stopping", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      await tauriCmd.stopServer(server.id, true);
-      await updateServerStatus(server.id, "stopped", null);
+      // Graceful shutdown: saveworld → optional countdown → doexit
+      // The Rust command emits its own status events so we don't update status here.
+      await tauriCmd.gracefulStopServer(
+        server.id,
+        server.rcon_port,
+        server.rcon_password,
+        server.shutdown_warn_players !== 0,
+        server.shutdown_warn_minutes ?? 5,
+        server.shutdown_message || "Server will shut down in {time}.",
+      );
     } catch (err) {
       toast.error(`Failed to stop ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      setActionPending(false);
+    }
+  };
+
+  const handleForceStop = async () => {
+    setActionPending(true);
+    try {
+      await tauriCmd.stopServer(server.id, false);
+    } catch (err) {
+      toast.error(`Force stop failed: ${err}`);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       setActionPending(false);
@@ -330,6 +350,21 @@ export function OverviewTab({ server }: Props) {
               Reinstall
             </Button>
           </>
+        ) : server.status === "stopping" ? (
+          <Button
+            size="sm"
+            onClick={handleForceStop}
+            disabled={actionPending}
+            className="gap-1.5"
+            style={{
+              background: "rgba(255,100,0,0.12)",
+              borderColor: "rgba(255,100,0,0.4)",
+              color: "#ff6400",
+            }}
+          >
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Force Stop
+          </Button>
         ) : isRunning ? (
           <Button
             size="sm"
@@ -535,13 +570,13 @@ export function OverviewTab({ server }: Props) {
           <div className="flex flex-col gap-1">
             {players.map((p) => (
               <div
-                key={p.steamId}
+                key={p.playerId}
                 className="flex items-center justify-between text-sm px-3 py-2 rounded-lg"
                 style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.1)" }}
               >
                 <span style={{ color: "var(--text-primary)" }}>{p.name}</span>
                 <span className="font-mono text-xs" style={{ color: "var(--text-muted)" }}>
-                  {p.steamId}
+                  {p.playerId}
                 </span>
               </div>
             ))}

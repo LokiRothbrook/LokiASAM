@@ -107,6 +107,58 @@ fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Open (or focus) the RCON console pop-out window for a specific server.
+/// Only one RCON window per server is allowed; subsequent calls focus the existing one.
+#[tauri::command]
+fn open_rcon_window(
+    app: tauri::AppHandle,
+    server_id: String,
+    server_name: String,
+) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    let label = format!("rcon-{server_id}");
+    let title = format!("{server_name} — RCON");
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        let is_min = existing.is_minimized().unwrap_or(false);
+        if is_min { let _ = existing.unminimize(); }
+        let _ = existing.show();
+        let w2 = existing.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = w2.set_always_on_top(true);
+            let _ = w2.set_focus();
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = w2.set_always_on_top(false);
+        });
+        return Ok(());
+    }
+
+    let url = format!("/rcon?serverId={server_id}");
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title(&title)
+        .inner_size(900.0, 700.0)
+        .min_inner_size(700.0, 500.0)
+        .resizable(true)
+        .decorations(true)
+        .center()
+        .build()
+        .map_err(|e| format!("Failed to open RCON window: {e}"))?;
+
+    Ok(())
+}
+
+/// Close the RCON pop-out window for a specific server (if open).
+#[tauri::command]
+fn close_rcon_window(app: tauri::AppHandle, server_id: String) -> Result<(), String> {
+    let label = format!("rcon-{server_id}");
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.close();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
@@ -305,17 +357,153 @@ pub fn run() {
             });
 
             // ── Scheduler background task ──────────────────────────────────
-            // Checks every 30 s for due entries. This runs unconditionally — JS
-            // timers are throttled when the window is hidden to tray; this loop is not.
             let scheduler_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.tick().await; // skip the immediate first tick
-
+                interval.tick().await;
                 loop {
                     interval.tick().await;
                     commands::scheduler::tick_scheduler(&scheduler_handle);
+                }
+            });
+
+            // ── RCON GetChat poll background task ──────────────────────────
+            // Polls GetChat every 5 s for any server that has an active subscriber
+            // (RCON tab or pop-out window open). Results are logged to the buffer
+            // and emitted as rcon://log/{server_id} events.
+            let rcon_chat_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(5));
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    let pool = rcon_chat_handle.state::<state::rcon_pool::RconPool>();
+
+                    let active: Vec<String> = pool
+                        .chat_poll_active
+                        .lock()
+                        .await
+                        .iter()
+                        .cloned()
+                        .collect();
+
+                    for server_id in active {
+                        let conn_arc = {
+                            let guard = pool.connections.lock().await;
+                            guard.get(&server_id).cloned()
+                        };
+                        if let Some(conn_arc) = conn_arc {
+                            let mut conn = conn_arc.lock().await;
+                            let cmd_id = conn.next_id;
+                            conn.next_id += 1;
+                            if conn.send_packet(cmd_id, state::rcon_pool::RCON_EXECCOMMAND, "GetChat").await.is_err() {
+                                continue;
+                            }
+                            let mut resp = String::new();
+                            let mut got_any = false;
+                            loop {
+                                let wait = if got_any {
+                                    std::time::Duration::from_millis(200)
+                                } else {
+                                    std::time::Duration::from_secs(3)
+                                };
+                                match tokio::time::timeout(wait, conn.recv_packet()).await {
+                                    Ok(Ok((id, _, body))) if id == cmd_id => {
+                                        got_any = true;
+                                        resp.push_str(&body);
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            drop(conn);
+                            for line in resp.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+                                let log_line = state::rcon_pool::RconLogLine {
+                                    timestamp_ms: state::rcon_pool::RconPool::now_ms(),
+                                    text: line.to_string(),
+                                    kind: "chat".into(),
+                                };
+                                pool.push_log(&server_id, log_line.clone()).await;
+                                let _ = rcon_chat_handle.emit(&format!("rcon://log/{server_id}"), &log_line);
+                            }
+                        }
+                    }
+                }
+            });
+
+            // ── RCON player list refresh background task ───────────────────
+            // Polls listplayers every 60 s for every server with an active RCON
+            // connection, caches the result, and emits rcon://players/{server_id}.
+            let rcon_pl_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    let pool = rcon_pl_handle.state::<state::rcon_pool::RconPool>();
+
+                    let connected: Vec<String> = pool
+                        .connections
+                        .lock()
+                        .await
+                        .keys()
+                        .cloned()
+                        .collect();
+
+                    for server_id in connected {
+                        let conn_arc = {
+                            let guard = pool.connections.lock().await;
+                            guard.get(&server_id).cloned()
+                        };
+                        if let Some(conn_arc) = conn_arc {
+                            let mut conn = conn_arc.lock().await;
+                            let cmd_id = conn.next_id;
+                            conn.next_id += 1;
+                            if conn.send_packet(cmd_id, state::rcon_pool::RCON_EXECCOMMAND, "listplayers").await.is_err() {
+                                continue;
+                            }
+                            let mut resp = String::new();
+                            let mut got_any = false;
+                            loop {
+                                let wait = if got_any {
+                                    std::time::Duration::from_millis(200)
+                                } else {
+                                    std::time::Duration::from_secs(5)
+                                };
+                                match tokio::time::timeout(wait, conn.recv_packet()).await {
+                                    Ok(Ok((id, _, body))) if id == cmd_id => {
+                                        got_any = true;
+                                        resp.push_str(&body);
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            drop(conn);
+                            let players: Vec<state::rcon_pool::CachedPlayer> = resp
+                                .lines()
+                                .filter_map(|line| {
+                                    let line = line.trim();
+                                    if line.is_empty() || line.to_lowercase().starts_with("no players") {
+                                        return None;
+                                    }
+                                    let after_dot = line.find(". ").map(|i| &line[i + 2..])?;
+                                    if let Some(comma) = after_dot.rfind(", ") {
+                                        let name = after_dot[..comma].trim().to_string();
+                                        let player_id = after_dot[comma + 2..].trim().to_string();
+                                        if !player_id.is_empty() {
+                                            return Some(state::rcon_pool::CachedPlayer { name, player_id });
+                                        }
+                                    }
+                                    None
+                                })
+                                .collect();
+
+                            pool.player_cache.lock().await.insert(server_id.clone(), players.clone());
+                            let _ = rcon_pl_handle.emit(&format!("rcon://players/{server_id}"), &players);
+                        }
+                    }
                 }
             });
 
@@ -333,6 +521,7 @@ pub fn run() {
             commands::server::start_server,
             commands::server::stop_server,
             commands::server::restart_server,
+            commands::server::graceful_stop_server,
             commands::server::get_server_status,
             commands::server::register_running_server,
             commands::server::clone_server,
@@ -352,7 +541,18 @@ pub fn run() {
             commands::rcon::rcon_connect,
             commands::rcon::rcon_send,
             commands::rcon::rcon_disconnect,
+            commands::rcon::rcon_is_connected,
             commands::rcon::rcon_get_players,
+            commands::rcon::rcon_get_cached_players,
+            commands::rcon::rcon_get_chat,
+            commands::rcon::rcon_get_log,
+            commands::rcon::rcon_clear_log,
+            commands::rcon::rcon_enable_chat_poll,
+            commands::rcon::rcon_disable_chat_poll,
+            commands::rcon::rcon_read_ban_list,
+            commands::rcon::rcon_read_whitelist,
+            open_rcon_window,
+            close_rcon_window,
             // Log watcher
             commands::logs::watch_server_log,
             commands::logs::stop_log_watch,

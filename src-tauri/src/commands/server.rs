@@ -1,4 +1,4 @@
-use crate::{events, state::AppState};
+use crate::{events, state::{AppState, rcon_pool::RconPool}};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -950,6 +950,126 @@ pub async fn clone_server(
     })
     .await
     .map_err(|e| format!("Clone task panicked: {e}"))??;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
+
+/// Gracefully stop a running server with optional player countdown warnings.
+///
+/// Flow:
+///   1. Emit "stopping" status
+///   2. If warn_players AND players are online: send countdown chat messages
+///   3. SaveWorld (wait for acknowledgment)
+///   4. DoExit
+///   5. Wait up to 30 s for process to exit, then force-kill
+///   6. Emit "stopped" status
+#[tauri::command]
+pub async fn graceful_stop_server(
+    app_handle: tauri::AppHandle,
+    server_id: String,
+    rcon_port: u16,
+    rcon_password: String,
+    warn_players: bool,
+    warn_minutes: u64,
+    warn_message: String,
+) -> Result<(), String> {
+    use crate::commands::rcon::transient_rcon_command;
+    use tokio::time::{sleep, Duration};
+
+    let state = app_handle.state::<AppState>();
+    let pool = app_handle.state::<RconPool>();
+
+    let (pid, install_path) = {
+        let registry = state.running_servers.lock().unwrap();
+        registry
+            .get(&server_id)
+            .map(|rs| (rs.pid, rs.install_path.clone()))
+            .ok_or_else(|| format!("Server {server_id} is not running"))?
+    };
+
+    state.stopping_servers.lock().unwrap().insert(server_id.clone());
+
+    emit_status(&app_handle, &ServerStatus {
+        server_id: server_id.clone(),
+        status: "stopping".into(),
+        pid: Some(pid),
+        uptime_seconds: None,
+        error: None,
+    });
+
+    // Optional player countdown
+    if warn_players && warn_minutes > 0 {
+        let players_online = transient_rcon_command(rcon_port, &rcon_password, "listplayers")
+            .await
+            .map(|r| !r.is_empty() && !r.to_lowercase().contains("no players"))
+            .unwrap_or(false);
+
+        if players_online {
+            let total_secs = warn_minutes * 60;
+            let mut elapsed: u64 = 0;
+
+            let initial_msg = warn_message.replace(
+                "{time}",
+                &format!("{warn_minutes} minute{}", if warn_minutes == 1 { "" } else { "s" }),
+            );
+            let _ = transient_rcon_command(rcon_port, &rcon_password, &format!("ServerChat {initial_msg}")).await;
+
+            while elapsed < total_secs {
+                let remaining = total_secs - elapsed;
+                let interval_secs: u64 = if remaining <= 5 { 1 } else if remaining <= 30 { 5 } else { 60 };
+
+                sleep(Duration::from_secs(interval_secs)).await;
+                elapsed += interval_secs;
+
+                let still_remaining = total_secs.saturating_sub(elapsed);
+                if still_remaining == 0 { break; }
+
+                let time_str = if still_remaining >= 60 {
+                    let m = still_remaining / 60;
+                    format!("{m} minute{}", if m == 1 { "" } else { "s" })
+                } else {
+                    format!("{still_remaining} second{}", if still_remaining == 1 { "" } else { "s" })
+                };
+
+                let msg = warn_message.replace("{time}", &time_str);
+                let _ = transient_rcon_command(rcon_port, &rcon_password, &format!("ServerChat {msg}")).await;
+            }
+        }
+    }
+
+    // SaveWorld then DoExit
+    let _ = transient_rcon_command(rcon_port, &rcon_password, "saveworld").await;
+    sleep(tokio::time::Duration::from_secs(2)).await;
+    let _ = transient_rcon_command(rcon_port, &rcon_password, "doexit").await;
+
+    // Wait up to 30 s for process to exit
+    for _ in 0..60 {
+        sleep(tokio::time::Duration::from_millis(500)).await;
+        if !pid_alive(pid) { break; }
+    }
+    if pid_alive(pid) {
+        kill_process_tree(pid, false, &install_path);
+        sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
+    // Clean up state
+    state.stopping_servers.lock().unwrap().remove(&server_id);
+    state.running_servers.lock().unwrap().remove(&server_id);
+    pool.connections.lock().await.remove(&server_id);
+    pool.chat_poll_active.lock().await.remove(&server_id);
+    pool.player_cache.lock().await.remove(&server_id);
+
+    emit_status(&app_handle, &ServerStatus {
+        server_id,
+        status: "stopped".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
 
     Ok(())
 }

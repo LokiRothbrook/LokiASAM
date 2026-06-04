@@ -282,7 +282,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
               className="w-3.5 h-3.5 accent-purple-500"
             />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Broadcast warning in-game before restart
+              Send in-game chat warning before restart
             </span>
           </label>
           {c.broadcastWarning && (
@@ -302,7 +302,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
                 />
               </div>
               <div className="flex-1 space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Broadcast message ({"{minutes}"} = countdown)</label>
+                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Chat message ({"{minutes}"} = countdown)</label>
                 <Input
                   value={c.message ?? ""}
                   onChange={(e) => patchConfig({ message: e.target.value })}
@@ -322,7 +322,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 
       {type === "broadcast" && (
         <div className="space-y-1">
-          <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message to broadcast</label>
+          <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message to send in global chat</label>
           <Input
             value={c.message ?? ""}
             onChange={(e) => patchConfig({ message: e.target.value })}
@@ -408,8 +408,8 @@ const CARD_DEFS: {
   {
     type: "broadcast",
     icon: Megaphone,
-    title: "Scheduled Broadcast",
-    description: "Send a recurring in-game message to all online players via RCON.",
+    title: "Scheduled Chat Message",
+    description: "Send a recurring global chat message to all online players via RCON.",
   },
 ];
 

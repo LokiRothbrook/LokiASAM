@@ -95,7 +95,13 @@ export interface ServerQueryResult {
 
 export interface ArkPlayer {
   name: string;
-  steamId: string;
+  playerId: string;  // EOS ID in ASA (32-char alphanumeric)
+}
+
+export interface RconLogLine {
+  timestampMs: number;
+  text: string;
+  kind: "command" | "response" | "chat" | "system" | "error";
 }
 
 /**
@@ -311,12 +317,37 @@ export const tauriCmd = {
   detectServerInstall: (installPath: string) =>
     invoke<DetectedServerConfig>("detect_server_install", { installPath }),
 
-  // RCON
+  // RCON — connection
   rconConnect: (serverId: string, host: string, port: number, password: string) =>
     invoke<void>("rcon_connect", { serverId, host, port, password }),
-  rconSend:       (serverId: string, command: string) => invoke<string>("rcon_send", { serverId, command }),
-  rconDisconnect: (serverId: string) => invoke<void>("rcon_disconnect", { serverId }),
-  rconGetPlayers: (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
+  rconSend:        (serverId: string, command: string) => invoke<string>("rcon_send", { serverId, command }),
+  rconDisconnect:  (serverId: string) => invoke<void>("rcon_disconnect", { serverId }),
+  rconIsConnected: (serverId: string) => invoke<boolean>("rcon_is_connected", { serverId }),
+  // RCON — players
+  rconGetPlayers:       (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
+  rconGetCachedPlayers: (serverId: string) => invoke<ArkPlayer[]>("rcon_get_cached_players", { serverId }),
+  // RCON — chat
+  rconGetChat: (serverId: string) => invoke<string[]>("rcon_get_chat", { serverId }),
+  rconEnableChatPoll:  (serverId: string) => invoke<void>("rcon_enable_chat_poll", { serverId }),
+  rconDisableChatPoll: (serverId: string) => invoke<void>("rcon_disable_chat_poll", { serverId }),
+  // RCON — log buffer
+  rconGetLog:   (serverId: string) => invoke<RconLogLine[]>("rcon_get_log", { serverId }),
+  rconClearLog: (serverId: string) => invoke<void>("rcon_clear_log", { serverId }),
+  // RCON — file-based lists
+  rconReadBanList:   (installPath: string) => invoke<string[]>("rcon_read_ban_list", { installPath }),
+  rconReadWhitelist: (installPath: string) => invoke<string[]>("rcon_read_whitelist", { installPath }),
+  // RCON — pop-out window
+  openRconWindow:  (serverId: string, serverName: string) => invoke<void>("open_rcon_window", { serverId, serverName }),
+  closeRconWindow: (serverId: string) => invoke<void>("close_rcon_window", { serverId }),
+  // Graceful shutdown
+  gracefulStopServer: (
+    serverId: string,
+    rconPort: number,
+    rconPassword: string,
+    warnPlayers: boolean,
+    warnMinutes: number,
+    warnMessage: string,
+  ) => invoke<void>("graceful_stop_server", { serverId, rconPort, rconPassword, warnPlayers, warnMinutes, warnMessage }),
 
   // Log watcher
   watchServerLog: (serverId: string, logPath: string) =>

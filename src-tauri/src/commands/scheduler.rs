@@ -126,8 +126,8 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
         .as_str()
         .unwrap_or("Server broadcast.")
         .to_string();
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("Broadcast {message}")).await;
-    let _ = app; // no app events needed for broadcast
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {message}")).await;
+    let _ = app; // no app events needed for chat
     Ok(())
 }
 
@@ -167,7 +167,7 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
             .unwrap_or("Server restarting in {minutes} minutes.")
             .to_string();
         let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("Broadcast {msg}")).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 
@@ -294,7 +294,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             .unwrap_or("Server updating in {minutes} minutes.")
             .to_string();
         let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("Broadcast {msg}")).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 

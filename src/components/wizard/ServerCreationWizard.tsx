@@ -46,6 +46,7 @@ import {
   type ClusterRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -1134,6 +1135,45 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [input, setInput] = useState("");
 
+  const modBrowserOpen      = useAppStore((s) => s.modBrowserOpen);
+  const setModBrowserOpen   = useAppStore((s) => s.setModBrowserOpen);
+  const setModBrowserParams = useAppStore((s) => s.setModBrowserParams);
+  const modAddedCount       = useAppStore((s) => s.modAddedCount);
+  const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
+  const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
+
+  // When mod browser adds a mod it fires modAddedCount — re-derive mod IDs from a
+  // "wizard-temp" server ID that the browser page will write into server_mods.
+  // Simpler: we just watch modBrowserJustClosed and re-read nothing (mods are
+  // passed directly via the params.addedModIds list the browser already knows).
+  // For wizard we use a temporary server ID of "wizard-temp".
+  useEffect(() => {
+    if (modBrowserJustClosed) {
+      setModBrowserJustClosed(false);
+      // Reload the mod list from the store params after the browser closes
+      // (mods were added through the standard ModBrowserEventHandler path).
+    }
+  }, [modBrowserJustClosed, setModBrowserJustClosed]);
+
+  const handleOpenBrowser = async () => {
+    if (modBrowserOpen) {
+      try { await tauriCmd.closeModBrowser(); } catch { /* not in Tauri */ }
+      return;
+    }
+    setModBrowserParams({
+      serverId: "wizard-temp",
+      serverName: "New Server (Wizard)",
+      addedModIds: data.modIds,
+    });
+    try {
+      await tauriCmd.openModBrowser("wizard-temp", "New Server (Wizard)", data.modIds);
+      setModBrowserOpen(true);
+    } catch (e) {
+      console.error("Failed to open mod browser", e);
+      setModBrowserParams(null);
+    }
+  };
+
   const addMod = () => {
     const id = input.trim();
     if (!id || data.modIds.includes(id)) { setInput(""); return; }
@@ -1150,9 +1190,22 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
 
   return (
     <div className="space-y-5">
-      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-        Add CurseForge mods by ID. The full mod browser is available on the Mods tab after creation.
-      </p>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Add mods by ID or browse CurseForge.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="gap-1.5 shrink-0"
+          style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+          onClick={handleOpenBrowser}
+        >
+          <Globe className="w-3.5 h-3.5" />
+          {modBrowserOpen ? "Close Browser" : "Browse Mods"}
+        </Button>
+      </div>
 
       {selectedMap?.isMod && selectedMap.requiredModId && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(0,255,255,0.06)", border: "1px solid rgba(0,255,255,0.2)" }}>

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -71,16 +71,66 @@ impl RconConn {
     }
 }
 
+/// One line in the RCON console log buffer.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RconLogLine {
+    pub timestamp_ms: u64,
+    pub text: String,
+    /// "command" | "response" | "chat" | "system" | "error"
+    pub kind: String,
+}
+
+/// A cached player entry from listplayers output.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedPlayer {
+    pub name: String,
+    pub player_id: String,
+}
+
 /// Global pool of live RCON connections, keyed by server UUID.
 /// Each connection has its own Mutex so the pool lock is never held during I/O.
 pub struct RconPool {
     pub connections: Mutex<HashMap<String, Arc<Mutex<RconConn>>>>,
+    /// Rolling console log buffer per server, capped at 500 lines.
+    pub log_buffer: Mutex<HashMap<String, VecDeque<RconLogLine>>>,
+    /// Server IDs that have an active GetChat poll subscriber (tab or pop-out open).
+    pub chat_poll_active: Mutex<HashSet<String>>,
+    /// Last-known player list per server (refreshed every ~60 s).
+    pub player_cache: Mutex<HashMap<String, Vec<CachedPlayer>>>,
 }
 
 impl RconPool {
     pub fn new() -> Self {
         Self {
             connections: Mutex::new(HashMap::new()),
+            log_buffer: Mutex::new(HashMap::new()),
+            chat_poll_active: Mutex::new(HashSet::new()),
+            player_cache: Mutex::new(HashMap::new()),
         }
     }
+
+    pub fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    /// Append a log line to the buffer for `server_id` (cap 500 lines).
+    pub async fn push_log(&self, server_id: &str, line: RconLogLine) {
+        let mut buf = self.log_buffer.lock().await;
+        let deque = buf.entry(server_id.to_string()).or_default();
+        if deque.len() >= 500 {
+            deque.pop_front();
+        }
+        deque.push_back(line);
+    }
+}
+
+/// Returns the platform binary subdirectory within a server install path.
+/// On Linux we always run the Win64 dedicated server binary via Wine/Proton.
+pub fn bin_subdir() -> &'static str {
+    "ShooterGame/Binaries/Win64"
 }

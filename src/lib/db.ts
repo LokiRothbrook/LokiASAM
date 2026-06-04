@@ -214,6 +214,17 @@ async function runMigrations(db: Database): Promise<void> {
   }
   // Remove old cron-based update schedules — superseded by update_automation_json.
   await db.execute("DELETE FROM schedules WHERE schedule_type = 'update'");
+
+  // ── Migration 005: per-server graceful shutdown settings ─────────────────
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN shutdown_warn_players INTEGER NOT NULL DEFAULT 1");
+  } catch { /* already exists */ }
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN shutdown_warn_minutes INTEGER NOT NULL DEFAULT 5");
+  } catch { /* already exists */ }
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN shutdown_message TEXT NOT NULL DEFAULT 'Server will shut down in {time}.'");
+  } catch { /* already exists */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +249,9 @@ export interface ServerRow {
   pid: number | null;
   update_available: number;       // 0 | 1 — set by global update check
   update_automation_json: string; // UpdateAutomation JSON blob
+  shutdown_warn_players: number;  // 0 | 1
+  shutdown_warn_minutes: number;  // default 5
+  shutdown_message: string;       // template with {time} placeholder
   created_at: string;
   updated_at: string;
 }
@@ -576,6 +590,19 @@ export async function setServerUpdateAutomation(
   await db.execute(
     "UPDATE servers SET update_automation_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [JSON.stringify(automation), id]
+  );
+}
+
+export async function updateServerShutdownSettings(
+  id: string,
+  warnPlayers: boolean,
+  warnMinutes: number,
+  message: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET shutdown_warn_players = ?, shutdown_warn_minutes = ?, shutdown_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [warnPlayers ? 1 : 0, warnMinutes, message, id]
   );
 }
 
