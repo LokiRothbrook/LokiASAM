@@ -47,7 +47,7 @@ const ALL_EVENTS = Object.values(NOTIFICATION_EVENTS) as NotificationEventType[]
 // Default events enabled per channel when no config row exists yet
 const CHANNEL_DEFAULTS: Record<ChannelId, NotificationEventType[]> = {
   bell:    ALL_EVENTS,
-  desktop: ["server_started", "server_crashed", "update_available"],
+  desktop: ["server_started", "server_crashed", "update_available", "update_started", "update_failed"],
   discord: ALL_EVENTS,
   email:   ALL_EVENTS,
 };

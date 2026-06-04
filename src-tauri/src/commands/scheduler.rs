@@ -190,20 +190,54 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
     inner_start_server(app.clone(), params).await.map(|_| ())
 }
 
+/// Run a global cache update check: update the shared SteamCMD cache, compare
+/// old vs new build IDs, and emit `asa://update-check` so the frontend can
+/// mark outdated servers and prompt the user.
+async fn fire_global_update_check(
+    app: &AppHandle,
+    entry: &crate::state::scheduler::ScheduleEntry,
+) -> Result<(), String> {
+    let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
+    let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
+
+    let old_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
+        .unwrap_or_else(|| "0".to_string());
+
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| format!("Failed to create cache dir: {e}"))?;
+
+    crate::commands::steamcmd::steamcmd_app_update(
+        app,
+        &entry.steamcmd_path,
+        &cache_dir,
+        false,
+        "steamcmd://output/global-update-check",
+        None,
+    )
+    .await?;
+
+    let new_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
+        .unwrap_or_else(|| old_build.clone());
+
+    let _ = app.emit(
+        crate::events::ASA_UPDATE_CHECK,
+        serde_json::json!({
+            "updateAvailable": new_build != old_build,
+            "cachedBuildId":   old_build,
+            "latestBuildId":   new_build,
+        }),
+    );
+
+    Ok(())
+}
+
 async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
     let cfg: serde_json::Value =
         serde_json::from_str(&entry.config_json).unwrap_or_default();
 
-    let mode = cfg["mode"].as_str().unwrap_or("check_and_apply");
     let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
     let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
-
-    // ── Check-only mode: query Steam API, emit result, do nothing else ────────
-    if mode == "check_only" {
-        let result = crate::commands::steamcmd::check_asa_update(cache_dir).await?;
-        let _ = app.emit(crate::events::ASA_UPDATE_CHECK, result);
-        return Ok(());
-    }
 
     // ── Check & Apply mode ────────────────────────────────────────────────────
     let is_running = {
@@ -368,6 +402,10 @@ pub fn tick_scheduler(app: &AppHandle) {
                     Err(e) => (false, Some(e), None),
                 },
                 "update" => match fire_update(&app, &entry).await {
+                    Ok(_) => (true, None, None),
+                    Err(e) => (false, Some(e), None),
+                },
+                "global_update_check" => match fire_global_update_check(&app, &entry).await {
                     Ok(_) => (true, None, None),
                     Err(e) => (false, Some(e), None),
                 },

@@ -14,6 +14,13 @@ const ACF_REL_PATH: &str = "steamapps/appmanifest_2430930.acf";
 // ACF / INI helpers
 // ---------------------------------------------------------------------------
 
+/// Read the build ID from the shared cache directory's appmanifest ACF.
+/// Returns None if the cache has never been downloaded.
+pub fn get_cache_build_id(cache_dir: &str) -> Option<String> {
+    let acf_path = Path::new(cache_dir).join(ACF_REL_PATH);
+    read_acf_build_id(&acf_path)
+}
+
 /// Extract the "buildid" value from a SteamCMD appmanifest ACF file.
 /// Returns None if the file is missing or the key is not found.
 pub fn read_acf_build_id(acf_path: &Path) -> Option<String> {
@@ -108,6 +115,7 @@ struct SteamUpToDateCheck {
 #[derive(serde::Deserialize)]
 struct SteamCheckResponse {
     success: bool,
+    #[serde(default)]
     up_to_date: bool,
     #[serde(default)]
     required_version: Option<u64>,
@@ -575,9 +583,14 @@ pub async fn check_asa_update(cache_dir: String) -> Result<UpdateCheckResult, St
     let acf_path = Path::new(&cache_dir).join(ACF_REL_PATH);
     let cached_build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());
 
+    // The Steam UpToDateCheck API rejects version=0 with success=false.
+    // When the cache ACF does not exist yet, fall back to "1" so the API
+    // returns the actual latest build ID in required_version.
+    let query_version = if cached_build_id == "0" { "1" } else { &cached_build_id };
+
     let url = format!(
         "https://api.steampowered.com/ISteamApps/UpToDateCheck/v1/?appid={}&version={}&format=json",
-        ASA_SERVER_APP_ID, cached_build_id
+        ASA_SERVER_APP_ID, query_version
     );
 
     let client = reqwest::Client::builder()

@@ -10,7 +10,7 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { insertBackup, updateScheduleRun, getScheduleById } from "@/lib/db";
+import { insertBackup, updateScheduleRun, getScheduleById, setAppSetting } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import type { SchedulerFiredPayload } from "@/lib/tauri-commands";
@@ -23,6 +23,20 @@ export function SchedulerManager() {
 
   useTauriEvent<SchedulerFiredPayload>("scheduler://fired", async (payload) => {
     const { scheduleId, serverName, scheduleType, success, error, backupRecord } = payload;
+
+    // ── Global cache update check — synthetic entry, not in the schedules table ──
+    if (scheduleType === "global_update_check") {
+      // Update asa_last_checked so syncSchedulesToRust computes the correct
+      // next_run_ms when it re-syncs below.
+      await setAppSetting("asa_last_checked", new Date().toISOString());
+      // The asa://update-check event (emitted by the Rust handler) drives the
+      // per-server badge update and "update available" settings — no toast here.
+      if (!success) {
+        toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
+      }
+      syncSchedulesToRust();
+      return;
+    }
 
     // Persist backup record to SQLite when a backup schedule fired.
     if (scheduleType === "backup" && backupRecord && success) {
@@ -42,8 +56,6 @@ export function SchedulerManager() {
     }
 
     // Update last_run / next_run in SQLite so the UI shows correct times.
-    // Fetch the schedule to get the cron expression and compute the real next_run
-    // up-front — avoids a null flash in the UI between update and re-sync.
     const lastRun = new Date().toISOString();
     try {
       const row = await getScheduleById(scheduleId);
@@ -57,9 +69,9 @@ export function SchedulerManager() {
     // Show a toast notification.
     if (success) {
       const labels: Record<string, string> = {
-        backup: "Scheduled backup completed",
-        restart: "Scheduled restart completed",
-        update: "Scheduled update completed",
+        backup:    "Scheduled backup completed",
+        restart:   "Scheduled restart completed",
+        update:    "Scheduled update completed",
         broadcast: "Scheduled broadcast sent",
       };
       toast.success(`[${serverName}] ${labels[scheduleType] ?? "Schedule fired"}.`);

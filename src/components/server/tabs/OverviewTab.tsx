@@ -7,6 +7,10 @@ import {
   Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription,
+  DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { useServerStats } from "@/hooks/useServerStats";
 import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
@@ -14,6 +18,7 @@ import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup, setAppSetting,
 } from "@/lib/db";
+import { applyUpdateToServer } from "@/lib/update-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import { toast } from "sonner";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -88,8 +93,11 @@ export function OverviewTab({ server }: Props) {
   const [actionPending, setActionPending] = useState(false);
   const [players, setPlayers] = useState<ArkPlayer[] | null>(null);
   const [playersLoading, setPlayersLoading] = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+
+  const hasUpdateAvailable = server.update_available === 1;
 
   const isRunning = server.status === "running";
   const isStarting = server.status === "starting";
@@ -109,20 +117,17 @@ export function OverviewTab({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, cachedBuild, serverBuild] = await Promise.all([
+      const [mc, lb, nr, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
-        getAppSetting("asa_cached_build_id"),
-        tauriCmd.getInstalledBuildId(server.install_path).catch(() => null),
+        getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
-        if (cachedBuild && serverBuild && cachedBuild !== "0" && serverBuild !== "0") {
-          setUpdateAvailable(parseInt(cachedBuild) > parseInt(serverBuild));
-        }
+        setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
     return () => { cancelled = true; };
@@ -222,22 +227,32 @@ export function OverviewTab({ server }: Props) {
   };
 
   const handleApplyUpdate = async () => {
+    setShowUpdateConfirm(false);
     setApplyingUpdate(true);
     try {
-      const cacheBase = await getAppSetting("base_dir");
-      if (!cacheBase) { toast.error("Base directory not configured."); return; }
-      const sep = cacheBase.includes("\\") ? "\\" : "/";
-      const cacheDir = `${cacheBase.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      await tauriCmd.applyCacheToServer(server.id, server.install_path, cacheDir);
-      // Update the cached build ID so the badge refreshes.
-      const cachedBuild = await getAppSetting("asa_cached_build_id");
-      if (cachedBuild) await setAppSetting(`asa_installed_build_${server.id}`, cachedBuild);
-      setUpdateAvailable(false);
-      toast.success("Update applied. Restart the server to use the new version.");
+      const wasRunning = isRunning;
+      try {
+        await applyUpdateToServer(
+          server.id,
+          server.name,
+          server.install_path,
+          wasRunning,
+          (msg) => toast.info(msg),
+        );
+      } catch (err) {
+        if (err && typeof err === "object" && "restartNeeded" in err) {
+          await handleStart();
+          return;
+        }
+        throw err;
+      }
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.success(`${server.name} updated successfully.`);
     } catch (e) {
-      toast.error(`Apply update failed: ${e}`);
+      toast.error(`Update failed: ${e}`);
     } finally {
       setApplyingUpdate(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
@@ -373,23 +388,31 @@ export function OverviewTab({ server }: Props) {
           <Save className="w-3.5 h-3.5 mr-1.5" />
           Backup Now
         </Button>
-        {updateAvailable && (
-          <Button
-            size="sm"
-            disabled={applyingUpdate || isTransitioning}
-            onClick={handleApplyUpdate}
-            className="gap-1.5"
-            style={{
-              background: "rgba(255,165,0,0.12)",
-              border: "1px solid rgba(255,165,0,0.4)",
-              color: "#ffa500",
-            }}
-          >
-            {applyingUpdate
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <ArrowUp className="w-3.5 h-3.5" />}
-            Apply Update
-          </Button>
+        {hasUpdateAvailable && (
+          <>
+            <Button
+              size="sm"
+              disabled={applyingUpdate || isTransitioning || !autoCheckEnabled}
+              onClick={() => autoCheckEnabled && setShowUpdateConfirm(true)}
+              title={!autoCheckEnabled ? "Enable auto update checks in Settings to use this feature" : undefined}
+              className="gap-1.5"
+              style={{
+                background: autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
+                border: `1px solid ${autoCheckEnabled ? "rgba(255,165,0,0.4)" : "rgba(255,165,0,0.15)"}`,
+                color: autoCheckEnabled ? "#ffa500" : "rgba(255,165,0,0.4)",
+              }}
+            >
+              {applyingUpdate
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <ArrowUp className="w-3.5 h-3.5" />}
+              Apply Update
+            </Button>
+            {!autoCheckEnabled && (
+              <span className="text-xs self-center" style={{ color: "rgba(255,165,0,0.5)" }}>
+                Enable auto checks in Settings
+              </span>
+            )}
+          </>
         )}
       </div>
 
@@ -525,6 +548,31 @@ export function OverviewTab({ server }: Props) {
           </div>
         )}
       </div>
+
+      {/* ── Update confirmation dialog ── */}
+      <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Apply Server Update?</DialogTitle>
+            <DialogDescription>
+              {isRunning
+                ? `${server.name} is currently running. It will be stopped, updated, and restarted automatically.`
+                : `${server.name} will be updated from the shared cache.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowUpdateConfirm(false)}
+              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button onClick={handleApplyUpdate} disabled={applyingUpdate}
+              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
+              Update
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

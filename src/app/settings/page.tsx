@@ -12,13 +12,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog, DialogContent, DialogDescription,
+  DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import {
   getAppSetting, setAppSetting,
   saveNotificationConfig, getNotificationConfigs,
+  getServers,
   type NotificationConfigRow,
 } from "@/lib/db";
+import { runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress } from "@/lib/tauri-commands";
@@ -616,6 +622,9 @@ function ServerUpdatesSection() {
   const [lastChecked, setLastChecked] = useState("");
   const [autoCheckHours, setAutoCheck] = useState("0");
   const [hasCacheInstalled, setHasCacheInstalled] = useState<boolean | null>(null);
+  const [showApplyAll, setShowApplyAll] = useState(false);
+  const [applyAllInfo, setApplyAllInfo] = useState<{ total: number; running: number }>({ total: 0, running: 0 });
+  const [applyingAll, setApplyingAll] = useState(false);
 
   const load = useCallback(async () => {
     const [avail, cached, latest, checked, hours, baseDir] = await Promise.all([
@@ -643,35 +652,93 @@ function ServerUpdatesSection() {
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const baseDir = await getAppSetting("base_dir");
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
       if (!baseDir) { toast.error("Base directory not configured."); return; }
+      if (!steamcmdPath) { toast.error("SteamCMD path not configured. Set it up in Settings."); return; }
+
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const result = await tauriCmd.checkAsaUpdate(cacheDir);
+
+      // Read build ID before update so we can detect whether something changed.
+      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
+
+      // Run SteamCMD. If already current this is fast; if an update exists it downloads.
+      const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
+
       const now = new Date().toISOString();
-      await setAppSetting("asa_update_available", String(result.updateAvailable));
-      await setAppSetting("asa_cached_build_id",  result.cachedBuildId);
-      await setAppSetting("asa_latest_build_id",  result.latestBuildId);
-      await setAppSetting("asa_last_checked",     now);
+      const cacheUpdated = !!newBuild && newBuild !== oldBuild;
+
+      await Promise.all([
+        setAppSetting("asa_cached_build_id", newBuild),
+        setAppSetting("asa_latest_build_id", newBuild),
+        setAppSetting("asa_last_checked",    now),
+      ]);
+
+      // Run per-server check now that the cache build ID is current.
+      await runPerServerUpdateCheck();
+
+      const servers = await getServers();
+      const outdated = servers.filter((s) => s.update_available === 1);
+      await setAppSetting("asa_update_available", String(outdated.length > 0));
       load();
-      if (result.updateAvailable) {
-        toast.info(`Update available — build ${result.latestBuildId} (cache is at ${result.cachedBuildId}).`);
+
+      if (cacheUpdated) {
+        toast.success(`Cache updated to build ${newBuild}${oldBuild ? ` (was ${oldBuild})` : ""}.`);
       } else {
-        toast.success("ASA server cache is up to date.");
+        toast.success(`Cache is up to date (build ${newBuild}).`);
+      }
+
+      if (outdated.length > 0) {
+        const running = outdated.filter((s) => s.status === "running").length;
+        setApplyAllInfo({ total: outdated.length, running });
+        setShowApplyAll(true);
       }
     } catch (e) {
-      const msg = `Update check failed: ${e}`;
-      toast.error(msg);
-      dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
         serverId:   null,
         serverName: "ASA Cache",
-        title:      "ASA Update Check Failed",
-        body:       msg,
+        title:      "Cache Update Failed",
+        body:       `Failed to update cache: ${e}`,
         severity:   "error",
       });
     } finally {
       setChecking(false);
+    }
+  };
+
+  const handleApplyAll = async () => {
+    setShowApplyAll(false);
+    setApplyingAll(true);
+    try {
+      const servers = await getServers();
+      const outdated = servers.filter((s) => s.update_available === 1);
+      for (const server of outdated) {
+        try {
+          await applyUpdateToServer(
+            server.id,
+            server.name,
+            server.install_path,
+            server.status === "running",
+            undefined,
+          );
+        } catch (err) {
+          // restartNeeded signal — server was restarted inside applyUpdateToServer
+          // (the outer caller handles restart, but here we skip it since we have
+          // no start params; the server was stopped and updated successfully).
+          if (!(err && typeof err === "object" && "restartNeeded" in err)) {
+            toast.error(`Failed to update ${server.name}: ${err}`);
+          }
+        }
+      }
+      toast.success(`Updated ${outdated.length} server${outdated.length !== 1 ? "s" : ""}.`);
+    } catch (e) {
+      toast.error(`Apply all failed: ${e}`);
+    } finally {
+      setApplyingAll(false);
     }
   };
 
@@ -739,6 +806,34 @@ function ServerUpdatesSection() {
           ))}
         </div>
       </div>
+
+      {/* ── Apply to all servers dialog ── */}
+      <Dialog open={showApplyAll} onOpenChange={setShowApplyAll}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Apply Update to All Servers?</DialogTitle>
+            <DialogDescription>
+              {applyAllInfo.total} server{applyAllInfo.total !== 1 ? "s are" : " is"} behind the cache.
+              {applyAllInfo.running > 0 && (
+                <> {applyAllInfo.running} currently running server{applyAllInfo.running !== 1 ? "s" : ""} will be stopped and restarted after the update.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowApplyAll(false)}
+              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              No, skip
+            </Button>
+            <Button onClick={handleApplyAll} disabled={applyingAll}
+              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              {applyingAll
+                ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                : <ArrowUp className="w-3.5 h-3.5 mr-1.5" />}
+              Yes, update all
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -50,23 +50,25 @@ async function runMigrations(db: Database): Promise<void> {
 
   // ── Migration 001: core tables ──────────────────────────────────────────
   await db.execute(`CREATE TABLE IF NOT EXISTS servers (
-    id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL UNIQUE,
-    map_id            TEXT NOT NULL,
-    install_path      TEXT NOT NULL,
-    port              INTEGER NOT NULL DEFAULT 7777,
-    query_port        INTEGER NOT NULL DEFAULT 27015,
-    rcon_port         INTEGER NOT NULL DEFAULT 27020,
-    rcon_password     TEXT NOT NULL DEFAULT '',
-    max_players       INTEGER NOT NULL DEFAULT 70,
-    server_password   TEXT,
-    admin_password    TEXT NOT NULL DEFAULT '',
-    cluster_id        TEXT,
-    preset_id         TEXT,
-    status            TEXT NOT NULL DEFAULT 'stopped',
-    pid               INTEGER,
-    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    id                     TEXT PRIMARY KEY,
+    name                   TEXT NOT NULL UNIQUE,
+    map_id                 TEXT NOT NULL,
+    install_path           TEXT NOT NULL,
+    port                   INTEGER NOT NULL DEFAULT 7777,
+    query_port             INTEGER NOT NULL DEFAULT 27015,
+    rcon_port              INTEGER NOT NULL DEFAULT 27020,
+    rcon_password          TEXT NOT NULL DEFAULT '',
+    max_players            INTEGER NOT NULL DEFAULT 70,
+    server_password        TEXT,
+    admin_password         TEXT NOT NULL DEFAULT '',
+    cluster_id             TEXT,
+    preset_id              TEXT,
+    status                 TEXT NOT NULL DEFAULT 'stopped',
+    pid                    INTEGER,
+    update_available       INTEGER NOT NULL DEFAULT 0,
+    update_automation_json TEXT NOT NULL DEFAULT '{}',
+    created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
   await db.execute(`CREATE TABLE IF NOT EXISTS server_config (
@@ -178,7 +180,7 @@ async function runMigrations(db: Database): Promise<void> {
     ('asa_last_checked', ''),
     ('asa_cached_build_id', ''),
     ('asa_latest_build_id', ''),
-    ('asa_auto_check_hours', '0')`);
+    ('asa_auto_check_hours', '1')`);
 
   // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
   try {
@@ -188,13 +190,30 @@ async function runMigrations(db: Database): Promise<void> {
   }
 
   // ── Migration 003: add locked_by_map to server_mods (old DBs) ───────────
-  // When a mod-based map is selected, the required map mod is locked so the
-  // user cannot remove it without changing the map first.
   try {
     await db.execute("ALTER TABLE server_mods ADD COLUMN locked_by_map INTEGER NOT NULL DEFAULT 0");
   } catch {
     // Column already exists — safe to ignore.
   }
+
+  // ── Migration 004: per-server update tracking + automation ───────────────
+  // update_available: set by the global check when this server's installed
+  //   build is behind the shared cache. Persists across reboots; cleared only
+  //   when the server is actually updated.
+  // update_automation_json: per-server update automation settings (mode,
+  //   time, restart behaviour). Replaces the old schedule_type='update' rows.
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN update_available INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN update_automation_json TEXT NOT NULL DEFAULT '{}'");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
+  // Remove old cron-based update schedules — superseded by update_automation_json.
+  await db.execute("DELETE FROM schedules WHERE schedule_type = 'update'");
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +236,17 @@ export interface ServerRow {
   preset_id: string | null;
   status: string;
   pid: number | null;
+  update_available: number;       // 0 | 1 — set by global update check
+  update_automation_json: string; // UpdateAutomation JSON blob
   created_at: string;
   updated_at: string;
+}
+
+export interface UpdateAutomation {
+  mode: "off" | "immediately" | "at_time";
+  update_time: string;   // "HH:MM" used when mode === "at_time"
+  restart_after_update: boolean;
+  only_if_running: boolean;
 }
 
 export interface ServerConfigRow {
@@ -524,6 +552,30 @@ export async function updateServerStatus(
   await db.execute(
     "UPDATE servers SET status = ?, pid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [status, pid ?? null, id]
+  );
+}
+
+/** Set the update_available flag for a single server. */
+export async function setServerUpdateAvailable(
+  id: string,
+  available: boolean
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET update_available = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [available ? 1 : 0, id]
+  );
+}
+
+/** Read/write per-server update automation settings. */
+export async function setServerUpdateAutomation(
+  id: string,
+  automation: import("./db").UpdateAutomation
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET update_automation_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [JSON.stringify(automation), id]
   );
 }
 

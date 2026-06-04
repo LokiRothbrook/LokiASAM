@@ -11,6 +11,7 @@
 import { tauriCmd, type ScheduleEntry } from "@/lib/tauri-commands";
 import {
   getServers, getServerSchedules, getServerMods, getServerConfig, getAppSetting,
+  setAppSetting,
 } from "@/lib/db";
 import { ARK_MAPS, LAUNCH_PARAMETERS } from "@/data/game-data";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
@@ -106,6 +107,51 @@ export async function syncSchedulesToRust(): Promise<void> {
           nextRunMs,
         });
       }
+    }
+
+    // ── Global auto-update-check entry ─────────────────────────────────────
+    // This is a synthetic entry (not in the schedules table) that fires the
+    // shared cache update on the interval configured in Settings.
+    const [autoCheckHours, lastChecked] = await Promise.all([
+      getAppSetting("asa_auto_check_hours"),
+      getAppSetting("asa_last_checked"),
+    ]);
+    const hours = parseInt(autoCheckHours ?? "0");
+    if (hours > 0 && steamcmdPath && baseDir) {
+      const intervalMs = hours * 3_600_000;
+      let nextRunMs: number;
+      if (!lastChecked) {
+        // Never checked — wait 5 minutes after startup to let things settle.
+        nextRunMs = Date.now() + 5 * 60_000;
+      } else {
+        const scheduled = new Date(lastChecked).getTime() + intervalMs;
+        // If overdue, give a 30-second startup buffer before firing.
+        nextRunMs = scheduled < Date.now() ? Date.now() + 30_000 : scheduled;
+      }
+
+      entries.push({
+        scheduleId:   "global-update-check",
+        serverId:     "global",
+        serverName:   "ASA Cache",
+        installPath:  "",
+        mapPath:      "",
+        mapId:        "",
+        port:         0,
+        queryPort:    0,
+        rconPort:     0,
+        rconPassword: "",
+        extraArgs:    [],
+        modIds:       [],
+        protonPath:   protonPath ?? undefined,
+        prefixPath:   prefixPath ?? undefined,
+        steamcmdPath: steamcmdPath ?? "",
+        baseDir:      baseDir ?? "",
+        backupDir:    "",
+        scheduleType: "global_update_check",
+        enabled:      true,
+        configJson:   "{}",
+        nextRunMs,
+      });
     }
 
     await tauriCmd.syncSchedules(entries);

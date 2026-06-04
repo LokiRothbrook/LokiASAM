@@ -149,6 +149,22 @@ fn pid_alive(pid: u32) -> bool {
 // Commands
 // ---------------------------------------------------------------------------
 
+/// Try an A2S_INFO Source Query on localhost. Returns true if any UDP response
+/// arrives within 3 seconds. Used by the readiness fallback to get a second
+/// opinion when the log watcher times out without seeing READY_MSG.
+async fn try_source_query_local(port: u16) -> bool {
+    use tokio::net::UdpSocket;
+    use tokio::time::{timeout, Duration};
+    let Ok(sock) = UdpSocket::bind("0.0.0.0:0").await else { return false };
+    if sock.connect(format!("127.0.0.1:{port}")).await.is_err() { return false; }
+    let req: &[u8] = b"\xFF\xFF\xFF\xFF\x54Source Engine Query\x00";
+    if sock.send(req).await.is_err() { return false; }
+    let mut buf = [0u8; 64];
+    timeout(Duration::from_secs(3), sock.recv(&mut buf))
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
 /// Internal: start a server without requiring Tauri State injection.
 /// Called by both the `start_server` command and the Rust scheduler.
 pub async fn inner_start_server(
@@ -492,9 +508,10 @@ async fn inner_start_server_with_state(
     // Falls back to emitting "running" after 15 minutes if the message is
     // never seen (e.g. log location changed, log disabled) so the server
     // doesn't stay in "starting" forever.
-    let sid2      = params.server_id.clone();
-    let handle2   = app_handle.clone();
-    let log_path2 = format!(
+    let sid2        = params.server_id.clone();
+    let handle2     = app_handle.clone();
+    let query_port2 = params.query_port;
+    let log_path2   = format!(
         "{}/ShooterGame/Saved/Logs/ShooterGame.log",
         params.install_path
     );
@@ -520,7 +537,7 @@ async fn inner_start_server_with_state(
     let confirmed2 = Arc::clone(&confirmed_running);
     tauri::async_runtime::spawn(async move {
         use std::io::SeekFrom;
-        use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
         use tokio::time::{sleep, Duration, Instant};
 
         // The exact log line ARK SA writes when the server is fully loaded.
@@ -583,7 +600,12 @@ async fn inner_start_server_with_state(
                     let Some(expected_ino) = pre_spawn_ino else { break f; };
 
                     // Check whether UE has rotated to a new inode yet.
-                    let rotated = tokio::fs::metadata(&log_path2).await.ok().map_or(false, |m| {
+                    // Use fstat on the open handle (not stat on the path) to avoid
+                    // a TOCTOU race: if UE renames the old log and creates a new one
+                    // between File::open and a path-based metadata call, the path
+                    // would report the new inode while `f` still refers to the old
+                    // file — causing us to tail the archived copy forever.
+                    let rotated = f.metadata().await.ok().map_or(false, |m| {
                         #[cfg(unix)]
                         let changed = { use std::os::unix::fs::MetadataExt; m.ino() != expected_ino };
                         #[cfg(windows)]
@@ -641,17 +663,59 @@ async fn inner_start_server_with_state(
             }
         }
 
-        // ── 20-minute fallback ────────────────────────────────────────────────
+        // ── 20-minute fallback — verify before promoting ──────────────────────
+        // The tail loop timed out without seeing READY_MSG. Before blindly
+        // promoting to "running", make two verification attempts:
+        //
+        // 1. Re-scan the tail of the current log file from scratch. This catches
+        //    the TOCTOU race where we spent 20 min tailing the pre-rotation
+        //    archived copy — the live file will have READY_MSG even though we
+        //    never saw it in the tailed stream.
+        //
+        // 2. Source Query (A2S_INFO) on localhost. An independent signal that
+        //    the server is advertising to Steam. May not respond from loopback
+        //    on all Linux/Proton configurations, but worth a few attempts.
+        //
+        // If both checks fail we still promote as a last resort: the server has
+        // been running 20+ minutes without crashing, so it is almost certainly
+        // up. Leaving it in "starting" forever is worse than a false positive.
         let still_tracked = handle2
             .state::<AppState>()
             .running_servers
             .lock()
             .unwrap()
             .contains_key(&sid2);
-        if still_tracked {
+        if !still_tracked { return; }
+
+        // 1. Re-scan the tail of the log file (last 512 KB) for READY_MSG.
+        let log_confirmed = 'scan: {
+            let Ok(mut lf) = tokio::fs::File::open(&log_path2).await else { break 'scan false };
+            const TAIL: u64 = 512 * 1024;
+            let size = lf.metadata().await.map(|m| m.len()).unwrap_or(0);
+            let _ = lf.seek(SeekFrom::Start(size.saturating_sub(TAIL))).await;
+            let mut snippet = String::new();
+            let _ = lf.read_to_string(&mut snippet).await;
+            snippet.contains(READY_MSG)
+        };
+        if log_confirmed {
             confirmed2.store(true, Ordering::Relaxed);
             confirm_running(&handle2, &sid2);
+            return;
         }
+
+        // 2. Try Source Query on localhost (3 attempts, 5 s apart).
+        for _ in 0..3u8 {
+            if try_source_query_local(query_port2).await {
+                confirmed2.store(true, Ordering::Relaxed);
+                confirm_running(&handle2, &sid2);
+                return;
+            }
+            sleep(Duration::from_secs(5)).await;
+        }
+
+        // 3. Last resort — promote regardless.
+        confirmed2.store(true, Ordering::Relaxed);
+        confirm_running(&handle2, &sid2);
     });
 
     Ok(pid)

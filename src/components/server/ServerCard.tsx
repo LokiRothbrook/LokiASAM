@@ -44,6 +44,7 @@ import {
   getNextScheduledRestart,
   getAppSetting,
 } from "@/lib/db";
+import { applyUpdateToServer } from "@/lib/update-utils";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
@@ -105,8 +106,12 @@ export function ServerCard({ server }: Props) {
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [nextRestart, setNextRestart] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
-  const [hasUpdateAvailable, setHasUpdateAvailable] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
+  const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+
+  // Derive update badge directly from the DB column (set by runPerServerUpdateCheck).
+  const hasUpdateAvailable = server.update_available === 1;
 
   // Force a re-render every 30 s so the uptime counter advances visually.
   const [, setTick] = useState(0);
@@ -129,29 +134,25 @@ export function ServerCard({ server }: Props) {
   const isStartFailed = server.status === "start-failed";
   const isReinstallable = isInstallFailed || isStartFailed;
 
-  // Load secondary card data (mod count, backup, schedule, update badge).
+  // Load secondary card data (mod count, backup, schedule, auto-check state).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, cachedBuild, serverBuild] = await Promise.all([
+      const [mc, lb, nr, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
-        getAppSetting("asa_cached_build_id"),
-        tauriCmd.getInstalledBuildId(server.install_path).catch(() => null),
+        getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
-        // Show badge when the cache has a newer build than what's installed.
-        if (cachedBuild && serverBuild && cachedBuild !== "0" && serverBuild !== "0") {
-          setHasUpdateAvailable(parseInt(cachedBuild) > parseInt(serverBuild));
-        }
+        setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
     return () => { cancelled = true; };
-  }, [server.id, server.install_path]);
+  }, [server.id]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -267,6 +268,36 @@ export function ServerCard({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } finally {
       setActionPending(false);
+    }
+  };
+
+  const handleApplyUpdate = async () => {
+    setShowUpdateConfirm(false);
+    setActionPending(true);
+    try {
+      const wasRunning = isRunning;
+      try {
+        await applyUpdateToServer(
+          server.id,
+          server.name,
+          server.install_path,
+          wasRunning,
+          (msg) => toast.info(msg),
+        );
+      } catch (err) {
+        if (err && typeof err === "object" && "restartNeeded" in err) {
+          await handleStart();
+          return;
+        }
+        throw err;
+      }
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.success(`${server.name} updated successfully.`);
+    } catch (e) {
+      toast.error(`Update failed: ${e}`);
+    } finally {
+      setActionPending(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
@@ -567,7 +598,33 @@ export function ServerCard({ server }: Props) {
               <RotateCcw className="w-3.5 h-3.5" />
               Restart
             </Button>
+
+            {/* Update — shown only when update is available */}
+            {hasUpdateAvailable && (
+              <Button
+                size="sm"
+                disabled={actionPending || !autoCheckEnabled || isTransitioning}
+                onClick={() => autoCheckEnabled ? setShowUpdateConfirm(true) : undefined}
+                title={!autoCheckEnabled ? "Enable auto update checks in Settings to use this feature" : undefined}
+                className="gap-1.5"
+                style={{
+                  background: autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
+                  borderColor: autoCheckEnabled ? "rgba(255,165,0,0.5)" : "rgba(255,165,0,0.2)",
+                  color: autoCheckEnabled ? "#ffa500" : "rgba(255,165,0,0.4)",
+                }}
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
+                Update
+              </Button>
+            )}
           </>
+        )}
+
+        {/* Disabled update note */}
+        {hasUpdateAvailable && !autoCheckEnabled && (
+          <span className="text-xs ml-auto" style={{ color: "rgba(255,165,0,0.5)" }}>
+            Enable auto checks in Settings
+          </span>
         )}
 
         {/* Open Detail — hidden while installing/updating/failed */}
@@ -585,6 +642,31 @@ export function ServerCard({ server }: Props) {
           </Button>
         )}
       </div>
+
+      {/* ── Update confirmation dialog ── */}
+      <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Apply Server Update?</DialogTitle>
+            <DialogDescription>
+              {isRunning
+                ? `${server.name} is currently running. It will be stopped, updated, and restarted automatically.`
+                : `${server.name} will be updated from the shared cache.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowUpdateConfirm(false)}
+              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button onClick={handleApplyUpdate}
+              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
+              Update
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── View Progress modal ── */}
       <Dialog
