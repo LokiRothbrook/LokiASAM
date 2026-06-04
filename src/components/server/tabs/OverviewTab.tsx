@@ -356,13 +356,20 @@ export function OverviewTab({ server }: Props) {
             onClick={handleForceStop}
             disabled={actionPending}
             className="gap-1.5"
-            style={{
-              background: "rgba(255,100,0,0.12)",
-              borderColor: "rgba(255,100,0,0.4)",
-              color: "#ff6400",
-            }}
+            style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
           >
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Force Stop
+          </Button>
+        ) : server.status === "starting" ? (
+          <Button
+            size="sm"
+            onClick={handleForceStop}
+            disabled={actionPending}
+            className="gap-1.5"
+            style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+          >
+            <Square className="w-3.5 h-3.5" />
             Force Stop
           </Button>
         ) : isRunning ? (
@@ -396,16 +403,18 @@ export function OverviewTab({ server }: Props) {
             {server.status === "starting" ? "Starting…" : "Start"}
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="outline"
-          className="btn-neon-purple"
-          onClick={handleRestart}
-          disabled={actionPending || isTransitioning || !isRunning}
-        >
-          <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-          Restart
-        </Button>
+        {isRunning && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="btn-neon-purple"
+            onClick={handleRestart}
+            disabled={actionPending}
+          >
+            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+            Restart
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"

@@ -24,11 +24,8 @@ const TIME_PRESETS = [
   { label: "Midnight", time: "00:00:00" },
 ] as const;
 
-// ── Message send types ────────────────────────────────────────────────────────
-const SEND_TYPES = [
-  { value: "ServerChat", label: "Global Chat" },
-  { value: "Broadcast",  label: "Broadcast"   },
-] as const;
+// ServerChat is the only working global message command on ASA.
+const SEND_CMD = "ServerChat";
 
 // ── Line color ────────────────────────────────────────────────────────────────
 function lineColor(kind: RconLogLine["kind"]): string {
@@ -56,13 +53,12 @@ interface PlayerAction {
 }
 
 const PLAYER_ACTIONS: PlayerAction[] = [
-  { label: "Kick",                  cmd: (p) => `kickplayer ${p.playerId}`,           danger: true },
-  { label: "Ban",                   cmd: (p) => `banplayer ${p.playerId}`,            danger: true },
-  { label: "Whitelist",             cmd: (p) => `allowplayertojoinnocheck ${p.playerId}` },
-  { label: "Make Tribe Admin",      cmd: (p) => `maketribeadmin ${p.playerId}` },
-  { label: "Make Tribe Founder",    cmd: (p) => `maketribefounders ${p.playerId}` },
-  { label: "Remove Tribe Admin",    cmd: (p) => `removetribeadmin ${p.playerId}`,     danger: true },
-  { label: "Private Message",       cmd: () => "" },  // handled specially below
+  { label: "Kick",               cmd: (p) => `kickplayer ${p.playerId}`,            danger: true },
+  { label: "Ban",                cmd: (p) => `banplayer ${p.playerId}`,             danger: true },
+  { label: "Whitelist",          cmd: (p) => `allowplayertojoinnocheck ${p.playerId}` },
+  { label: "Make Tribe Admin",   cmd: (p) => `maketribeadmin ${p.playerId}` },
+  { label: "Make Tribe Founder", cmd: (p) => `maketribefounders ${p.playerId}` },
+  { label: "Remove Tribe Admin", cmd: (p) => `removetribeadmin ${p.playerId}`,      danger: true },
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -73,7 +69,6 @@ export function RconConsole({ server, isPopout }: Props) {
   const [lines, setLines]             = useState<RconLogLine[]>([]);
   const [cmdInput, setCmdInput]       = useState("");
   const [msgInput, setMsgInput]       = useState("");
-  const [sendType, setSendType]       = useState<"ServerChat" | "Broadcast">("ServerChat");
   const [sending, setSending]         = useState(false);
   const [cmdHistory, setCmdHistory]   = useState<string[]>([]);
   const [historyIdx, setHistoryIdx]   = useState(-1);
@@ -83,16 +78,12 @@ export function RconConsole({ server, isPopout }: Props) {
   const [banOpen, setBanOpen]         = useState(true);
   const [wlOpen, setWlOpen]           = useState(false);
   const [showTimeMenu, setShowTimeMenu] = useState(false);
-  const [showSendTypeMenu, setShowSendTypeMenu] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState<ArkPlayer | null>(null);
   const [playerMenuPos, setPlayerMenuPos]   = useState({ x: 0, y: 0 });
-  const [pmTarget, setPmTarget]       = useState<ArkPlayer | null>(null);
-  const [pmText, setPmText]           = useState("");
 
   const logRef      = useRef<HTMLDivElement>(null);
   const cmdInputRef = useRef<HTMLInputElement>(null);
-  const timeMenuRef = useRef<HTMLDivElement>(null);
-  const sendTypeMenuRef = useRef<HTMLDivElement>(null);
+  const timeMenuRef     = useRef<HTMLDivElement>(null);
   const playerMenuRef   = useRef<HTMLDivElement>(null);
 
   // ── Auto-scroll log ────────────────────────────────────────────────────────
@@ -106,9 +97,6 @@ export function RconConsole({ server, isPopout }: Props) {
     const handler = (e: MouseEvent) => {
       if (timeMenuRef.current && !timeMenuRef.current.contains(e.target as Node)) {
         setShowTimeMenu(false);
-      }
-      if (sendTypeMenuRef.current && !sendTypeMenuRef.current.contains(e.target as Node)) {
-        setShowSendTypeMenu(false);
       }
       if (playerMenuRef.current && !playerMenuRef.current.contains(e.target as Node)) {
         setSelectedPlayer(null);
@@ -247,9 +235,9 @@ export function RconConsole({ server, isPopout }: Props) {
   // ── Send global chat / broadcast ──────────────────────────────────────────
   const sendMessage = useCallback(async () => {
     if (!msgInput.trim() || !connected || sending) return;
-    await sendCommand(`${sendType} ${msgInput.trim()}`);
+    await sendCommand(`${SEND_CMD} ${msgInput.trim()}`);
     setMsgInput("");
-  }, [msgInput, connected, sending, sendCommand, sendType]);
+  }, [msgInput, connected, sending, sendCommand]);
 
   // ── Player context menu ───────────────────────────────────────────────────
   const openPlayerMenu = (e: React.MouseEvent, player: ArkPlayer) => {
@@ -260,28 +248,12 @@ export function RconConsole({ server, isPopout }: Props) {
 
   const handlePlayerAction = async (action: PlayerAction) => {
     if (!selectedPlayer) return;
-    if (action.label === "Private Message") {
-      setPmTarget(selectedPlayer);
-      setPmText("");
-      setSelectedPlayer(null);
-      return;
-    }
     const cmd = action.cmd(selectedPlayer);
     setSelectedPlayer(null);
     await sendCommand(cmd);
-    if (action.label === "Ban") {
+    if (action.label === "Ban" || action.label === "Whitelist") {
       setTimeout(refreshLists, 500);
     }
-    if (action.label === "Whitelist") {
-      setTimeout(refreshLists, 500);
-    }
-  };
-
-  const sendPm = async () => {
-    if (!pmTarget || !pmText.trim()) return;
-    await sendCommand(`serverchattoplayerid ${pmTarget.playerId} ${pmText.trim()}`);
-    setPmTarget(null);
-    setPmText("");
   };
 
   const copyLog = () => {
@@ -324,7 +296,7 @@ export function RconConsole({ server, isPopout }: Props) {
 
   // ── Layout ────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-2 h-full" style={{ minHeight: 0 }}>
+    <div className="flex flex-col gap-2 overflow-hidden" style={{ height: "100%", minHeight: 0 }}>
 
       {/* ── Status bar ── */}
       <div
@@ -365,27 +337,6 @@ export function RconConsole({ server, isPopout }: Props) {
           style={{ background: "rgba(255,50,50,0.08)", border: "1px solid rgba(255,50,50,0.2)" }}>
           <AlertCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-red)" }} />
           <span style={{ color: "var(--neon-red)" }}>{error}</span>
-        </div>
-      )}
-
-      {/* ── Private message modal ── */}
-      {pmTarget && (
-        <div className="rounded-xl p-3 flex items-center gap-2 shrink-0"
-          style={{ background: "rgba(0,0,0,0.5)", border: "1px solid rgba(191,0,255,0.3)" }}>
-          <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
-            PM → <strong style={{ color: "var(--neon-purple)" }}>{pmTarget.name}</strong>
-          </span>
-          <Input
-            autoFocus
-            className="h-7 text-xs flex-1"
-            placeholder="Private message…"
-            value={pmText}
-            onChange={(e) => setPmText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") sendPm(); if (e.key === "Escape") setPmTarget(null); }}
-            style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.3)", color: "var(--text-primary)" }}
-          />
-          <Button size="sm" className="btn-neon-purple h-7 shrink-0" onClick={sendPm}>Send</Button>
-          <Button size="sm" variant="ghost" className="h-7 shrink-0" onClick={() => setPmTarget(null)}>Cancel</Button>
         </div>
       )}
 
@@ -504,11 +455,11 @@ export function RconConsole({ server, isPopout }: Props) {
         {/* RIGHT — console + controls */}
         <div className="flex flex-col gap-2 flex-1 min-w-0 min-h-0">
 
-          {/* Terminal */}
+          {/* Terminal — fills remaining height, scrolls internally */}
           <div
             ref={logRef}
-            className="flex-1 rounded-xl p-3 overflow-y-auto font-mono text-xs leading-relaxed"
-            style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.1)", minHeight: 0 }}
+            className="rounded-xl p-3 overflow-y-auto font-mono text-xs leading-relaxed"
+            style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.1)", flex: "1 1 0", minHeight: 0 }}
           >
             {lines.map((l, i) => (
               <div key={i} className="flex gap-2 items-start mb-0.5">
@@ -564,36 +515,16 @@ export function RconConsole({ server, isPopout }: Props) {
             </div>
           )}
 
-          {/* Global chat / broadcast input */}
+          {/* Global chat input */}
           {connected && (
             <div className="flex items-center gap-1.5 shrink-0">
-              {/* Send type dropdown */}
-              <div className="relative shrink-0" ref={sendTypeMenuRef}>
-                <button type="button"
-                  className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg h-8"
-                  style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.25)", color: "var(--neon-purple)" }}
-                  onClick={() => setShowSendTypeMenu((v) => !v)}>
-                  {SEND_TYPES.find((t) => t.value === sendType)?.label ?? "Global Chat"}
-                  <ChevronDown className="w-3 h-3" />
-                </button>
-                {showSendTypeMenu && (
-                  <div className="absolute bottom-full left-0 mb-1 z-50 rounded-lg overflow-hidden py-1"
-                    style={{ background: "rgba(5,5,16,0.98)", border: "1px solid rgba(191,0,255,0.25)", minWidth: "120px" }}>
-                    {SEND_TYPES.map((t) => (
-                      <button key={t.value} type="button"
-                        className="w-full text-left text-xs px-3 py-1.5 hover:bg-white/5 transition-colors"
-                        style={{ color: t.value === sendType ? "var(--neon-purple)" : "var(--text-primary)" }}
-                        onClick={() => { setSendType(t.value as "ServerChat" | "Broadcast"); setShowSendTypeMenu(false); }}>
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
+              <span className="text-xs shrink-0 px-2 py-1.5 rounded-lg"
+                style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--neon-purple)" }}>
+                Global Chat
+              </span>
               <Input
                 className="h-8 text-xs flex-1"
-                placeholder={`${sendType === "ServerChat" ? "Global chat" : "Broadcast"} message…`}
+                placeholder="Send message to all players…"
                 value={msgInput}
                 onChange={(e) => setMsgInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && sendMessage()}

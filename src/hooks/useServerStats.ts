@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { tauriCmd } from "@/lib/tauri-commands";
+import { tauriCmd, type ArkPlayer } from "@/lib/tauri-commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { ServerRow } from "@/lib/db";
 
 export interface ServerStats {
@@ -71,40 +72,36 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     };
   }, [server?.pid, server?.status]);
 
-  // ── Source Query (players / version) — every 30 s ─────────────────────────
+  // ── Player count via RCON player-list events ──────────────────────────────
+  // The background task in lib.rs emits rcon://players/{id} every 60 s for
+  // every server with an active RCON connection. Use that instead of Source
+  // Query, which is unreliable on ASA.
+  useTauriEvent<ArkPlayer[]>(
+    server ? `rcon://players/${server.id}` : "",
+    (players) => {
+      setStats((prev) => ({
+        ...prev,
+        playersOnline: players.length,
+        maxPlayers: serverRef.current?.max_players ?? prev.maxPlayers,
+      }));
+    },
+  );
+
+  // Seed the player count immediately from the RCON cache when the server
+  // becomes running (avoids showing null for up to 60 s after RCON connects).
   useEffect(() => {
     if (!server || server.status !== "running") {
-      setStats((s) => ({ ...s, playersOnline: null, maxPlayers: null }));
+      setStats((s) => ({ ...s, playersOnline: null }));
       return;
     }
-
-    let cancelled = false;
-
-    const poll = async () => {
-      const s = serverRef.current;
-      if (!s || s.status !== "running") return;
-      try {
-        const qs = await tauriCmd.queryServer("127.0.0.1", s.query_port);
-        if (!cancelled) {
-          setStats((prev) => ({
-            ...prev,
-            playersOnline: qs.players,
-            maxPlayers: qs.maxPlayers,
-            version: qs.version || prev.version,
-          }));
-        }
-      } catch {
-        // Server may not have fully started yet or Source Query is unavailable.
-      }
-    };
-
-    poll();
-    const id = setInterval(poll, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [server?.id, server?.status]);
+    tauriCmd.rconGetCachedPlayers(server.id).then((players) => {
+      setStats((prev) => ({
+        ...prev,
+        playersOnline: players.length,
+        maxPlayers: server.max_players,
+      }));
+    }).catch(() => null);
+  }, [server?.id, server?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return stats;
 }

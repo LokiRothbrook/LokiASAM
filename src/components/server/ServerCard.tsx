@@ -242,8 +242,14 @@ export function ServerCard({ server }: Props) {
     try {
       await updateServerStatus(server.id, "stopping", server.pid);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      await tauriCmd.stopServer(server.id, true);
-      // Actual "stopped" status comes via the server://any-change event from Rust.
+      await tauriCmd.gracefulStopServer(
+        server.id,
+        server.rcon_port,
+        server.rcon_password,
+        server.shutdown_warn_players !== 0,
+        server.shutdown_warn_minutes ?? 5,
+        server.shutdown_message || "Server will shut down in {time}.",
+      );
     } catch (err) {
       toast.error(`Failed to stop ${server.name}`, { description: String(err) });
     } finally {

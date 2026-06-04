@@ -154,12 +154,16 @@ pub async fn rcon_send(
             .clone()
     };
 
-    // Log the command
-    emit_log(&app, &server_id, RconLogLine {
-        timestamp_ms: now_ms(),
-        text: format!("> {command}"),
-        kind: "command".into(),
-    }).await;
+    // Suppress internal housekeeping commands from the visible console.
+    let suppressed = matches!(command.to_lowercase().as_str(), "listplayers" | "getchat");
+
+    if !suppressed {
+        emit_log(&app, &server_id, RconLogLine {
+            timestamp_ms: now_ms(),
+            text: format!("> {command}"),
+            kind: "command".into(),
+        }).await;
+    }
 
     let mut conn = conn_arc.lock().await;
 
@@ -207,21 +211,17 @@ pub async fn rcon_send(
         }
     }
 
-    // Log the response
-    let resp_trimmed = response.trim().to_string();
-    if resp_trimmed.is_empty() {
-        emit_log(&app, &server_id, RconLogLine {
-            timestamp_ms: now_ms(),
-            text: "(no response)".into(),
-            kind: "system".into(),
-        }).await;
-    } else {
-        for line in resp_trimmed.lines() {
-            emit_log(&app, &server_id, RconLogLine {
-                timestamp_ms: now_ms(),
-                text: line.to_string(),
-                kind: "response".into(),
-            }).await;
+    // Log the response (suppressed commands get no log entry at all)
+    if !suppressed {
+        let resp_trimmed = response.trim().to_string();
+        if !resp_trimmed.is_empty() {
+            for line in resp_trimmed.lines() {
+                emit_log(&app, &server_id, RconLogLine {
+                    timestamp_ms: now_ms(),
+                    text: line.to_string(),
+                    kind: "response".into(),
+                }).await;
+            }
         }
     }
 
