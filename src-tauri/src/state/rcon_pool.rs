@@ -1,10 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot, Mutex};
 
-/// Packet type constants for Source RCON protocol.
+/// Packet type constants for the Source RCON protocol.
 pub const RCON_AUTH: i32 = 3;
 pub const RCON_AUTH_RESPONSE: i32 = 2;
 pub const RCON_EXECCOMMAND: i32 = 2;
@@ -89,22 +88,43 @@ pub struct CachedPlayer {
     pub player_id: String,
 }
 
-/// Global pool of live RCON connections, keyed by server UUID.
-/// Each connection has its own Mutex so the pool lock is never held during I/O.
+/// Command sent to a server's RCON manager task through its mpsc channel.
+pub enum RconCmd {
+    /// Execute an arbitrary RCON command and return the raw response.
+    Execute {
+        command: String,
+        /// When true, the "> command" log line is suppressed.
+        suppress_cmd: bool,
+        /// When true, response lines are not logged to the console.
+        suppress_resp: bool,
+        response_tx: oneshot::Sender<Result<String, String>>,
+    },
+    /// Run listplayers, update the player cache, emit rcon://players/{id}.
+    GetPlayers {
+        response_tx: oneshot::Sender<Result<Vec<CachedPlayer>, String>>,
+    },
+    /// Gracefully shut down the manager task and close the connection.
+    Disconnect,
+}
+
+/// Global pool of RCON manager state, keyed by server UUID.
 pub struct RconPool {
-    pub connections: Mutex<HashMap<String, Arc<Mutex<RconConn>>>>,
+    /// mpsc sender to each server's manager task.  Presence of a non-closed
+    /// sender is the authoritative "is connected" check.
+    pub cmd_channels: Mutex<HashMap<String, mpsc::Sender<RconCmd>>>,
     /// Rolling console log buffer per server, capped at 500 lines.
     pub log_buffer: Mutex<HashMap<String, VecDeque<RconLogLine>>>,
-    /// Server IDs that have an active GetChat poll subscriber (tab or pop-out open).
+    /// Server IDs that have an active GetChat poll subscriber (RCON tab open).
     pub chat_poll_active: Mutex<HashSet<String>>,
-    /// Last-known player list per server (refreshed every ~60 s).
+    /// Last-known player list per server.  A missing key means no data yet
+    /// (never connected this session); an empty Vec means 0 players online.
     pub player_cache: Mutex<HashMap<String, Vec<CachedPlayer>>>,
 }
 
 impl RconPool {
     pub fn new() -> Self {
         Self {
-            connections: Mutex::new(HashMap::new()),
+            cmd_channels: Mutex::new(HashMap::new()),
             log_buffer: Mutex::new(HashMap::new()),
             chat_poll_active: Mutex::new(HashSet::new()),
             player_cache: Mutex::new(HashMap::new()),
@@ -133,4 +153,28 @@ impl RconPool {
 /// On Linux we always run the Win64 dedicated server binary via Wine/Proton.
 pub fn bin_subdir() -> &'static str {
     "ShooterGame/Binaries/Win64"
+}
+
+/// Parse the raw `listplayers` response into a typed player list.
+///
+/// ASA response format (one player per line):
+/// `0. PlayerName, EOS_ID`
+pub fn parse_player_list(raw: &str) -> Vec<CachedPlayer> {
+    raw.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.to_lowercase().starts_with("no players") {
+                return None;
+            }
+            let after_dot = line.find(". ").map(|i| &line[i + 2..])?;
+            if let Some(comma) = after_dot.rfind(", ") {
+                let name = after_dot[..comma].trim().to_string();
+                let player_id = after_dot[comma + 2..].trim().to_string();
+                if !player_id.is_empty() {
+                    return Some(CachedPlayer { name, player_id });
+                }
+            }
+            None
+        })
+        .collect()
 }

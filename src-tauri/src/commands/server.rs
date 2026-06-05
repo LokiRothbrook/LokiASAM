@@ -1162,7 +1162,7 @@ pub async fn graceful_stop_server(
     // Clean up state
     state.stopping_servers.lock().unwrap().remove(&server_id);
     state.running_servers.lock().unwrap().remove(&server_id);
-    pool.connections.lock().await.remove(&server_id);
+    pool.cmd_channels.lock().await.remove(&server_id);
     pool.chat_poll_active.lock().await.remove(&server_id);
     pool.player_cache.lock().await.remove(&server_id);
 

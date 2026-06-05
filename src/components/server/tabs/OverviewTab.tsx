@@ -303,7 +303,6 @@ export function OverviewTab({ server }: Props) {
   const refreshPlayers = async () => {
     setPlayersLoading(true);
     try {
-      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
       const list = await tauriCmd.rconGetPlayers(server.id);
       setPlayers(list);
     } catch (err) {

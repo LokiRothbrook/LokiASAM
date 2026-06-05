@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { tauriCmd, type RconLogLine, type ArkPlayer } from "@/lib/tauri-commands";
+import { tauriCmd, type RconLogLine, type ArkPlayer, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { ServerRow } from "@/lib/db";
 
@@ -115,6 +115,22 @@ export function RconConsole({ server }: Props) {
     setPlayers(list);
   });
 
+  // ── Drive connected/disconnected state from Rust manager events ────────────
+  // This is the authoritative source of truth — no more inferring connection
+  // state from command errors.
+  useTauriEvent<RconStatusPayload>(`rcon://status/${server.id}`, (payload) => {
+    if (payload.status === "connected") {
+      setConnected(true);
+      setError(null);
+    } else if (payload.status === "connecting") {
+      setConnecting(true);
+    } else if (payload.status === "disconnected") {
+      setConnected(false);
+      setConnecting(false);
+      if (payload.error) setError(payload.error);
+    }
+  });
+
   // ── Load initial log buffer on mount ──────────────────────────────────────
   useEffect(() => {
     tauriCmd.rconGetLog(server.id).then((buf) => {
@@ -148,36 +164,35 @@ export function RconConsole({ server }: Props) {
     } catch { /* ignore */ }
   }, [server.install_path]);
 
-  // ── Connect / reconnect ───────────────────────────────────────────────────
+  // ── Manual reconnect (user presses "Reconnect" button) ───────────────────
+  // RconManager handles auto-connect; this is only needed for the manual button.
   const connect = useCallback(async () => {
     setConnecting(true);
     setError(null);
     try {
-      const already = await tauriCmd.rconIsConnected(server.id);
-      if (!already) {
-        await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
-      }
-      setConnected(true);
+      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
+      // State update comes via rcon://status/{id} event — no need to set here.
     } catch (e) {
-      const msg = String(e);
-      setError(msg);
-      setConnected(false);
-    } finally {
+      setError(String(e));
       setConnecting(false);
     }
   }, [server.id, server.rcon_port, server.rcon_password]);
 
+  // Sync initial connected state from Rust on mount (covers the case where
+  // RconManager already connected before this tab was opened).
   useEffect(() => {
-    if (server.status === "running") {
-      connect();
-    } else {
+    if (server.status !== "running") {
       setLines([{
         timestampMs: Date.now(),
         text: "Server is not running — start the server to use RCON.",
         kind: "system",
       }]);
+      return;
     }
-    // Do NOT disconnect on unmount — the connection persists for graceful shutdown etc.
+    tauriCmd.rconIsConnected(server.id).then((live) => {
+      setConnected(live);
+      if (!live) setError(null);
+    }).catch(() => null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -200,8 +215,7 @@ export function RconConsole({ server }: Props) {
     try {
       await tauriCmd.rconSend(server.id, trimmed);
     } catch {
-      setConnected(false);
-      setError("Connection lost");
+      // Connection state update comes via rcon://status/{id} event from Rust.
     } finally {
       setSending(false);
       cmdInputRef.current?.focus();

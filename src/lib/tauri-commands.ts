@@ -104,6 +104,16 @@ export interface RconLogLine {
   kind: "command" | "response" | "chat" | "system" | "error";
 }
 
+/** Emitted on rcon://status/{id} and rcon://status-any when connection state changes. */
+export interface RconStatusPayload {
+  serverId: string;
+  /** "connecting" | "connected" | "disconnected" */
+  status: string;
+  host?: string;
+  port?: number;
+  error?: string;
+}
+
 /**
  * Serialized INI configuration for a server.
  * `gameUserSettings` and `gameIni` are nested objects:
@@ -325,9 +335,9 @@ export const tauriCmd = {
   rconIsConnected: (serverId: string) => invoke<boolean>("rcon_is_connected", { serverId }),
   // RCON — players
   rconGetPlayers:       (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
-  rconGetCachedPlayers: (serverId: string) => invoke<ArkPlayer[]>("rcon_get_cached_players", { serverId }),
-  // RCON — chat
-  rconGetChat: (serverId: string) => invoke<string[]>("rcon_get_chat", { serverId }),
+  /** null = no RCON connection established yet; [] = connected but 0 players online. */
+  rconGetCachedPlayers: (serverId: string) => invoke<ArkPlayer[] | null>("rcon_get_cached_players", { serverId }),
+  // RCON — chat (polling is now internal to the Rust manager task)
   rconEnableChatPoll:  (serverId: string) => invoke<void>("rcon_enable_chat_poll", { serverId }),
   rconDisableChatPoll: (serverId: string) => invoke<void>("rcon_disable_chat_poll", { serverId }),
   // RCON — log buffer

@@ -1,61 +1,88 @@
 "use client";
 
 /**
- * RconManager — maintains RCON connections and a live player-count cache.
+ * RconManager — global side-effect component that maintains RCON connections.
  *
- * Every 30 s it:
- *   1. Queries the DB for servers currently in "running" state
- *   2. Connects RCON for any that don't have a live connection yet
- *   3. Calls rconGetPlayers for each — this fills the cache AND emits
- *      rcon://players/{id} events so stats tiles update without the RCON
- *      tab ever being opened
+ * Strategy:
+ *   1. On mount: attempt to connect all currently-running servers.
+ *   2. server://any-change → immediately connect when a server becomes "running".
+ *   3. rcon://status-any  → immediately reconnect when the Rust manager task
+ *      reports a disconnection for a server that is still running.
+ *   4. 60 s safety-net interval: catches any edge case where events were missed.
  *
- * No tracking ref is used so every tick naturally retries failed connections
- * without any special retry logic.
+ * The Rust manager task owns all polling (listplayers every 30 s, GetChat
+ * every 5 s).  This component only handles connection lifecycle.
  */
 
 import { useEffect } from "react";
 import { getServers } from "@/lib/db";
-import { tauriCmd } from "@/lib/tauri-commands";
+import { tauriCmd, type ServerStatus, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import type { ServerStatus } from "@/lib/tauri-commands";
 
-const POLL_MS = 30_000;
+const SAFETY_NET_MS = 60_000;
+
+async function connectServer(serverId: string, host: string, rconPort: number, rconPassword: string) {
+  try {
+    await tauriCmd.rconConnect(serverId, host, rconPort, rconPassword);
+  } catch {
+    // Server RCON not ready yet — the safety-net interval or next status event
+    // will retry automatically.
+  }
+}
 
 export function RconManager() {
+  // ── Initial connect for all running servers on mount ──────────────────────
   useEffect(() => {
-    const tick = async () => {
-      const servers = await getServers().catch(() => []);
+    getServers().then((servers) => {
       for (const s of servers) {
-        if (s.status !== "running") continue;
-        try {
-          const already = await tauriCmd.rconIsConnected(s.id);
-          if (!already) {
-            await tauriCmd.rconConnect(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
-            // Seed the player cache once on fresh connection. After this, the
-            // Rust 30 s background task owns the periodic listplayers polling.
-            // Calling it every JS tick would double-call the command and fight
-            // the background task for the connection mutex.
-            await tauriCmd.rconGetPlayers(s.id);
-          }
-          // Already connected: Rust background task handles the 30 s poll.
-        } catch {
-          // RCON not ready yet — next tick retries automatically.
+        if (s.status === "running") {
+          connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
         }
       }
-    };
-
-    tick();
-    const id = setInterval(tick, POLL_MS);
-    return () => clearInterval(id);
+    }).catch(() => null);
   }, []);
 
-  // Clean up the pool connection when a server stops so stale handles don't linger.
+  // ── React immediately when a server becomes "running" ─────────────────────
   useTauriEvent<ServerStatus>("server://any-change", (payload) => {
+    if (payload.status === "running") {
+      // Fetch the server row to get rcon_port and rcon_password.
+      getServers().then((servers) => {
+        const s = servers.find((srv) => srv.id === payload.serverId);
+        if (s) connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+      }).catch(() => null);
+    }
+
+    // Clean up the pool entry when the server stops.
     if (["stopped", "crashed", "start-failed"].includes(payload.status)) {
       tauriCmd.rconDisconnect(payload.serverId).catch(() => null);
     }
   });
+
+  // ── Reconnect when the Rust manager reports a disconnection ───────────────
+  useTauriEvent<RconStatusPayload>("rcon://status-any", (payload) => {
+    if (payload.status !== "disconnected") return;
+    getServers().then((servers) => {
+      const s = servers.find((srv) => srv.id === payload.serverId);
+      if (s && s.status === "running") {
+        connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+      }
+    }).catch(() => null);
+  });
+
+  // ── 60 s safety-net: reconnect any running server that lost its connection ─
+  useEffect(() => {
+    const id = setInterval(async () => {
+      const servers = await getServers().catch(() => []);
+      for (const s of servers) {
+        if (s.status !== "running") continue;
+        const connected = await tauriCmd.rconIsConnected(s.id).catch(() => false);
+        if (!connected) {
+          connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+        }
+      }
+    }, SAFETY_NET_MS);
+    return () => clearInterval(id);
+  }, []);
 
   return null;
 }
