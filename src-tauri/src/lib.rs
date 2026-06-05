@@ -50,24 +50,36 @@ fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let is_min = w.is_minimized().unwrap_or(false);
         if is_min {
-            let _ = w.unminimize();
+            // Wayland XDG Shell has no unminimize operation; maximize overrides it.
+            let _ = w.maximize();
         }
         let _ = w.show();
 
-        // set_focus() alone is blocked by focus-stealing prevention on X11 and
-        // most Wayland compositors (Cinnamon, GNOME, KDE, etc.).
-        // Workaround: briefly set always-on-top so the WM is forced to raise and
-        // present the window, then immediately restore normal z-order.
-        // The 50 ms pre-delay gives the WM time to finish processing unminimize/show
-        // before we try to raise. The 50 ms post-delay keeps the window pinned
-        // long enough for focus to land before we clear the flag.
         let w2 = w.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = w2.set_always_on_top(true);
+            // KDE/KWin leaves decoration buttons non-interactive after a hide→show
+            // cycle. Cycling through maximize state forces KWin to re-initialize
+            // button input regions. Only needed on KDE — other DEs handle remap fine.
+            #[cfg(target_os = "linux")]
+            let on_kde = std::env::var("XDG_CURRENT_DESKTOP")
+                .map(|v| v.to_uppercase().contains("KDE"))
+                .unwrap_or(false);
+            #[cfg(not(target_os = "linux"))]
+            let on_kde = false;
+
+            if on_kde {
+                let already_max = w2.is_maximized().unwrap_or(false);
+                if already_max {
+                    let _ = w2.unmaximize();
+                    tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                    let _ = w2.maximize();
+                } else {
+                    let _ = w2.maximize();
+                    tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                    let _ = w2.unmaximize();
+                }
+            }
             let _ = w2.set_focus();
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = w2.set_always_on_top(false);
         });
     }
     if let Some(tray_state) = app.try_state::<TrayMenuState>() {
