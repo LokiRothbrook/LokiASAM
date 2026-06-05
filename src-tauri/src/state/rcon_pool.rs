@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -109,9 +110,10 @@ pub enum RconCmd {
 
 /// Global pool of RCON manager state, keyed by server UUID.
 pub struct RconPool {
-    /// mpsc sender to each server's manager task.  Presence of a non-closed
-    /// sender is the authoritative "is connected" check.
-    pub cmd_channels: Mutex<HashMap<String, mpsc::Sender<RconCmd>>>,
+    /// mpsc sender + connection ID for each server's manager task.
+    /// The ID lets a stale manager task detect that a newer connection has
+    /// taken over, so it exits silently instead of clobbering the pool.
+    pub cmd_channels: Mutex<HashMap<String, (mpsc::Sender<RconCmd>, u64)>>,
     /// Rolling console log buffer per server, capped at 500 lines.
     pub log_buffer: Mutex<HashMap<String, VecDeque<RconLogLine>>>,
     /// Server IDs that have an active GetChat poll subscriber (RCON tab open).
@@ -119,6 +121,8 @@ pub struct RconPool {
     /// Last-known player list per server.  A missing key means no data yet
     /// (never connected this session); an empty Vec means 0 players online.
     pub player_cache: Mutex<HashMap<String, Vec<CachedPlayer>>>,
+    /// Monotonically increasing counter — each rcon_connect call gets a unique ID.
+    next_conn_id: AtomicU64,
 }
 
 impl RconPool {
@@ -128,7 +132,13 @@ impl RconPool {
             log_buffer: Mutex::new(HashMap::new()),
             chat_poll_active: Mutex::new(HashSet::new()),
             player_cache: Mutex::new(HashMap::new()),
+            next_conn_id: AtomicU64::new(1),
         }
+    }
+
+    /// Allocate the next connection ID (used by rcon_connect).
+    pub fn alloc_conn_id(&self) -> u64 {
+        self.next_conn_id.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn now_ms() -> u64 {
