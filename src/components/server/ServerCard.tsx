@@ -101,6 +101,7 @@ export function ServerCard({ server }: Props) {
   const noRetry = useAppStore((s) => !!s.noRetryServerIds[server.id]);
   const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
   const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
+  const isServerScanPending = useAppStore((s) => s.isServerScanPending);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -390,7 +391,7 @@ export function ServerCard({ server }: Props) {
             >
               {server.name}
             </h3>
-            <ServerStatusBadge status={server.status} />
+            <ServerStatusBadge status={isServerScanPending ? "detecting" : server.status} />
             {hasUpdateAvailable && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
@@ -568,6 +569,11 @@ export function ServerCard({ server }: Props) {
               Reinstall
             </Button>
           </>
+        ) : isServerScanPending ? (
+          <Button size="sm" disabled className="gap-1.5 flex-1">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Detecting...
+          </Button>
         ) : (
           <>
             {/* Start / Stop / Force Stop */}

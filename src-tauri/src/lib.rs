@@ -224,99 +224,6 @@ pub fn run() {
                     }
                 });
 
-            // ── Crash-monitor background task ──────────────────────────────
-            // Polls every 30 s for any PID in `running_servers` that has exited
-            // unexpectedly. This catches servers started in a previous app session
-            // that were re-registered via `register_running_server`, as well as
-            // any watcher-task gaps. For servers started in the current session
-            // the per-server watcher task in `start_server` provides instant
-            // detection; this loop acts as a safety net.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(std::time::Duration::from_secs(30));
-                // Skip the immediate first tick so we don't race with startup
-                // reconciliation on the frontend.
-                interval.tick().await;
-
-                loop {
-                    interval.tick().await;
-
-                    let app_state = handle.state::<state::AppState>();
-
-                    // Snapshot current entries to avoid holding the lock
-                    // across the sysinfo calls.
-                    let entries: Vec<(String, u32)> = {
-                        let registry = app_state.running_servers.lock().unwrap();
-                        registry
-                            .iter()
-                            .map(|(id, rs)| (id.clone(), rs.pid))
-                            .collect()
-                    };
-
-                    if entries.is_empty() {
-                        continue;
-                    }
-
-                    use sysinfo::{Pid, ProcessesToUpdate, System};
-                    let mut sys = System::new();
-
-                    for (server_id, pid) in &entries {
-                        let spid = Pid::from_u32(*pid);
-                        sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
-                        let alive = sys.process(spid).is_some();
-
-                        if !alive {
-                            let was_intentional = app_state
-                                .stopping_servers
-                                .lock()
-                                .unwrap()
-                                .remove(server_id);
-
-                            let confirmed_running = {
-                                let mut registry = app_state.running_servers.lock().unwrap();
-                                let confirmed = registry
-                                    .get(server_id)
-                                    .map_or(false, |rs| rs.confirmed_running);
-                                registry.remove(server_id);
-                                confirmed
-                            };
-
-                            let status_str = if was_intentional {
-                                "stopped"
-                            } else if confirmed_running {
-                                "crashed"
-                            } else {
-                                "start-failed"
-                            };
-
-                            let error_msg = if status_str == "start-failed" {
-                                Some("Server process exited before completing startup. Try disabling mods — if the problem persists, reinstall the server.".to_string())
-                            } else {
-                                None
-                            };
-
-                            let payload = commands::server::ServerStatus {
-                                server_id: server_id.clone(),
-                                status: status_str.into(),
-                                pid: None,
-                                uptime_seconds: None,
-                                error: error_msg,
-                            };
-
-                            let _ = handle.emit(
-                                &events::server_event(
-                                    events::SERVER_STATUS,
-                                    server_id,
-                                ),
-                                payload.clone(),
-                            );
-                            let _ = handle.emit(events::SERVER_ANY_CHANGE, payload);
-                        }
-                    }
-                }
-            });
-
             // ── Scheduler background task ──────────────────────────────────
             let scheduler_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -491,7 +398,7 @@ pub fn run() {
             commands::server::restart_server,
             commands::server::graceful_stop_server,
             commands::server::get_server_status,
-            commands::server::register_running_server,
+            commands::server::scan_running_servers,
             commands::server::clone_server,
             commands::server::delete_server,
             // SteamCMD / installation

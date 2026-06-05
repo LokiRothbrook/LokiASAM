@@ -38,6 +38,11 @@ interface AppState {
    */
   unreadBump: number;
 
+  /** True while the startup process scan is running. All server action buttons
+   *  are disabled and the status badge shows "Detecting..." during this window. */
+  isServerScanPending: boolean;
+  setIsServerScanPending: (v: boolean) => void;
+
   /**
    * Wall-clock timestamp (ms since epoch) when each server process first started.
    * Keyed by server ID.  Set when the first "starting" event arrives; cleared on
@@ -87,6 +92,8 @@ export const useAppStore = create<AppState>((set) => ({
   verifyTotal: 0,
   verifyProgress: 0,
   unreadBump: 0,
+  isServerScanPending: false,
+  setIsServerScanPending: (v) => set({ isServerScanPending: v }),
   serverStartTimes: {},
   setServerStartTime: (id, ts) =>
     set((s) => ({ serverStartTimes: { ...s.serverStartTimes, [id]: ts } })),

@@ -8,7 +8,7 @@ import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
 import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getTransitioningServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
+import { getServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
 import { runPerServerUpdateCheck } from "@/lib/update-utils";
 import { dispatchNotification } from "@/lib/notifications";
@@ -170,34 +170,49 @@ function UpdateStatusChip() {
 // ---------------------------------------------------------------------------
 
 /**
- * On mount, reconcile servers that were left in a transitioning state
- * ('running' or 'starting') from a previous app session.
+ * On mount, scan OS processes for each configured server by install path.
+ * The OS is the source of truth — stored status and PID are ignored.
+ *   - process found  → "running" with the discovered PID; registered in crash monitor
+ *   - process absent → "stopped" (covers crashed, never-started, and manually-stopped)
  *
- * For each server, the stored PID is checked against live OS processes:
- *   - alive PID  → re-register in the Rust crash-monitor map; status unchanged
- *   - dead PID, was "running"  → "crashed" (was running, died while app was closed)
- *   - dead PID, was "starting" → "stopped" (never confirmed running; clean slate)
+ * This also handles servers started outside the app: if the user launched the
+ * game process manually before opening the manager, it is detected and tracked.
  */
 function useStartupReconciliation() {
   const queryClient = useQueryClient();
+  const { setIsServerScanPending } = useAppStore();
 
   useEffect(() => {
+    setIsServerScanPending(true);
     (async () => {
       try {
-        const transitioning = await getTransitioningServers();
-        if (!transitioning.length) return;
+        const servers = await getServers();
+
+        if (!servers.length) return;
+
+        const entries = servers.map((s) => ({ serverId: s.id, installPath: s.install_path }));
+
+        let results: Array<{ serverId: string; pid: number | null }>;
+        try {
+          results = await tauriCmd.scanRunningServers(entries);
+        } catch {
+          // Tauri not available (dev browser preview) — skip.
+          return;
+        }
 
         await Promise.all(
-          transitioning.map(async (s) => {
-            if (!s.pid) return;
-            try {
-              const alive = await tauriCmd.registerRunningServer(s.id, s.pid, s.install_path);
-              if (!alive) {
-                const deadStatus = s.status === "running" ? "crashed" : "stopped";
-                await updateServerStatus(s.id, deadStatus, null);
+          results.map(async (r) => {
+            const current = servers.find((s) => s.id === r.serverId);
+            if (!current) return;
+
+            if (r.pid != null) {
+              if (current.status !== "running" || current.pid !== r.pid) {
+                await updateServerStatus(r.serverId, "running", r.pid);
               }
-            } catch {
-              // Tauri not available (dev browser preview) — skip.
+            } else {
+              if (current.status !== "stopped") {
+                await updateServerStatus(r.serverId, "stopped", null);
+              }
             }
           })
         );
@@ -205,6 +220,8 @@ function useStartupReconciliation() {
         queryClient.invalidateQueries({ queryKey: ["servers"] });
       } catch {
         // Non-fatal.
+      } finally {
+        setIsServerScanPending(false);
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

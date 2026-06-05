@@ -241,10 +241,10 @@ export const tauriCmd = {
     invoke<number>("restart_server", { params, graceful }),
   getServerStatus: (serverId: string) =>
     invoke<ServerStatus>("get_server_status", { serverId }),
-  /** Re-register a PID from a previous session. Returns false if the process
-   *  already exited (crashed while the app was closed). */
-  registerRunningServer: (serverId: string, pid: number, installPath: string) =>
-    invoke<boolean>("register_running_server", { serverId, pid, installPath }),
+  /** Scan for running ASA server processes by install path. Returns the live
+   *  PID for each server found, or null if not running. */
+  scanRunningServers: (servers: Array<{ serverId: string; installPath: string }>) =>
+    invoke<Array<{ serverId: string; pid: number | null }>>("scan_running_servers", { servers }),
   /**
    * Copy server installation files from sourceInstallPath to destInstallPath.
    * ShooterGame/Saved is excluded so player data is not carried over.

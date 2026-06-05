@@ -86,6 +86,7 @@ export function OverviewTab({ server }: Props) {
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
+  const isServerScanPending = useAppStore((s) => s.isServerScanPending);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -323,7 +324,12 @@ export function OverviewTab({ server }: Props) {
         <span className="text-sm font-medium mr-2" style={{ color: "var(--text-muted)" }}>
           Actions
         </span>
-        {isStartFailed ? (
+        {isServerScanPending ? (
+          <Button size="sm" disabled className="gap-1.5">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Detecting...
+          </Button>
+        ) : isStartFailed ? (
           <>
             <Button
               size="sm"
@@ -401,7 +407,7 @@ export function OverviewTab({ server }: Props) {
             {server.status === "starting" ? "Starting…" : "Start"}
           </Button>
         )}
-        {isRunning && (
+        {isRunning && !isServerScanPending && (
           <Button
             size="sm"
             variant="outline"

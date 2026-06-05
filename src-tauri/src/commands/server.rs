@@ -850,37 +850,131 @@ pub async fn get_server_status(
     }
 }
 
-/// Register a server PID from a previous app session in the running_servers map
-/// so the crash-monitor 30 s polling loop can watch it.
+/// Scan for running ASA server processes on app startup.
 ///
-/// Returns `true` if the process is alive, `false` if it has already exited
-/// (i.e., it crashed while the app was closed — the frontend should mark it
-/// "crashed" in SQLite).
+/// For each entry, scans the OS for a matching game process by install path.
+/// Servers that are found are registered in the running map and get a dedicated
+/// watcher task that fires a crash event within ~5 s of the process dying.
+/// Returns the live PID for each server found, or null if not running.
+/// This replaces stored-PID reconciliation — the OS is the source of truth.
 #[tauri::command]
-pub async fn register_running_server(
+pub async fn scan_running_servers(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    server_id: String,
-    pid: u32,
-    install_path: String,
-) -> Result<bool, String> {
-    if pid_alive(pid) {
-        let mut registry = state.running_servers.lock().unwrap();
-        registry.insert(
-            server_id,
-            crate::state::RunningServer {
-                pid,
-                // started_at is approximate for re-registered servers; uptime
-                // will read from SQLite updated_at on the frontend instead.
-                started_at: Instant::now(),
-                install_path,
-                // A re-registered server was already running before the app restarted.
-                confirmed_running: true,
-            },
-        );
-        Ok(true)
-    } else {
-        Ok(false)
+    servers: Vec<ScanEntry>,
+) -> Result<Vec<ScanResult>, String> {
+    let mut results = Vec::new();
+
+    for entry in servers {
+        let pid = find_server_process(&entry.install_path);
+
+        if let Some(pid) = pid {
+            {
+                let mut registry = state.running_servers.lock().unwrap();
+                registry.insert(
+                    entry.server_id.clone(),
+                    crate::state::RunningServer {
+                        pid,
+                        started_at: Instant::now(),
+                        install_path: entry.install_path,
+                        confirmed_running: true,
+                    },
+                );
+            }
+
+            let handle = app_handle.clone();
+            let sid = entry.server_id.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    let app_state = handle.state::<AppState>();
+
+                    // stop_server removes the entry — if it's gone, exit cleanly.
+                    if !app_state.running_servers.lock().unwrap().contains_key(&sid) {
+                        break;
+                    }
+
+                    if !pid_alive(pid) {
+                        let was_intentional = app_state
+                            .stopping_servers
+                            .lock()
+                            .unwrap()
+                            .remove(&sid);
+
+                        app_state.running_servers.lock().unwrap().remove(&sid);
+
+                        let status = if was_intentional { "stopped" } else { "crashed" };
+                        let payload = ServerStatus {
+                            server_id: sid.clone(),
+                            status: status.into(),
+                            pid: None,
+                            uptime_seconds: None,
+                            error: None,
+                        };
+
+                        let _ = handle.emit(
+                            &events::server_event(events::SERVER_STATUS, &sid),
+                            payload.clone(),
+                        );
+                        let _ = handle.emit(events::SERVER_ANY_CHANGE, payload);
+                        break;
+                    }
+                }
+            });
+        }
+
+        results.push(ScanResult { server_id: entry.server_id, pid });
     }
+
+    Ok(results)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanEntry {
+    pub server_id: String,
+    pub install_path: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResult {
+    pub server_id: String,
+    pub pid: Option<u32>,
+}
+
+/// Find a running ASA server process by install path.
+/// Linux: procfs cmdline scan finds the Wine game process even when re-parented.
+/// Windows: sysinfo exe-path scan finds ArkAscendedServer.exe directly.
+#[cfg(target_os = "linux")]
+fn find_server_process(install_path: &str) -> Option<u32> {
+    super::utils::find_game_process_pid(install_path)
+}
+
+#[cfg(target_os = "windows")]
+fn find_server_process(install_path: &str) -> Option<u32> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    if install_path.is_empty() {
+        return None;
+    }
+
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+
+    let base = install_path.trim_end_matches('\\').trim_end_matches('/').to_lowercase();
+
+    for (pid, proc) in sys.processes() {
+        let exe = proc
+            .exe()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if exe.starts_with(&base) && exe.contains("arkascendedserver") {
+            return Some(pid.as_u32());
+        }
+    }
+    None
 }
 
 /// Delete a server from disk (optionally) and clean up in-memory state.

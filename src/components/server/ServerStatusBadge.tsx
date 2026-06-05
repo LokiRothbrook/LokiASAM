@@ -10,7 +10,8 @@ export type ServerStatusValue =
   | "crashed"
   | "installing"
   | "install_failed"
-  | "start-failed";
+  | "start-failed"
+  | "detecting";
 
 interface StatusConfig {
   label: string;
@@ -29,6 +30,7 @@ const STATUS_MAP: Record<ServerStatusValue, StatusConfig> = {
   installing:     { label: "Installing",      color: "var(--neon-purple)", pulse: true  },
   install_failed: { label: "Install Failed",  color: "var(--neon-red)",    pulse: false },
   "start-failed": { label: "Start Failed",    color: "var(--neon-red)",    pulse: false },
+  detecting:      { label: "Detecting...",    color: "var(--text-muted)",  pulse: true  },
 };
 
 interface Props {
