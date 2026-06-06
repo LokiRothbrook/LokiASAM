@@ -125,9 +125,12 @@ export default function ServerDetailPage() {
   const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   return (
-    <div className="flex flex-col gap-6">
+    // When the RCON tab is active the root div fills main's content area exactly
+    // so the log scrolls internally without creating a page-level scrollbar.
+    // Other tabs keep normal flow (gap-6, no height constraint).
+    <div className={`flex flex-col gap-6${activeTab === "rcon" ? " h-full overflow-hidden" : ""}`}>
       {/* ── Header ── */}
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-3 shrink-0">
         <Button
           asChild
           variant="ghost"
@@ -158,7 +161,7 @@ export default function ServerDetailPage() {
 
       {/* ── Tab bar ── */}
       <div
-        className="flex gap-1 p-1 rounded-xl flex-wrap"
+        className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
         style={{
           background: "rgba(0,0,0,0.4)",
           border: "1px solid rgba(191,0,255,0.15)",
@@ -189,11 +192,9 @@ export default function ServerDetailPage() {
 
       {/* ── Tab content ── */}
       {activeTab === "rcon" ? (
-        // RCON console fills all remaining viewport height so the log scrolls
-        // internally rather than pushing the page. The magic number accounts for
-        // TopBar (57 px) + page padding-top (24 px) + header block (~90 px) +
-        // tab bar (~46 px) + gap (8 px) + page padding-bottom (24 px) = ~249 px.
-        <div style={{ height: "calc(100vh - 249px)" }} className="mt-2">
+        // flex-1 min-h-0: fills the remaining height in the h-full flex container
+        // without overflowing. The RconConsole scrolls the log internally.
+        <div className="flex-1 min-h-0">
           <RconTab server={server} />
         </div>
       ) : (

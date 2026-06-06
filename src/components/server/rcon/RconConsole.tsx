@@ -200,7 +200,7 @@ export function RconConsole({ server }: Props) {
   // Subsequent updates come from rcon://players/{id} events via RconManager's 30 s tick.
   useEffect(() => {
     if (!connected) return;
-    tauriCmd.rconGetCachedPlayers(server.id).then(setPlayers).catch(() => null);
+    tauriCmd.rconGetCachedPlayers(server.id).then((p) => { if (p !== null) setPlayers(p); }).catch(() => null);
     refreshLists();
   }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
 
