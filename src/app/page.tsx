@@ -8,7 +8,7 @@ import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
 import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
 import { runPerServerUpdateCheck } from "@/lib/update-utils";
 import { dispatchNotification } from "@/lib/notifications";
@@ -165,70 +165,7 @@ function UpdateStatusChip() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Startup reconciliation
-// ---------------------------------------------------------------------------
-
-/**
- * On mount, scan OS processes for each configured server by install path.
- * The OS is the source of truth — stored status and PID are ignored.
- *   - process found  → "running" with the discovered PID; registered in crash monitor
- *   - process absent → "stopped" (covers crashed, never-started, and manually-stopped)
- *
- * This also handles servers started outside the app: if the user launched the
- * game process manually before opening the manager, it is detected and tracked.
- */
-function useStartupReconciliation() {
-  const queryClient = useQueryClient();
-  const { setIsServerScanPending } = useAppStore();
-
-  useEffect(() => {
-    setIsServerScanPending(true);
-    (async () => {
-      try {
-        const servers = await getServers();
-
-        if (!servers.length) return;
-
-        const entries = servers.map((s) => ({ serverId: s.id, installPath: s.install_path }));
-
-        let results: Array<{ serverId: string; pid: number | null }>;
-        try {
-          results = await tauriCmd.scanRunningServers(entries);
-        } catch {
-          // Tauri not available (dev browser preview) — skip.
-          return;
-        }
-
-        await Promise.all(
-          results.map(async (r) => {
-            const current = servers.find((s) => s.id === r.serverId);
-            if (!current) return;
-
-            if (r.pid != null) {
-              if (current.status !== "running" || current.pid !== r.pid) {
-                await updateServerStatus(r.serverId, "running", r.pid);
-              }
-            } else {
-              if (current.status !== "stopped") {
-                await updateServerStatus(r.serverId, "stopped", null);
-              }
-            }
-          })
-        );
-
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-      } catch {
-        // Non-fatal.
-      } finally {
-        setIsServerScanPending(false);
-      }
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-}
-
 export default function DashboardPage() {
-  useStartupReconciliation();
 
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard } = useAppStore();

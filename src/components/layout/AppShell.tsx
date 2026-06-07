@@ -11,6 +11,7 @@ import { NotificationManager } from "@/components/layout/NotificationManager";
 import { UpdateManager } from "@/components/layout/UpdateManager";
 import { CloseWarningManager } from "@/components/layout/CloseWarningManager";
 import { RconManager } from "@/components/layout/RconManager";
+import { StartupReconciliationManager } from "@/components/layout/StartupReconciliationManager";
 import { Toaster } from "sonner";
 
 const toasterOptions = {
@@ -32,6 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <UpdateManager />
         <CloseWarningManager />
         <RconManager />
+        <StartupReconciliationManager />
         <Toaster position="bottom-right" toastOptions={toasterOptions} />
         <div className="flex h-full">
           <Sidebar />

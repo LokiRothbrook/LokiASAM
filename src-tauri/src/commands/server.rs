@@ -47,6 +47,40 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Remove Steam/Wine/Proton diagnostic noise from stderr before surfacing it
+/// as a start-failed error. These lines are emitted unconditionally by the
+/// runtime and contain no actionable information for the user.
+fn filter_steam_noise(s: &str) -> String {
+    let noisy_prefixes = [
+        "ProtonFixes",
+        "wineserver:",
+        "WARNING: radv",
+        "WARNING: ANV",
+        "wine: ",
+        "wine64: ",
+        "fsync:",
+        "esync:",
+    ];
+    let noisy_contains = ["minidumps folder is set to", "NTSync up and running"];
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|line| {
+            let l = line.trim();
+            if l.is_empty() {
+                return false;
+            }
+            if noisy_prefixes.iter().any(|p| l.starts_with(p)) {
+                return false;
+            }
+            if noisy_contains.iter().any(|p| l.contains(p)) {
+                return false;
+            }
+            true
+        })
+        .collect();
+    lines.join("\n")
+}
+
 /// Full parameter set for starting an ASA dedicated server.
 /// The frontend reads all values from SQLite and passes them here — Rust does
 /// no DB access of its own.
@@ -437,12 +471,12 @@ async fn inner_start_server_with_state(
         // On Linux with the Steam Runtime, Proton (a Python script) hands the
         // Wine process off to the container daemon and exits — this is NORMAL.
         // The game continues under a different PID.  Before declaring a start
-        // failure, scan /proc for up to 30 s to see if the game process appears.
-        // If it does, update the tracked PID and let the log-watcher task handle
-        // the "running" transition.
+        // failure, scan /proc for up to 10 s (20 × 500 ms) to see if the game
+        // process appears. If it does, update the tracked PID and let the
+        // log-watcher task handle the "running" transition.
         #[cfg(target_os = "linux")]
         {
-            for i in 0..30u32 {
+            for i in 0..20u32 {
                 if let Some(game_pid) =
                     super::utils::find_game_process_pid(&install_path_watcher)
                 {
@@ -456,8 +490,8 @@ async fn inner_start_server_with_state(
                     // The log-watcher task will emit "running" when the ready line appears.
                     return;
                 }
-                if i < 29 {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                if i < 19 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
         }
@@ -465,10 +499,11 @@ async fn inner_start_server_with_state(
         // ── Genuine start failure ─────────────────────────────────────────────
         app_state.running_servers.lock().unwrap().remove(&sid);
         let cleaned = strip_ansi(raw_stderr.trim());
-        let trimmed = if cleaned.len() > 800 {
-            format!("\u{2026}{}", &cleaned[cleaned.len() - 800..])
+        let filtered = filter_steam_noise(&cleaned);
+        let trimmed = if filtered.len() > 800 {
+            format!("\u{2026}{}", &filtered[filtered.len() - 800..])
         } else {
-            cleaned
+            filtered
         };
         emit_status(&handle_clone, &ServerStatus {
             server_id: sid,
