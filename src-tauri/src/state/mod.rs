@@ -1,6 +1,7 @@
 pub mod log_watcher;
 pub mod rcon_pool;
 pub mod scheduler;
+pub mod stats_recorder;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Arc, Mutex};

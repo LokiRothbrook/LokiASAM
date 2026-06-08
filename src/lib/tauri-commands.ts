@@ -454,6 +454,9 @@ export const tauriCmd = {
     invoke<string>("move_base_dir", { oldDir, newDir, createBackup }),
   getProcessStats:    (pid: number, installPath?: string) => invoke<ProcessStats>("get_process_stats", { pid, installPath: installPath ?? null }),
   getPlatform:        () => invoke<string>("get_platform"),
+  /** Open the Rust-side stats recorder DB connection at the given absolute path.
+   *  Must be called after initDb() has run all migrations on the same file. */
+  initStatsRecorder:  (dbPath: string) => invoke<void>("init_stats_recorder", { dbPath }),
   /** Tell the backend whether first-time setup is complete.
    *  Controls close-to-tray: if not done, the X button exits the process. */
   setSetupComplete:   (complete: boolean) => invoke<void>("set_setup_complete", { complete }),

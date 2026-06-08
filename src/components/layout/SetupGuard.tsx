@@ -60,6 +60,8 @@ export function SetupGuard({ children }: SetupGuardProps) {
         const dbPath = bootstrap.baseDir.replace(/[/\\]$/, "") +
           sep + "lokiasam" + sep + "lokiasam.db";
         await initDb(dbPath);
+        // Open a separate Rust-side connection for the background stats recorder.
+        tauriCmd.initStatsRecorder(dbPath).catch(() => null);
 
         const [value, accent, closeToTraySetting] = await Promise.all([
           getAppSetting("setup_complete"),

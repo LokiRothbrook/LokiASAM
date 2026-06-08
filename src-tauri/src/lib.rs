@@ -152,6 +152,7 @@ pub fn run() {
             app.manage(state::rcon_pool::RconPool::new());
             app.manage(state::log_watcher::LogWatcherState::new());
             app.manage(state::scheduler::SchedulerState::new());
+            app.manage(state::stats_recorder::StatsRecorderState::new());
 
             // ── System tray ───────────────────────────────────────────────
             // Window starts visible, so "Bring to Front" is the correct initial label.
@@ -236,6 +237,149 @@ pub fn run() {
                 }
             });
 
+            // ── Stats recorder background task ─────────────────────────────
+            // Polls all running servers every 5 s.  On every poll:
+            //   - Emits "stats://live" so the frontend live buffer stays current.
+            //   - Writes a raw sample to server_stats_history every 12th poll (60 s).
+            //   - Opens / closes server_uptime_sessions when servers start / stop.
+            // Waits until the frontend calls init_stats_recorder (which opens the
+            // rusqlite connection) before doing any DB work.
+            let stats_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::collections::{HashMap, HashSet};
+
+                let mut poll_counters: HashMap<String, u32> = HashMap::new();
+                let mut prev_active: HashSet<String> = HashSet::new();
+                let mut open_sessions: HashMap<String, String> = HashMap::new();
+                let mut rollup_done = false;
+                let mut last_rollup = tokio::time::Instant::now();
+
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(5));
+                interval.set_missed_tick_behavior(
+                    tokio::time::MissedTickBehavior::Skip,
+                );
+                interval.tick().await; // consume the immediate first tick
+
+                loop {
+                    interval.tick().await;
+
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+
+                    let recorder = stats_handle
+                        .state::<state::stats_recorder::StatsRecorderState>();
+
+                    if !recorder.is_ready() {
+                        continue;
+                    }
+
+                    // Initial rollup on first ready tick; then every 24 h.
+                    if !rollup_done {
+                        rollup_done = true;
+                        last_rollup = tokio::time::Instant::now();
+                        recorder.run_rollup(now_ms);
+                    } else if last_rollup.elapsed()
+                        >= std::time::Duration::from_secs(24 * 60 * 60)
+                    {
+                        last_rollup = tokio::time::Instant::now();
+                        recorder.run_rollup(now_ms);
+                    }
+
+                    // Snapshot running servers.
+                    let app_state = stats_handle.state::<state::AppState>();
+                    let servers: Vec<(String, u32, String)> = {
+                        let lock = app_state.running_servers.lock().unwrap();
+                        lock.iter()
+                            .map(|(id, rs)| {
+                                (id.clone(), rs.pid, rs.install_path.clone())
+                            })
+                            .collect()
+                    };
+                    let active_now: HashSet<String> =
+                        servers.iter().map(|(id, _, _)| id.clone()).collect();
+
+                    // Open uptime sessions for newly-started servers.
+                    for id in active_now.difference(&prev_active) {
+                        let session_id = uuid::Uuid::new_v4().to_string();
+                        open_sessions.insert(id.clone(), session_id.clone());
+                        recorder.open_uptime_session(id, &session_id, now_ms);
+                    }
+                    // Close uptime sessions for servers that stopped.
+                    for id in prev_active.difference(&active_now) {
+                        if let Some(sid) = open_sessions.remove(id) {
+                            recorder.close_uptime_session(&sid, now_ms);
+                        }
+                        poll_counters.remove(id);
+                    }
+                    prev_active = active_now;
+
+                    // Sample all active servers concurrently so the 200 ms
+                    // CPU-delta sleeps inside get_process_stats overlap.
+                    let rcon_pool =
+                        stats_handle.state::<state::rcon_pool::RconPool>();
+                    let mut tasks = tokio::task::JoinSet::new();
+
+                    for (server_id, pid, install_path) in &servers {
+                        let server_id = server_id.clone();
+                        let pid = *pid;
+                        let install_path = install_path.clone();
+                        // Snapshot player count without holding the lock inside the task.
+                        let player_count: Option<i32> = rcon_pool
+                            .player_cache
+                            .lock()
+                            .await
+                            .get(&server_id)
+                            .map(|v| v.len() as i32);
+
+                        tasks.spawn(async move {
+                            let ps =
+                                commands::system::get_process_stats(
+                                    pid,
+                                    Some(install_path),
+                                )
+                                .await
+                                .ok();
+                            (server_id, ps, player_count)
+                        });
+                    }
+
+                    while let Some(Ok((server_id, ps, players))) =
+                        tasks.join_next().await
+                    {
+                        let cpu = ps.as_ref().map(|s| s.cpu_percent);
+                        let mem = ps.as_ref().map(|s| s.memory_mb);
+
+                        let _ = stats_handle.emit(
+                            "stats://live",
+                            serde_json::json!({
+                                "serverId": server_id,
+                                "ts":       now_ms,
+                                "cpu":      cpu,
+                                "mem":      mem,
+                                "players":  players,
+                            }),
+                        );
+
+                        // Write raw sample every 12th poll (~60 s).
+                        let count =
+                            poll_counters.entry(server_id.clone()).or_insert(0);
+                        *count += 1;
+                        if *count % 12 == 0 {
+                            recorder.insert_stat_sample(
+                                &server_id,
+                                now_ms,
+                                cpu,
+                                mem,
+                                players,
+                            );
+                        }
+                    }
+                }
+            });
+
             // RCON chat and player polling are now handled inside per-server
             // manager tasks spawned by rcon_connect.  No background tasks needed here.
 
@@ -300,6 +444,8 @@ pub fn run() {
             commands::mods::close_mod_browser,
             commands::mods::start_mod_verification,
             commands::mods::close_mod_verify,
+            // Stats recorder
+            commands::stats::init_stats_recorder,
             // System stats
             commands::system::check_appimage_integration,
             commands::system::install_appimage_integration,
