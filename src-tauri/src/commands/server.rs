@@ -321,14 +321,6 @@ async fn inner_start_server_with_state(
         cmd.env_remove("PYTHONPATH");
     }
 
-    // Archive any existing ShooterGame.log to central LokiASAM log storage before
-    // launching so the fresh session always starts from byte 0.
-    let did_rotate = LogManagerState::archive_all_server_logs(
-        app_handle,
-        &params.server_id,
-        &params.install_path,
-    ).await;
-
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -413,6 +405,7 @@ async fn inner_start_server_with_state(
         // ── Intentional stop ─────────────────────────────────────────────────
         if was_intentional {
             app_state.running_servers.lock().unwrap().remove(&sid);
+            LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
             emit_status(&handle_clone, &ServerStatus {
                 server_id: sid, status: "stopped".into(),
                 pid: None, uptime_seconds: None, error: None,
@@ -423,6 +416,7 @@ async fn inner_start_server_with_state(
         // ── Runtime crash (was confirmed running) ────────────────────────────
         if confirmed_clone.load(Ordering::Relaxed) {
             app_state.running_servers.lock().unwrap().remove(&sid);
+            LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
             emit_status(&handle_clone, &ServerStatus {
                 server_id: sid, status: "crashed".into(),
                 pid: None, uptime_seconds: None, error: None,
@@ -461,6 +455,7 @@ async fn inner_start_server_with_state(
 
         // ── Genuine start failure ─────────────────────────────────────────────
         app_state.running_servers.lock().unwrap().remove(&sid);
+        LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
         let cleaned = strip_ansi(raw_stderr.trim());
         let filtered = filter_steam_noise(&cleaned);
         let trimmed = if filtered.len() > 800 {
@@ -604,11 +599,8 @@ async fn inner_start_server_with_state(
         };
 
         // ── Wait for the fresh log file to appear ────────────────────────────
-        // We rotated any pre-existing ShooterGame.log before spawning, so the
-        // first file to appear at this path belongs to the current session.
-        // Read from byte 0 — no need for inode detection or seek-to-end.
-        // If rotation failed (permissions, locked file), did_rotate is false
-        // and we seek to end to skip stale content from the previous session.
+        // Rotation happens on stop/crash/startup, so by the time the server
+        // starts there is no pre-existing ShooterGame.log. Read from byte 0.
         let file = loop {
             if Instant::now() >= deadline { return; }
 
@@ -626,12 +618,6 @@ async fn inner_start_server_with_state(
             }
         };
 
-        let mut file = file;
-        if !did_rotate {
-            // Rotation failed — old file is still in place. Seek past stale
-            // content so we don't false-positive on a READY_MSG from a prior run.
-            let _ = file.seek(SeekFrom::End(0)).await;
-        }
         let mut reader = BufReader::new(file);
         let mut buf = String::new();
 
@@ -862,11 +848,14 @@ pub async fn scan_running_servers(
     servers: Vec<ScanEntry>,
 ) -> Result<Vec<ScanResult>, String> {
     let mut results = Vec::new();
+    let mut to_rotate: Vec<(String, String)> = Vec::new();
 
     for entry in servers {
         let pid = find_server_process(&entry.install_path);
 
         if let Some(pid) = pid {
+            // Keep a copy of install_path for the watcher closure before it's moved.
+            let install_path_watcher = entry.install_path.clone();
             {
                 let mut registry = state.running_servers.lock().unwrap();
                 registry.insert(
@@ -902,6 +891,10 @@ pub async fn scan_running_servers(
 
                         app_state.running_servers.lock().unwrap().remove(&sid);
 
+                        // Rotate logs before announcing the status change so the
+                        // frontend can display the archived last-session log immediately.
+                        LogManagerState::archive_all_server_logs(&handle, &sid, &install_path_watcher).await;
+
                         let status = if was_intentional { "stopped" } else { "crashed" };
                         let payload = ServerStatus {
                             server_id: sid.clone(),
@@ -920,9 +913,18 @@ pub async fn scan_running_servers(
                     }
                 }
             });
+        } else {
+            // Not running — schedule for startup rotation.
+            to_rotate.push((entry.server_id.clone(), entry.install_path.clone()));
         }
 
         results.push(ScanResult { server_id: entry.server_id, pid });
+    }
+
+    // Rotate all stopped servers before returning so the scan-complete signal
+    // only reaches the frontend after logs are already in central storage.
+    for (server_id, install_path) in to_rotate {
+        LogManagerState::archive_all_server_logs(&app_handle, &server_id, &install_path).await;
     }
 
     Ok(results)
@@ -1163,6 +1165,11 @@ pub async fn graceful_stop_server(
     pool.cmd_channels.lock().await.remove(&server_id);
     pool.chat_poll_active.lock().await.remove(&server_id);
     pool.player_cache.lock().await.remove(&server_id);
+
+    // Rotate logs now that the process is confirmed dead. Covers servers that
+    // were found running at startup (watched by the scan watcher which exits
+    // cleanly when running_servers is cleared above, bypassing its rotation).
+    LogManagerState::archive_all_server_logs(&app_handle, &server_id, &install_path).await;
 
     emit_status(&app_handle, &ServerStatus {
         server_id,

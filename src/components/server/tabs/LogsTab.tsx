@@ -134,12 +134,33 @@ function ScrollBanner({ onClick }: { onClick: () => void }) {
 // ---------------------------------------------------------------------------
 
 function LivePanel({ server }: { server: ServerRow }) {
+  const isActive = server.status === "running" || server.status === "starting";
+
   const [lines, setLines] = useState<LogLine[]>([]);
   const [filter, setFilter] = useState<LevelFilter>("all");
   const [search, setSearch] = useState("");
   const [ready, setReady] = useState(false);
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [lastSessionFilename, setLastSessionFilename] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const loadLastSession = useCallback(async () => {
+    try {
+      const archives = await tauriCmd.listArchivedLogs(server.id);
+      if (archives.length === 0) {
+        setLastSessionFilename(null);
+        setLines([]);
+        return;
+      }
+      const latest = archives[archives.length - 1];
+      setLastSessionFilename(latest.filename);
+      const content = await tauriCmd.readArchivedLog(server.id, latest.filename, 0, 0);
+      setLines(content.map((line) => ({ id: ++_id, line, level: classifyLine(line) })));
+    } catch {
+      setLastSessionFilename(null);
+      setLines([]);
+    }
+  }, [server.id]);
 
   useTauriEvent<{ line: string; level: string }[]>(`log://backfill/${server.id}`, (payload) => {
     const newLines = payload.map((item) => ({
@@ -159,14 +180,22 @@ function LivePanel({ server }: { server: ServerRow }) {
     ]);
   });
 
-  // Auto-start watcher on mount
+  // Manage watcher vs last-session display based on whether the server is active.
   useEffect(() => {
-    tauriCmd.watchServerLog(server.id, logPath(server.install_path)).catch(() => null);
-    return () => { tauriCmd.stopLogWatch(server.id).catch(() => null); };
+    if (isActive) {
+      setLastSessionFilename(null);
+      setLines([]);
+      setReady(false);
+      tauriCmd.watchServerLog(server.id, logPath(server.install_path)).catch(() => null);
+      return () => { tauriCmd.stopLogWatch(server.id).catch(() => null); };
+    } else {
+      tauriCmd.stopLogWatch(server.id).catch(() => null);
+      loadLastSession();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id, server.install_path]);
+  }, [server.id, isActive]);
 
-  // Auto-scroll when not scrolled up
+  // Auto-scroll on new live lines and when last-session content is first loaded.
   useEffect(() => {
     if (!scrolledUp && logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -196,25 +225,36 @@ function LivePanel({ server }: { server: ServerRow }) {
     if (root) tauriCmd.openFolder(`${root}/${server.id}`).catch(() => null);
   }, [server.id]);
 
+  // Derive toolbar appearance from server state
+  const toolbarBorder = isActive
+    ? (ready ? "rgba(0,255,136,0.3)" : "rgba(191,0,255,0.15)")
+    : "rgba(255,170,68,0.2)";
+  const dotStyle = isActive
+    ? (ready
+        ? { background: "var(--neon-green)", boxShadow: "0 0 6px var(--neon-green)", animation: "pulse 2s infinite" }
+        : { background: "var(--text-muted)" as string })
+    : { background: "#ffaa44" };
+  const statusLabel = isActive
+    ? (ready ? "Live" : (server.status === "starting" ? "Starting…" : "Connecting…"))
+    : (lastSessionFilename ? "Last Session" : "No Previous Sessions");
+
   return (
     <div className="flex flex-col gap-2 h-full">
       {/* Toolbar */}
       <div
         className="glass-card rounded-xl p-2.5 flex items-center gap-2 flex-wrap shrink-0"
-        style={{ borderColor: ready ? "rgba(0,255,136,0.3)" : "rgba(191,0,255,0.15)" }}
+        style={{ borderColor: toolbarBorder }}
       >
-        <div className="flex items-center gap-2">
-          <div
-            className="w-2 h-2 rounded-full shrink-0"
-            style={{
-              background: ready ? "var(--neon-green)" : "var(--text-muted)",
-              boxShadow: ready ? "0 0 6px var(--neon-green)" : "none",
-              animation: ready ? "pulse 2s infinite" : "none",
-            }}
-          />
-          <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>
-            {ready ? "Live" : "Connecting…"}
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-2 h-2 rounded-full shrink-0" style={dotStyle} />
+          <span className="text-xs font-medium shrink-0" style={{ color: "var(--text-primary)" }}>
+            {statusLabel}
           </span>
+          {!isActive && lastSessionFilename && (
+            <span className="text-xs truncate hidden sm:block" style={{ color: "var(--text-muted)" }}>
+              · {lastSessionFilename}
+            </span>
+          )}
         </div>
 
         <div className="w-px h-4 shrink-0" style={{ background: "rgba(255,255,255,0.08)" }} />
@@ -224,9 +264,11 @@ function LivePanel({ server }: { server: ServerRow }) {
           <Button size="sm" variant="ghost" onClick={() => { const t = visibleLines.map((l) => l.line).join("\n"); navigator.clipboard.writeText(t).catch(() => null); }} title="Copy visible lines" style={{ color: "var(--text-muted)" }}>
             <Copy className="w-3.5 h-3.5" />
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setLines([])} title="Clear display" style={{ color: "var(--text-muted)" }}>
-            <Trash2 className="w-3.5 h-3.5" />
-          </Button>
+          {isActive && (
+            <Button size="sm" variant="ghost" onClick={() => setLines([])} title="Clear display" style={{ color: "var(--text-muted)" }}>
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={openLogsFolder} title="Open log storage folder" style={{ color: "var(--text-muted)" }}>
             <FolderOpen className="w-3.5 h-3.5" />
           </Button>
@@ -262,7 +304,11 @@ function LivePanel({ server }: { server: ServerRow }) {
             <div className="flex flex-col items-center justify-center h-40 gap-2">
               <FileText className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
               <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                {ready ? "No lines match the current filter" : "Waiting for ShooterGame.log…"}
+                {isActive
+                  ? "Waiting for ShooterGame.log…"
+                  : lastSessionFilename
+                  ? "No lines match the current filter"
+                  : "No previous session logs found"}
               </p>
             </div>
           ) : (
