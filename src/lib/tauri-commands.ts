@@ -50,6 +50,8 @@ export interface ServerStatus {
  */
 export interface StartServerParams {
   serverId: string;
+  /** Human-readable server name — used for log context only. */
+  serverName: string;
   installPath: string;
   /** ASA map identifier, e.g. "TheIsland_WP". */
   mapPath: string;
@@ -127,6 +129,13 @@ export interface CrashFile {
 export interface CrashReport {
   folderName: string;
   files: CrashFile[];
+}
+
+export interface OtherLogInfo {
+  filename: string;
+  sizeBytes: number;
+  timestamp: string;
+  fullPath: string;
 }
 
 export interface ChatLogInfo {
@@ -410,11 +419,19 @@ export const tauriCmd = {
   deleteArchivedLog: (serverId: string, filename: string) =>
     invoke<void>("delete_archived_log", { serverId, filename }),
 
-  // Crash reports
-  listCrashes: (installPath: string) =>
-    invoke<CrashInfo[]>("list_crashes", { installPath }),
-  readCrashReport: (installPath: string, folderName: string) =>
-    invoke<CrashReport>("read_crash_report", { installPath, folderName }),
+  // Crash reports (stored in central LokiASAM logs folder)
+  listCrashes: (serverId: string) =>
+    invoke<CrashInfo[]>("list_crashes", { serverId }),
+  readCrashReport: (serverId: string, folderName: string) =>
+    invoke<CrashReport>("read_crash_report", { serverId, folderName }),
+  deleteCrashReport: (serverId: string, folderName: string) =>
+    invoke<void>("delete_crash_report", { serverId, folderName }),
+
+  // Other server logs (secondary engine logs collected at startup)
+  listOtherLogs: (serverId: string) =>
+    invoke<OtherLogInfo[]>("list_other_logs", { serverId }),
+  readOtherLog: (serverId: string, filename: string, offset: number, limit: number) =>
+    invoke<string[]>("read_other_log", { serverId, filename, offset, limit }),
 
   // Chat logs
   listChatLogs: (serverId: string) =>

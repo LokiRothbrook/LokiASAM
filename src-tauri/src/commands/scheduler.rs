@@ -360,6 +360,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
 fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> StartServerParams {
     StartServerParams {
         server_id: entry.server_id.clone(),
+        server_name: entry.server_name.clone(),
         install_path: entry.install_path.clone(),
         map_path: entry.map_path.clone(),
         port: entry.port,

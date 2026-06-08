@@ -92,6 +92,8 @@ fn filter_steam_noise(s: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct StartServerParams {
     pub server_id: String,
+    /// Human-readable server name — used only for log archiving context.
+    pub server_name: String,
     /// Absolute path to the server install directory.
     pub install_path: String,
     /// ASA map identifier, e.g. "TheIsland_WP".
@@ -321,7 +323,7 @@ async fn inner_start_server_with_state(
 
     // Archive any existing ShooterGame.log to central LokiASAM log storage before
     // launching so the fresh session always starts from byte 0.
-    let did_rotate = LogManagerState::archive_shootergame_log(
+    let did_rotate = LogManagerState::archive_all_server_logs(
         app_handle,
         &params.server_id,
         &params.install_path,

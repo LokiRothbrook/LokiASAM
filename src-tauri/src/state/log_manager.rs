@@ -78,49 +78,95 @@ impl LogManagerState {
         Some(Self::logs_root(app)?.join(server_id))
     }
 
-    /// Archive the current ShooterGame.log for `server_id` to central storage.
-    /// Called by `inner_start_server` before the server process is spawned.
-    /// Returns true if the log was archived or didn't exist; false on error.
-    pub async fn archive_shootergame_log(
+    /// Archive ALL log and crash data from the server install directory to central
+    /// storage before each server launch. Handles:
+    ///   - ShooterGame.log → {server_id}/shootergame/ShooterGame_{ts}.log
+    ///   - Other *.log files in Saved/Logs/ → {server_id}/other/{name}_{ts}.log
+    ///   - Crash folders in Saved/Crashes/ → {server_id}/crashes/{folder}/
+    ///
+    /// Returns true if the main log was cleanly handled (or absent).
+    pub async fn archive_all_server_logs(
         app: &tauri::AppHandle,
         server_id: &str,
         install_path: &str,
     ) -> bool {
+        let timestamp = current_timestamp_str();
+        let server_dir = Self::server_logs_dir(app, server_id);
+
+        // ── ShooterGame.log ──────────────────────────────────────────────────
         let current_log = format!(
             "{}/ShooterGame/Saved/Logs/ShooterGame.log",
             install_path
         );
-
-        if tokio::fs::metadata(&current_log).await.is_err() {
-            return true; // no log to archive — fresh install
-        }
-
-        let Some(dest_dir) = Self::server_logs_dir(app, server_id)
-            .map(|d| d.join("shootergame")) else {
-            // Bootstrap not set up yet; fall back to deleting the old log so
-            // the new session always starts from byte 0.
-            return tokio::fs::remove_file(&current_log).await.is_ok();
+        let main_ok = if tokio::fs::metadata(&current_log).await.is_ok() {
+            let ok = if let Some(dest_dir) = server_dir.as_ref().map(|d| d.join("shootergame")) {
+                let _ = tokio::fs::create_dir_all(&dest_dir).await;
+                let dest = dest_dir.join(format!("ShooterGame_{timestamp}.log"));
+                move_file(&current_log, &dest).await
+            } else {
+                false
+            };
+            if !ok {
+                // Fall back to delete so the new session starts at byte 0.
+                tokio::fs::remove_file(&current_log).await.is_ok()
+            } else {
+                true
+            }
+        } else {
+            true // no prior log — fresh install
         };
 
-        if tokio::fs::create_dir_all(&dest_dir).await.is_err() {
-            return tokio::fs::remove_file(&current_log).await.is_ok();
-        }
-
-        let timestamp = current_timestamp_str();
-        let archive_name = format!("ShooterGame_{timestamp}.log");
-        let dest = dest_dir.join(&archive_name);
-
-        if tokio::fs::rename(&current_log, &dest).await.is_ok() {
-            true
-        } else {
-            // rename across filesystems fails — copy then delete
-            if tokio::fs::copy(&current_log, &dest).await.is_ok() {
-                let _ = tokio::fs::remove_file(&current_log).await;
-                true
-            } else {
-                tokio::fs::remove_file(&current_log).await.is_ok()
+        // ── Other *.log files in Saved/Logs/ ────────────────────────────────
+        let logs_src_dir = format!("{}/ShooterGame/Saved/Logs", install_path);
+        if let Ok(mut rd) = tokio::fs::read_dir(&logs_src_dir).await {
+            if let Some(other_dir) = server_dir.as_ref().map(|d| d.join("other")) {
+                let _ = tokio::fs::create_dir_all(&other_dir).await;
+                while let Ok(Some(entry)) = rd.next_entry().await {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    // Skip ShooterGame.log (handled above) and our own archives.
+                    if name == "ShooterGame.log" || name.starts_with("ShooterGame_") {
+                        continue;
+                    }
+                    if !name.ends_with(".log") {
+                        continue;
+                    }
+                    let stem = name.trim_end_matches(".log");
+                    let dest = other_dir.join(format!("{stem}_{timestamp}.log"));
+                    let src = entry.path().to_string_lossy().to_string();
+                    let _ = move_file(&src, &dest).await;
+                }
             }
         }
+
+        // ── Crash folders in Saved/Crashes/ ─────────────────────────────────
+        let crashes_src = format!("{}/ShooterGame/Saved/Crashes", install_path);
+        if let Ok(mut rd) = tokio::fs::read_dir(&crashes_src).await {
+            if let Some(crashes_dir) = server_dir.as_ref().map(|d| d.join("crashes")) {
+                let _ = tokio::fs::create_dir_all(&crashes_dir).await;
+                while let Ok(Some(entry)) = rd.next_entry().await {
+                    let meta = match entry.metadata().await {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    if !meta.is_dir() {
+                        continue;
+                    }
+                    let folder_name = entry.file_name().to_string_lossy().to_string();
+                    let dest = crashes_dir.join(&folder_name);
+                    // If destination already exists (same crash already moved), skip.
+                    if dest.exists() {
+                        continue;
+                    }
+                    let src = entry.path().to_string_lossy().to_string();
+                    // Try rename first, then recursive copy+delete.
+                    if tokio::fs::rename(&src, &dest).await.is_err() {
+                        copy_dir_and_remove(&src, &dest).await;
+                    }
+                }
+            }
+        }
+
+        main_ok
     }
 
     /// Append a chat line to today's chat log file.
@@ -147,6 +193,40 @@ impl LogManagerState {
             let _ = f.write_all(entry.as_bytes()).await;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// File/directory helpers
+// ---------------------------------------------------------------------------
+
+/// Move a file: try rename first (fast, same filesystem); fall back to copy+delete.
+async fn move_file(src: &str, dest: &std::path::Path) -> bool {
+    if tokio::fs::rename(src, dest).await.is_ok() {
+        return true;
+    }
+    if tokio::fs::copy(src, dest).await.is_ok() {
+        let _ = tokio::fs::remove_file(src).await;
+        true
+    } else {
+        false
+    }
+}
+
+/// Recursively copy a directory then remove the source.
+async fn copy_dir_and_remove(src: &str, dest: &std::path::Path) {
+    let src_path = std::path::Path::new(src);
+    if let Err(_) = tokio::fs::create_dir_all(dest).await {
+        return;
+    }
+    let mut rd = match tokio::fs::read_dir(src_path).await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let dest_file = dest.join(entry.file_name());
+        let _ = tokio::fs::copy(entry.path(), &dest_file).await;
+    }
+    let _ = tokio::fs::remove_dir_all(src_path).await;
 }
 
 // ---------------------------------------------------------------------------

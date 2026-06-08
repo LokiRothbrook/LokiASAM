@@ -185,6 +185,7 @@ export function ServerCard({ server }: Props) {
 
     const params: StartServerParams = {
       serverId: server.id,
+      serverName: server.name,
       installPath: server.install_path,
       mapPath: map?.mapPath ?? "TheIsland_WP",
       port: server.port,

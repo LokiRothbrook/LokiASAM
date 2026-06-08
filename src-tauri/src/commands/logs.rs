@@ -197,20 +197,25 @@ pub async fn delete_archived_log(
 // Crash commands
 // ---------------------------------------------------------------------------
 
-/// List crash reports from the server's Saved/Crashes directory.
+/// List crash reports from the server's central crash storage.
 #[tauri::command]
 pub async fn list_crashes(
-    install_path: String,
+    app: tauri::AppHandle,
+    server_id: String,
 ) -> Result<Vec<CrashInfo>, String> {
-    let crashes_dir = format!("{}/ShooterGame/Saved/Crashes", install_path);
-    let path = std::path::Path::new(&crashes_dir);
+    let dir = match LogManagerState::server_logs_dir(&app, &server_id)
+        .map(|d| d.join("crashes"))
+    {
+        Some(d) => d,
+        None => return Ok(vec![]),
+    };
 
-    if !path.exists() {
+    if !dir.exists() {
         return Ok(vec![]);
     }
 
     let mut crashes: Vec<CrashInfo> = Vec::new();
-    let mut read_dir = tokio::fs::read_dir(&path)
+    let mut read_dir = tokio::fs::read_dir(&dir)
         .await
         .map_err(|e| format!("Failed to read crashes dir: {e}"))?;
 
@@ -226,7 +231,6 @@ pub async fn list_crashes(
         let folder_name = entry.file_name().to_string_lossy().to_string();
         let full_path = entry.path().to_string_lossy().to_string();
 
-        // Collect file names in the crash folder.
         let mut files: Vec<String> = Vec::new();
         let mut has_call_stack = false;
 
@@ -243,34 +247,29 @@ pub async fn list_crashes(
         files.sort();
 
         let timestamp = folder_name_to_timestamp(&folder_name);
-
-        crashes.push(CrashInfo {
-            folder_name,
-            timestamp,
-            has_call_stack,
-            files,
-            full_path,
-        });
+        crashes.push(CrashInfo { folder_name, timestamp, has_call_stack, files, full_path });
     }
 
-    // Newest first.
     crashes.sort_by(|a, b| b.folder_name.cmp(&a.folder_name));
     Ok(crashes)
 }
 
-/// Read all readable (non-binary) files from a crash folder.
+/// Read all readable (non-binary) files from a crash folder in central storage.
 #[tauri::command]
 pub async fn read_crash_report(
-    install_path: String,
+    app: tauri::AppHandle,
+    server_id: String,
     folder_name: String,
 ) -> Result<CrashReport, String> {
     if folder_name.contains('/') || folder_name.contains('\\') || folder_name.contains("..") {
         return Err("Invalid folder name".to_string());
     }
 
-    let crashes_dir = format!("{}/ShooterGame/Saved/Crashes", install_path);
-    let folder_path = std::path::Path::new(&crashes_dir).join(&folder_name);
+    let dir = LogManagerState::server_logs_dir(&app, &server_id)
+        .map(|d| d.join("crashes"))
+        .ok_or("Log storage not configured")?;
 
+    let folder_path = dir.join(&folder_name);
     if !folder_path.exists() {
         return Err("Crash folder not found".to_string());
     }
@@ -283,26 +282,126 @@ pub async fn read_crash_report(
     while let Some(entry) = read_dir.next_entry().await.map_err(|e| e.to_string())? {
         let name = entry.file_name().to_string_lossy().to_string();
         let lower = name.to_lowercase();
-
-        // Skip binary files (.dmp, .png, .jpg).
-        if lower.ends_with(".dmp")
-            || lower.ends_with(".png")
-            || lower.ends_with(".jpg")
-            || lower.ends_with(".bin")
-        {
+        if lower.ends_with(".dmp") || lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".bin") {
             continue;
         }
-
         let content = tokio::fs::read_to_string(entry.path())
             .await
             .unwrap_or_else(|_| "[binary or unreadable file]".to_string());
-
         files.push(CrashFile { name, content });
     }
 
     files.sort_by(|a, b| a.name.cmp(&b.name));
-
     Ok(CrashReport { folder_name, files })
+}
+
+/// Delete a crash report folder from central storage.
+#[tauri::command]
+pub async fn delete_crash_report(
+    app: tauri::AppHandle,
+    server_id: String,
+    folder_name: String,
+) -> Result<(), String> {
+    if folder_name.contains('/') || folder_name.contains('\\') || folder_name.contains("..") {
+        return Err("Invalid folder name".to_string());
+    }
+
+    let dir = LogManagerState::server_logs_dir(&app, &server_id)
+        .map(|d| d.join("crashes"))
+        .ok_or("Log storage not configured")?;
+
+    tokio::fs::remove_dir_all(dir.join(&folder_name))
+        .await
+        .map_err(|e| format!("Failed to delete crash report: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Other log commands (secondary engine logs collected at server start)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtherLogInfo {
+    pub filename: String,
+    pub size_bytes: u64,
+    pub timestamp: String,
+    pub full_path: String,
+}
+
+/// List secondary log files collected to central storage (non-ShooterGame logs).
+#[tauri::command]
+pub async fn list_other_logs(
+    app: tauri::AppHandle,
+    server_id: String,
+) -> Result<Vec<OtherLogInfo>, String> {
+    let dir = match LogManagerState::server_logs_dir(&app, &server_id)
+        .map(|d| d.join("other"))
+    {
+        Some(d) => d,
+        None => return Ok(vec![]),
+    };
+
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut entries: Vec<OtherLogInfo> = Vec::new();
+    let mut read_dir = tokio::fs::read_dir(&dir)
+        .await
+        .map_err(|e| format!("Failed to read other logs dir: {e}"))?;
+
+    while let Some(entry) = read_dir.next_entry().await.map_err(|e| e.to_string())? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".log") {
+            continue;
+        }
+        let meta = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let timestamp = extract_timestamp_from_filename(&name);
+        entries.push(OtherLogInfo {
+            filename: name,
+            size_bytes: meta.len(),
+            timestamp,
+            full_path: entry.path().to_string_lossy().to_string(),
+        });
+    }
+
+    entries.sort_by(|a, b| b.filename.cmp(&a.filename));
+    Ok(entries)
+}
+
+/// Read lines from an other log file.
+#[tauri::command]
+pub async fn read_other_log(
+    app: tauri::AppHandle,
+    server_id: String,
+    filename: String,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let dir = LogManagerState::server_logs_dir(&app, &server_id)
+        .map(|d| d.join("other"))
+        .ok_or("Log storage not configured")?;
+
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid filename".to_string());
+    }
+
+    let path = dir.join(&filename);
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("Failed to read log: {e}"))?;
+
+    let lines: Vec<String> = content
+        .lines()
+        .skip(offset)
+        .take(if limit == 0 { usize::MAX } else { limit })
+        .map(|l| l.to_string())
+        .collect();
+
+    Ok(lines)
 }
 
 // ---------------------------------------------------------------------------

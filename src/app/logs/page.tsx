@@ -17,7 +17,6 @@ export default function LogsPage() {
     searchParams.get("server") ?? ""
   );
 
-  // Default to first server once loaded if none selected
   useEffect(() => {
     if (!selectedId && servers.length > 0) {
       setSelectedId(servers[0].id);
@@ -36,9 +35,9 @@ export default function LogsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full overflow-hidden flex flex-col gap-4">
       {/* ── Page header ── */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 shrink-0">
         <ScrollText
           className="w-6 h-6 shrink-0"
           style={{ color: "var(--neon-cyan)" }}
@@ -51,9 +50,9 @@ export default function LogsPage() {
         </h1>
       </div>
 
-      {/* ── Server selector (sticky) ── */}
+      {/* ── Server selector ── */}
       <div
-        className="glass-card rounded-xl p-3 flex items-center gap-3 flex-wrap sticky top-0 z-10"
+        className="glass-card rounded-xl p-3 flex items-center gap-3 flex-wrap shrink-0"
         style={{ borderColor: "rgba(0,255,255,0.2)" }}
       >
         <span className="text-sm font-medium shrink-0" style={{ color: "var(--text-muted)" }}>
@@ -101,12 +100,14 @@ export default function LogsPage() {
         )}
       </div>
 
-      {/* ── Log viewer ── */}
+      {/* ── Log viewer — fills remaining height ── */}
       {selectedServer ? (
-        <LogsTab server={selectedServer} />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <LogsTab server={selectedServer} />
+        </div>
       ) : !isLoading && servers.length === 0 ? (
         <div
-          className="glass-card rounded-2xl p-16 flex flex-col items-center gap-4"
+          className="glass-card rounded-2xl p-16 flex flex-col items-center gap-4 shrink-0"
           style={{ borderColor: "rgba(191,0,255,0.15)" }}
         >
           <ScrollText className="w-10 h-10" style={{ color: "var(--text-muted)" }} />

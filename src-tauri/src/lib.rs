@@ -133,13 +133,6 @@ pub fn run() {
         );
     }
 
-    // Disable WebKit's DMA-BUF renderer before the WebView is created.
-    // The DMA-BUF path breaks on modern Linux distributions (Arch, CachyOS, etc.)
-    // with newer mesa/kernel versions, producing a blank white window. Falling back
-    // to the SHM renderer has no visible effect for a desktop management UI.
-    #[cfg(target_os = "linux")]
-    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-
     tauri::Builder::default()
         // ── Single-instance guard ──────────────────────────────────────────
         // If a second instance is launched, focus the existing window and exit.
@@ -441,6 +434,9 @@ pub fn run() {
             commands::logs::delete_archived_log,
             commands::logs::list_crashes,
             commands::logs::read_crash_report,
+            commands::logs::delete_crash_report,
+            commands::logs::list_other_logs,
+            commands::logs::read_other_log,
             commands::logs::list_chat_logs,
             commands::logs::read_chat_log,
             commands::logs::cleanup_logs,

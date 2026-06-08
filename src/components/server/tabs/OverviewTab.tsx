@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
-  Save, RefreshCw, ArrowUp, Loader2, X, BarChart2,
+  Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -475,6 +475,7 @@ export function OverviewTab({ server }: Props) {
     const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
     const params: StartServerParams = {
       serverId: server.id,
+      serverName: server.name,
       installPath: server.install_path,
       mapPath: map?.mapPath ?? "TheIsland_WP",
       port: server.port,
@@ -809,7 +810,7 @@ export function OverviewTab({ server }: Props) {
 
       </div>
 
-      {/* ── Network info ── */}
+      {/* ── Network / install info ── */}
       <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
         <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-muted)" }}>Network</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -824,6 +825,26 @@ export function OverviewTab({ server }: Props) {
               <div className="font-mono font-semibold" style={{ color: "var(--text-primary)" }}>{value}</div>
             </div>
           ))}
+        </div>
+
+        <div className="mt-4 pt-3 flex items-center gap-6 flex-wrap" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          <div className="min-w-0">
+            <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>Server UUID</div>
+            <div className="font-mono text-xs" style={{ color: "var(--text-primary)", opacity: 0.7 }}>{server.id}</div>
+          </div>
+          <button
+            className="flex items-center gap-1.5 ml-auto shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
+            style={{
+              background: "rgba(191,0,255,0.06)",
+              border: "1px solid rgba(191,0,255,0.2)",
+              color: "var(--text-muted)",
+            }}
+            onClick={() => tauriCmd.openFolder(server.install_path).catch(() => null)}
+            title="Open install folder"
+          >
+            <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+            Open Install Folder
+          </button>
         </div>
       </div>
 
