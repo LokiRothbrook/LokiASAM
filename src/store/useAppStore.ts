@@ -10,7 +10,7 @@
 import { create } from "zustand";
 import type { ChartPoint } from "@/lib/db";
 
-const LIVE_BUFFER_SIZE = 60; // 10 min × 10 s = 60 points
+const LIVE_BUFFER_SIZE = 120; // 10 min × 5 s = 120 points
 
 interface AppState {
   /** True once setup_complete has been confirmed in SQLite. */

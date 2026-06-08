@@ -4,8 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
-  Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2, X,
-  BarChart2,
+  Save, RefreshCw, ArrowUp, Loader2, X, BarChart2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,11 +25,10 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup,
-  getUptimeSessions,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
-import type { UptimeSessionRow, ServerRow } from "@/lib/db";
+import type { ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
@@ -261,6 +259,7 @@ function StatChart({
           fillOpacity={0.07}
           dot={false}
           connectNulls={false}
+          isAnimationActive={timeframe !== "Live"}
         />
         {showMax && (
           <Line
@@ -280,37 +279,36 @@ function StatChart({
   );
 }
 
-// ── UptimePanel ───────────────────────────────────────────────────────────────
+// ── ServerSummaryPanel ────────────────────────────────────────────────────────
 
-function UptimePanel({
+function formatFutureTime(iso: string | null): string {
+  if (!iso) return "Not scheduled";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const diffMs = d.getTime() - Date.now();
+  if (diffMs < 0) return "Overdue";
+  const diffMins = Math.floor(diffMs / 60_000);
+  if (diffMins < 60) return `in ${diffMins}m`;
+  const h = Math.floor(diffMins / 60);
+  if (h < 24) return `in ${h}h`;
+  return `in ${Math.floor(h / 24)}d`;
+}
+
+function ServerSummaryPanel({
   server,
   startTime,
+  modCount,
+  lastBackup,
+  nextRestart,
 }: {
   server: ServerRow;
   startTime: number | undefined;
+  modCount: number | null;
+  lastBackup: string | null;
+  nextRestart: string | null;
 }) {
-  const [sessions, setSessions] = useState<UptimeSessionRow[]>([]);
-
-  useEffect(() => {
-    getUptimeSessions(server.id, 50).then(setSessions).catch(() => null);
-  }, [server.id]);
-
   const isRunning = server.status === "running" || server.status === "starting";
-
-  const recordSession = sessions.reduce<UptimeSessionRow | null>((best, s) => {
-    const dur = (s.ended_at ?? Date.now()) - s.started_at;
-    const bestDur = best ? (best.ended_at ?? Date.now()) - best.started_at : 0;
-    return dur > bestDur ? s : best;
-  }, null);
-
-  const fmtDuration = (ms: number) => {
-    const d = Math.floor(ms / 86_400_000);
-    const h = Math.floor((ms % 86_400_000) / 3_600_000);
-    const m = Math.floor((ms % 3_600_000) / 60_000);
-    if (d > 0) return `${d}d ${h}h ${m}m`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
+  const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
 
   const fmtDate = (ms: number) =>
     new Date(ms).toLocaleString([], {
@@ -318,17 +316,14 @@ function UptimePanel({
       hour: "2-digit", minute: "2-digit",
     });
 
-  const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
-  const currentDuration = currentStartMs ? Date.now() - currentStartMs : null;
-  const recordDuration  = recordSession
-    ? (recordSession.ended_at ?? Date.now()) - recordSession.started_at
-    : null;
+  const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   const items = [
-    { label: "Started",       value: currentStartMs ? fmtDate(currentStartMs) : "—"           },
-    { label: "This session",  value: currentDuration != null ? fmtDuration(currentDuration) : "—" },
-    { label: "Record run",    value: recordDuration  != null ? fmtDuration(recordDuration)  : "—" },
-    { label: "Total sessions", value: sessions.length > 0 ? String(sessions.length) : "—"    },
+    { label: "Started",       value: currentStartMs ? fmtDate(currentStartMs) : "—"   },
+    { label: "Map",           value: mapDisplay                                         },
+    { label: "Mods",          value: modCount !== null ? String(modCount) : "—"        },
+    { label: "Last Backup",   value: formatRelativeTime(lastBackup)                    },
+    { label: "Next Restart",  value: formatFutureTime(nextRestart)                     },
   ];
 
   return (
@@ -336,7 +331,7 @@ function UptimePanel({
       {items.map(({ label, value }) => (
         <div key={label}>
           <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
-          <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</div>
+          <div className="text-sm font-semibold truncate" style={{ color: "var(--text-primary)" }}>{value}</div>
         </div>
       ))}
     </div>
@@ -402,37 +397,6 @@ function ChartStatTile({
   );
 }
 
-// ── InfoTile (static, no chart) ───────────────────────────────────────────────
-
-function InfoTile({
-  icon: Icon,
-  label,
-  value,
-  neonColor,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string | number | null;
-  neonColor?: string;
-}) {
-  const color = neonColor ?? "var(--neon-purple)";
-  return (
-    <div
-      className="glass-card rounded-xl p-4 flex flex-col gap-2"
-      style={{ borderColor: `${color}28` }}
-    >
-      <div className="flex items-center gap-2">
-        <Icon className="w-4 h-4 shrink-0" style={{ color }} />
-        <span className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-          {label}
-        </span>
-      </div>
-      <div className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>
-        {value ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
-      </div>
-    </div>
-  );
-}
 
 // ── OverviewTab ───────────────────────────────────────────────────────────────
 
@@ -786,6 +750,28 @@ export function OverviewTab({ server }: Props) {
       {/* ── Chart tiles (2-column) ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
+        {/* Uptime first — also surfaces map, mods, backup and schedule info */}
+        <ChartStatTile
+          icon={Clock}
+          label={isStarting ? "Starting…" : "Uptime"}
+          value={
+            startTime != null
+              ? formatUptime(startTime)
+              : isRunning
+              ? formatUptime(new Date(server.updated_at).getTime())
+              : null
+          }
+          neonColor="var(--neon-purple)"
+        >
+          <ServerSummaryPanel
+            server={server}
+            startTime={startTime}
+            modCount={modCount}
+            lastBackup={lastBackup}
+            nextRestart={nextRestart}
+          />
+        </ChartStatTile>
+
         <ChartStatTile
           icon={Users}
           label="Players"
@@ -821,37 +807,6 @@ export function OverviewTab({ server }: Props) {
           <StatChart serverId={server.id} metric="mem" timeframe={memTf} />
         </ChartStatTile>
 
-        <ChartStatTile
-          icon={Clock}
-          label={isStarting ? "Starting…" : "Uptime"}
-          value={
-            startTime != null
-              ? formatUptime(startTime)
-              : isRunning
-              ? formatUptime(new Date(server.updated_at).getTime())
-              : null
-          }
-          neonColor="var(--neon-purple)"
-        >
-          <UptimePanel server={server} startTime={startTime} />
-        </ChartStatTile>
-
-      </div>
-
-      {/* ── Info tiles (4-column) ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <InfoTile
-          icon={Map}
-          label="Map"
-          value={ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id}
-        />
-        <InfoTile icon={Package} label="Mods" value={modCount ?? 0} />
-        <InfoTile icon={HardDrive} label="Last Backup" value={formatRelativeTime(lastBackup)} />
-        <InfoTile
-          icon={Clock}
-          label="Next Restart"
-          value={nextRestart ?? "Not scheduled"}
-        />
       </div>
 
       {/* ── Network info ── */}

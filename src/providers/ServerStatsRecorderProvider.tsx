@@ -7,9 +7,9 @@ import { insertStatSample, openUptimeSession, closeUptimeSession } from "@/lib/d
 import { useAppStore } from "@/store/useAppStore";
 import { runStatsRollup } from "@/lib/stats-rollup";
 
-const LIVE_POLL_MS = 10_000;
-// Write to DB on every 6th poll (every 60 s).
-const DB_WRITE_EVERY = 6;
+const LIVE_POLL_MS = 5_000;
+// Write to DB on every 12th poll (every 60 s at 5 s resolution).
+const DB_WRITE_EVERY = 12;
 
 /**
  * Mounts inside SetupGuard. For each running server it:
