@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Play,
   Square,
@@ -19,6 +20,7 @@ import {
   XCircle,
   Terminal,
   Loader2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -95,6 +97,7 @@ function formatFutureTime(iso: string | null): string {
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function ServerCard({ server }: Props) {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
@@ -371,7 +374,7 @@ export function ServerCard({ server }: Props) {
 
   return (
     <div
-      className="glass-card flex flex-col gap-4 p-5 rounded-2xl transition-all duration-300"
+      className="glass-card flex flex-col gap-4 p-5 rounded-2xl transition-all duration-300 cursor-pointer"
       style={{
         border: `1px solid ${borderColor}`,
         boxShadow: isRunning
@@ -379,6 +382,11 @@ export function ServerCard({ server }: Props) {
           : server.status === "error" || server.status === "crashed"
           ? "0 0 20px rgba(255,0,85,0.08)"
           : undefined,
+      }}
+      onClick={(e) => {
+        if (!(e.target as HTMLElement).closest('button, a, [role="menuitem"], [data-radix-collection-item]')) {
+          router.push(`/servers/detail?id=${server.id}`);
+        }
       }}
     >
       {/* ── Header row ── */}
@@ -592,10 +600,10 @@ export function ServerCard({ server }: Props) {
                 size="sm"
                 onClick={handleForceStop}
                 className="gap-1.5 flex-1"
-                style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+                style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
               >
-                <Square className="w-3.5 h-3.5" />
-                Force Stop
+                <X className="w-3.5 h-3.5" />
+                Cancel Startup
               </Button>
             ) : isRunning ? (
               <Button
@@ -657,27 +665,25 @@ export function ServerCard({ server }: Props) {
           </>
         )}
 
-        {/* Disabled update note */}
-        {hasUpdateAvailable && !autoCheckEnabled && (
-          <span className="text-xs ml-auto" style={{ color: "rgba(255,165,0,0.5)" }}>
-            Enable auto checks in Settings
-          </span>
-        )}
-
-        {/* Open Detail — hidden while installing/updating/failed */}
-        {!isActiveInstall && !isReinstallable && (
+        {/* Right side: optional note + always-visible detail arrow */}
+        <div className="flex items-center gap-2 ml-auto">
+          {hasUpdateAvailable && !autoCheckEnabled && (
+            <span className="text-xs" style={{ color: "rgba(255,165,0,0.5)" }}>
+              Enable auto checks in Settings
+            </span>
+          )}
           <Button
             asChild
             size="sm"
             variant="outline"
-            className="gap-1"
+            className="gap-1 shrink-0"
             style={{ color: "var(--neon-cyan)", borderColor: "rgba(0,255,255,0.3)" }}
           >
             <Link href={`/servers/detail?id=${server.id}`}>
               <ChevronRight className="w-3.5 h-3.5" />
             </Link>
           </Button>
-        )}
+        </div>
       </div>
 
       {/* ── Update confirmation dialog ── */}

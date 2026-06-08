@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
-  Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2,
+  Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -324,12 +324,12 @@ export function OverviewTab({ server }: Props) {
           Actions
         </span>
         {isServerScanPending ? (
-          <Button size="sm" disabled className="gap-1.5">
+          <Button key="detecting" size="sm" disabled className="gap-1.5">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
             Detecting...
           </Button>
         ) : isStartFailed ? (
-          <>
+          <React.Fragment key="start-failed">
             <Button
               size="sm"
               onClick={handleStart}
@@ -354,9 +354,10 @@ export function OverviewTab({ server }: Props) {
               <RotateCcw className="w-3.5 h-3.5" />
               Reinstall
             </Button>
-          </>
+          </React.Fragment>
         ) : server.status === "stopping" ? (
           <Button
+            key="force-stop-stopping"
             size="sm"
             onClick={handleForceStop}
             className="gap-1.5"
@@ -367,16 +368,18 @@ export function OverviewTab({ server }: Props) {
           </Button>
         ) : server.status === "starting" ? (
           <Button
+            key="cancel-startup"
             size="sm"
             onClick={handleForceStop}
             className="gap-1.5"
-            style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+            style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
           >
-            <Square className="w-3.5 h-3.5" />
-            Force Stop
+            <X className="w-3.5 h-3.5" />
+            Cancel Startup
           </Button>
         ) : isRunning ? (
           <Button
+            key="stop"
             size="sm"
             onClick={handleStop}
             disabled={actionPending || isTransitioning}
@@ -392,6 +395,7 @@ export function OverviewTab({ server }: Props) {
           </Button>
         ) : (
           <Button
+            key="start"
             size="sm"
             onClick={handleStart}
             disabled={actionPending || isTransitioning}
@@ -418,23 +422,6 @@ export function OverviewTab({ server }: Props) {
             Restart
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={async () => {
-            const backupDir = await getAppSetting("backup_dir");
-            if (!backupDir) return;
-            tauriCmd.createBackup(server.id, server.name, server.install_path, backupDir, server.map_id, "manual")
-              .then(async (record: BackupRecord) => {
-                await insertBackup({ id: record.id, server_id: record.serverId, file_path: record.filePath, file_size_bytes: record.fileSizeBytes, map_id: record.mapId, triggered_by: record.triggeredBy, created_at: record.createdAt });
-              })
-              .catch(() => null);
-          }}
-          disabled={isTransitioning}
-        >
-          <Save className="w-3.5 h-3.5 mr-1.5" />
-          Backup Now
-        </Button>
         {hasUpdateAvailable && (
           <>
             <Button
@@ -461,6 +448,24 @@ export function OverviewTab({ server }: Props) {
             )}
           </>
         )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto"
+          onClick={async () => {
+            const backupDir = await getAppSetting("backup_dir");
+            if (!backupDir) return;
+            tauriCmd.createBackup(server.id, server.name, server.install_path, backupDir, server.map_id, "manual")
+              .then(async (record: BackupRecord) => {
+                await insertBackup({ id: record.id, server_id: record.serverId, file_path: record.filePath, file_size_bytes: record.fileSizeBytes, map_id: record.mapId, triggered_by: record.triggeredBy, created_at: record.createdAt });
+              })
+              .catch(() => null);
+          }}
+          disabled={isTransitioning}
+        >
+          <Save className="w-3.5 h-3.5 mr-1.5" />
+          Backup Now
+        </Button>
       </div>
 
       {/* ── Stats grid ── */}
