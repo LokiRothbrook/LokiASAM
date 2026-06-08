@@ -13,19 +13,22 @@ import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
   AlertTriangle, Bell, Mail, MessageSquare, Monitor, ChevronDown, ChevronUp, Send,
+  ArrowUp, Clock, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { CronBuilder, getNextCronDate, CRON_PRESETS } from "@/components/shared/CronBuilder";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
+  setServerUpdateAutomation,
   getServerNotificationConfigs, saveNotificationConfig,
   type ScheduleRow, type CreateScheduleInput, type NotificationConfigRow,
+  type UpdateAutomation,
 } from "@/lib/db";
+import { getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -35,7 +38,7 @@ import type { ServerRow } from "@/lib/db";
 // Types
 // ---------------------------------------------------------------------------
 
-type ScheduleType = "backup" | "update" | "restart" | "broadcast";
+type ScheduleType = "backup" | "restart" | "broadcast";
 
 interface BackupConfig {
   // no extra options
@@ -45,15 +48,6 @@ interface RestartConfig {
   broadcastWarning: boolean;
   warningMinutes: number;
   message: string;
-}
-
-interface UpdateConfig {
-  mode: "check_only" | "check_and_apply";
-  restartAfterUpdate: boolean;
-  broadcastWarning: boolean;
-  warningMinutes: number;
-  message: string;
-  skipIfPlayersOnline: boolean;
 }
 
 interface BroadcastConfig {
@@ -66,21 +60,12 @@ interface BroadcastConfig {
 
 const DEFAULT_CRON: Record<ScheduleType, string> = {
   backup:    CRON_PRESETS[3].cron,  // Every 6h
-  update:    "0 3 * * *",           // Daily at 3 AM
   restart:   "0 6 * * *",           // Daily at 6 AM
   broadcast: CRON_PRESETS[0].cron,  // Every hour
 };
 
 const DEFAULT_CONFIG: Record<ScheduleType, object> = {
   backup:    {} as BackupConfig,
-  update:    {
-    mode: "check_and_apply",
-    restartAfterUpdate: true,
-    broadcastWarning: true,
-    warningMinutes: 15,
-    message: "Server updating in {minutes} minutes. Progress will be saved.",
-    skipIfPlayersOnline: false,
-  } as UpdateConfig,
   restart:   { broadcastWarning: true, warningMinutes: 15, message: "Server restarting in {minutes} minutes. Progress will be saved." } as RestartConfig,
   broadcast: { message: "Welcome to the server! Type /help for commands." } as BroadcastConfig,
 };
@@ -139,7 +124,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
   const nextDate = getNextCronDate(cron);
   const nextRun  = existing?.next_run ?? (nextDate ? nextDate.toISOString() : null);
 
-  function patchConfig(patch: Partial<RestartConfig & UpdateConfig & BroadcastConfig>) {
+  function patchConfig(patch: Partial<RestartConfig & BroadcastConfig>) {
     setConfig((c) => ({ ...c, ...patch }));
   }
 
@@ -221,7 +206,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
     }
   }
 
-  const c = config as RestartConfig & UpdateConfig & BroadcastConfig;
+  const c = config as RestartConfig & BroadcastConfig;
 
   return (
     <div
@@ -286,101 +271,6 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
       {/* Cron picker */}
       <CronBuilder value={cron} onChange={setCron} label="Schedule" />
 
-      {/* Update-specific options */}
-      {type === "update" && (
-        <div className="space-y-3">
-          {/* Mode toggle */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Update Mode</label>
-            <div className="flex gap-2">
-              {(["check_only", "check_and_apply"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => patchConfig({ mode: m })}
-                  className="flex-1 text-xs py-1.5 rounded-lg transition-all"
-                  style={{
-                    background: (c.mode ?? "check_and_apply") === m ? "rgba(191,0,255,0.15)" : "transparent",
-                    border: `1px solid ${(c.mode ?? "check_and_apply") === m ? "var(--neon-purple)" : "rgba(191,0,255,0.2)"}`,
-                    color: (c.mode ?? "check_and_apply") === m ? "var(--neon-purple)" : "var(--text-muted)",
-                  }}
-                >
-                  {m === "check_only" ? "Check Only" : "Check & Apply"}
-                </button>
-              ))}
-            </div>
-            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-              {(c.mode ?? "check_and_apply") === "check_only"
-                ? "Only check if an update is available. An Update Available badge will appear — apply manually."
-                : "Check for an update and apply it automatically. The shared cache is updated, then synced to this server."}
-            </p>
-          </div>
-
-          {/* Check & Apply options */}
-          {(c.mode ?? "check_and_apply") === "check_and_apply" && (
-            <div className="space-y-2 pl-0.5">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={c.restartAfterUpdate ?? true}
-                  onChange={(e) => patchConfig({ restartAfterUpdate: e.target.checked })}
-                  className="w-3.5 h-3.5 accent-purple-500"
-                />
-                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Restart server after update (if it was running)
-                </span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={c.skipIfPlayersOnline ?? false}
-                  onChange={(e) => patchConfig({ skipIfPlayersOnline: e.target.checked })}
-                  className="w-3.5 h-3.5 accent-purple-500"
-                />
-                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Skip update if players are online
-                </span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={c.broadcastWarning ?? true}
-                  onChange={(e) => patchConfig({ broadcastWarning: e.target.checked })}
-                  className="w-3.5 h-3.5 accent-purple-500"
-                />
-                <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Broadcast in-game warning before updating
-                </span>
-              </label>
-              {c.broadcastWarning && (
-                <div className="flex gap-3 items-end pl-5">
-                  <div className="space-y-1">
-                    <label className="text-xs" style={{ color: "var(--text-muted)" }}>Warning (minutes)</label>
-                    <Input
-                      type="number" min={1} max={60}
-                      value={c.warningMinutes ?? 15}
-                      onChange={(e) => patchConfig({ warningMinutes: parseInt(e.target.value, 10) || 15 })}
-                      className="h-7 w-20 text-xs"
-                      style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                    />
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message ({"{minutes}"} = countdown)</label>
-                    <Input
-                      value={c.message ?? ""}
-                      onChange={(e) => patchConfig({ message: e.target.value })}
-                      placeholder="Server updating in {minutes} minutes."
-                      className="h-7 text-xs"
-                      style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Restart-specific options */}
       {type === "restart" && (
         <div className="space-y-2">
@@ -392,7 +282,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
               className="w-3.5 h-3.5 accent-purple-500"
             />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Broadcast warning in-game before restart
+              Send in-game chat warning before restart
             </span>
           </label>
           {c.broadcastWarning && (
@@ -412,7 +302,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
                 />
               </div>
               <div className="flex-1 space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Broadcast message ({"{minutes}"} = countdown)</label>
+                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Chat message ({"{minutes}"} = countdown)</label>
                 <Input
                   value={c.message ?? ""}
                   onChange={(e) => patchConfig({ message: e.target.value })}
@@ -432,7 +322,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 
       {type === "broadcast" && (
         <div className="space-y-1">
-          <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message to broadcast</label>
+          <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message to send in global chat</label>
           <Input
             value={c.message ?? ""}
             onChange={(e) => patchConfig({ message: e.target.value })}
@@ -510,12 +400,6 @@ const CARD_DEFS: {
     description: "Automatically zip and archive the server's save directory on a schedule.",
   },
   {
-    type: "update",
-    icon: RefreshCw,
-    title: "Auto-Update",
-    description: "Check for and install server updates via SteamCMD on a schedule.",
-  },
-  {
     type: "restart",
     icon: RotateCcw,
     title: "Auto-Restart",
@@ -524,10 +408,187 @@ const CARD_DEFS: {
   {
     type: "broadcast",
     icon: Megaphone,
-    title: "Scheduled Broadcast",
-    description: "Send a recurring in-game message to all online players via RCON.",
+    title: "Scheduled Chat Message",
+    description: "Send a recurring global chat message to all online players via RCON.",
   },
 ];
+
+// ---------------------------------------------------------------------------
+// UpdateAutomationCard — per-server update automation settings
+// ---------------------------------------------------------------------------
+
+const DEFAULT_UPDATE_AUTOMATION: UpdateAutomation = {
+  mode: "off",
+  update_time: "03:00",
+  restart_after_update: true,
+  only_if_running: true,
+};
+
+function UpdateAutomationCard({ server }: { server: ServerRow }) {
+  const [automation, setAutomation] = useState<UpdateAutomation>(DEFAULT_UPDATE_AUTOMATION);
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const hours = await getAppSetting("asa_auto_check_hours");
+      setAutoCheckEnabled((hours ?? "0") !== "0");
+      try {
+        const raw = server.update_automation_json;
+        if (raw && raw !== "{}") {
+          setAutomation({ ...DEFAULT_UPDATE_AUTOMATION, ...JSON.parse(raw) });
+        }
+      } catch {
+        // malformed JSON — use defaults
+      }
+    })();
+  }, [server.id, server.update_automation_json]);
+
+  const handleSave = async (patch: Partial<UpdateAutomation>) => {
+    const next = { ...automation, ...patch };
+    setAutomation(next);
+    setSaving(true);
+    try {
+      await setServerUpdateAutomation(server.id, next);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      toast.error(`Failed to save update automation: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isActive = automation.mode !== "off";
+
+  return (
+    <div
+      className="glass-card rounded-xl p-4 space-y-4"
+      style={{
+        border: isActive ? "1px solid rgba(255,165,0,0.25)" : "1px solid rgba(191,0,255,0.1)",
+        opacity: isActive ? 1 : 0.75,
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-start gap-3">
+        <div
+          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{
+            background: isActive ? "rgba(255,165,0,0.1)" : "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,165,0,0.2)",
+          }}
+        >
+          <ArrowUp className="w-4 h-4" style={{ color: isActive ? "#ffa500" : "var(--text-muted)" }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Update</h3>
+            {isActive && (
+              <span className="px-1.5 py-0.5 rounded text-xs"
+                style={{ background: "rgba(255,165,0,0.08)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.2)" }}>
+                Active
+              </span>
+            )}
+            {saving && <Loader2 className="w-3 h-3 animate-spin" style={{ color: "var(--text-muted)" }} />}
+            {saved && <CheckCircle2 className="w-3 h-3" style={{ color: "var(--neon-green)" }} />}
+          </div>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Automatically apply cached server updates when available.
+          </p>
+        </div>
+      </div>
+
+      {/* Auto-check required warning */}
+      {!autoCheckEnabled && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+          style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "rgba(255,165,0,0.8)" }}>
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>Auto update checks are disabled in Settings. Enable a check interval there for automation to work.</span>
+        </div>
+      )}
+
+      {/* Mode selector */}
+      <div className="space-y-2">
+        <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Update Trigger</label>
+        <div className="flex gap-2 flex-wrap">
+          {([
+            { value: "off",         label: "Disabled",       icon: null },
+            { value: "immediately", label: "When Found",     icon: Zap },
+            { value: "at_time",     label: "Daily at Time",  icon: Clock },
+          ] as const).map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => handleSave({ mode: value })}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
+              style={{
+                background: automation.mode === value ? "rgba(255,165,0,0.15)" : "transparent",
+                border: `1px solid ${automation.mode === value ? "rgba(255,165,0,0.5)" : "rgba(191,0,255,0.2)"}`,
+                color: automation.mode === value ? "#ffa500" : "var(--text-muted)",
+              }}
+            >
+              {Icon && <Icon className="w-3 h-3" />}
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* At-time picker */}
+        {automation.mode === "at_time" && (
+          <div className="flex items-center gap-3 pl-1">
+            <label className="text-xs" style={{ color: "var(--text-muted)" }}>Update time (daily):</label>
+            <input
+              type="time"
+              value={automation.update_time}
+              onChange={(e) => handleSave({ update_time: e.target.value })}
+              className="h-7 rounded px-2 text-xs font-mono"
+              style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)", outline: "none" }}
+            />
+          </div>
+        )}
+
+        {/* Framework note for non-off modes */}
+        {automation.mode !== "off" && (
+          <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+            style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.12)", color: "var(--text-muted)" }}>
+            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
+            <span>
+              Automated triggers are coming in a future update once proper RCON shutdown is implemented.
+              Settings are saved now so configuration is ready when the feature ships. Use the <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards for manual updates.
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Restart options — only shown when a mode is active */}
+      {automation.mode !== "off" && (
+        <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(255,165,0,0.1)" }}>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={automation.restart_after_update}
+              onChange={(e) => handleSave({ restart_after_update: e.target.checked })}
+              className="w-3.5 h-3.5 accent-orange-500"
+            />
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Restart server after update</span>
+          </label>
+          {automation.restart_after_update && (
+            <label className="flex items-center gap-2 cursor-pointer select-none pl-5">
+              <input
+                type="checkbox"
+                checked={automation.only_if_running}
+                onChange={(e) => handleSave({ only_if_running: e.target.checked })}
+                className="w-3.5 h-3.5 accent-orange-500"
+              />
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Only restart if server was already running</span>
+            </label>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function AutomationTab({ server }: Props) {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
@@ -597,6 +658,10 @@ export function AutomationTab({ server }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Update automation — uses new per-server settings instead of schedule rows */}
+          <UpdateAutomationCard server={server} />
+
+          {/* Backup, restart, broadcast — cron-based schedule cards */}
           {CARD_DEFS.map((def) => (
             <ScheduleCard
               key={def.type}
@@ -889,10 +954,16 @@ function ChannelCard({
           >
             {expanded ? "Hide" : "Configure"}
           </button>
-          <Switch
-            checked={enabled}
-            onCheckedChange={onToggle}
-          />
+          <button
+            type="button"
+            onClick={() => onToggle(!enabled)}
+            className="shrink-0 flex items-center"
+            aria-label={enabled ? "Disable" : "Enable"}
+          >
+            {enabled
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
         </div>
       </div>
 

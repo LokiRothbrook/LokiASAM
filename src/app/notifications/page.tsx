@@ -25,6 +25,7 @@ import {
   markAllNotificationsRead,
   deleteNotification,
   pruneNotificationsWithFilter,
+  parseDbDate,
   type InAppNotificationRow,
 } from "@/lib/db";
 import { useAppStore } from "@/store/useAppStore";
@@ -106,7 +107,7 @@ function NotificationRow({
             className="text-xs shrink-0"
             style={{ color: "var(--text-subtle)" }}
           >
-            {new Date(n.created_at).toLocaleString()}
+            {parseDbDate(n.created_at).toLocaleString()}
           </span>
         </div>
         <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>

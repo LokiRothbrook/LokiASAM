@@ -1,4 +1,4 @@
-use crate::{events, state::AppState};
+use crate::{events, state::{AppState, rcon_pool::RconPool}};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -47,9 +47,47 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Remove Steam/Wine/Proton diagnostic noise from stderr before surfacing it
+/// as a start-failed error. These lines are emitted unconditionally by the
+/// runtime and contain no actionable information for the user.
+fn filter_steam_noise(s: &str) -> String {
+    let noisy_prefixes = [
+        "ProtonFixes",
+        "wineserver:",
+        "WARNING: radv",
+        "WARNING: ANV",
+        "wine: ",
+        "wine64: ",
+        "fsync:",
+        "esync:",
+    ];
+    let noisy_contains = ["minidumps folder is set to", "NTSync up and running"];
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|line| {
+            let l = line.trim();
+            if l.is_empty() {
+                return false;
+            }
+            if noisy_prefixes.iter().any(|p| l.starts_with(p)) {
+                return false;
+            }
+            if noisy_contains.iter().any(|p| l.contains(p)) {
+                return false;
+            }
+            true
+        })
+        .collect();
+    lines.join("\n")
+}
+
 /// Full parameter set for starting an ASA dedicated server.
 /// The frontend reads all values from SQLite and passes them here — Rust does
 /// no DB access of its own.
+///
+/// Server name, passwords, rates, RCON, and MaxPlayers all live in
+/// GameUserSettings.ini — they are NOT passed on the command line.
+/// Only map path, ports, mods, and CLI-only flags are handled here.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StartServerParams {
@@ -58,23 +96,20 @@ pub struct StartServerParams {
     pub install_path: String,
     /// ASA map identifier, e.g. "TheIsland_WP".
     pub map_path: String,
+    /// Game UDP port that clients connect to (CLI only, must be ?Port=).
     pub port: u16,
+    /// Steam query UDP port (CLI only, must be ?QueryPort=).
     pub query_port: u16,
+    /// RCON TCP port — NOT passed on CLI; used internally for readiness polling.
+    /// The actual value is read by the server from GameUserSettings.ini [ServerSettings].
     pub rcon_port: u16,
-    pub max_players: u32,
-    /// Optional join password shown to connecting players.
-    pub server_password: Option<String>,
-    pub admin_password: String,
-    /// Additional command-line flags, e.g. ["-NoBattlEye", "-servergamelog"].
+    /// Additional CLI-only flags, e.g. ["-NoBattlEye", "-ForceRespawnDinos"].
     pub extra_args: Vec<String>,
-    /// CurseForge mod IDs to load. Passed as `-mods=id1,id2,...` — the server
-    /// downloads and applies them on startup automatically.
+    /// CurseForge mod IDs to load. Passed as `-mods=id1,id2,...`.
     pub mod_ids: Vec<String>,
-    /// Linux only: path to the Proton-GE installation directory (must contain `proton` script).
-    /// Typically {base_dir}/proton/GE-ProtonX-Y/
+    /// Linux only: path to the Proton-GE installation directory.
     pub proton_path: Option<String>,
     /// Linux only: WINEPREFIX path where Proton creates its fake C: drive.
-    /// Stored at {base_dir}/proton/prefix/ so everything Proton-related is co-located.
     pub prefix_path: Option<String>,
 }
 
@@ -148,6 +183,22 @@ fn pid_alive(pid: u32) -> bool {
 // Commands
 // ---------------------------------------------------------------------------
 
+/// Try an A2S_INFO Source Query on localhost. Returns true if any UDP response
+/// arrives within 3 seconds. Used by the readiness fallback to get a second
+/// opinion when the log watcher times out without seeing READY_MSG.
+async fn try_source_query_local(port: u16) -> bool {
+    use tokio::net::UdpSocket;
+    use tokio::time::{timeout, Duration};
+    let Ok(sock) = UdpSocket::bind("0.0.0.0:0").await else { return false };
+    if sock.connect(format!("127.0.0.1:{port}")).await.is_err() { return false; }
+    let req: &[u8] = b"\xFF\xFF\xFF\xFF\x54Source Engine Query\x00";
+    if sock.send(req).await.is_err() { return false; }
+    let mut buf = [0u8; 64];
+    timeout(Duration::from_secs(3), sock.recv(&mut buf))
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
 /// Internal: start a server without requiring Tauri State injection.
 /// Called by both the `start_server` command and the Rust scheduler.
 pub async fn inner_start_server(
@@ -179,20 +230,15 @@ async fn inner_start_server_with_state(
     params: StartServerParams,
 ) -> Result<u32, String> {
     // Build the ?-delimited query string that follows the map name.
-    let mut query_string = format!(
-        "{}?listen?Port={}?QueryPort={}?RCONEnabled=True?RCONPort={}?MaxPlayers={}?ServerAdminPassword={}",
+    // Passwords, RCON, MaxPlayers, and all gameplay settings are read by the
+    // server from GameUserSettings.ini — they must NOT be duplicated on the CLI
+    // or they will override INI values on every restart.
+    let query_string = format!(
+        "{}?listen?Port={}?QueryPort={}",
         params.map_path,
         params.port,
         params.query_port,
-        params.rcon_port,
-        params.max_players,
-        params.admin_password,
     );
-    if let Some(pw) = &params.server_password {
-        if !pw.is_empty() {
-            query_string.push_str(&format!("?ServerPassword={}", pw));
-        }
-    }
 
     // Build the platform-specific Command.
     // Windows: run the Win64 exe directly.
@@ -273,9 +319,66 @@ async fn inner_start_server_with_state(
         cmd.env_remove("PYTHONPATH");
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start server process: {e}"))?;
+    // Rotate any existing ShooterGame.log before launching. We own log rotation
+    // from here on — archiving the old file ourselves so the fresh log starts at
+    // byte 0 and the readiness watcher below never has to deal with inodes.
+    let current_log_path = format!(
+        "{}/ShooterGame/Saved/Logs/ShooterGame.log",
+        params.install_path
+    );
+    let did_rotate: bool = if tokio::fs::metadata(&current_log_path).await.is_ok() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let (year, month, day, hh, mm, ss) = {
+            let secs_per_day = 86_400u64;
+            let days = now_secs / secs_per_day;
+            let day_secs = now_secs % secs_per_day;
+            let mut d = days;
+            let mut y = 1970u64;
+            loop {
+                let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+                let days_in_year = if leap { 366 } else { 365 };
+                if d < days_in_year { break; }
+                d -= days_in_year;
+                y += 1;
+            }
+            let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+            let days_in_month = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            let mut mo = 0usize;
+            while mo < 12 && d >= days_in_month[mo] { d -= days_in_month[mo]; mo += 1; }
+            (y, (mo + 1) as u64, d + 1, day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60)
+        };
+        let archive_path = format!(
+            "{}/ShooterGame/Saved/Logs/ShooterGame_{year:04}-{month:02}-{day:02}_{hh:02}-{mm:02}-{ss:02}.log",
+            params.install_path
+        );
+        // Rename preferred; fall back to delete so we always start with a clean slate.
+        if tokio::fs::rename(&current_log_path, &archive_path).await.is_ok() {
+            true
+        } else {
+            tokio::fs::remove_file(&current_log_path).await.is_ok()
+        }
+    } else {
+        // No pre-existing log — fresh install or first ever start.
+        true
+    };
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+                // The server executable is missing — reinstall is the only fix.
+                // Prefix lets the frontend detect this case and hide the Retry button.
+                "exe_missing: ArkAscendedServer.exe was not found. Please reinstall the server.".to_string()
+            } else {
+                format!("Failed to start server process: {e}")
+            };
+            return Err(msg);
+        }
+    };
 
     let pid = child.id().ok_or("Spawned process has no PID")?;
 
@@ -296,6 +399,7 @@ async fn inner_start_server_with_state(
                 pid,
                 started_at: Instant::now(),
                 install_path: params.install_path.clone(),
+                confirmed_running: false,
             },
         );
     }
@@ -367,12 +471,12 @@ async fn inner_start_server_with_state(
         // On Linux with the Steam Runtime, Proton (a Python script) hands the
         // Wine process off to the container daemon and exits — this is NORMAL.
         // The game continues under a different PID.  Before declaring a start
-        // failure, scan /proc for up to 30 s to see if the game process appears.
-        // If it does, update the tracked PID and let the log-watcher task handle
-        // the "running" transition.
+        // failure, scan /proc for up to 10 s (20 × 500 ms) to see if the game
+        // process appears. If it does, update the tracked PID and let the
+        // log-watcher task handle the "running" transition.
         #[cfg(target_os = "linux")]
         {
-            for i in 0..30u32 {
+            for i in 0..20u32 {
                 if let Some(game_pid) =
                     super::utils::find_game_process_pid(&install_path_watcher)
                 {
@@ -386,8 +490,8 @@ async fn inner_start_server_with_state(
                     // The log-watcher task will emit "running" when the ready line appears.
                     return;
                 }
-                if i < 29 {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                if i < 19 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
         }
@@ -395,10 +499,11 @@ async fn inner_start_server_with_state(
         // ── Genuine start failure ─────────────────────────────────────────────
         app_state.running_servers.lock().unwrap().remove(&sid);
         let cleaned = strip_ansi(raw_stderr.trim());
-        let trimmed = if cleaned.len() > 800 {
-            format!("\u{2026}{}", &cleaned[cleaned.len() - 800..])
+        let filtered = filter_steam_noise(&cleaned);
+        let trimmed = if filtered.len() > 800 {
+            format!("\u{2026}{}", &filtered[filtered.len() - 800..])
         } else {
-            cleaned
+            filtered
         };
         emit_status(&handle_clone, &ServerStatus {
             server_id: sid,
@@ -485,16 +590,18 @@ async fn inner_start_server_with_state(
     // Falls back to emitting "running" after 15 minutes if the message is
     // never seen (e.g. log location changed, log disabled) so the server
     // doesn't stay in "starting" forever.
-    let sid2      = params.server_id.clone();
-    let handle2   = app_handle.clone();
-    let log_path2 = format!(
+    let sid2        = params.server_id.clone();
+    let handle2     = app_handle.clone();
+    let query_port2 = params.query_port;
+    let log_path2   = format!(
         "{}/ShooterGame/Saved/Logs/ShooterGame.log",
         params.install_path
     );
+
     let confirmed2 = Arc::clone(&confirmed_running);
     tauri::async_runtime::spawn(async move {
         use std::io::SeekFrom;
-        use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
         use tokio::time::{sleep, Duration, Instant};
 
         // The exact log line ARK SA writes when the server is fully loaded.
@@ -504,16 +611,19 @@ async fn inner_start_server_with_state(
 
         let deadline = Instant::now() + TIMEOUT;
 
-        // Read current PID and uptime from running_servers and emit "running".
+        // Mark the server as confirmed-running, read its PID/uptime, and emit "running".
+        // Sets confirmed_running = true so the crash monitor emits "crashed" (not
+        // "start-failed") if the process dies after this point.
         // Returns false if the server was already removed from the map.
         let confirm_running = |handle: &tauri::AppHandle, sid: &str| -> bool {
-            let pid_uptime = handle
-                .state::<AppState>()
-                .running_servers
-                .lock()
-                .unwrap()
-                .get(sid)
-                .map(|rs| (rs.pid, rs.started_at.elapsed().as_secs()));
+            let pid_uptime = {
+                let state = handle.state::<AppState>();
+                let mut registry = state.running_servers.lock().unwrap();
+                registry.get_mut(sid).map(|rs| {
+                    rs.confirmed_running = true;
+                    (rs.pid, rs.started_at.elapsed().as_secs())
+                })
+            };
 
             let Some((game_pid, uptime)) = pid_uptime else { return false; };
 
@@ -530,8 +640,12 @@ async fn inner_start_server_with_state(
             true
         };
 
-        // ── Wait for the log file to appear ──────────────────────────────────
-        // The server creates it within the first few seconds of startup.
+        // ── Wait for the fresh log file to appear ────────────────────────────
+        // We rotated any pre-existing ShooterGame.log before spawning, so the
+        // first file to appear at this path belongs to the current session.
+        // Read from byte 0 — no need for inode detection or seek-to-end.
+        // If rotation failed (permissions, locked file), did_rotate is false
+        // and we seek to end to skip stale content from the previous session.
         let file = loop {
             if Instant::now() >= deadline { return; }
 
@@ -549,10 +663,12 @@ async fn inner_start_server_with_state(
             }
         };
 
-        // Seek to end so we only see lines from this server session (not a
-        // previous run that left the log file on disk).
         let mut file = file;
-        let _ = file.seek(SeekFrom::End(0)).await;
+        if !did_rotate {
+            // Rotation failed — old file is still in place. Seek past stale
+            // content so we don't false-positive on a READY_MSG from a prior run.
+            let _ = file.seek(SeekFrom::End(0)).await;
+        }
         let mut reader = BufReader::new(file);
         let mut buf = String::new();
 
@@ -584,17 +700,59 @@ async fn inner_start_server_with_state(
             }
         }
 
-        // ── 20-minute fallback ────────────────────────────────────────────────
+        // ── 20-minute fallback — verify before promoting ──────────────────────
+        // The tail loop timed out without seeing READY_MSG. Before blindly
+        // promoting to "running", make two verification attempts:
+        //
+        // 1. Re-scan the tail of the current log file from scratch. This catches
+        //    the TOCTOU race where we spent 20 min tailing the pre-rotation
+        //    archived copy — the live file will have READY_MSG even though we
+        //    never saw it in the tailed stream.
+        //
+        // 2. Source Query (A2S_INFO) on localhost. An independent signal that
+        //    the server is advertising to Steam. May not respond from loopback
+        //    on all Linux/Proton configurations, but worth a few attempts.
+        //
+        // If both checks fail we still promote as a last resort: the server has
+        // been running 20+ minutes without crashing, so it is almost certainly
+        // up. Leaving it in "starting" forever is worse than a false positive.
         let still_tracked = handle2
             .state::<AppState>()
             .running_servers
             .lock()
             .unwrap()
             .contains_key(&sid2);
-        if still_tracked {
+        if !still_tracked { return; }
+
+        // 1. Re-scan the tail of the log file (last 512 KB) for READY_MSG.
+        let log_confirmed = 'scan: {
+            let Ok(mut lf) = tokio::fs::File::open(&log_path2).await else { break 'scan false };
+            const TAIL: u64 = 512 * 1024;
+            let size = lf.metadata().await.map(|m| m.len()).unwrap_or(0);
+            let _ = lf.seek(SeekFrom::Start(size.saturating_sub(TAIL))).await;
+            let mut snippet = String::new();
+            let _ = lf.read_to_string(&mut snippet).await;
+            snippet.contains(READY_MSG)
+        };
+        if log_confirmed {
             confirmed2.store(true, Ordering::Relaxed);
             confirm_running(&handle2, &sid2);
+            return;
         }
+
+        // 2. Try Source Query on localhost (3 attempts, 5 s apart).
+        for _ in 0..3u8 {
+            if try_source_query_local(query_port2).await {
+                confirmed2.store(true, Ordering::Relaxed);
+                confirm_running(&handle2, &sid2);
+                return;
+            }
+            sleep(Duration::from_secs(5)).await;
+        }
+
+        // 3. Last resort — promote regardless.
+        confirmed2.store(true, Ordering::Relaxed);
+        confirm_running(&handle2, &sid2);
     });
 
     Ok(pid)
@@ -727,35 +885,131 @@ pub async fn get_server_status(
     }
 }
 
-/// Register a server PID from a previous app session in the running_servers map
-/// so the crash-monitor 30 s polling loop can watch it.
+/// Scan for running ASA server processes on app startup.
 ///
-/// Returns `true` if the process is alive, `false` if it has already exited
-/// (i.e., it crashed while the app was closed — the frontend should mark it
-/// "crashed" in SQLite).
+/// For each entry, scans the OS for a matching game process by install path.
+/// Servers that are found are registered in the running map and get a dedicated
+/// watcher task that fires a crash event within ~5 s of the process dying.
+/// Returns the live PID for each server found, or null if not running.
+/// This replaces stored-PID reconciliation — the OS is the source of truth.
 #[tauri::command]
-pub async fn register_running_server(
+pub async fn scan_running_servers(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    server_id: String,
-    pid: u32,
-    install_path: String,
-) -> Result<bool, String> {
-    if pid_alive(pid) {
-        let mut registry = state.running_servers.lock().unwrap();
-        registry.insert(
-            server_id,
-            crate::state::RunningServer {
-                pid,
-                // started_at is approximate for re-registered servers; uptime
-                // will read from SQLite updated_at on the frontend instead.
-                started_at: Instant::now(),
-                install_path,
-            },
-        );
-        Ok(true)
-    } else {
-        Ok(false)
+    servers: Vec<ScanEntry>,
+) -> Result<Vec<ScanResult>, String> {
+    let mut results = Vec::new();
+
+    for entry in servers {
+        let pid = find_server_process(&entry.install_path);
+
+        if let Some(pid) = pid {
+            {
+                let mut registry = state.running_servers.lock().unwrap();
+                registry.insert(
+                    entry.server_id.clone(),
+                    crate::state::RunningServer {
+                        pid,
+                        started_at: Instant::now(),
+                        install_path: entry.install_path,
+                        confirmed_running: true,
+                    },
+                );
+            }
+
+            let handle = app_handle.clone();
+            let sid = entry.server_id.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    let app_state = handle.state::<AppState>();
+
+                    // stop_server removes the entry — if it's gone, exit cleanly.
+                    if !app_state.running_servers.lock().unwrap().contains_key(&sid) {
+                        break;
+                    }
+
+                    if !pid_alive(pid) {
+                        let was_intentional = app_state
+                            .stopping_servers
+                            .lock()
+                            .unwrap()
+                            .remove(&sid);
+
+                        app_state.running_servers.lock().unwrap().remove(&sid);
+
+                        let status = if was_intentional { "stopped" } else { "crashed" };
+                        let payload = ServerStatus {
+                            server_id: sid.clone(),
+                            status: status.into(),
+                            pid: None,
+                            uptime_seconds: None,
+                            error: None,
+                        };
+
+                        let _ = handle.emit(
+                            &events::server_event(events::SERVER_STATUS, &sid),
+                            payload.clone(),
+                        );
+                        let _ = handle.emit(events::SERVER_ANY_CHANGE, payload);
+                        break;
+                    }
+                }
+            });
+        }
+
+        results.push(ScanResult { server_id: entry.server_id, pid });
     }
+
+    Ok(results)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanEntry {
+    pub server_id: String,
+    pub install_path: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResult {
+    pub server_id: String,
+    pub pid: Option<u32>,
+}
+
+/// Find a running ASA server process by install path.
+/// Linux: procfs cmdline scan finds the Wine game process even when re-parented.
+/// Windows: sysinfo exe-path scan finds ArkAscendedServer.exe directly.
+#[cfg(target_os = "linux")]
+fn find_server_process(install_path: &str) -> Option<u32> {
+    super::utils::find_game_process_pid(install_path)
+}
+
+#[cfg(target_os = "windows")]
+fn find_server_process(install_path: &str) -> Option<u32> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    if install_path.is_empty() {
+        return None;
+    }
+
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+
+    let base = install_path.trim_end_matches('\\').trim_end_matches('/').to_lowercase();
+
+    for (pid, proc) in sys.processes() {
+        let exe = proc
+            .exe()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if exe.starts_with(&base) && exe.contains("arkascendedserver") {
+            return Some(pid.as_u32());
+        }
+    }
+    None
 }
 
 /// Delete a server from disk (optionally) and clean up in-memory state.
@@ -825,6 +1079,135 @@ pub async fn clone_server(
     })
     .await
     .map_err(|e| format!("Clone task panicked: {e}"))??;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
+
+/// Gracefully stop a running server with optional player countdown warnings.
+///
+/// Flow:
+///   1. Emit "stopping" status
+///   2. If warn_players AND players are online: send countdown chat messages
+///   3. SaveWorld (wait for acknowledgment)
+///   4. DoExit
+///   5. Wait up to 30 s for process to exit, then force-kill
+///   6. Emit "stopped" status
+#[tauri::command]
+pub async fn graceful_stop_server(
+    app_handle: tauri::AppHandle,
+    server_id: String,
+    rcon_port: u16,
+    rcon_password: String,
+    warn_players: bool,
+    warn_minutes: u64,
+    warn_message: String,
+) -> Result<(), String> {
+    use crate::commands::rcon::transient_rcon_command;
+    use tokio::time::{sleep, Duration};
+
+    let state = app_handle.state::<AppState>();
+    let pool = app_handle.state::<RconPool>();
+
+    let (pid, install_path) = {
+        let registry = state.running_servers.lock().unwrap();
+        registry
+            .get(&server_id)
+            .map(|rs| (rs.pid, rs.install_path.clone()))
+            .ok_or_else(|| format!("Server {server_id} is not running"))?
+    };
+
+    state.stopping_servers.lock().unwrap().insert(server_id.clone());
+
+    emit_status(&app_handle, &ServerStatus {
+        server_id: server_id.clone(),
+        status: "stopping".into(),
+        pid: Some(pid),
+        uptime_seconds: None,
+        error: None,
+    });
+
+    // Helper: returns true if at least one player is connected right now.
+    let has_players = |resp: &str| -> bool {
+        !resp.trim().is_empty() && !resp.to_lowercase().contains("no players")
+    };
+
+    // Optional player countdown — re-checks player count before each message
+    // so we skip straight to save+exit the moment the server empties.
+    if warn_players && warn_minutes > 0 {
+        let initial_check = transient_rcon_command(rcon_port, &rcon_password, "listplayers").await.unwrap_or_default();
+
+        if has_players(&initial_check) {
+            let total_secs = warn_minutes * 60;
+            let mut elapsed: u64 = 0;
+
+            let initial_msg = warn_message.replace(
+                "{time}",
+                &format!("{warn_minutes} minute{}", if warn_minutes == 1 { "" } else { "s" }),
+            );
+            let _ = transient_rcon_command(rcon_port, &rcon_password, &format!("ServerChat {initial_msg}")).await;
+
+            'countdown: while elapsed < total_secs {
+                let remaining = total_secs - elapsed;
+                let interval_secs: u64 = if remaining <= 5 { 1 } else if remaining <= 30 { 5 } else { 60 };
+
+                sleep(Duration::from_secs(interval_secs)).await;
+                elapsed += interval_secs;
+
+                // If server is now empty, skip the rest of the countdown.
+                let check = transient_rcon_command(rcon_port, &rcon_password, "listplayers").await.unwrap_or_default();
+                if !has_players(&check) {
+                    break 'countdown;
+                }
+
+                let still_remaining = total_secs.saturating_sub(elapsed);
+                if still_remaining == 0 { break; }
+
+                let time_str = if still_remaining >= 60 {
+                    let m = still_remaining / 60;
+                    format!("{m} minute{}", if m == 1 { "" } else { "s" })
+                } else {
+                    format!("{still_remaining} second{}", if still_remaining == 1 { "" } else { "s" })
+                };
+
+                let msg = warn_message.replace("{time}", &time_str);
+                let _ = transient_rcon_command(rcon_port, &rcon_password, &format!("ServerChat {msg}")).await;
+            }
+        }
+    }
+
+    // SaveWorld then DoExit
+    let _ = transient_rcon_command(rcon_port, &rcon_password, "saveworld").await;
+    sleep(tokio::time::Duration::from_secs(2)).await;
+    let _ = transient_rcon_command(rcon_port, &rcon_password, "doexit").await;
+
+    // Wait up to 30 s for process to exit
+    for _ in 0..60 {
+        sleep(tokio::time::Duration::from_millis(500)).await;
+        if !pid_alive(pid) { break; }
+    }
+    if pid_alive(pid) {
+        kill_process_tree(pid, false, &install_path);
+        sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
+    // Clean up state
+    state.stopping_servers.lock().unwrap().remove(&server_id);
+    state.running_servers.lock().unwrap().remove(&server_id);
+    pool.cmd_channels.lock().await.remove(&server_id);
+    pool.chat_poll_active.lock().await.remove(&server_id);
+    pool.player_cache.lock().await.remove(&server_id);
+
+    emit_status(&app_handle, &ServerStatus {
+        server_id,
+        status: "stopped".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
 
     Ok(())
 }

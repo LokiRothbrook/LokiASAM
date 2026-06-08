@@ -26,7 +26,7 @@ import type { NotificationEventType } from "@/data/game-data";
 // Types & constants
 // ---------------------------------------------------------------------------
 
-type ChannelId = "bell" | "desktop" | "discord" | "email";
+type ChannelId = "in_app" | "bell" | "desktop" | "discord" | "email";
 
 interface ChannelDef {
   id: ChannelId;
@@ -36,6 +36,7 @@ interface ChannelDef {
 }
 
 const CHANNELS: ChannelDef[] = [
+  { id: "in_app",  label: "In-App",  Icon: Bell,          description: "Toast popup inside LokiASAM" },
   { id: "bell",    label: "Bell",    Icon: Bell,          description: "Show as unread in the bell badge and popup" },
   { id: "desktop", label: "Desktop", Icon: Monitor,       description: "OS system notification" },
   { id: "discord", label: "Discord", Icon: MessageSquare, description: "Discord webhook" },
@@ -46,8 +47,9 @@ const ALL_EVENTS = Object.values(NOTIFICATION_EVENTS) as NotificationEventType[]
 
 // Default events enabled per channel when no config row exists yet
 const CHANNEL_DEFAULTS: Record<ChannelId, NotificationEventType[]> = {
+  in_app:  ALL_EVENTS,
   bell:    ALL_EVENTS,
-  desktop: ["server_started", "server_crashed", "update_available"],
+  desktop: ["server_started", "server_crashed", "update_available", "update_started", "update_failed"],
   discord: ALL_EVENTS,
   email:   ALL_EVENTS,
 };
@@ -62,6 +64,7 @@ interface NotificationMatrixProps {
 
 export function NotificationMatrix({ onSaved }: NotificationMatrixProps) {
   const [channelEvents, setChannelEvents] = useState<Record<ChannelId, Set<NotificationEventType>>>({
+    in_app:  new Set(CHANNEL_DEFAULTS.in_app),
     bell:    new Set(CHANNEL_DEFAULTS.bell),
     desktop: new Set(CHANNEL_DEFAULTS.desktop),
     discord: new Set(CHANNEL_DEFAULTS.discord),

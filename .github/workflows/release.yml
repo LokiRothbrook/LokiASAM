@@ -66,41 +66,63 @@ jobs:
           releaseBody: |
             ## LokiASAM ${{ github.ref_name }} — Public Beta
 
-            LokiASAM is a desktop application for managing Ark Survival Ascended dedicated servers on Linux and Windows. It provides a full GUI for every aspect of running one or more ASA servers without needing to touch config files or the command line.
+            LokiASAM is a desktop application for managing Ark Survival Ascended dedicated servers on Linux and Windows.
 
-            ### Bug fixes in v0.10.1
+            ### What's new in v0.11.0
 
-            - **Linux: server stats and uptime not tracked** — the Steam Runtime container detaches Wine from the Proton PID the app was watching, causing CPU/RAM usage and uptime to show as zero for running servers. Fixed by scanning process command lines for the server's install path to locate the correct Wine process inside the container.
+            **Server stats history**
+            CPU and RAM usage are now recorded to a local database in the background. The Overview tab shows live charts of resource usage over time so you can see how your server behaves across a session, not just at a single moment.
 
-            ### Features
+            **Server status on startup**
+            The app now scans running OS processes on launch to determine which servers are actually running, rather than relying on stored state. If a server crashed or was stopped while the app was closed, the status will be correct immediately on next open.
 
-            - **Server management** — create, start, stop, restart, and monitor multiple servers from a single dashboard. Live CPU/RAM stats and player counts update automatically.
-            - **Server configuration** — edit `GameUserSettings.ini` and `Game.ini` through an organized section editor, or drop into the raw text view for full control.
-            - **RCON console** — built-in terminal with command history, preset commands, and broadcast support.
-            - **Live log viewer** — tail server logs in real time with text filtering and auto-scroll.
-            - **Mods** — browse CurseForge directly inside the app, add mods by ID, reorder, toggle, and install via SteamCMD with one click.
-            - **Backups** — create, restore, and delete server backups; configurable retention with scheduled automatic backups.
-            - **Automation** — schedule backups, updates, restarts, and broadcasts on a cron schedule with optional RCON warnings before restarts.
-            - **Clusters** — group servers into clusters with shared player data directories.
-            - **Notifications** — configurable desktop, Discord webhook, and email alerts with per-event channel control.
-            - **ASA server updates** — shared SteamCMD cache keeps downloads fast when managing multiple servers; update cache and apply to servers independently.
-            - **Auto-update** — the app checks for new LokiASAM releases and can download and install them without leaving the app.
-            - **Setup wizard** — guided first-run experience that installs SteamCMD and Proton (Linux) automatically.
+            **Launch parameters**
+            You can now configure per-server launch arguments through the UI — both in the setup wizard and the server config tab — without editing config files manually.
+
+            **Graceful shutdown settings**
+            Servers now have configurable graceful shutdown behaviour, letting you control how the shutdown sequence is handled per server.
+
+            **Per-server update automation**
+            Update automation is now configured per server rather than globally, with in-app notifications when updates are available for the server's installed version.
+
+            **New game settings**
+            - PvP friendly fire toggle added
+            - Cryo sickness handling option added
+
+            ### Improvements
+
+            - **RCON** — improved tab layout, scrolling behaviour, and reliability. IO errors and timeouts are now distinguished and reported separately. Player list updates are handled via events.
+            - **Log handling** — ShooterGame.log is now rotated on server startup so the log viewer always starts from a clean slate for that session.
+            - **UI controls** — toggle switches replaced with icon buttons for better clarity. Numeric settings now use a combined number field and slider control.
+            - **Setup wizard** — improved visual effects and theme handling.
+
+            ### Bug fixes
+
+            - **Linux/Arch/CachyOS: blank screen on launch** — modern distros with newer GPU drivers could get a blank white window due to a WebKit DMA-BUF renderer incompatibility. Fixed.
+            - **Linux/KDE: title bar buttons stop working** — minimising and restoring the window on KDE could leave the decoration buttons unresponsive. Fixed.
+            - **Startup: Steam error output** — noisy Steam deprecation warnings are no longer surfaced as server errors in the log.
+            - **Startup: missing executable** — clearer error notification when the server binary can't be found at launch.
 
             ### Installation
 
-            **Linux:** Download the `.AppImage` from the assets below, make it executable, and run it.
-            ```bash
-            chmod +x LokiASAM_0.10.1_amd64.AppImage
-            ./LokiASAM_0.10.1_amd64.AppImage
-            ```
-            > The AppImage receives automatic update notifications. The `.deb` package does not.
+            **Linux:** Download your preferred package from the assets below.
 
-            **Windows:** Download and run `LokiASAM_0.10.1_x64-setup.exe` from the assets below.
+            | Format | Auto-updates | Notes |
+            |--------|-------------|-------|
+            | `.AppImage` | Yes | Updates in-place, no admin rights needed |
+            | `.deb` | Yes | Installs via `dpkg`, prompts for your password |
+            | `.rpm` | Yes | Installs via `rpm`, prompts for your password |
+
+            ```bash
+            chmod +x LokiASAM_0.11.0_amd64.AppImage
+            ./LokiASAM_0.11.0_amd64.AppImage
+            ```
+
+            **Windows:** Download and run `LokiASAM_0.11.0_x64-setup.exe` from the assets below.
 
             ### Notes
             - This is a public beta — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
-            - Linux requires a working Proton-GE installation for server processes. The setup wizard will guide you through this.
+            - Linux requires a working Proton-GE installation. The setup wizard will guide you through this.
           releaseDraft: false
           prerelease: false
           updaterJsonKeepUniversal: false

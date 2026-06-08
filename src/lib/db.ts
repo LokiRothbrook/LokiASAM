@@ -12,6 +12,20 @@ import Database from "@tauri-apps/plugin-sql";
 let _db: Database | null = null;
 
 /**
+ * Parse a SQLite datetime string as UTC.
+ * SQLite's CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" with no timezone
+ * marker. JavaScript's Date constructor treats that format as local time in
+ * most engines, causing displayed times to be off by the user's UTC offset.
+ * Normalising to ISO UTC ("T" separator + "Z") fixes the parse.
+ */
+export function parseDbDate(ts: string): Date {
+  if (!ts.includes("T")) {
+    return new Date(ts.replace(" ", "T") + "Z");
+  }
+  return new Date(ts);
+}
+
+/**
  * Open (or reuse) the database at an absolute filesystem path and apply
  * all schema migrations idempotently.  Must be called before any other
  * function in this module.
@@ -36,23 +50,25 @@ async function runMigrations(db: Database): Promise<void> {
 
   // ── Migration 001: core tables ──────────────────────────────────────────
   await db.execute(`CREATE TABLE IF NOT EXISTS servers (
-    id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL UNIQUE,
-    map_id            TEXT NOT NULL,
-    install_path      TEXT NOT NULL,
-    port              INTEGER NOT NULL DEFAULT 7777,
-    query_port        INTEGER NOT NULL DEFAULT 27015,
-    rcon_port         INTEGER NOT NULL DEFAULT 27020,
-    rcon_password     TEXT NOT NULL DEFAULT '',
-    max_players       INTEGER NOT NULL DEFAULT 70,
-    server_password   TEXT,
-    admin_password    TEXT NOT NULL DEFAULT '',
-    cluster_id        TEXT,
-    preset_id         TEXT,
-    status            TEXT NOT NULL DEFAULT 'stopped',
-    pid               INTEGER,
-    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    id                     TEXT PRIMARY KEY,
+    name                   TEXT NOT NULL UNIQUE,
+    map_id                 TEXT NOT NULL,
+    install_path           TEXT NOT NULL,
+    port                   INTEGER NOT NULL DEFAULT 7777,
+    query_port             INTEGER NOT NULL DEFAULT 27015,
+    rcon_port              INTEGER NOT NULL DEFAULT 27020,
+    rcon_password          TEXT NOT NULL DEFAULT '',
+    max_players            INTEGER NOT NULL DEFAULT 70,
+    server_password        TEXT,
+    admin_password         TEXT NOT NULL DEFAULT '',
+    cluster_id             TEXT,
+    preset_id              TEXT,
+    status                 TEXT NOT NULL DEFAULT 'stopped',
+    pid                    INTEGER,
+    update_available       INTEGER NOT NULL DEFAULT 0,
+    update_automation_json TEXT NOT NULL DEFAULT '{}',
+    created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
   await db.execute(`CREATE TABLE IF NOT EXISTS server_config (
@@ -164,7 +180,7 @@ async function runMigrations(db: Database): Promise<void> {
     ('asa_last_checked', ''),
     ('asa_cached_build_id', ''),
     ('asa_latest_build_id', ''),
-    ('asa_auto_check_hours', '0')`);
+    ('asa_auto_check_hours', '1')`);
 
   // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
   try {
@@ -172,6 +188,85 @@ async function runMigrations(db: Database): Promise<void> {
   } catch {
     // Column already exists — safe to ignore.
   }
+
+  // ── Migration 003: add locked_by_map to server_mods (old DBs) ───────────
+  try {
+    await db.execute("ALTER TABLE server_mods ADD COLUMN locked_by_map INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
+
+  // ── Migration 004: per-server update tracking + automation ───────────────
+  // update_available: set by the global check when this server's installed
+  //   build is behind the shared cache. Persists across reboots; cleared only
+  //   when the server is actually updated.
+  // update_automation_json: per-server update automation settings (mode,
+  //   time, restart behaviour). Replaces the old schedule_type='update' rows.
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN update_available INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN update_automation_json TEXT NOT NULL DEFAULT '{}'");
+  } catch {
+    // Column already exists — safe to ignore.
+  }
+  // Remove old cron-based update schedules — superseded by update_automation_json.
+  await db.execute("DELETE FROM schedules WHERE schedule_type = 'update'");
+
+  // ── Migration 005: per-server graceful shutdown settings ─────────────────
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN shutdown_warn_players INTEGER NOT NULL DEFAULT 1");
+  } catch { /* already exists */ }
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN shutdown_warn_minutes INTEGER NOT NULL DEFAULT 5");
+  } catch { /* already exists */ }
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN shutdown_message TEXT NOT NULL DEFAULT 'Server will shut down in {time}.'");
+  } catch { /* already exists */ }
+
+  // ── Migration 006: server stats history tables ────────────────────────────
+  // Raw 60-second samples retained for 30 days; rolled up to daily after that.
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_stats_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id   TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    sampled_at  INTEGER NOT NULL,
+    cpu_pct     REAL,
+    mem_mb      REAL,
+    players     INTEGER
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stats_history_server_time ON server_stats_history(server_id, sampled_at)"
+  );
+
+  // Daily avg + max aggregates retained for 1 year.
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_stats_daily (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id   TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    day_ts      INTEGER NOT NULL,
+    avg_cpu     REAL,
+    max_cpu     REAL,
+    avg_mem     REAL,
+    max_mem     REAL,
+    avg_players REAL,
+    max_players INTEGER,
+    UNIQUE(server_id, day_ts)
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stats_daily_server_day ON server_stats_daily(server_id, day_ts)"
+  );
+
+  // Uptime sessions — one row per contiguous server run, for record/history display.
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_uptime_sessions (
+    id         TEXT    PRIMARY KEY,
+    server_id  TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    started_at INTEGER NOT NULL,
+    ended_at   INTEGER
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_uptime_sessions_server ON server_uptime_sessions(server_id, started_at)"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -194,8 +289,20 @@ export interface ServerRow {
   preset_id: string | null;
   status: string;
   pid: number | null;
+  update_available: number;       // 0 | 1 — set by global update check
+  update_automation_json: string; // UpdateAutomation JSON blob
+  shutdown_warn_players: number;  // 0 | 1
+  shutdown_warn_minutes: number;  // default 5
+  shutdown_message: string;       // template with {time} placeholder
   created_at: string;
   updated_at: string;
+}
+
+export interface UpdateAutomation {
+  mode: "off" | "immediately" | "at_time";
+  update_time: string;   // "HH:MM" used when mode === "at_time"
+  restart_after_update: boolean;
+  only_if_running: boolean;
 }
 
 export interface ServerConfigRow {
@@ -504,16 +611,43 @@ export async function updateServerStatus(
   );
 }
 
-/** Fetch servers in a transitioning state ('running' or 'starting') that have
- *  a stored PID. Called on app startup to reconcile state from a previous session.
- *  - 'running' servers: PID checked against live processes; dead → 'crashed'
- *  - 'starting' servers: PID checked; dead → 'stopped' (never confirmed running) */
-export async function getTransitioningServers(): Promise<ServerRow[]> {
+/** Set the update_available flag for a single server. */
+export async function setServerUpdateAvailable(
+  id: string,
+  available: boolean
+): Promise<void> {
   const db = await getDb();
-  return db.select<ServerRow[]>(
-    "SELECT * FROM servers WHERE status IN ('running', 'starting') AND pid IS NOT NULL"
+  await db.execute(
+    "UPDATE servers SET update_available = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [available ? 1 : 0, id]
   );
 }
+
+/** Read/write per-server update automation settings. */
+export async function setServerUpdateAutomation(
+  id: string,
+  automation: import("./db").UpdateAutomation
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET update_automation_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [JSON.stringify(automation), id]
+  );
+}
+
+export async function updateServerShutdownSettings(
+  id: string,
+  warnPlayers: boolean,
+  warnMinutes: number,
+  message: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET shutdown_warn_players = ?, shutdown_warn_minutes = ?, shutdown_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [warnPlayers ? 1 : 0, warnMinutes, message, id]
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Aggregate helpers used by ServerCard
@@ -531,6 +665,8 @@ export interface ModRow {
   mod_thumbnail_url: string | null;
   install_order: number;
   enabled: number;
+  /** 1 if this mod is required by the server's map and cannot be removed without changing the map. */
+  locked_by_map: number;
   added_at: string;
 }
 
@@ -548,10 +684,10 @@ export async function addServerMod(
   serverId: string,
   modId: string,
   modName: string,
-  thumbnailUrl?: string | null
+  thumbnailUrl?: string | null,
+  lockedByMap?: boolean
 ): Promise<void> {
   const db = await getDb();
-  // Find the current max install_order to append at the end.
   const rows = await db.select<{ max_order: number | null }[]>(
     "SELECT MAX(install_order) as max_order FROM server_mods WHERE server_id = ?",
     [serverId]
@@ -560,9 +696,22 @@ export async function addServerMod(
   const id = crypto.randomUUID();
   await db.execute(
     `INSERT OR IGNORE INTO server_mods
-       (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`,
-    [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder]
+       (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled, locked_by_map)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder, lockedByMap ? 1 : 0]
+  );
+}
+
+/** Update the locked_by_map flag on an existing mod entry. */
+export async function setModMapLock(
+  serverId: string,
+  modId: string,
+  locked: boolean
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_mods SET locked_by_map = ? WHERE server_id = ? AND mod_id = ?",
+    [locked ? 1 : 0, serverId, modId]
   );
 }
 
@@ -771,9 +920,9 @@ export interface LogNotificationInput {
 export async function logNotification(input: LogNotificationInput): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity, input.read ?? 0]
+    `INSERT INTO in_app_notifications (id, server_id, event_type, title, body, severity, read, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [input.id, input.serverId ?? null, input.eventType, input.title, input.body, input.severity, input.read ?? 0, new Date().toISOString()]
   );
 }
 
@@ -979,6 +1128,217 @@ export async function saveNotificationConfig(
 export async function deleteNotificationConfig(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM notification_configs WHERE id = ?", [id]);
+}
+
+// ---------------------------------------------------------------------------
+// Server Stats History
+// ---------------------------------------------------------------------------
+
+export interface ChartPoint {
+  ts: number;
+  cpu: number | null;
+  cpuMax: number | null;
+  mem: number | null;
+  memMax: number | null;
+  players: number | null;
+  playersMax: number | null;
+}
+
+export interface UptimeSessionRow {
+  id: string;
+  server_id: string;
+  started_at: number;
+  ended_at: number | null;
+}
+
+/** Insert a single raw stat sample for a server. */
+export async function insertStatSample(
+  serverId: string,
+  cpuPct: number | null,
+  memMb: number | null,
+  players: number | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO server_stats_history (server_id, sampled_at, cpu_pct, mem_mb, players) VALUES (?, ?, ?, ?, ?)",
+    [serverId, Date.now(), cpuPct, memMb, players],
+  );
+}
+
+/**
+ * Query raw history table bucketed into ~120 display points.
+ * bucketMs controls the grouping interval (e.g. 60_000 for 1-min buckets).
+ */
+export async function queryStatHistory(
+  serverId: string,
+  fromMs: number,
+  bucketMs: number,
+): Promise<ChartPoint[]> {
+  const db = await getDb();
+  const now = Date.now();
+  type Row = {
+    bucket_ts: number;
+    avg_cpu: number | null;
+    max_cpu: number | null;
+    avg_mem: number | null;
+    max_mem: number | null;
+    avg_players: number | null;
+    max_players: number | null;
+  };
+  const rows = await db.select<Row[]>(
+    `SELECT
+       (sampled_at / ?) * ? AS bucket_ts,
+       AVG(cpu_pct)                            AS avg_cpu,
+       MAX(cpu_pct)                            AS max_cpu,
+       AVG(mem_mb)                             AS avg_mem,
+       MAX(mem_mb)                             AS max_mem,
+       ROUND(AVG(CAST(players AS REAL)))       AS avg_players,
+       MAX(players)                            AS max_players
+     FROM server_stats_history
+     WHERE server_id = ? AND sampled_at >= ? AND sampled_at <= ?
+     GROUP BY bucket_ts
+     ORDER BY bucket_ts ASC`,
+    [bucketMs, bucketMs, serverId, fromMs, now],
+  );
+  return rows.map((r) => ({
+    ts: r.bucket_ts,
+    cpu: r.avg_cpu,
+    cpuMax: r.max_cpu,
+    mem: r.avg_mem,
+    memMax: r.max_mem,
+    players: r.avg_players,
+    playersMax: r.max_players,
+  }));
+}
+
+/** Query the daily aggregate table for a date range. */
+export async function queryStatDaily(
+  serverId: string,
+  fromMs: number,
+): Promise<ChartPoint[]> {
+  const db = await getDb();
+  type Row = {
+    day_ts: number;
+    avg_cpu: number | null;
+    max_cpu: number | null;
+    avg_mem: number | null;
+    max_mem: number | null;
+    avg_players: number | null;
+    max_players: number | null;
+  };
+  const rows = await db.select<Row[]>(
+    `SELECT day_ts, avg_cpu, max_cpu, avg_mem, max_mem, avg_players, max_players
+     FROM server_stats_daily
+     WHERE server_id = ? AND day_ts >= ?
+     ORDER BY day_ts ASC`,
+    [serverId, fromMs],
+  );
+  return rows.map((r) => ({
+    ts: r.day_ts,
+    cpu: r.avg_cpu,
+    cpuMax: r.max_cpu,
+    mem: r.avg_mem,
+    memMax: r.max_mem,
+    players: r.avg_players,
+    playersMax: r.max_players,
+  }));
+}
+
+/**
+ * Roll up raw history rows older than 30 days into server_stats_daily,
+ * then delete the raw rows. Also prunes daily rows older than 1 year.
+ */
+export async function rollupOldStats(): Promise<void> {
+  const db = await getDb();
+  const cutoff30d = Date.now() - 30 * 24 * 60 * 60_000;
+  const cutoff1y  = Date.now() - 365 * 24 * 60 * 60_000;
+
+  type AggRow = {
+    server_id: string;
+    day_ts: number;
+    avg_cpu: number | null;
+    max_cpu: number | null;
+    avg_mem: number | null;
+    max_mem: number | null;
+    avg_players: number | null;
+    max_players: number | null;
+  };
+
+  const rows = await db.select<AggRow[]>(
+    `SELECT
+       server_id,
+       (sampled_at / 86400000) * 86400000      AS day_ts,
+       AVG(cpu_pct)                             AS avg_cpu,
+       MAX(cpu_pct)                             AS max_cpu,
+       AVG(mem_mb)                              AS avg_mem,
+       MAX(mem_mb)                              AS max_mem,
+       ROUND(AVG(CAST(players AS REAL)))        AS avg_players,
+       MAX(players)                             AS max_players
+     FROM server_stats_history
+     WHERE sampled_at < ?
+     GROUP BY server_id, day_ts`,
+    [cutoff30d],
+  );
+
+  for (const row of rows) {
+    await db.execute(
+      `INSERT OR REPLACE INTO server_stats_daily
+         (server_id, day_ts, avg_cpu, max_cpu, avg_mem, max_mem, avg_players, max_players)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [row.server_id, row.day_ts, row.avg_cpu, row.max_cpu, row.avg_mem, row.max_mem, row.avg_players, row.max_players],
+    );
+  }
+
+  await db.execute("DELETE FROM server_stats_history WHERE sampled_at < ?", [cutoff30d]);
+  await db.execute("DELETE FROM server_stats_daily WHERE day_ts < ?", [cutoff1y]);
+}
+
+// ---------------------------------------------------------------------------
+// Uptime Sessions
+// ---------------------------------------------------------------------------
+
+/**
+ * Open a new uptime session for a server. Closes any orphaned open sessions
+ * (e.g. from a previous app crash) before inserting the new row.
+ */
+export async function openUptimeSession(
+  serverId: string,
+  sessionId: string,
+  startedAt: number,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_uptime_sessions SET ended_at = ? WHERE server_id = ? AND ended_at IS NULL",
+    [startedAt, serverId],
+  );
+  await db.execute(
+    "INSERT INTO server_uptime_sessions (id, server_id, started_at) VALUES (?, ?, ?)",
+    [sessionId, serverId, startedAt],
+  );
+}
+
+/** Close the open uptime session by ID. */
+export async function closeUptimeSession(
+  sessionId: string,
+  endedAt: number,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_uptime_sessions SET ended_at = ? WHERE id = ?",
+    [endedAt, sessionId],
+  );
+}
+
+/** Return uptime sessions for a server, newest first. */
+export async function getUptimeSessions(
+  serverId: string,
+  limit = 20,
+): Promise<UptimeSessionRow[]> {
+  const db = await getDb();
+  return db.select<UptimeSessionRow[]>(
+    "SELECT * FROM server_uptime_sessions WHERE server_id = ? ORDER BY started_at DESC LIMIT ?",
+    [serverId, limit],
+  );
 }
 
 /** Get a single global (server_id IS NULL) notification config by channel. */

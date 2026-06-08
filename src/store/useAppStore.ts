@@ -8,6 +8,9 @@
  */
 
 import { create } from "zustand";
+import type { ChartPoint } from "@/lib/db";
+
+const LIVE_BUFFER_SIZE = 120; // 10 min × 5 s = 120 points
 
 interface AppState {
   /** True once setup_complete has been confirmed in SQLite. */
@@ -38,6 +41,11 @@ interface AppState {
    */
   unreadBump: number;
 
+  /** True while the startup process scan is running. All server action buttons
+   *  are disabled and the status badge shows "Detecting..." during this window. */
+  isServerScanPending: boolean;
+  setIsServerScanPending: (v: boolean) => void;
+
   /**
    * Wall-clock timestamp (ms since epoch) when each server process first started.
    * Keyed by server ID.  Set when the first "starting" event arrives; cleared on
@@ -47,6 +55,15 @@ interface AppState {
   serverStartTimes: Record<string, number>;
   setServerStartTime: (id: string, ts: number) => void;
   clearServerStartTime: (id: string) => void;
+
+  /**
+   * Server IDs where the last start-failed was due to a missing executable.
+   * These servers hide the Retry button — only Reinstall makes sense.
+   * Cleared when the user retries or reinstall completes.
+   */
+  noRetryServerIds: Record<string, true>;
+  setNoRetryServer: (id: string) => void;
+  clearNoRetryServer: (id: string) => void;
 
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
@@ -63,6 +80,14 @@ interface AppState {
   incrementUnread: () => void;
   /** Called after the user views/clears notifications. */
   resetUnreadBump: () => void;
+
+  /**
+   * Rolling 10-minute live stat buffers keyed by server ID.
+   * Each array holds up to LIVE_BUFFER_SIZE (60) points at 10s resolution.
+   */
+  statsLiveBuffers: Record<string, ChartPoint[]>;
+  addLiveSample: (serverId: string, point: ChartPoint) => void;
+  clearLiveBuffer: (serverId: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -78,6 +103,8 @@ export const useAppStore = create<AppState>((set) => ({
   verifyTotal: 0,
   verifyProgress: 0,
   unreadBump: 0,
+  isServerScanPending: false,
+  setIsServerScanPending: (v) => set({ isServerScanPending: v }),
   serverStartTimes: {},
   setServerStartTime: (id, ts) =>
     set((s) => ({ serverStartTimes: { ...s.serverStartTimes, [id]: ts } })),
@@ -86,6 +113,15 @@ export const useAppStore = create<AppState>((set) => ({
       const next = { ...s.serverStartTimes };
       delete next[id];
       return { serverStartTimes: next };
+    }),
+  noRetryServerIds: {},
+  setNoRetryServer: (id) =>
+    set((s) => ({ noRetryServerIds: { ...s.noRetryServerIds, [id]: true } })),
+  clearNoRetryServer: (id) =>
+    set((s) => {
+      const next = { ...s.noRetryServerIds };
+      delete next[id];
+      return { noRetryServerIds: next };
     }),
 
   setSetupChecked: (checked) => set({ setupChecked: checked }),
@@ -101,4 +137,19 @@ export const useAppStore = create<AppState>((set) => ({
   stopVerifying: () => set({ verifying: false, verifyTotal: 0, verifyProgress: 0 }),
   incrementUnread: () => set((s) => ({ unreadBump: s.unreadBump + 1 })),
   resetUnreadBump: () => set({ unreadBump: 0 }),
+
+  statsLiveBuffers: {},
+  addLiveSample: (serverId, point) =>
+    set((s) => {
+      const prev = s.statsLiveBuffers[serverId] ?? [];
+      const next = [...prev, point];
+      if (next.length > LIVE_BUFFER_SIZE) next.shift();
+      return { statsLiveBuffers: { ...s.statsLiveBuffers, [serverId]: next } };
+    }),
+  clearLiveBuffer: (serverId) =>
+    set((s) => {
+      const next = { ...s.statsLiveBuffers };
+      delete next[serverId];
+      return { statsLiveBuffers: next };
+    }),
 }));

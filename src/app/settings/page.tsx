@@ -5,21 +5,26 @@ import {
   Folder, Terminal, Info,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
+import {
+  Dialog, DialogContent, DialogDescription,
+  DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import {
   getAppSetting, setAppSetting,
   saveNotificationConfig, getNotificationConfigs,
+  getServers,
   type NotificationConfigRow,
 } from "@/lib/db";
+import { runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress } from "@/lib/tauri-commands";
@@ -228,7 +233,16 @@ function BaseDirMigrationSection() {
               <p className="text-sm" style={{ color: "var(--foreground)" }}>Create backup before moving</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Backs up the lokiasam config/DB folder inside the current base dir.</p>
             </div>
-            <Switch checked={createBackup} onCheckedChange={setCreateBackup} />
+            <button
+              type="button"
+              onClick={() => setCreateBackup((v) => !v)}
+              className="shrink-0 flex items-center"
+              aria-label={createBackup ? "Disable backup" : "Enable backup"}
+            >
+              {createBackup
+                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+            </button>
           </div>
 
           <div className="rounded-lg p-3" style={{ background: "rgba(255,136,0,0.06)", border: "1px solid rgba(255,136,0,0.2)" }}>
@@ -602,24 +616,22 @@ const AUTO_CHECK_OPTIONS = [
 
 function ServerUpdatesSection() {
   const [checking, setChecking]       = useState(false);
-  const [updateAvailable, setUpdate]  = useState(false);
   const [cachedBuild, setCached]      = useState("");
-  const [latestBuild, setLatest]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
   const [autoCheckHours, setAutoCheck] = useState("0");
   const [hasCacheInstalled, setHasCacheInstalled] = useState<boolean | null>(null);
+  const [showApplyAll, setShowApplyAll] = useState(false);
+  const [applyAllInfo, setApplyAllInfo] = useState<{ total: number; running: number }>({ total: 0, running: 0 });
+  const [applyingAll, setApplyingAll] = useState(false);
 
   const load = useCallback(async () => {
-    const [avail, cached, latest, checked, hours, baseDir] = await Promise.all([
-      getAppSetting("asa_update_available"),
+    const [cached, checked, hours, baseDir] = await Promise.all([
       getAppSetting("asa_cached_build_id"),
-      getAppSetting("asa_latest_build_id"),
       getAppSetting("asa_last_checked"),
       getAppSetting("asa_auto_check_hours"),
       getAppSetting("base_dir"),
     ]);
-    setUpdate(avail === "true"); setCached(cached ?? ""); setLatest(latest ?? "");
-    setLastChecked(checked ?? ""); setAutoCheck(hours ?? "0");
+    setCached(cached ?? ""); setLastChecked(checked ?? ""); setAutoCheck(hours ?? "0");
     if (baseDir) {
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
@@ -635,35 +647,120 @@ function ServerUpdatesSection() {
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const baseDir = await getAppSetting("base_dir");
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
       if (!baseDir) { toast.error("Base directory not configured."); return; }
+      if (!steamcmdPath) { toast.error("SteamCMD path not configured. Set it up in Settings."); return; }
+
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const result = await tauriCmd.checkAsaUpdate(cacheDir);
+
+      // Read build ID before update so we can detect whether something changed.
+      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
+
+      // Run SteamCMD. If already current this is fast; if an update exists it downloads.
+      const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
+
       const now = new Date().toISOString();
-      await setAppSetting("asa_update_available", String(result.updateAvailable));
-      await setAppSetting("asa_cached_build_id",  result.cachedBuildId);
-      await setAppSetting("asa_latest_build_id",  result.latestBuildId);
-      await setAppSetting("asa_last_checked",     now);
+      const cacheUpdated = !!newBuild && newBuild !== oldBuild;
+
+      await Promise.all([
+        setAppSetting("asa_cached_build_id", newBuild),
+        setAppSetting("asa_latest_build_id", newBuild),
+        setAppSetting("asa_last_checked",    now),
+      ]);
+
+      // Run per-server check now that the cache build ID is current.
+      await runPerServerUpdateCheck();
+
+      const servers = await getServers();
+      const outdated = servers.filter((s) => s.update_available === 1);
+      await setAppSetting("asa_update_available", String(outdated.length > 0));
       load();
-      if (result.updateAvailable) {
-        toast.info(`Update available — build ${result.latestBuildId} (cache is at ${result.cachedBuildId}).`);
+
+      if (cacheUpdated) {
+        await dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+          serverId:   null,
+          serverName: "ASA Cache",
+          title:      "Cache Updated",
+          body:       `Cache updated to build ${newBuild}${oldBuild ? ` (was ${oldBuild})` : ""}. Outdated servers have been flagged.`,
+          severity:   "info",
+        });
       } else {
-        toast.success("ASA server cache is up to date.");
+        // "Already up to date" is purely informational — toast only, no bell.
+        toast.success(`Cache is up to date (build ${newBuild}).`);
+      }
+
+      if (outdated.length > 0) {
+        const running = outdated.filter((s) => s.status === "running").length;
+        setApplyAllInfo({ total: outdated.length, running });
+        setShowApplyAll(true);
       }
     } catch (e) {
-      const msg = `Update check failed: ${e}`;
-      toast.error(msg);
-      dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
         serverId:   null,
         serverName: "ASA Cache",
-        title:      "ASA Update Check Failed",
-        body:       msg,
+        title:      "Cache Update Failed",
+        body:       `Failed to update cache: ${e}`,
         severity:   "error",
       });
     } finally {
       setChecking(false);
+    }
+  };
+
+  const handleApplyAll = async () => {
+    setShowApplyAll(false);
+    setApplyingAll(true);
+    try {
+      const servers = await getServers();
+      const outdated = servers.filter((s) => s.update_available === 1);
+      for (const server of outdated) {
+        try {
+          await applyUpdateToServer(
+            server.id,
+            server.name,
+            server.install_path,
+            server.status === "running",
+            undefined,
+          );
+        } catch (err) {
+          // restartNeeded signal — server updated successfully, restart handled inside.
+          if (!(err && typeof err === "object" && "restartNeeded" in err)) {
+            await dispatchNotification({
+              eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+              serverId:   server.id,
+              serverName: server.name,
+              title:      `${server.name} Update Failed`,
+              body:       `Failed to update ${server.name}: ${err}`,
+              severity:   "error",
+            });
+          }
+        }
+      }
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
+        serverId:   null,
+        serverName: "All Servers",
+        title:      `${outdated.length} Server${outdated.length !== 1 ? "s" : ""} Updated`,
+        body:       `${outdated.length} server${outdated.length !== 1 ? "s have" : " has"} been updated from the cache.`,
+        severity:   "success",
+      });
+    } catch (e) {
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+        serverId:   null,
+        serverName: "ASA Cache",
+        title:      "Apply All Failed",
+        body:       `Failed to apply updates: ${e}`,
+        severity:   "error",
+      });
+    } finally {
+      setApplyingAll(false);
     }
   };
 
@@ -675,32 +772,17 @@ function ServerUpdatesSection() {
   return (
     <div className="space-y-5">
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Compares the locally cached build ID against the latest build on Steam. Does not run SteamCMD or alter any files — apply updates per-server from the server Overview tab or via an Auto-Update schedule.
+        Runs SteamCMD to update the shared server cache. If a new version is available it will be downloaded automatically. Servers are then compared against the updated cache and marked for update if behind.
       </p>
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex flex-col gap-0.5">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Cache Build</span>
           <span className="font-mono text-sm" style={{ color: "var(--text-primary)" }}>{cachedBuild || "—"}</span>
         </div>
-        {updateAvailable && latestBuild && (
-          <>
-            <div className="text-xs" style={{ color: "var(--text-muted)" }}>→</div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Steam Build</span>
-              <span className="font-mono text-sm" style={{ color: "#ffa500" }}>{latestBuild}</span>
-            </div>
-          </>
-        )}
         <div className="flex flex-col gap-0.5">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Last Checked</span>
           <span className="text-sm" style={{ color: "var(--text-primary)" }}>{lastChecked ? new Date(lastChecked).toLocaleString() : "Never"}</span>
         </div>
-        {updateAvailable && (
-          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium"
-            style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}>
-            <ArrowUp className="w-3 h-3" /> Update Available
-          </span>
-        )}
       </div>
       <div className="flex items-center gap-3 flex-wrap">
         <Button onClick={handleCheck} disabled={checking || hasCacheInstalled === false} size="sm" className="gap-1.5"
@@ -717,7 +799,7 @@ function ServerUpdatesSection() {
       <Separator style={{ background: "var(--border)" }} />
       <div className="space-y-2">
         <Label style={{ color: "var(--text-primary)" }}>Auto-Check Interval</Label>
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>Automatically check for ASA updates via the Rust scheduler (immune to tray throttling).</p>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>Automatically runs the cache update on an interval — immune to tray throttling. If a new version is downloaded, outdated servers are marked automatically.</p>
         <div className="flex gap-2 flex-wrap">
           {AUTO_CHECK_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => handleAutoCheckChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
@@ -731,6 +813,34 @@ function ServerUpdatesSection() {
           ))}
         </div>
       </div>
+
+      {/* ── Apply to all servers dialog ── */}
+      <Dialog open={showApplyAll} onOpenChange={setShowApplyAll}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Apply Update to All Servers?</DialogTitle>
+            <DialogDescription>
+              {applyAllInfo.total} server{applyAllInfo.total !== 1 ? "s are" : " is"} behind the cache.
+              {applyAllInfo.running > 0 && (
+                <> {applyAllInfo.running} currently running server{applyAllInfo.running !== 1 ? "s" : ""} will be stopped and restarted after the update.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowApplyAll(false)}
+              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              No, skip
+            </Button>
+            <Button onClick={handleApplyAll} disabled={applyingAll}
+              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              {applyingAll
+                ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                : <ArrowUp className="w-3.5 h-3.5 mr-1.5" />}
+              Yes, update all
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -964,7 +1074,7 @@ function ProtonGeUpdateSection() {
       {looksExternal && !isManaged && (
         <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
           <div className="flex items-start gap-2">
-            <Link className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: "var(--neon-orange)" }} />
+            <Link className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
             <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
               This Proton-GE path is outside LokiASAM's managed directory. Automatic updates are suppressed.
             </p>
@@ -1246,6 +1356,102 @@ function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fie
 // Close-to-tray section
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// AppImage integration (Linux AppImage only)
+// ---------------------------------------------------------------------------
+
+function AppImageIntegrationSection() {
+  const [status, setStatus]   = useState<{ isAppimage: boolean; isInstalled: boolean } | null>(null);
+  const [working, setWorking] = useState(false);
+
+  const refresh = useCallback(() => {
+    tauriCmd.checkAppimageIntegration().then(setStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (!status?.isAppimage) return null;
+
+  const handleInstall = async () => {
+    setWorking(true);
+    try {
+      await tauriCmd.installAppimageIntegration();
+      refresh();
+      toast.success("LokiASAM added to your application menu.", {
+        description: "If it doesn't appear right away, log out and back in.",
+        duration: 6000,
+      });
+    } catch (e) {
+      toast.error("Installation failed", { description: String(e) });
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const handleUninstall = async () => {
+    setWorking(true);
+    try {
+      await tauriCmd.uninstallAppimageIntegration();
+      refresh();
+      toast.success("Removed from application menu.");
+    } catch (e) {
+      toast.error("Removal failed", { description: String(e) });
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Adds LokiASAM to your desktop application launcher so you can find, launch, and pin it
+        without navigating to the AppImage file each time. Writes a <code>.desktop</code> file and
+        icon to <code>~/.local/share/</code> only — no files are placed outside that folder.
+        Removing it restores the system to its original state.
+      </p>
+      {status.isInstalled ? (
+        <div className="space-y-2">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <span className="text-sm flex items-center gap-2" style={{ color: "var(--neon-green)" }}>
+            <CheckCircle2 className="w-4 h-4" />
+            Installed in application menu
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleUninstall}
+            disabled={working}
+            className="gap-1.5"
+            style={{ borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+          >
+            {working
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <StopCircle className="w-3.5 h-3.5" />}
+            Remove from Menu
+          </Button>
+        </div>
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          If the icon doesn't appear in your launcher, log out and back in (or reboot).
+        </p>
+        </div>
+      ) : (
+        <Button
+          size="sm"
+          onClick={handleInstall}
+          disabled={working}
+          className="gap-2"
+          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+        >
+          {working
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Download className="w-3.5 h-3.5" />}
+          Install to Application Menu
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function CloseToTraySection() {
   const [closeToTray, setCloseToTrayState] = useState(true);
 
@@ -1358,6 +1564,16 @@ export default function SettingsPage() {
           <Section icon={Monitor} title="System Tray" description="Control how LokiASAM behaves when minimized or closed.">
             <CloseToTraySection />
           </Section>
+
+          {IS_LINUX && (
+            <Section
+              icon={Layers}
+              title="Application Menu Integration"
+              description="Install LokiASAM into your desktop launcher (AppImage only)."
+            >
+              <AppImageIntegrationSection />
+            </Section>
+          )}
         </div>
       )}
 

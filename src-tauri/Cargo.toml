@@ -1,6 +1,6 @@
 [package]
 name = "lokiasam"
-version = "0.10.0"
+version = "0.11.0"
 description = "Loki Ark Survival Ascended Server Manager"
 authors = ["Loki"]
 license = "GPL-3.0-or-later"
@@ -63,6 +63,10 @@ url = { version = "2" }
 
 # Logging
 log = "0.4"
+
+# Direct SQLite access for the background stats recorder (separate from tauri-plugin-sql).
+# "bundled" links SQLite statically so no system library is required.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Linux /proc reader — process discovery, PSS memory, thread detection
 # Replaces hand-rolled /proc string parsing with a tested, maintained library.

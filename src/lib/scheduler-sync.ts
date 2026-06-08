@@ -11,8 +11,9 @@
 import { tauriCmd, type ScheduleEntry } from "@/lib/tauri-commands";
 import {
   getServers, getServerSchedules, getServerMods, getServerConfig, getAppSetting,
+  setAppSetting,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { ARK_MAPS, LAUNCH_PARAMETERS } from "@/data/game-data";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 
 function isTauriEnv(): boolean {
@@ -58,9 +59,13 @@ export async function syncSchedulesToRust(): Promise<void> {
       const launchArgs: Record<string, string> = config
         ? JSON.parse(config.launch_args_json)
         : {};
-      const extraArgs = Object.entries(launchArgs)
-        .filter(([, v]) => v === "true" || v === "1")
-        .map(([k]) => `-${k}`);
+      const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
+        if (!v || v === "false" || v === "0") return [];
+        const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
+        if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
+        if (param) return v ? [`${param.flag}${v}`] : [];
+        return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
+      });
 
       const modIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
@@ -89,9 +94,6 @@ export async function syncSchedulesToRust(): Promise<void> {
           queryPort: server.query_port,
           rconPort: server.rcon_port,
           rconPassword: server.rcon_password,
-          maxPlayers: server.max_players,
-          serverPassword: server.server_password ?? undefined,
-          adminPassword: server.admin_password,
           extraArgs,
           modIds,
           protonPath: protonPath ?? undefined,
@@ -105,6 +107,51 @@ export async function syncSchedulesToRust(): Promise<void> {
           nextRunMs,
         });
       }
+    }
+
+    // ── Global auto-update-check entry ─────────────────────────────────────
+    // This is a synthetic entry (not in the schedules table) that fires the
+    // shared cache update on the interval configured in Settings.
+    const [autoCheckHours, lastChecked] = await Promise.all([
+      getAppSetting("asa_auto_check_hours"),
+      getAppSetting("asa_last_checked"),
+    ]);
+    const hours = parseInt(autoCheckHours ?? "0");
+    if (hours > 0 && steamcmdPath && baseDir) {
+      const intervalMs = hours * 3_600_000;
+      let nextRunMs: number;
+      if (!lastChecked) {
+        // Never checked — wait 5 minutes after startup to let things settle.
+        nextRunMs = Date.now() + 5 * 60_000;
+      } else {
+        const scheduled = new Date(lastChecked).getTime() + intervalMs;
+        // If overdue, give a 30-second startup buffer before firing.
+        nextRunMs = scheduled < Date.now() ? Date.now() + 30_000 : scheduled;
+      }
+
+      entries.push({
+        scheduleId:   "global-update-check",
+        serverId:     "global",
+        serverName:   "ASA Cache",
+        installPath:  "",
+        mapPath:      "",
+        mapId:        "",
+        port:         0,
+        queryPort:    0,
+        rconPort:     0,
+        rconPassword: "",
+        extraArgs:    [],
+        modIds:       [],
+        protonPath:   protonPath ?? undefined,
+        prefixPath:   prefixPath ?? undefined,
+        steamcmdPath: steamcmdPath ?? "",
+        baseDir:      baseDir ?? "",
+        backupDir:    "",
+        scheduleType: "global_update_check",
+        enabled:      true,
+        configJson:   "{}",
+        nextRunMs,
+      });
     }
 
     await tauriCmd.syncSchedules(entries);

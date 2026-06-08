@@ -126,8 +126,8 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
         .as_str()
         .unwrap_or("Server broadcast.")
         .to_string();
-    transient_rcon_send(entry.rcon_port, &entry.admin_password, &format!("Broadcast {message}")).await;
-    let _ = app; // no app events needed for broadcast
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {message}")).await;
+    let _ = app; // no app events needed for chat
     Ok(())
 }
 
@@ -167,43 +167,81 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
             .unwrap_or("Server restarting in {minutes} minutes.")
             .to_string();
         let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.admin_password, &format!("Broadcast {msg}")).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 
-    let _ = inner_stop_server(app, &entry.server_id, true);
+    // Clean shutdown via RCON: save then exit.
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
+    sleep(Duration::from_secs(2)).await;
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
 
-    // Wait up to 15 s for the process to exit.
-    for _ in 0..30 {
+    // Wait up to 30 s for the process to exit gracefully.
+    for _ in 0..60 {
         sleep(Duration::from_millis(500)).await;
-        let running = {
+        let still_running = {
             let state = app.state::<AppState>();
             let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
             r
         };
-        if !running {
-            break;
-        }
+        if !still_running { break; }
     }
+
+    // Force-kill if still alive.
+    let _ = inner_stop_server(app, &entry.server_id, false);
 
     let params = entry_to_start_params(entry);
     inner_start_server(app.clone(), params).await.map(|_| ())
+}
+
+/// Run a global cache update check: update the shared SteamCMD cache, compare
+/// old vs new build IDs, and emit `asa://update-check` so the frontend can
+/// mark outdated servers and prompt the user.
+async fn fire_global_update_check(
+    app: &AppHandle,
+    entry: &crate::state::scheduler::ScheduleEntry,
+) -> Result<(), String> {
+    let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
+    let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
+
+    let old_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
+        .unwrap_or_else(|| "0".to_string());
+
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| format!("Failed to create cache dir: {e}"))?;
+
+    crate::commands::steamcmd::steamcmd_app_update(
+        app,
+        &entry.steamcmd_path,
+        &cache_dir,
+        false,
+        "steamcmd://output/global-update-check",
+        None,
+    )
+    .await?;
+
+    let new_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
+        .unwrap_or_else(|| old_build.clone());
+
+    let _ = app.emit(
+        crate::events::ASA_UPDATE_CHECK,
+        serde_json::json!({
+            "updateAvailable": new_build != old_build,
+            "cachedBuildId":   old_build,
+            "latestBuildId":   new_build,
+        }),
+    );
+
+    Ok(())
 }
 
 async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
     let cfg: serde_json::Value =
         serde_json::from_str(&entry.config_json).unwrap_or_default();
 
-    let mode = cfg["mode"].as_str().unwrap_or("check_and_apply");
     let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
     let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
-
-    // ── Check-only mode: query Steam API, emit result, do nothing else ────────
-    if mode == "check_only" {
-        let result = crate::commands::steamcmd::check_asa_update(cache_dir).await?;
-        let _ = app.emit(crate::events::ASA_UPDATE_CHECK, result);
-        return Ok(());
-    }
 
     // ── Check & Apply mode ────────────────────────────────────────────────────
     let is_running = {
@@ -225,7 +263,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         if let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await {
             let _ = stream.set_nodelay(true);
             let mut conn = RconConn { stream, next_id: 1 };
-            if conn.send_packet(1, RCON_AUTH, &entry.admin_password).await.is_ok() {
+            if conn.send_packet(1, RCON_AUTH, &entry.rcon_password).await.is_ok() {
                 for _ in 0..3 {
                     match tokio::time::timeout(Duration::from_secs(3), conn.recv_packet()).await {
                         Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
@@ -260,21 +298,28 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             .unwrap_or("Server updating in {minutes} minutes.")
             .to_string();
         let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.admin_password, &format!("Broadcast {msg}")).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
         sleep(Duration::from_secs(warning_minutes * 60)).await;
     }
 
     if is_running {
-        let _ = inner_stop_server(app, &entry.server_id, true);
-        for _ in 0..30 {
+        // Clean shutdown via RCON: save then exit.
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
+        sleep(Duration::from_secs(2)).await;
+        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
+
+        for _ in 0..60 {
             sleep(Duration::from_millis(500)).await;
-            let running = {
+            let still_running = {
                 let state = app.state::<AppState>();
                 let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
                 r
             };
-            if !running { break; }
+            if !still_running { break; }
         }
+
+        // Force-kill if still alive.
+        let _ = inner_stop_server(app, &entry.server_id, false);
     }
 
     // Update shared cache via SteamCMD.
@@ -320,9 +365,6 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
         port: entry.port,
         query_port: entry.query_port,
         rcon_port: entry.rcon_port,
-        max_players: entry.max_players,
-        server_password: entry.server_password.clone(),
-        admin_password: entry.admin_password.clone(),
         extra_args: entry.extra_args.clone(),
         mod_ids: entry.mod_ids.clone(),
         proton_path: entry.proton_path.clone(),
@@ -371,6 +413,10 @@ pub fn tick_scheduler(app: &AppHandle) {
                     Err(e) => (false, Some(e), None),
                 },
                 "update" => match fire_update(&app, &entry).await {
+                    Ok(_) => (true, None, None),
+                    Err(e) => (false, Some(e), None),
+                },
+                "global_update_check" => match fire_global_update_check(&app, &entry).await {
                     Ok(_) => (true, None, None),
                     Err(e) => (false, Some(e), None),
                 },

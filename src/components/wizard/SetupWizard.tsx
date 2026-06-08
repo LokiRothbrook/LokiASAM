@@ -32,7 +32,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
-import { Switch } from "@/components/ui/switch";
 import { useSetupStore } from "@/store/useSetupStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
@@ -275,8 +274,9 @@ function ThemeStep() {
                 className="w-8 h-8 rounded-full transition-all"
                 style={{
                   background: hex,
-                  boxShadow: selected ? `0 0 0 2px #000, 0 0 0 4px ${hex}` : "none",
-                  transform: selected ? "scale(1.15)" : "scale(1)",
+                  boxShadow: selected
+                    ? `0 0 0 2px #050510, 0 0 0 4px ${hex}, 0 0 10px ${hex}`
+                    : "none",
                 }}
               />
             );
@@ -1745,6 +1745,96 @@ function AutoUpdateStep() {
   );
 }
 
+function AppImageIntegrationPanel() {
+  const [status, setStatus]   = useState<{ isAppimage: boolean; isInstalled: boolean } | null>(null);
+  const [working, setWorking] = useState(false);
+
+  useEffect(() => {
+    tauriCmd.checkAppimageIntegration().then(setStatus).catch(() => {});
+  }, []);
+
+  if (!status?.isAppimage) return null;
+
+  const handleInstall = async () => {
+    setWorking(true);
+    try {
+      await tauriCmd.installAppimageIntegration();
+      setStatus({ ...status, isInstalled: true });
+      toast.success("LokiASAM added to your application menu.");
+    } catch (e) {
+      toast.error("Failed to install", { description: String(e) });
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const handleUninstall = async () => {
+    setWorking(true);
+    try {
+      await tauriCmd.uninstallAppimageIntegration();
+      setStatus({ ...status, isInstalled: false });
+      toast.success("Removed from application menu.");
+    } catch (e) {
+      toast.error("Failed to uninstall", { description: String(e) });
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div
+      className="w-full rounded-xl p-4 text-left space-y-3"
+      style={{ background: "rgba(191,0,255,0.06)", border: "1px solid rgba(191,0,255,0.2)" }}
+    >
+      <div className="flex items-start gap-3">
+        <Layers className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+            Install to Application Menu
+          </p>
+          <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+            Adds LokiASAM to your desktop launcher so you can find and pin it without navigating
+            to the AppImage file. Writes a <code>.desktop</code> file and icon to{" "}
+            <code>~/.local/share/</code>. You can remove this at any time from Settings.
+          </p>
+        </div>
+      </div>
+
+      {status.isInstalled ? (
+        <div className="flex items-center justify-between">
+          <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-green)" }}>
+            <CheckCircle2 className="w-3.5 h-3.5" /> Installed in application menu
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleUninstall}
+            disabled={working}
+            className="text-xs h-7"
+            style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+          >
+            {working ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+            Remove
+          </Button>
+        </div>
+      ) : (
+        <Button
+          size="sm"
+          onClick={handleInstall}
+          disabled={working}
+          className="gap-2"
+          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+        >
+          {working
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Download className="w-3.5 h-3.5" />}
+          Install to Application Menu
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function CompleteStep({ onComplete }: { onComplete: () => void }) {
   const { baseDir, backupDir, steamcmdPath, protonPath } = useSetupStore();
 
@@ -1789,6 +1879,9 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
           </div>
         ))}
       </div>
+
+      {/* AppImage-only: offer application menu integration */}
+      <AppImageIntegrationPanel />
 
       <Button
         onClick={onComplete}

@@ -63,15 +63,14 @@ export function NotificationManager() {
         severity:   "error",
       });
     } else if (status.status === "start-failed") {
-      const detail = status.error
-        ? `Server process exited immediately after launch.\n\nProcess output:\n${status.error}`
-        : "Server process exited immediately after launch. Verify that Proton-GE is configured correctly, the server files are intact, and all required ports are available.";
+      const body = status.error
+        ?? "Server failed to start. Verify that Proton-GE is configured correctly, the server files are intact, and all required ports are available.";
       await dispatchNotification({
         eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
         serverId:   status.serverId,
         serverName,
         title:      `${serverName} failed to start`,
-        body:       detail,
+        body,
         severity:   "error",
       });
     }

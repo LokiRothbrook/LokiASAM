@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   Package, Plus, Trash2, ChevronUp, ChevronDown, Globe,
   AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Info,
-  Loader2, XCircle,
+  Loader2, XCircle, Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -157,9 +157,15 @@ export function ModsTab({ server }: Props) {
   };
 
   // ── Mod CRUD ──────────────────────────────────────────────────────────
-  const handleRemoveMod = async (modId: string) => {
+  const handleRemoveMod = async (mod: ModRow) => {
+    if (mod.locked_by_map) {
+      toast.warning("Cannot remove map mod", {
+        description: "This mod is required by the server's map. Change the map to remove it.",
+      });
+      return;
+    }
     try {
-      await removeServerMod(server.id, modId);
+      await removeServerMod(server.id, mod.mod_id);
       await loadMods();
     } catch (e) {
       toast.error("Failed to remove mod", { description: String(e) });
@@ -246,7 +252,7 @@ export function ModsTab({ server }: Props) {
                 onMoveUp={() => handleMoveUp(index)}
                 onMoveDown={() => handleMoveDown(index)}
                 onToggle={(enabled) => handleToggleMod(mod.mod_id, enabled)}
-                onRemove={() => handleRemoveMod(mod.mod_id)}
+                onRemove={() => handleRemoveMod(mod)}
               />
             ))
           )}
@@ -432,44 +438,28 @@ function ModRowItem({
   onRemove,
 }: ModRowItemProps) {
   const enabled = mod.enabled === 1;
+  const locked  = mod.locked_by_map === 1;
 
   return (
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg group transition-all"
       style={{
-        background: "rgba(10,10,30,0.4)",
-        border: "1px solid rgba(191,0,255,0.08)",
+        background: locked ? "rgba(0,255,255,0.04)" : "rgba(10,10,30,0.4)",
+        border: `1px solid ${locked ? "rgba(0,255,255,0.18)" : "rgba(191,0,255,0.08)"}`,
         opacity: enabled ? 1 : 0.55,
       }}
     >
       {/* Order index */}
-      <span
-        className="text-xs font-mono w-5 text-center shrink-0"
-        style={{ color: "var(--text-muted)" }}
-      >
+      <span className="text-xs font-mono w-5 text-center shrink-0" style={{ color: "var(--text-muted)" }}>
         {index + 1}
       </span>
 
-      {/* Up / Down */}
+      {/* Up / Down — disabled for locked mods */}
       <div className="flex flex-col gap-0.5 shrink-0">
-        <button
-          type="button"
-          onClick={onMoveUp}
-          disabled={index === 0}
-          className="p-0.5 rounded transition-colors disabled:opacity-20"
-          style={{ color: "var(--text-muted)" }}
-          title="Move up"
-        >
+        <button type="button" onClick={onMoveUp} disabled={index === 0 || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move up">
           <ChevronUp className="w-3 h-3" />
         </button>
-        <button
-          type="button"
-          onClick={onMoveDown}
-          disabled={index === total - 1}
-          className="p-0.5 rounded transition-colors disabled:opacity-20"
-          style={{ color: "var(--text-muted)" }}
-          title="Move down"
-        >
+        <button type="button" onClick={onMoveDown} disabled={index === total - 1 || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move down">
           <ChevronDown className="w-3 h-3" />
         </button>
       </div>
@@ -477,46 +467,53 @@ function ModRowItem({
       {/* Mod info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span
-            className="text-sm font-medium truncate"
-            style={{ color: "var(--text-primary)" }}
-          >
+          {locked && (
+            <span title="Required by map — cannot be removed">
+              <Lock className="w-3 h-3 shrink-0" style={{ color: "var(--neon-cyan)" }} />
+            </span>
+          )}
+          <span className="text-sm font-medium truncate" style={{ color: locked ? "var(--neon-cyan)" : "var(--text-primary)" }}>
             {mod.mod_name}
           </span>
+          {locked && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,255,0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)" }}>
+              Map Mod
+            </span>
+          )}
         </div>
-        <span
-          className="text-xs font-mono"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {mod.mod_id}
-        </span>
+        <span className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>{mod.mod_id}</span>
+        {locked && (
+          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-subtle)" }}>Required by this server&apos;s map — change the map to remove.</p>
+        )}
       </div>
 
-      {/* Enable toggle */}
+      {/* Enable toggle — locked mods stay enabled */}
       <button
         type="button"
-        onClick={() => onToggle(!enabled)}
-        title={enabled ? "Disable mod" : "Enable mod"}
+        onClick={() => !locked && onToggle(!enabled)}
+        title={locked ? "Map mod — always loaded" : enabled ? "Disable mod" : "Enable mod"}
         className="shrink-0 transition-colors"
-        style={{ color: enabled ? "var(--neon-purple)" : "var(--text-muted)" }}
+        style={{ color: locked ? "var(--neon-cyan)" : enabled ? "var(--neon-purple)" : "var(--text-muted)", cursor: locked ? "default" : "pointer" }}
       >
-        {enabled ? (
-          <ToggleRight className="w-5 h-5" />
-        ) : (
-          <ToggleLeft className="w-5 h-5" />
-        )}
+        {enabled ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
       </button>
 
-      {/* Remove */}
-      <button
-        type="button"
-        onClick={onRemove}
-        title="Remove mod"
-        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ color: "var(--neon-red)" }}
-      >
-        <Trash2 className="w-4 h-4" />
-      </button>
+      {/* Remove — hidden for locked mods, shown on hover for normal mods */}
+      {locked ? (
+        <span title="Cannot remove map mod">
+          <Lock className="w-4 h-4 shrink-0" style={{ color: "var(--neon-cyan)", opacity: 0.5 }} />
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onRemove}
+          title="Remove mod"
+          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ color: "var(--neon-red)" }}
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      )}
     </div>
   );
 }

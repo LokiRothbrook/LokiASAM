@@ -8,8 +8,11 @@ import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
 import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getTransitioningServers, updateServerStatus, getAppSetting, setAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
+import { runPerServerUpdateCheck } from "@/lib/update-utils";
+import { dispatchNotification } from "@/lib/notifications";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -21,7 +24,6 @@ import { toast } from "sonner";
 
 function UpdateStatusChip() {
   const [checking, setChecking]       = useState(false);
-  const [updating, setUpdating]       = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [cachedBuild, setCachedBuild] = useState("");
   const [latestBuild, setLatestBuild] = useState("");
@@ -58,62 +60,63 @@ function UpdateStatusChip() {
       await setAppSetting("asa_latest_build_id", r.latestBuildId);
       await setAppSetting("asa_last_checked", now);
       load();
+      // Always run per-server check — a server may be behind the cache even
+      // if the cache itself is current (e.g. server was never updated).
+      await runPerServerUpdateCheck();
     }
   });
 
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const cacheDir = await getAppSetting("base_dir");
-      if (!cacheDir) { toast.error("Base directory not configured."); return; }
-      const sep = cacheDir.includes("\\") ? "\\" : "/";
-      const dir = `${cacheDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const result = await tauriCmd.checkAsaUpdate(dir);
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) {
+        toast.error("Base directory or SteamCMD not configured.");
+        return;
+      }
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
+      const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
       const now = new Date().toISOString();
-      await setAppSetting("asa_update_available", String(result.updateAvailable));
-      await setAppSetting("asa_cached_build_id", result.cachedBuildId);
-      await setAppSetting("asa_latest_build_id", result.latestBuildId);
-      await setAppSetting("asa_last_checked", now);
+      const cacheUpdated = !!newBuild && newBuild !== oldBuild;
+      await Promise.all([
+        setAppSetting("asa_cached_build_id", newBuild),
+        setAppSetting("asa_latest_build_id", newBuild),
+        setAppSetting("asa_last_checked",    now),
+      ]);
+      await runPerServerUpdateCheck();
       load();
-      if (result.updateAvailable) {
-        toast.info(`Update available: build ${result.latestBuildId}`);
+      if (cacheUpdated) {
+        await dispatchNotification({
+          eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+          serverId:   null,
+          serverName: "ASA Cache",
+          title:      "Cache Updated",
+          body:       `Cache updated to build ${newBuild}. Outdated servers have been flagged.`,
+          severity:   "info",
+        });
       } else {
-        toast.success("Server is up to date.");
+        toast.success(`Cache is up to date (build ${newBuild}).`);
       }
     } catch (e) {
-      toast.error(`Update check failed: ${e}`);
+      await dispatchNotification({
+        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+        serverId:   null,
+        serverName: "ASA Cache",
+        title:      "Cache Update Failed",
+        body:       `Failed to update cache: ${e}`,
+        severity:   "error",
+      });
     } finally {
       setChecking(false);
     }
   };
 
-  const handleUpdateCache = async () => {
-    setUpdating(true);
-    try {
-      const [cacheBase, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!cacheBase || !steamcmdPath) {
-        toast.error("Base directory or SteamCMD path not configured.");
-        return;
-      }
-      const sep = cacheBase.includes("\\") ? "\\" : "/";
-      const cacheDir = `${cacheBase.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const newBuild = await tauriCmd.updateCache("global", cacheDir, steamcmdPath);
-      await setAppSetting("asa_cached_build_id", newBuild);
-      await setAppSetting("asa_update_available", "false");
-      await setAppSetting("asa_last_checked", new Date().toISOString());
-      load();
-      toast.success(`Cache updated to build ${newBuild}. Apply to individual servers via their Overview tab.`);
-    } catch (e) {
-      toast.error(`Cache update failed: ${e}`);
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const busy = checking || updating;
+  const busy = checking;
   const neverChecked = !lastChecked;
 
   return (
@@ -145,25 +148,6 @@ function UpdateStatusChip() {
         </div>
       ) : null}
 
-      {updateAvailable && (
-        <Button
-          size="sm"
-          disabled={busy}
-          onClick={handleUpdateCache}
-          className="h-7 gap-1.5 text-xs"
-          style={{
-            background: "rgba(255,165,0,0.12)",
-            border: "1px solid rgba(255,165,0,0.4)",
-            color: "#ffa500",
-          }}
-        >
-          {updating
-            ? <Loader2 className="w-3 h-3 animate-spin" />
-            : <Upload className="w-3 h-3" />}
-          Update Cache
-        </Button>
-      )}
-
       <Button
         size="sm"
         variant="outline"
@@ -175,59 +159,13 @@ function UpdateStatusChip() {
         {checking
           ? <Loader2 className="w-3 h-3 animate-spin" />
           : <RefreshCw className="w-3 h-3" />}
-        Check
+        Check for Update
       </Button>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Startup reconciliation
-// ---------------------------------------------------------------------------
-
-/**
- * On mount, reconcile servers that were left in a transitioning state
- * ('running' or 'starting') from a previous app session.
- *
- * For each server, the stored PID is checked against live OS processes:
- *   - alive PID  → re-register in the Rust crash-monitor map; status unchanged
- *   - dead PID, was "running"  → "crashed" (was running, died while app was closed)
- *   - dead PID, was "starting" → "stopped" (never confirmed running; clean slate)
- */
-function useStartupReconciliation() {
-  const queryClient = useQueryClient();
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const transitioning = await getTransitioningServers();
-        if (!transitioning.length) return;
-
-        await Promise.all(
-          transitioning.map(async (s) => {
-            if (!s.pid) return;
-            try {
-              const alive = await tauriCmd.registerRunningServer(s.id, s.pid, s.install_path);
-              if (!alive) {
-                const deadStatus = s.status === "running" ? "crashed" : "stopped";
-                await updateServerStatus(s.id, deadStatus, null);
-              }
-            } catch {
-              // Tauri not available (dev browser preview) — skip.
-            }
-          })
-        );
-
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-      } catch {
-        // Non-fatal.
-      }
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-}
-
 export default function DashboardPage() {
-  useStartupReconciliation();
 
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard } = useAppStore();

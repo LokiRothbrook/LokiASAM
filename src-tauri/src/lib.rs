@@ -2,6 +2,36 @@ mod commands;
 mod events;
 mod state;
 
+// Suppress the "libayatana-appindicator is deprecated" stderr warning that the
+// library emits unconditionally when the tray icon is initialized on Linux.
+// The warning is informational only (Tauri still works correctly); we silence
+// it by registering a no-op GLib log handler for that specific domain before
+// the tray is created.
+#[cfg(target_os = "linux")]
+#[link(name = "glib-2.0")]
+extern "C" {
+    fn g_log_set_handler(
+        log_domain: *const std::ffi::c_char,
+        log_levels: u32,
+        log_func: unsafe extern "C" fn(
+            *const std::ffi::c_char,
+            u32,
+            *const std::ffi::c_char,
+            *mut std::ffi::c_void,
+        ),
+        user_data: *mut std::ffi::c_void,
+    ) -> u32;
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn noop_log(
+    _domain: *const std::ffi::c_char,
+    _level: u32,
+    _message: *const std::ffi::c_char,
+    _user_data: *mut std::ffi::c_void,
+) {
+}
+
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -20,24 +50,36 @@ fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let is_min = w.is_minimized().unwrap_or(false);
         if is_min {
-            let _ = w.unminimize();
+            // Wayland XDG Shell has no unminimize operation; maximize overrides it.
+            let _ = w.maximize();
         }
         let _ = w.show();
 
-        // set_focus() alone is blocked by focus-stealing prevention on X11 and
-        // most Wayland compositors (Cinnamon, GNOME, KDE, etc.).
-        // Workaround: briefly set always-on-top so the WM is forced to raise and
-        // present the window, then immediately restore normal z-order.
-        // The 50 ms pre-delay gives the WM time to finish processing unminimize/show
-        // before we try to raise. The 50 ms post-delay keeps the window pinned
-        // long enough for focus to land before we clear the flag.
         let w2 = w.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = w2.set_always_on_top(true);
+            // KDE/KWin leaves decoration buttons non-interactive after a hide→show
+            // cycle. Cycling through maximize state forces KWin to re-initialize
+            // button input regions. Only needed on KDE — other DEs handle remap fine.
+            #[cfg(target_os = "linux")]
+            let on_kde = std::env::var("XDG_CURRENT_DESKTOP")
+                .map(|v| v.to_uppercase().contains("KDE"))
+                .unwrap_or(false);
+            #[cfg(not(target_os = "linux"))]
+            let on_kde = false;
+
+            if on_kde {
+                let already_max = w2.is_maximized().unwrap_or(false);
+                if already_max {
+                    let _ = w2.unmaximize();
+                    tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                    let _ = w2.maximize();
+                } else {
+                    let _ = w2.maximize();
+                    tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                    let _ = w2.unmaximize();
+                }
+            }
             let _ = w2.set_focus();
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let _ = w2.set_always_on_top(false);
         });
     }
     if let Some(tray_state) = app.try_state::<TrayMenuState>() {
@@ -77,8 +119,26 @@ fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        // G_LOG_LEVEL_WARNING = 1 << 4
+        g_log_set_handler(
+            b"libayatana-appindicator\0".as_ptr() as *const std::ffi::c_char,
+            1u32 << 4,
+            noop_log,
+            std::ptr::null_mut(),
+        );
+    }
+
+    // Disable WebKit's DMA-BUF renderer before the WebView is created.
+    // The DMA-BUF path breaks on modern Linux distributions (Arch, CachyOS, etc.)
+    // with newer mesa/kernel versions, producing a blank white window. Falling back
+    // to the SHM renderer has no visible effect for a desktop management UI.
+    #[cfg(target_os = "linux")]
+    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 
     tauri::Builder::default()
         // ── Single-instance guard ──────────────────────────────────────────
@@ -99,6 +159,7 @@ pub fn run() {
             app.manage(state::rcon_pool::RconPool::new());
             app.manage(state::log_watcher::LogWatcherState::new());
             app.manage(state::scheduler::SchedulerState::new());
+            app.manage(state::stats_recorder::StatsRecorderState::new());
 
             // ── System tray ───────────────────────────────────────────────
             // Window starts visible, so "Bring to Front" is the correct initial label.
@@ -171,99 +232,163 @@ pub fn run() {
                     }
                 });
 
-            // ── Crash-monitor background task ──────────────────────────────
-            // Polls every 30 s for any PID in `running_servers` that has exited
-            // unexpectedly. This catches servers started in a previous app session
-            // that were re-registered via `register_running_server`, as well as
-            // any watcher-task gaps. For servers started in the current session
-            // the per-server watcher task in `start_server` provides instant
-            // detection; this loop acts as a safety net.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(std::time::Duration::from_secs(30));
-                // Skip the immediate first tick so we don't race with startup
-                // reconciliation on the frontend.
-                interval.tick().await;
-
-                loop {
-                    interval.tick().await;
-
-                    let app_state = handle.state::<state::AppState>();
-
-                    // Snapshot current entries to avoid holding the lock
-                    // across the sysinfo calls.
-                    let entries: Vec<(String, u32)> = {
-                        let registry = app_state.running_servers.lock().unwrap();
-                        registry
-                            .iter()
-                            .map(|(id, rs)| (id.clone(), rs.pid))
-                            .collect()
-                    };
-
-                    if entries.is_empty() {
-                        continue;
-                    }
-
-                    use sysinfo::{Pid, ProcessesToUpdate, System};
-                    let mut sys = System::new();
-
-                    for (server_id, pid) in &entries {
-                        let spid = Pid::from_u32(*pid);
-                        sys.refresh_processes(ProcessesToUpdate::Some(&[spid]), false);
-                        let alive = sys.process(spid).is_some();
-
-                        if !alive {
-                            let was_intentional = app_state
-                                .stopping_servers
-                                .lock()
-                                .unwrap()
-                                .remove(server_id);
-
-                            app_state
-                                .running_servers
-                                .lock()
-                                .unwrap()
-                                .remove(server_id);
-
-                            let status_str =
-                                if was_intentional { "stopped" } else { "crashed" };
-
-                            let payload = commands::server::ServerStatus {
-                                server_id: server_id.clone(),
-                                status: status_str.into(),
-                                pid: None,
-                                uptime_seconds: None,
-                                error: None,
-                            };
-
-                            let _ = handle.emit(
-                                &events::server_event(
-                                    events::SERVER_STATUS,
-                                    server_id,
-                                ),
-                                payload.clone(),
-                            );
-                            let _ = handle.emit(events::SERVER_ANY_CHANGE, payload);
-                        }
-                    }
-                }
-            });
-
             // ── Scheduler background task ──────────────────────────────────
-            // Checks every 30 s for due entries. This runs unconditionally — JS
-            // timers are throttled when the window is hidden to tray; this loop is not.
             let scheduler_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.tick().await; // skip the immediate first tick
-
+                interval.tick().await;
                 loop {
                     interval.tick().await;
                     commands::scheduler::tick_scheduler(&scheduler_handle);
                 }
             });
+
+            // ── Stats recorder background task ─────────────────────────────
+            // Polls all running servers every 5 s.  On every poll:
+            //   - Emits "stats://live" so the frontend live buffer stays current.
+            //   - Writes a raw sample to server_stats_history every 12th poll (60 s).
+            //   - Opens / closes server_uptime_sessions when servers start / stop.
+            // Waits until the frontend calls init_stats_recorder (which opens the
+            // rusqlite connection) before doing any DB work.
+            let stats_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::collections::{HashMap, HashSet};
+
+                let mut poll_counters: HashMap<String, u32> = HashMap::new();
+                let mut prev_active: HashSet<String> = HashSet::new();
+                let mut open_sessions: HashMap<String, String> = HashMap::new();
+                let mut rollup_done = false;
+                let mut last_rollup = tokio::time::Instant::now();
+
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(5));
+                interval.set_missed_tick_behavior(
+                    tokio::time::MissedTickBehavior::Skip,
+                );
+                interval.tick().await; // consume the immediate first tick
+
+                loop {
+                    interval.tick().await;
+
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+
+                    let recorder = stats_handle
+                        .state::<state::stats_recorder::StatsRecorderState>();
+
+                    if !recorder.is_ready() {
+                        continue;
+                    }
+
+                    // Initial rollup on first ready tick; then every 24 h.
+                    if !rollup_done {
+                        rollup_done = true;
+                        last_rollup = tokio::time::Instant::now();
+                        recorder.run_rollup(now_ms);
+                    } else if last_rollup.elapsed()
+                        >= std::time::Duration::from_secs(24 * 60 * 60)
+                    {
+                        last_rollup = tokio::time::Instant::now();
+                        recorder.run_rollup(now_ms);
+                    }
+
+                    // Snapshot running servers.
+                    let app_state = stats_handle.state::<state::AppState>();
+                    let servers: Vec<(String, u32, String)> = {
+                        let lock = app_state.running_servers.lock().unwrap();
+                        lock.iter()
+                            .map(|(id, rs)| {
+                                (id.clone(), rs.pid, rs.install_path.clone())
+                            })
+                            .collect()
+                    };
+                    let active_now: HashSet<String> =
+                        servers.iter().map(|(id, _, _)| id.clone()).collect();
+
+                    // Open uptime sessions for newly-started servers.
+                    for id in active_now.difference(&prev_active) {
+                        let session_id = uuid::Uuid::new_v4().to_string();
+                        open_sessions.insert(id.clone(), session_id.clone());
+                        recorder.open_uptime_session(id, &session_id, now_ms);
+                    }
+                    // Close uptime sessions for servers that stopped.
+                    for id in prev_active.difference(&active_now) {
+                        if let Some(sid) = open_sessions.remove(id) {
+                            recorder.close_uptime_session(&sid, now_ms);
+                        }
+                        poll_counters.remove(id);
+                    }
+                    prev_active = active_now;
+
+                    // Sample all active servers concurrently so the 200 ms
+                    // CPU-delta sleeps inside get_process_stats overlap.
+                    let rcon_pool =
+                        stats_handle.state::<state::rcon_pool::RconPool>();
+                    let mut tasks = tokio::task::JoinSet::new();
+
+                    for (server_id, pid, install_path) in &servers {
+                        let server_id = server_id.clone();
+                        let pid = *pid;
+                        let install_path = install_path.clone();
+                        // Snapshot player count without holding the lock inside the task.
+                        let player_count: Option<i32> = rcon_pool
+                            .player_cache
+                            .lock()
+                            .await
+                            .get(&server_id)
+                            .map(|v| v.len() as i32);
+
+                        tasks.spawn(async move {
+                            let ps =
+                                commands::system::get_process_stats(
+                                    pid,
+                                    Some(install_path),
+                                )
+                                .await
+                                .ok();
+                            (server_id, ps, player_count)
+                        });
+                    }
+
+                    while let Some(Ok((server_id, ps, players))) =
+                        tasks.join_next().await
+                    {
+                        let cpu = ps.as_ref().map(|s| s.cpu_percent);
+                        let mem = ps.as_ref().map(|s| s.memory_mb);
+
+                        let _ = stats_handle.emit(
+                            "stats://live",
+                            serde_json::json!({
+                                "serverId": server_id,
+                                "ts":       now_ms,
+                                "cpu":      cpu,
+                                "mem":      mem,
+                                "players":  players,
+                            }),
+                        );
+
+                        // Write raw sample every 12th poll (~60 s).
+                        let count =
+                            poll_counters.entry(server_id.clone()).or_insert(0);
+                        *count += 1;
+                        if *count % 12 == 0 {
+                            recorder.insert_stat_sample(
+                                &server_id,
+                                now_ms,
+                                cpu,
+                                mem,
+                                players,
+                            );
+                        }
+                    }
+                }
+            });
+
+            // RCON chat and player polling are now handled inside per-server
+            // manager tasks spawned by rcon_connect.  No background tasks needed here.
 
             Ok(())
         })
@@ -279,8 +404,9 @@ pub fn run() {
             commands::server::start_server,
             commands::server::stop_server,
             commands::server::restart_server,
+            commands::server::graceful_stop_server,
             commands::server::get_server_status,
-            commands::server::register_running_server,
+            commands::server::scan_running_servers,
             commands::server::clone_server,
             commands::server::delete_server,
             // SteamCMD / installation
@@ -298,7 +424,15 @@ pub fn run() {
             commands::rcon::rcon_connect,
             commands::rcon::rcon_send,
             commands::rcon::rcon_disconnect,
+            commands::rcon::rcon_is_connected,
             commands::rcon::rcon_get_players,
+            commands::rcon::rcon_get_cached_players,
+            commands::rcon::rcon_get_log,
+            commands::rcon::rcon_clear_log,
+            commands::rcon::rcon_enable_chat_poll,
+            commands::rcon::rcon_disable_chat_poll,
+            commands::rcon::rcon_read_ban_list,
+            commands::rcon::rcon_read_whitelist,
             // Log watcher
             commands::logs::watch_server_log,
             commands::logs::stop_log_watch,
@@ -317,7 +451,12 @@ pub fn run() {
             commands::mods::close_mod_browser,
             commands::mods::start_mod_verification,
             commands::mods::close_mod_verify,
+            // Stats recorder
+            commands::stats::init_stats_recorder,
             // System stats
+            commands::system::check_appimage_integration,
+            commands::system::install_appimage_integration,
+            commands::system::uninstall_appimage_integration,
             commands::system::check_dir,
             commands::system::check_file_exists,
             commands::system::delete_directory,

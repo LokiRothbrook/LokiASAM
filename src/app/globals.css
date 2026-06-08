@@ -37,7 +37,7 @@
      Overridden at runtime by applyThemeAccent() to match the chosen accent. */
   --color-primary:            #bf00ff;
   --color-primary-foreground: #050510;
-  --color-input:              rgba(191, 0, 255, 0.2);
+  --color-input:              rgba(var(--neon-purple-rgb), 0.2);
   --color-ring:               #bf00ff;
   --color-muted:              rgba(10, 10, 30, 0.75);
   --color-muted-foreground:   #5858a0;
@@ -60,6 +60,9 @@
   --surface:          rgba(10, 10, 30, 0.75);
   --surface-elevated: rgba(15, 15, 40, 0.9);
   --terminal-bg:      #000008;
+
+  /* Accent RGB components — updated by applyThemeAccent() so all rgba() uses track the active color */
+  --neon-purple-rgb:  191, 0, 255;
 
   /* Borders — purple is the primary accent */
   --border:           rgba(191, 0, 255, 0.15);
@@ -114,11 +117,11 @@ body {
   color:             var(--text-primary);
   font-family:       var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   min-height:        100vh;
-  /* Subtle scanline/grid background texture — purple tint for primary theme */
+  /* Subtle scanline/grid background texture — tracks the active accent color */
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(191,0,255,0.06) 0%, transparent 60%),
-    linear-gradient(rgba(191,0,255,0.015) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(191,0,255,0.015) 1px, transparent 1px);
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(var(--neon-purple-rgb),0.06) 0%, transparent 60%),
+    linear-gradient(rgba(var(--neon-purple-rgb),0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--neon-purple-rgb),0.015) 1px, transparent 1px);
   background-size: 100% 100%, 40px 40px, 40px 40px;
 }
 
@@ -144,7 +147,7 @@ body {
 }
 
 .glass-card:hover {
-  border-color:      rgba(191, 0, 255, 0.3);
+  border-color:      rgba(var(--neon-purple-rgb), 0.3);
 }
 
 /* ---------------------------------------------------------------------------
@@ -156,7 +159,7 @@ body {
 .glow-red    { box-shadow: var(--glow-red);    }
 
 .text-glow-cyan   { text-shadow: 0 0 10px rgba(0,255,255,0.8); }
-.text-glow-purple { text-shadow: 0 0 10px rgba(191,0,255,0.8); }
+.text-glow-purple { text-shadow: 0 0 10px rgba(var(--neon-purple-rgb),0.8); }
 .text-glow-green  { text-shadow: 0 0 10px rgba(0,255,136,0.8); }
 .text-glow-red    { text-shadow: 0 0 10px rgba(255,0,85,0.8);  }
 
@@ -194,8 +197,8 @@ body {
 }
 
 @keyframes pulse-border-purple {
-  0%, 100% { box-shadow: 0 0 12px rgba(191,0,255,0.3); }
-  50%       { box-shadow: 0 0 24px rgba(191,0,255,0.6); }
+  0%, 100% { box-shadow: 0 0 12px rgba(var(--neon-purple-rgb),0.3); }
+  50%       { box-shadow: 0 0 24px rgba(var(--neon-purple-rgb),0.6); }
 }
 
 @keyframes pulse-border-cyan {
@@ -217,8 +220,8 @@ body {
    --------------------------------------------------------------------------- */
 ::-webkit-scrollbar              { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track        { background: rgba(0,0,0,0.3); }
-::-webkit-scrollbar-thumb        { background: rgba(191,0,255,0.2); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover  { background: rgba(191,0,255,0.4); }
+::-webkit-scrollbar-thumb        { background: rgba(var(--neon-purple-rgb),0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(var(--neon-purple-rgb),0.4); }
 
 /* ---------------------------------------------------------------------------
    Neon button base styles (used in conjunction with ShadCN Button variants)
@@ -230,7 +233,7 @@ body {
   transition:    box-shadow 150ms ease, background 150ms ease;
 }
 .btn-neon-purple:hover {
-  background:    rgba(191,0,255,0.08);
+  background:    rgba(var(--neon-purple-rgb),0.08);
   box-shadow:    var(--glow-purple);
 }
 

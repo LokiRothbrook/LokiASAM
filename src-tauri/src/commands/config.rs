@@ -13,22 +13,18 @@ pub struct ServerConfigJson {
     pub launch_args: Value,
 }
 
-/// Returns the platform-specific path to the server INI config directory.
+/// Returns the path to the server INI config directory.
 ///
-/// ASA uses different subdirectories on each platform:
-/// - Windows: ShooterGame/Saved/Config/WindowsServer/
-/// - Linux:   ShooterGame/Saved/Config/LinuxServer/
+/// ASA ships only a Windows dedicated server binary. On Linux the binary is
+/// run through Proton/Wine, which maps the working directory to the real
+/// filesystem via the Z:\ drive. The server binary therefore always writes
+/// and reads config from the WindowsServer subfolder regardless of the host OS.
 fn config_dir(install_path: &Path) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    let platform = "WindowsServer";
-    #[cfg(not(target_os = "windows"))]
-    let platform = "LinuxServer";
-
     install_path
         .join("ShooterGame")
         .join("Saved")
         .join("Config")
-        .join(platform)
+        .join("WindowsServer")
 }
 
 /// Parse an INI file at `path` into a JSON object of section → { key → value }.

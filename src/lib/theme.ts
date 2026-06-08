@@ -98,6 +98,8 @@ export function applyThemeAccent(accent: string): void {
   const { r, g, b, hex } = t;
   const root = document.documentElement;
 
+  // RGB components variable — used by rgba(var(--neon-purple-rgb), alpha) throughout globals.css
+  root.style.setProperty("--neon-purple-rgb", `${r},${g},${b}`);
   root.style.setProperty("--neon-purple",   hex);
   root.style.setProperty("--border",        `rgba(${r},${g},${b},0.15)`);
   root.style.setProperty("--border-hover",  `rgba(${r},${g},${b},0.4)`);

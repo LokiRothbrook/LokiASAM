@@ -1,22 +1,355 @@
-use std::sync::Arc;
+use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
-use tauri::State;
-use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
+use tauri::{Emitter, Manager, State};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::{timeout, Duration, interval, MissedTickBehavior};
 
-use crate::state::rcon_pool::{RconConn, RconPool, RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND};
+use crate::state::rcon_pool::{
+    bin_subdir, CachedPlayer, RconCmd, RconConn, RconLogLine, RconPool,
+    RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND, parse_player_list,
+};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ArkPlayer {
-    pub name: String,
-    pub steam_id: String,
+// Re-export CachedPlayer as ArkPlayer for backwards-compat with existing frontend calls.
+pub type ArkPlayer = CachedPlayer;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+fn now_ms() -> u64 {
+    RconPool::now_ms()
 }
 
-/// Connect to the server's RCON port and authenticate.
-/// Stores the live TcpStream in the global RconPool for subsequent commands.
+/// Emit one log line to the log buffer and fire the Tauri event.
+async fn emit_log(app: &tauri::AppHandle, server_id: &str, line: RconLogLine) {
+    let pool = app.state::<RconPool>();
+    pool.push_log(server_id, line.clone()).await;
+    let _ = app.emit(&format!("rcon://log/{server_id}"), &line);
+}
+
+/// Payload for `rcon://status/{id}` and `rcon://status-any` events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RconStatusPayload {
+    pub server_id: String,
+    /// "connecting" | "connected" | "disconnected"
+    pub status: String,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub error: Option<String>,
+}
+
+/// Emit connection status to both the per-server channel and the broadcast channel.
+fn emit_status(app: &tauri::AppHandle, payload: RconStatusPayload) {
+    let _ = app.emit(&format!("rcon://status/{}", payload.server_id), &payload);
+    let _ = app.emit("rcon://status-any", &payload);
+}
+
+/// Distinguishes a dead TCP connection from a command that simply got no response.
+/// Only `Io` errors should terminate the manager task; `Timeout` is often normal
+/// (e.g. GetChat when the chat buffer is empty).
+#[derive(Debug)]
+enum ExecError {
+    /// The TCP stream returned an error — connection is definitely dead.
+    Io(String),
+    /// No matching response packet arrived within the timeout window.
+    /// The TCP stream itself may still be alive.
+    Timeout,
+}
+
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecError::Io(e)  => write!(f, "{e}"),
+            ExecError::Timeout => write!(f, "RCON command timed out — no response from server"),
+        }
+    }
+}
+
+/// Send one RCON command and collect the full response.
+/// `first_timeout_ms` controls how long to wait for the very first packet;
+/// subsequent packets always use a 200 ms drain window.
+///
+/// Returns `Err(ExecError::Io)` on TCP errors (connection dead).
+/// Returns `Err(ExecError::Timeout)` when no matching packet arrived in time
+/// (the TCP stream may still be alive — callers decide whether to break).
+async fn exec_cmd(
+    conn: &mut RconConn,
+    command: &str,
+    first_timeout_ms: u64,
+) -> Result<String, ExecError> {
+    let cmd_id = conn.next_id;
+    conn.next_id += 1;
+    conn.send_packet(cmd_id, RCON_EXECCOMMAND, command).await
+        .map_err(ExecError::Io)?;
+
+    let mut response = String::new();
+    let mut received_any = false;
+
+    loop {
+        let wait = if received_any {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_millis(first_timeout_ms)
+        };
+
+        match timeout(wait, conn.recv_packet()).await {
+            Ok(Ok((id, _, body))) if id == cmd_id => {
+                received_any = true;
+                response.push_str(&body);
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(ExecError::Io(e)),
+            Err(_) => {
+                if !received_any {
+                    return Err(ExecError::Timeout);
+                }
+                break;
+            }
+        }
+    }
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// Per-server RCON manager task
+// ---------------------------------------------------------------------------
+
+/// Owns the TCP connection for one server.  Runs a select! loop that:
+///   • Processes commands from the mpsc channel (user commands, player refresh)
+///   • Polls listplayers every 30 s
+///   • Polls GetChat every 5 s (only when chat_poll_active)
+///
+/// All RCON I/O is serialized — nothing competes for the connection.
+/// On any fatal I/O error the task exits, emits rcon://status disconnected,
+/// and removes itself from the pool so the frontend can reconnect.
+async fn run_rcon_manager(
+    server_id: String,
+    conn_id: u64,
+    mut conn: RconConn,
+    mut rx: mpsc::Receiver<RconCmd>,
+    app: tauri::AppHandle,
+    _host: String,
+    _port: u16,
+) {
+    let mut player_tick = interval(Duration::from_secs(30));
+    player_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    player_tick.tick().await; // discard the immediate first tick
+
+    let mut chat_tick = interval(Duration::from_secs(5));
+    chat_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    chat_tick.tick().await; // discard the immediate first tick
+
+    loop {
+        tokio::select! {
+            // ── Incoming command from frontend ────────────────────────────
+            cmd = rx.recv() => {
+                match cmd {
+                    None | Some(RconCmd::Disconnect) => break,
+
+                    Some(RconCmd::Execute { command, suppress_cmd, suppress_resp, response_tx }) => {
+                        if !suppress_cmd {
+                            emit_log(&app, &server_id, RconLogLine {
+                                timestamp_ms: now_ms(),
+                                text: format!("> {command}"),
+                                kind: "command".into(),
+                            }).await;
+                        }
+
+                        match exec_cmd(&mut conn, &command, 15_000).await {
+                            Ok(raw) => {
+                                if !suppress_resp {
+                                    for line in raw.trim().lines() {
+                                        let t = line.trim();
+                                        if t.is_empty() { continue; }
+                                        if t.to_lowercase() == "server received, but no response!!" { continue; }
+                                        emit_log(&app, &server_id, RconLogLine {
+                                            timestamp_ms: now_ms(),
+                                            text: t.to_string(),
+                                            kind: "response".into(),
+                                        }).await;
+                                    }
+                                }
+                                let _ = response_tx.send(Ok(raw));
+                            }
+                            Err(e) => {
+                                emit_log(&app, &server_id, RconLogLine {
+                                    timestamp_ms: now_ms(),
+                                    text: format!("Error: {e}"),
+                                    kind: "error".into(),
+                                }).await;
+                                let _ = response_tx.send(Err(e.to_string()));
+                                if matches!(e, ExecError::Io(_)) {
+                                    break; // TCP dead
+                                }
+                                // Timeout: log + surface to caller but keep the manager alive.
+                            }
+                        }
+                    }
+
+                    Some(RconCmd::GetPlayers { response_tx }) => {
+                        match exec_cmd(&mut conn, "listplayers", 5_000).await {
+                            Ok(raw) => {
+                                let players = parse_player_list(&raw);
+                                {
+                                    let pool = app.state::<RconPool>();
+                                    pool.player_cache.lock().await
+                                        .insert(server_id.clone(), players.clone());
+                                }
+                                let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
+                                let _ = response_tx.send(Ok(players));
+                            }
+                            Err(e) => {
+                                let _ = response_tx.send(Err(e.to_string()));
+                                if matches!(e, ExecError::Io(_)) {
+                                    break; // TCP dead
+                                }
+                                // Timeout: caller gets an error but keep the manager alive.
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Periodic player list poll (every 30 s) ────────────────────
+            _ = player_tick.tick() => {
+                match exec_cmd(&mut conn, "listplayers", 5_000).await {
+                    Ok(raw) => {
+                        let players = parse_player_list(&raw);
+                        {
+                            let pool = app.state::<RconPool>();
+                            pool.player_cache.lock().await
+                                .insert(server_id.clone(), players.clone());
+                        }
+                        let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
+                    }
+                    Err(ExecError::Io(_)) => break, // TCP dead
+                    Err(ExecError::Timeout) => {} // server slow; skip this poll cycle
+                }
+            }
+
+            // ── Periodic chat poll (every 5 s, only when tab is open) ─────
+            _ = chat_tick.tick() => {
+                let active = app.state::<RconPool>()
+                    .chat_poll_active.lock().await
+                    .contains(&server_id);
+
+                if !active { continue; }
+
+                match exec_cmd(&mut conn, "GetChat", 3_000).await {
+                    Ok(raw) => {
+                        for line in raw.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+                            let tl = line.to_lowercase();
+                            // Drop no-response noise.
+                            if tl == "server received, but no response!!" { continue; }
+                            // Drop SERVER: prefix lines — these are echoes of admin
+                            // broadcasts (e.g. ServerChat) that the user already saw.
+                            if line.starts_with("SERVER: ") { continue; }
+                            emit_log(&app, &server_id, RconLogLine {
+                                timestamp_ms: now_ms(),
+                                text: line.to_string(),
+                                kind: "chat".into(),
+                            }).await;
+                        }
+                    }
+                    Err(ExecError::Io(_)) => break, // TCP dead
+                    // Timeout means the chat buffer was empty (ASA sent no packet or
+                    // responded with a non-matching ID).  This is normal — just continue.
+                    Err(ExecError::Timeout) => {}
+                }
+            }
+        }
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+    // Only emit events and clean up the pool if we are still the current
+    // connection for this server.  If a newer rcon_connect call has already
+    // taken over (its conn_id replaced ours in the pool), exit silently — the
+    // newer manager task will handle its own lifecycle.  Without this check,
+    // the stale task's cleanup would drop the newer task's tx, instantly
+    // killing it and creating the disconnect/reconnect loop.
+    {
+        let pool = app.state::<RconPool>();
+        let mut guard = pool.cmd_channels.lock().await;
+        let is_superseded = guard
+            .get(&server_id)
+            .map(|(_, id)| *id != conn_id)
+            .unwrap_or(false);
+        if is_superseded {
+            return;
+        }
+        guard.remove(&server_id);
+    }
+
+    emit_log(&app, &server_id, RconLogLine {
+        timestamp_ms: now_ms(),
+        text: "RCON connection closed.".into(),
+        kind: "system".into(),
+    }).await;
+
+    emit_status(&app, RconStatusPayload {
+        server_id,
+        status: "disconnected".into(),
+        host: None,
+        port: None,
+        error: None,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// One-shot transient connection (graceful shutdown etc.)
+// ---------------------------------------------------------------------------
+
+/// Open a fresh authenticated connection, run one command, return the response.
+/// Used for fire-and-forget operations that must not block the pool connection.
+pub async fn transient_rcon_command(port: u16, password: &str, command: &str) -> Result<String, String> {
+    use tokio::net::TcpStream;
+
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        .await
+        .map_err(|_| "RCON connect timed out".to_string())?
+        .map_err(|e| format!("RCON connect failed: {e}"))?;
+    let _ = stream.set_nodelay(true);
+    let mut conn = RconConn { stream, next_id: 1 };
+
+    conn.send_packet(1, RCON_AUTH, password).await?;
+    for _ in 0..3 {
+        match timeout(Duration::from_secs(5), conn.recv_packet()).await {
+            Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err("RCON auth timed out".into()),
+            _ => {}
+        }
+    }
+
+    conn.send_packet(2, RCON_EXECCOMMAND, command).await?;
+
+    let mut response = String::new();
+    let mut got_any = false;
+    loop {
+        let wait = if got_any { Duration::from_millis(300) } else { Duration::from_secs(15) };
+        match timeout(wait, conn.recv_packet()).await {
+            Ok(Ok((id, _, body))) if id == 2 => {
+                got_any = true;
+                response.push_str(&body);
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+/// Connect to the server's RCON port, authenticate, and spawn the manager task.
+/// If a live connection already exists this is a no-op.
 #[tauri::command]
 pub async fn rcon_connect(
+    app: tauri::AppHandle,
     server_id: String,
     host: String,
     port: u16,
@@ -24,6 +357,24 @@ pub async fn rcon_connect(
     pool: State<'_, RconPool>,
 ) -> Result<(), String> {
     use tokio::net::TcpStream;
+
+    // Already connected and task is alive — nothing to do.
+    {
+        let guard = pool.cmd_channels.lock().await;
+        if let Some((tx, _)) = guard.get(&server_id) {
+            if !tx.is_closed() {
+                return Ok(());
+            }
+        }
+    }
+
+    emit_status(&app, RconStatusPayload {
+        server_id: server_id.clone(),
+        status: "connecting".into(),
+        host: Some(host.clone()),
+        port: Some(port),
+        error: None,
+    });
 
     let stream = timeout(
         Duration::from_secs(5),
@@ -34,22 +385,16 @@ pub async fn rcon_connect(
     .map_err(|e| format!("RCON connect failed: {e}"))?;
 
     let _ = stream.set_nodelay(true);
+    let mut conn = RconConn { stream, next_id: 1 };
 
-    let mut conn = RconConn {
-        stream,
-        next_id: 1,
-    };
-
-    // Send AUTH packet — do this before inserting into the pool
     let auth_id = conn.next_id;
     conn.next_id += 1;
     conn.send_packet(auth_id, RCON_AUTH, &password).await?;
 
-    // Read response packets. Some servers send an empty RESPONSE_VALUE first,
-    // then the AUTH_RESPONSE; others skip the empty packet.
     let mut authenticated = false;
     for _ in 0..3 {
-        let result = timeout(Duration::from_secs(5), conn.recv_packet()).await
+        let result = timeout(Duration::from_secs(5), conn.recv_packet())
+            .await
             .map_err(|_| "RCON auth timed out — no response from server".to_string())?;
         let (resp_id, resp_type, _body) = result?;
         if resp_type == RCON_AUTH_RESPONSE {
@@ -67,113 +412,211 @@ pub async fn rcon_connect(
         return Err("RCON authentication failed — unexpected response sequence".into());
     }
 
-    pool.connections
-        .lock()
-        .await
-        .insert(server_id, Arc::new(Mutex::new(conn)));
+    let conn_id = pool.alloc_conn_id();
+    let (tx, rx) = mpsc::channel::<RconCmd>(32);
+    pool.cmd_channels.lock().await.insert(server_id.clone(), (tx.clone(), conn_id));
+
+    // Spawn the manager task — it owns the connection from here on.
+    let app_clone = app.clone();
+    let sid = server_id.clone();
+    let h = host.clone();
+    tauri::async_runtime::spawn(async move {
+        run_rcon_manager(sid, conn_id, conn, rx, app_clone, h, port).await;
+    });
+
+    emit_log(&app, &server_id, RconLogLine {
+        timestamp_ms: now_ms(),
+        text: format!("Connected to RCON at {host}:{port}"),
+        kind: "system".into(),
+    }).await;
+
+    emit_status(&app, RconStatusPayload {
+        server_id: server_id.clone(),
+        status: "connected".into(),
+        host: Some(host),
+        port: Some(port),
+        error: None,
+    });
+
+    // Seed the player cache asynchronously — the event will update the frontend.
+    let tx_seed = tx.clone();
+    tauri::async_runtime::spawn(async move {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        if tx_seed.send(RconCmd::GetPlayers { response_tx: resp_tx }).await.is_ok() {
+            let _ = resp_rx.await;
+        }
+    });
+
     Ok(())
 }
 
-/// Send an RCON command and return the server's response string.
-///
-/// The pool lock is held only long enough to clone the per-connection Arc.
-/// All I/O is done while holding only the individual connection lock, so a
-/// slow or hanging command never blocks other servers or disconnect calls.
+/// Send an RCON command through the manager task queue.
 #[tauri::command]
 pub async fn rcon_send(
     server_id: String,
     command: String,
     pool: State<'_, RconPool>,
 ) -> Result<String, String> {
-    // Grab a clone of the Arc without holding the pool lock during I/O
-    let conn_arc = {
-        let guard = pool.connections.lock().await;
-        guard
-            .get(&server_id)
-            .ok_or_else(|| "Not connected to RCON for this server".to_string())?
-            .clone()
-    };
+    let tx = pool.cmd_channels.lock().await
+        .get(&server_id)
+        .map(|(tx, _)| tx.clone())
+        .ok_or_else(|| "Not connected to RCON for this server".to_string())?;
 
-    let mut conn = conn_arc.lock().await;
+    // ServerChat* responses are an echo of the sent message — suppress them.
+    let suppress_resp = command.to_lowercase().starts_with("serverchat");
 
-    let cmd_id = conn.next_id;
-    conn.next_id += 1;
-    conn.send_packet(cmd_id, RCON_EXECCOMMAND, &command).await?;
+    let (response_tx, response_rx) = oneshot::channel();
+    tx.send(RconCmd::Execute {
+        command,
+        suppress_cmd: false,
+        suppress_resp,
+        response_tx,
+    })
+    .await
+    .map_err(|_| "RCON manager task has stopped".to_string())?;
 
-    // Timeout-based multi-packet reading:
-    //   - Wait up to 15s for the first response packet (commands like saveworld can be slow)
-    //   - After receiving any packet, switch to a 200ms continuation window
-    //   - If no packet arrives within the window, the response is complete
-    //   - This avoids the "ping trick" which ASA ignores
-    let mut response = String::new();
-    let mut received_any = false;
-
-    loop {
-        let wait = if received_any {
-            Duration::from_millis(200)
-        } else {
-            Duration::from_secs(15)
-        };
-
-        match timeout(wait, conn.recv_packet()).await {
-            Ok(Ok((resp_id, _resp_type, body))) => {
-                received_any = true;
-                if resp_id == cmd_id {
-                    response.push_str(&body);
-                }
-            }
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                if !received_any {
-                    return Err("RCON command timed out — no response from server".into());
-                }
-                break;
-            }
-        }
-    }
-
-    Ok(response)
+    response_rx.await
+        .map_err(|_| "RCON response channel dropped".to_string())?
 }
 
-/// Disconnect RCON for this server and remove the connection from the pool.
-/// Removing the Arc here will drop the TcpStream once the connection lock is free.
+/// Signal the manager task to close the connection and remove it from the pool.
 #[tauri::command]
 pub async fn rcon_disconnect(
     server_id: String,
     pool: State<'_, RconPool>,
 ) -> Result<(), String> {
-    pool.connections.lock().await.remove(&server_id);
+    if let Some((tx, _)) = pool.cmd_channels.lock().await.remove(&server_id) {
+        let _ = tx.send(RconCmd::Disconnect).await;
+    }
     Ok(())
 }
 
-/// Send RCON `listplayers` and parse the result into a typed player list.
-///
-/// ASA response format (one player per line):
-/// `0. PlayerName, SteamID 76561198XXXXXXXXX`
+/// Returns true only if a manager task is actively running for this server.
+/// Uses channel liveness — a dead connection is detected even if the key exists.
+#[tauri::command]
+pub async fn rcon_is_connected(
+    server_id: String,
+    pool: State<'_, RconPool>,
+) -> Result<bool, String> {
+    Ok(pool.cmd_channels.lock().await
+        .get(&server_id)
+        .map(|(tx, _)| !tx.is_closed())
+        .unwrap_or(false))
+}
+
+/// Request an immediate listplayers refresh through the manager queue.
 #[tauri::command]
 pub async fn rcon_get_players(
+    _app: tauri::AppHandle,
     server_id: String,
     pool: State<'_, RconPool>,
 ) -> Result<Vec<ArkPlayer>, String> {
-    let raw = rcon_send(server_id, "listplayers".into(), pool).await?;
+    let tx = pool.cmd_channels.lock().await
+        .get(&server_id)
+        .map(|(tx, _)| tx.clone())
+        .ok_or_else(|| "Not connected to RCON for this server".to_string())?;
 
-    let players = raw
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with("No Players") {
-                return None;
-            }
-            let after_dot = line.find(". ").map(|i| &line[i + 2..])?;
-            if let Some(comma) = after_dot.rfind(", SteamID ") {
-                let name = after_dot[..comma].trim().to_string();
-                let steam_id = after_dot[comma + 10..].trim().to_string();
-                Some(ArkPlayer { name, steam_id })
-            } else {
-                None
-            }
-        })
-        .collect();
+    let (response_tx, response_rx) = oneshot::channel();
+    tx.send(RconCmd::GetPlayers { response_tx })
+        .await
+        .map_err(|_| "RCON manager task has stopped".to_string())?;
 
-    Ok(players)
+    response_rx.await
+        .map_err(|_| "RCON response channel dropped".to_string())?
+}
+
+/// Return the cached player list without sending a command.
+///
+/// Returns `None` when no RCON connection has been established this session
+/// (distinguishes "no data yet" from "0 players online").
+#[tauri::command]
+pub async fn rcon_get_cached_players(
+    server_id: String,
+    pool:      State<'_, RconPool>,
+) -> Result<Option<Vec<ArkPlayer>>, String> {
+    Ok(pool.player_cache.lock().await.get(&server_id).cloned())
+}
+
+/// Return the current in-memory console log for this server (up to 500 lines).
+#[tauri::command]
+pub async fn rcon_get_log(
+    server_id: String,
+    pool: State<'_, RconPool>,
+) -> Result<Vec<RconLogLine>, String> {
+    Ok(pool.log_buffer.lock().await
+        .get(&server_id)
+        .map(|d| d.iter().cloned().collect())
+        .unwrap_or_default())
+}
+
+/// Clear the in-memory log buffer for this server.
+#[tauri::command]
+pub async fn rcon_clear_log(
+    server_id: String,
+    pool: State<'_, RconPool>,
+) -> Result<(), String> {
+    pool.log_buffer.lock().await.insert(server_id, VecDeque::new());
+    Ok(())
+}
+
+/// Enable GetChat polling for this server (called when RCON tab opens).
+#[tauri::command]
+pub async fn rcon_enable_chat_poll(
+    server_id: String,
+    pool: State<'_, RconPool>,
+) -> Result<(), String> {
+    pool.chat_poll_active.lock().await.insert(server_id);
+    Ok(())
+}
+
+/// Disable GetChat polling for this server (called when RCON tab closes).
+#[tauri::command]
+pub async fn rcon_disable_chat_poll(
+    server_id: String,
+    pool: State<'_, RconPool>,
+) -> Result<(), String> {
+    pool.chat_poll_active.lock().await.remove(&server_id);
+    Ok(())
+}
+
+/// Read the server's BanList.txt and return a list of EOS IDs.
+#[tauri::command]
+pub async fn rcon_read_ban_list(install_path: String) -> Result<Vec<String>, String> {
+    let path = std::path::PathBuf::from(&install_path)
+        .join(bin_subdir())
+        .join("BanList.txt");
+
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("Failed to read BanList.txt: {e}"))?;
+
+    Ok(content.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// Read the server's PlayersJoinNoCheckList.txt and return a list of EOS IDs.
+#[tauri::command]
+pub async fn rcon_read_whitelist(install_path: String) -> Result<Vec<String>, String> {
+    let path = std::path::PathBuf::from(&install_path)
+        .join(bin_subdir())
+        .join("PlayersJoinNoCheckList.txt");
+
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("Failed to read PlayersJoinNoCheckList.txt: {e}"))?;
+
+    Ok(content.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }

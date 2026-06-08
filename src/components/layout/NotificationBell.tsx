@@ -10,7 +10,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useUnreadNotificationCount, useNotificationList } from "@/hooks/useNotifications";
-import { markAllNotificationsRead } from "@/lib/db";
+import { markAllNotificationsRead, parseDbDate } from "@/lib/db";
 import { useAppStore } from "@/store/useAppStore";
 import { useQueryClient } from "@tanstack/react-query";
 import type { InAppNotificationRow } from "@/lib/db";
@@ -69,7 +69,7 @@ function NotificationItemMini({
           {n.title}
         </p>
         <p className="text-xs mt-0.5 truncate" style={{ color: "var(--text-subtle)" }}>
-          {formatRelative(new Date(n.created_at))}
+          {formatRelative(parseDbDate(n.created_at))}
         </p>
       </div>
     </button>

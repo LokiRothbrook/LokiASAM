@@ -43,7 +43,11 @@ export interface ServerStatus {
   error?: string;
 }
 
-/** Full parameter set passed to `start_server`. All values come from SQLite. */
+/**
+ * Full parameter set passed to `start_server`.
+ * Passwords, RCON, MaxPlayers, and gameplay settings all live in
+ * GameUserSettings.ini — they are NOT included here.
+ */
 export interface StartServerParams {
   serverId: string;
   installPath: string;
@@ -51,11 +55,9 @@ export interface StartServerParams {
   mapPath: string;
   port: number;
   queryPort: number;
+  /** NOT passed on CLI — used internally by Rust for RCON readiness polling. */
   rconPort: number;
-  maxPlayers: number;
-  serverPassword?: string;
-  adminPassword: string;
-  /** Additional CLI flags like ["-NoBattlEye", "-servergamelog"]. */
+  /** Additional CLI-only flags like ["-NoBattlEye", "-ForceRespawnDinos"]. */
   extraArgs: string[];
   /** CurseForge mod IDs to pass as -mods=id1,id2,... on startup. */
   modIds: string[];
@@ -93,7 +95,23 @@ export interface ServerQueryResult {
 
 export interface ArkPlayer {
   name: string;
-  steamId: string;
+  playerId: string;  // EOS ID in ASA (32-char alphanumeric)
+}
+
+export interface RconLogLine {
+  timestampMs: number;
+  text: string;
+  kind: "command" | "response" | "chat" | "system" | "error";
+}
+
+/** Emitted on rcon://status/{id} and rcon://status-any when connection state changes. */
+export interface RconStatusPayload {
+  serverId: string;
+  /** "connecting" | "connected" | "disconnected" */
+  status: string;
+  host?: string;
+  port?: number;
+  error?: string;
 }
 
 /**
@@ -192,9 +210,6 @@ export interface ScheduleEntry {
   queryPort: number;
   rconPort: number;
   rconPassword: string;
-  maxPlayers: number;
-  serverPassword?: string;
-  adminPassword: string;
   extraArgs: string[];
   modIds: string[];
   protonPath?: string;
@@ -236,10 +251,10 @@ export const tauriCmd = {
     invoke<number>("restart_server", { params, graceful }),
   getServerStatus: (serverId: string) =>
     invoke<ServerStatus>("get_server_status", { serverId }),
-  /** Re-register a PID from a previous session. Returns false if the process
-   *  already exited (crashed while the app was closed). */
-  registerRunningServer: (serverId: string, pid: number, installPath: string) =>
-    invoke<boolean>("register_running_server", { serverId, pid, installPath }),
+  /** Scan for running ASA server processes by install path. Returns the live
+   *  PID for each server found, or null if not running. */
+  scanRunningServers: (servers: Array<{ serverId: string; installPath: string }>) =>
+    invoke<Array<{ serverId: string; pid: number | null }>>("scan_running_servers", { servers }),
   /**
    * Copy server installation files from sourceInstallPath to destInstallPath.
    * ShooterGame/Saved is excluded so player data is not carried over.
@@ -312,12 +327,34 @@ export const tauriCmd = {
   detectServerInstall: (installPath: string) =>
     invoke<DetectedServerConfig>("detect_server_install", { installPath }),
 
-  // RCON
+  // RCON — connection
   rconConnect: (serverId: string, host: string, port: number, password: string) =>
     invoke<void>("rcon_connect", { serverId, host, port, password }),
-  rconSend:       (serverId: string, command: string) => invoke<string>("rcon_send", { serverId, command }),
-  rconDisconnect: (serverId: string) => invoke<void>("rcon_disconnect", { serverId }),
-  rconGetPlayers: (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
+  rconSend:        (serverId: string, command: string) => invoke<string>("rcon_send", { serverId, command }),
+  rconDisconnect:  (serverId: string) => invoke<void>("rcon_disconnect", { serverId }),
+  rconIsConnected: (serverId: string) => invoke<boolean>("rcon_is_connected", { serverId }),
+  // RCON — players
+  rconGetPlayers:       (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
+  /** null = no RCON connection established yet; [] = connected but 0 players online. */
+  rconGetCachedPlayers: (serverId: string) => invoke<ArkPlayer[] | null>("rcon_get_cached_players", { serverId }),
+  // RCON — chat (polling is now internal to the Rust manager task)
+  rconEnableChatPoll:  (serverId: string) => invoke<void>("rcon_enable_chat_poll", { serverId }),
+  rconDisableChatPoll: (serverId: string) => invoke<void>("rcon_disable_chat_poll", { serverId }),
+  // RCON — log buffer
+  rconGetLog:   (serverId: string) => invoke<RconLogLine[]>("rcon_get_log", { serverId }),
+  rconClearLog: (serverId: string) => invoke<void>("rcon_clear_log", { serverId }),
+  // RCON — file-based lists
+  rconReadBanList:   (installPath: string) => invoke<string[]>("rcon_read_ban_list", { installPath }),
+  rconReadWhitelist: (installPath: string) => invoke<string[]>("rcon_read_whitelist", { installPath }),
+  // Graceful shutdown
+  gracefulStopServer: (
+    serverId: string,
+    rconPort: number,
+    rconPassword: string,
+    warnPlayers: boolean,
+    warnMinutes: number,
+    warnMessage: string,
+  ) => invoke<void>("graceful_stop_server", { serverId, rconPort, rconPassword, warnPlayers, warnMinutes, warnMessage }),
 
   // Log watcher
   watchServerLog: (serverId: string, logPath: string) =>
@@ -417,6 +454,9 @@ export const tauriCmd = {
     invoke<string>("move_base_dir", { oldDir, newDir, createBackup }),
   getProcessStats:    (pid: number, installPath?: string) => invoke<ProcessStats>("get_process_stats", { pid, installPath: installPath ?? null }),
   getPlatform:        () => invoke<string>("get_platform"),
+  /** Open the Rust-side stats recorder DB connection at the given absolute path.
+   *  Must be called after initDb() has run all migrations on the same file. */
+  initStatsRecorder:  (dbPath: string) => invoke<void>("init_stats_recorder", { dbPath }),
   /** Tell the backend whether first-time setup is complete.
    *  Controls close-to-tray: if not done, the X button exits the process. */
   setSetupComplete:   (complete: boolean) => invoke<void>("set_setup_complete", { complete }),
@@ -468,6 +508,18 @@ export const tauriCmd = {
   /** Atomically replace all active schedule entries in the Rust scheduler. */
   syncSchedules: (entries: ScheduleEntry[]) =>
     invoke<void>("sync_schedules", { entries }),
+
+  // AppImage desktop integration (Linux only)
+  /**
+   * Check whether LokiASAM is running as an AppImage and whether it is
+   * already registered in the user's application menu.
+   */
+  checkAppimageIntegration: () =>
+    invoke<{ isAppimage: boolean; isInstalled: boolean }>("check_appimage_integration"),
+  /** Install the .desktop file and icon to ~/.local/share/ (AppImage only). */
+  installAppimageIntegration: () => invoke<void>("install_appimage_integration"),
+  /** Remove the .desktop file and icons installed by installAppimageIntegration. */
+  uninstallAppimageIntegration: () => invoke<void>("uninstall_appimage_integration"),
 
   // Bootstrap
   /** Read the bootstrap file. Returns null if first-time setup has never run. */
