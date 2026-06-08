@@ -225,6 +225,48 @@ async function runMigrations(db: Database): Promise<void> {
   try {
     await db.execute("ALTER TABLE servers ADD COLUMN shutdown_message TEXT NOT NULL DEFAULT 'Server will shut down in {time}.'");
   } catch { /* already exists */ }
+
+  // ── Migration 006: server stats history tables ────────────────────────────
+  // Raw 60-second samples retained for 30 days; rolled up to daily after that.
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_stats_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id   TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    sampled_at  INTEGER NOT NULL,
+    cpu_pct     REAL,
+    mem_mb      REAL,
+    players     INTEGER
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stats_history_server_time ON server_stats_history(server_id, sampled_at)"
+  );
+
+  // Daily avg + max aggregates retained for 1 year.
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_stats_daily (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id   TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    day_ts      INTEGER NOT NULL,
+    avg_cpu     REAL,
+    max_cpu     REAL,
+    avg_mem     REAL,
+    max_mem     REAL,
+    avg_players REAL,
+    max_players INTEGER,
+    UNIQUE(server_id, day_ts)
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_stats_daily_server_day ON server_stats_daily(server_id, day_ts)"
+  );
+
+  // Uptime sessions — one row per contiguous server run, for record/history display.
+  await db.execute(`CREATE TABLE IF NOT EXISTS server_uptime_sessions (
+    id         TEXT    PRIMARY KEY,
+    server_id  TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    started_at INTEGER NOT NULL,
+    ended_at   INTEGER
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_uptime_sessions_server ON server_uptime_sessions(server_id, started_at)"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1128,217 @@ export async function saveNotificationConfig(
 export async function deleteNotificationConfig(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM notification_configs WHERE id = ?", [id]);
+}
+
+// ---------------------------------------------------------------------------
+// Server Stats History
+// ---------------------------------------------------------------------------
+
+export interface ChartPoint {
+  ts: number;
+  cpu: number | null;
+  cpuMax: number | null;
+  mem: number | null;
+  memMax: number | null;
+  players: number | null;
+  playersMax: number | null;
+}
+
+export interface UptimeSessionRow {
+  id: string;
+  server_id: string;
+  started_at: number;
+  ended_at: number | null;
+}
+
+/** Insert a single raw stat sample for a server. */
+export async function insertStatSample(
+  serverId: string,
+  cpuPct: number | null,
+  memMb: number | null,
+  players: number | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO server_stats_history (server_id, sampled_at, cpu_pct, mem_mb, players) VALUES (?, ?, ?, ?, ?)",
+    [serverId, Date.now(), cpuPct, memMb, players],
+  );
+}
+
+/**
+ * Query raw history table bucketed into ~120 display points.
+ * bucketMs controls the grouping interval (e.g. 60_000 for 1-min buckets).
+ */
+export async function queryStatHistory(
+  serverId: string,
+  fromMs: number,
+  bucketMs: number,
+): Promise<ChartPoint[]> {
+  const db = await getDb();
+  const now = Date.now();
+  type Row = {
+    bucket_ts: number;
+    avg_cpu: number | null;
+    max_cpu: number | null;
+    avg_mem: number | null;
+    max_mem: number | null;
+    avg_players: number | null;
+    max_players: number | null;
+  };
+  const rows = await db.select<Row[]>(
+    `SELECT
+       (sampled_at / ?) * ? AS bucket_ts,
+       AVG(cpu_pct)                            AS avg_cpu,
+       MAX(cpu_pct)                            AS max_cpu,
+       AVG(mem_mb)                             AS avg_mem,
+       MAX(mem_mb)                             AS max_mem,
+       ROUND(AVG(CAST(players AS REAL)))       AS avg_players,
+       MAX(players)                            AS max_players
+     FROM server_stats_history
+     WHERE server_id = ? AND sampled_at >= ? AND sampled_at <= ?
+     GROUP BY bucket_ts
+     ORDER BY bucket_ts ASC`,
+    [bucketMs, bucketMs, serverId, fromMs, now],
+  );
+  return rows.map((r) => ({
+    ts: r.bucket_ts,
+    cpu: r.avg_cpu,
+    cpuMax: r.max_cpu,
+    mem: r.avg_mem,
+    memMax: r.max_mem,
+    players: r.avg_players,
+    playersMax: r.max_players,
+  }));
+}
+
+/** Query the daily aggregate table for a date range. */
+export async function queryStatDaily(
+  serverId: string,
+  fromMs: number,
+): Promise<ChartPoint[]> {
+  const db = await getDb();
+  type Row = {
+    day_ts: number;
+    avg_cpu: number | null;
+    max_cpu: number | null;
+    avg_mem: number | null;
+    max_mem: number | null;
+    avg_players: number | null;
+    max_players: number | null;
+  };
+  const rows = await db.select<Row[]>(
+    `SELECT day_ts, avg_cpu, max_cpu, avg_mem, max_mem, avg_players, max_players
+     FROM server_stats_daily
+     WHERE server_id = ? AND day_ts >= ?
+     ORDER BY day_ts ASC`,
+    [serverId, fromMs],
+  );
+  return rows.map((r) => ({
+    ts: r.day_ts,
+    cpu: r.avg_cpu,
+    cpuMax: r.max_cpu,
+    mem: r.avg_mem,
+    memMax: r.max_mem,
+    players: r.avg_players,
+    playersMax: r.max_players,
+  }));
+}
+
+/**
+ * Roll up raw history rows older than 30 days into server_stats_daily,
+ * then delete the raw rows. Also prunes daily rows older than 1 year.
+ */
+export async function rollupOldStats(): Promise<void> {
+  const db = await getDb();
+  const cutoff30d = Date.now() - 30 * 24 * 60 * 60_000;
+  const cutoff1y  = Date.now() - 365 * 24 * 60 * 60_000;
+
+  type AggRow = {
+    server_id: string;
+    day_ts: number;
+    avg_cpu: number | null;
+    max_cpu: number | null;
+    avg_mem: number | null;
+    max_mem: number | null;
+    avg_players: number | null;
+    max_players: number | null;
+  };
+
+  const rows = await db.select<AggRow[]>(
+    `SELECT
+       server_id,
+       (sampled_at / 86400000) * 86400000      AS day_ts,
+       AVG(cpu_pct)                             AS avg_cpu,
+       MAX(cpu_pct)                             AS max_cpu,
+       AVG(mem_mb)                              AS avg_mem,
+       MAX(mem_mb)                              AS max_mem,
+       ROUND(AVG(CAST(players AS REAL)))        AS avg_players,
+       MAX(players)                             AS max_players
+     FROM server_stats_history
+     WHERE sampled_at < ?
+     GROUP BY server_id, day_ts`,
+    [cutoff30d],
+  );
+
+  for (const row of rows) {
+    await db.execute(
+      `INSERT OR REPLACE INTO server_stats_daily
+         (server_id, day_ts, avg_cpu, max_cpu, avg_mem, max_mem, avg_players, max_players)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [row.server_id, row.day_ts, row.avg_cpu, row.max_cpu, row.avg_mem, row.max_mem, row.avg_players, row.max_players],
+    );
+  }
+
+  await db.execute("DELETE FROM server_stats_history WHERE sampled_at < ?", [cutoff30d]);
+  await db.execute("DELETE FROM server_stats_daily WHERE day_ts < ?", [cutoff1y]);
+}
+
+// ---------------------------------------------------------------------------
+// Uptime Sessions
+// ---------------------------------------------------------------------------
+
+/**
+ * Open a new uptime session for a server. Closes any orphaned open sessions
+ * (e.g. from a previous app crash) before inserting the new row.
+ */
+export async function openUptimeSession(
+  serverId: string,
+  sessionId: string,
+  startedAt: number,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_uptime_sessions SET ended_at = ? WHERE server_id = ? AND ended_at IS NULL",
+    [startedAt, serverId],
+  );
+  await db.execute(
+    "INSERT INTO server_uptime_sessions (id, server_id, started_at) VALUES (?, ?, ?)",
+    [sessionId, serverId, startedAt],
+  );
+}
+
+/** Close the open uptime session by ID. */
+export async function closeUptimeSession(
+  sessionId: string,
+  endedAt: number,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE server_uptime_sessions SET ended_at = ? WHERE id = ?",
+    [endedAt, sessionId],
+  );
+}
+
+/** Return uptime sessions for a server, newest first. */
+export async function getUptimeSessions(
+  serverId: string,
+  limit = 20,
+): Promise<UptimeSessionRow[]> {
+  const db = await getDb();
+  return db.select<UptimeSessionRow[]>(
+    "SELECT * FROM server_uptime_sessions WHERE server_id = ? ORDER BY started_at DESC LIMIT ?",
+    [serverId, limit],
+  );
 }
 
 /** Get a single global (server_id IS NULL) notification config by channel. */

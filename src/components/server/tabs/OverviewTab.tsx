@@ -1,25 +1,33 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Map, Package, HardDrive, Save, RefreshCw, ArrowUp, Loader2, X,
+  ChevronDown, BarChart2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription,
   DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  ResponsiveContainer, ComposedChart, Area, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip,
+} from "recharts";
 import { useServerStats } from "@/hooks/useServerStats";
+import { useServerStatsHistory, type Timeframe } from "@/hooks/useServerStatsHistory";
 import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup, setAppSetting,
+  getUptimeSessions,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
+import type { UptimeSessionRow } from "@/lib/db";
 import { toast } from "sonner";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
@@ -29,6 +37,412 @@ import type { ServerRow } from "@/lib/db";
 interface Props {
   server: ServerRow;
 }
+
+// ── Timeframe selector ───────────────────────────────────────────────────────
+
+const TIMEFRAMES: Timeframe[] = ["Live", "1H", "6H", "24H", "7D", "30D", "3M", "6M", "1Y"];
+
+function TimeframeSelector({
+  value,
+  onChange,
+}: {
+  value: Timeframe;
+  onChange: (t: Timeframe) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {TIMEFRAMES.map((t) => (
+        <button
+          key={t}
+          onClick={() => onChange(t)}
+          className="px-2 py-0.5 rounded text-xs font-medium transition-colors"
+          style={
+            value === t
+              ? { background: "rgba(191,0,255,0.2)", border: "1px solid rgba(191,0,255,0.5)", color: "var(--neon-purple)" }
+              : { background: "transparent", border: "1px solid rgba(191,0,255,0.15)", color: "var(--text-muted)" }
+          }
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Chart tooltip ────────────────────────────────────────────────────────────
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  metric,
+  timeframe,
+}: {
+  active?: boolean;
+  payload?: { value: number | null; name: string; color: string }[];
+  label?: number;
+  metric: "cpu" | "mem" | "players";
+  timeframe: Timeframe;
+}) {
+  if (!active || !payload?.length || label == null) return null;
+
+  const formatTs = (ts: number) => {
+    const d = new Date(ts);
+    if (timeframe === "Live" || timeframe === "1H" || timeframe === "6H" || timeframe === "24H") {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    if (timeframe === "7D" || timeframe === "30D") {
+      return `${d.getMonth() + 1}/${d.getDate()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    }
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+
+  const formatVal = (v: number | null) => {
+    if (v == null) return "—";
+    if (metric === "cpu") return `${v.toFixed(1)}%`;
+    if (metric === "mem") return `${(v / 1024).toFixed(2)} GB`;
+    return String(Math.round(v));
+  };
+
+  return (
+    <div
+      className="rounded-lg px-3 py-2 text-xs"
+      style={{ background: "rgba(10,10,30,0.95)", border: "1px solid rgba(191,0,255,0.25)", color: "var(--text-primary)" }}
+    >
+      <div className="mb-1" style={{ color: "var(--text-muted)" }}>{formatTs(label)}</div>
+      {payload.map((p) => (
+        <div key={p.name} className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full inline-block" style={{ background: p.color }} />
+          <span style={{ color: "var(--text-muted)" }}>{p.name === "avg" ? "Avg" : "Peak"}:</span>
+          <span className="font-semibold">{formatVal(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Stat chart ───────────────────────────────────────────────────────────────
+
+const METRIC_CONFIG = {
+  cpu:     { color: "var(--neon-green)",  avgKey: "cpu",     maxKey: "cpuMax",     unit: "%",  label: "CPU Usage" },
+  mem:     { color: "var(--neon-cyan)",   avgKey: "mem",     maxKey: "memMax",     unit: "GB", label: "RAM Usage" },
+  players: { color: "var(--neon-purple)", avgKey: "players", maxKey: "playersMax", unit: "",   label: "Players Online" },
+} as const;
+
+function StatChart({
+  serverId,
+  metric,
+  timeframe,
+}: {
+  serverId: string;
+  metric: "cpu" | "mem" | "players";
+  timeframe: Timeframe;
+}) {
+  const { data, loading } = useServerStatsHistory(serverId, timeframe);
+  const cfg = METRIC_CONFIG[metric];
+
+  const formatTick = (ts: number) => {
+    const d = new Date(ts);
+    if (timeframe === "Live" || timeframe === "1H") {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    if (timeframe === "6H" || timeframe === "24H") {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    if (timeframe === "7D" || timeframe === "30D") {
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+
+  const formatYTick = (v: number) => {
+    if (metric === "mem") return `${(v / 1024).toFixed(1)}G`;
+    if (metric === "cpu") return `${v.toFixed(0)}%`;
+    return String(Math.round(v));
+  };
+
+  // Map ChartPoint to the recharts data array.
+  const chartData = data.map((p) => ({
+    ts:  p.ts,
+    avg: p[cfg.avgKey as keyof typeof p] as number | null,
+    max: p[cfg.maxKey as keyof typeof p] as number | null,
+  }));
+
+  const hasData = chartData.some((d) => d.avg != null);
+  const showMax = timeframe !== "Live" && chartData.some((d) => d.max != null && d.max !== d.avg);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-40" style={{ color: "var(--text-muted)" }}>
+        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        Loading…
+      </div>
+    );
+  }
+
+  if (!hasData) {
+    return (
+      <div className="flex flex-col items-center justify-center h-40 gap-1" style={{ color: "var(--text-muted)" }}>
+        <BarChart2 className="w-6 h-6 opacity-30" />
+        <span className="text-xs">No data for this timeframe yet</span>
+      </div>
+    );
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height={160}>
+      <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(191,0,255,0.08)" vertical={false} />
+        <XAxis
+          dataKey="ts"
+          tickFormatter={formatTick}
+          tick={{ fill: "var(--text-muted)", fontSize: 10 }}
+          axisLine={false}
+          tickLine={false}
+          minTickGap={40}
+        />
+        <YAxis
+          tickFormatter={formatYTick}
+          tick={{ fill: "var(--text-muted)", fontSize: 10 }}
+          axisLine={false}
+          tickLine={false}
+          width={38}
+        />
+        <Tooltip
+          content={(props) => (
+            <ChartTooltip
+              active={props.active}
+              payload={props.payload as unknown as { value: number | null; name: string; color: string }[]}
+              label={props.label as number}
+              metric={metric}
+              timeframe={timeframe}
+            />
+          )}
+        />
+        <Area
+          type="monotone"
+          dataKey="avg"
+          name="avg"
+          stroke={cfg.color}
+          strokeWidth={1.5}
+          fill={cfg.color}
+          fillOpacity={0.08}
+          dot={false}
+          connectNulls={false}
+        />
+        {showMax && (
+          <Line
+            type="monotone"
+            dataKey="max"
+            name="max"
+            stroke={cfg.color}
+            strokeWidth={1}
+            strokeDasharray="4 2"
+            strokeOpacity={0.5}
+            dot={false}
+            connectNulls={false}
+          />
+        )}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ── Uptime session panel ─────────────────────────────────────────────────────
+
+function UptimePanel({
+  server,
+  startTime,
+}: {
+  server: ServerRow;
+  startTime: number | undefined;
+}) {
+  const [sessions, setSessions] = useState<UptimeSessionRow[]>([]);
+
+  useEffect(() => {
+    getUptimeSessions(server.id, 50)
+      .then(setSessions)
+      .catch(() => null);
+  }, [server.id]);
+
+  const isRunning = server.status === "running" || server.status === "starting";
+
+  const recordSession = sessions.reduce<UptimeSessionRow | null>((best, s) => {
+    const dur = (s.ended_at ?? Date.now()) - s.started_at;
+    const bestDur = best ? (best.ended_at ?? Date.now()) - best.started_at : 0;
+    return dur > bestDur ? s : best;
+  }, null);
+
+  const fmtDuration = (ms: number) => {
+    const d = Math.floor(ms / 86_400_000);
+    const h = Math.floor((ms % 86_400_000) / 3_600_000);
+    const m = Math.floor((ms % 3_600_000) / 60_000);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+
+  const fmtDate = (ms: number) =>
+    new Date(ms).toLocaleString([], {
+      month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+
+  const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
+  const currentDuration = currentStartMs ? Date.now() - currentStartMs : null;
+
+  const recordDuration = recordSession
+    ? (recordSession.ended_at ?? Date.now()) - recordSession.started_at
+    : null;
+
+  const items = [
+    {
+      label: "Started at",
+      value: currentStartMs ? fmtDate(currentStartMs) : "—",
+    },
+    {
+      label: "Current session",
+      value: currentDuration != null ? fmtDuration(currentDuration) : "—",
+    },
+    {
+      label: "Record session",
+      value: recordDuration != null ? fmtDuration(recordDuration) : "—",
+    },
+    {
+      label: "Total sessions",
+      value: sessions.length > 0 ? String(sessions.length) : "—",
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 py-2">
+      {items.map(({ label, value }) => (
+        <div key={label}>
+          <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
+          <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── StatTile ─────────────────────────────────────────────────────────────────
+
+type ExpandableTile = "cpu" | "mem" | "players" | "uptime";
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  unit,
+  neonColor,
+  expandable,
+  isActive,
+  onToggle,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string | number | null;
+  unit?: string;
+  neonColor?: string;
+  expandable?: boolean;
+  isActive?: boolean;
+  onToggle?: () => void;
+}) {
+  const color = neonColor ?? "var(--neon-purple)";
+  return (
+    <div
+      className={`glass-card rounded-xl p-4 flex flex-col gap-2 transition-all duration-200${expandable ? " cursor-pointer select-none" : ""}`}
+      style={{
+        borderColor: isActive ? color : `${color}30`,
+        boxShadow: isActive ? `0 0 14px ${color}18` : undefined,
+      }}
+      onClick={expandable ? onToggle : undefined}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Icon className="w-4 h-4 shrink-0" style={{ color }} />
+          <span className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+            {label}
+          </span>
+        </div>
+        {expandable && (
+          <ChevronDown
+            className="w-3 h-3 transition-transform duration-200 shrink-0"
+            style={{
+              color,
+              transform: isActive ? "rotate(180deg)" : "rotate(0deg)",
+            }}
+          />
+        )}
+      </div>
+      <div className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
+        {value ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+        {value != null && unit && (
+          <span className="text-sm font-normal ml-1" style={{ color: "var(--text-muted)" }}>{unit}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Expanded chart panel ──────────────────────────────────────────────────────
+
+function ChartPanel({
+  server,
+  tile,
+  timeframe,
+  onTimeframeChange,
+  onClose,
+  startTime,
+}: {
+  server: ServerRow;
+  tile: ExpandableTile;
+  timeframe: Timeframe;
+  onTimeframeChange: (t: Timeframe) => void;
+  onClose: () => void;
+  startTime: number | undefined;
+}) {
+  const titles: Record<ExpandableTile, string> = {
+    cpu:     "CPU Usage",
+    mem:     "RAM Usage",
+    players: "Players Online",
+    uptime:  "Uptime History",
+  };
+
+  return (
+    <div
+      className="glass-card rounded-xl p-4 flex flex-col gap-3"
+      style={{ borderColor: "rgba(191,0,255,0.2)" }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          {titles[tile]}
+        </span>
+        <div className="flex items-center gap-2">
+          {tile !== "uptime" && (
+            <TimeframeSelector value={timeframe} onChange={onTimeframeChange} />
+          )}
+          <button
+            onClick={onClose}
+            className="p-1 rounded opacity-50 hover:opacity-100 transition-opacity"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {tile === "uptime" ? (
+        <UptimePanel server={server} startTime={startTime} />
+      ) : (
+        <StatChart serverId={server.id} metric={tile} timeframe={timeframe} />
+      )}
+    </div>
+  );
+}
+
+// ── Helpers (unchanged from original) ────────────────────────────────────────
 
 function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
@@ -50,36 +464,7 @@ function formatRelativeTime(iso: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function StatTile({
-  icon: Icon, label, value, unit, neonColor,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string | number | null;
-  unit?: string;
-  neonColor?: string;
-}) {
-  const color = neonColor ?? "var(--neon-purple)";
-  return (
-    <div
-      className="glass-card rounded-xl p-4 flex flex-col gap-2"
-      style={{ borderColor: `${color}30` }}
-    >
-      <div className="flex items-center gap-2">
-        <Icon className="w-4 h-4 shrink-0" style={{ color }} />
-        <span className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-          {label}
-        </span>
-      </div>
-      <div className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
-        {value ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
-        {value != null && unit && (
-          <span className="text-sm font-normal ml-1" style={{ color: "var(--text-muted)" }}>{unit}</span>
-        )}
-      </div>
-    </div>
-  );
-}
+// ── OverviewTab ───────────────────────────────────────────────────────────────
 
 export function OverviewTab({ server }: Props) {
   const router = useRouter();
@@ -98,6 +483,17 @@ export function OverviewTab({ server }: Props) {
   const [applyingUpdate, setApplyingUpdate] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
 
+  const [activeTile, setActiveTile] = useState<ExpandableTile | null>(null);
+  const [chartTimeframe, setChartTimeframe] = useState<Timeframe>("Live");
+
+  const handleTileToggle = useCallback((tile: ExpandableTile) => {
+    setActiveTile((prev) => {
+      if (prev === tile) return null;
+      setChartTimeframe("Live");
+      return tile;
+    });
+  }, []);
+
   const hasUpdateAvailable = server.update_available === 1;
 
   const isRunning = server.status === "running";
@@ -106,8 +502,6 @@ export function OverviewTab({ server }: Props) {
   const isStartFailed = server.status === "start-failed";
   const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
-  // Force a re-render every 30 s so the uptime counter visually advances.
-  // Run during both "starting" and "running" so loading time is visible.
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!isRunning && !isStarting) return;
@@ -173,8 +567,6 @@ export function OverviewTab({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       const params = await buildStartParams();
       const pid = await tauriCmd.startServer(params);
-      // Keep status "starting" — Rust backend will emit server://status/{id}
-      // with "running" once the RCON port responds (server fully loaded).
       await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
       const errMsg = typeof e === "string" ? e : String(e);
@@ -199,8 +591,6 @@ export function OverviewTab({ server }: Props) {
     try {
       await updateServerStatus(server.id, "stopping", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      // Graceful shutdown: saveworld → optional countdown → doexit
-      // The Rust command emits its own status events so we don't update status here.
       await tauriCmd.gracefulStopServer(
         server.id,
         server.rcon_port,
@@ -335,11 +725,7 @@ export function OverviewTab({ server }: Props) {
               onClick={handleStart}
               disabled={actionPending}
               className="gap-1.5"
-              style={{
-                background: "rgba(0,255,136,0.12)",
-                borderColor: "rgba(0,255,136,0.4)",
-                color: "var(--neon-green)",
-              }}
+              style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
             >
               <Play className="w-3.5 h-3.5" />
               Retry Start
@@ -384,11 +770,7 @@ export function OverviewTab({ server }: Props) {
             onClick={handleStop}
             disabled={actionPending || isTransitioning}
             className="gap-1.5"
-            style={{
-              background: "rgba(255,0,85,0.12)",
-              borderColor: "rgba(255,0,85,0.4)",
-              color: "var(--neon-red)",
-            }}
+            style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
           >
             <Square className="w-3.5 h-3.5" />
             Stop
@@ -400,11 +782,7 @@ export function OverviewTab({ server }: Props) {
             onClick={handleStart}
             disabled={actionPending || isTransitioning}
             className="gap-1.5"
-            style={{
-              background: "rgba(0,255,136,0.12)",
-              borderColor: "rgba(0,255,136,0.4)",
-              color: "var(--neon-green)",
-            }}
+            style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
           >
             <Play className="w-3.5 h-3.5" />
             {server.status === "starting" ? "Starting…" : "Start"}
@@ -475,20 +853,29 @@ export function OverviewTab({ server }: Props) {
           label="Players"
           value={stats.playersOnline != null ? `${stats.playersOnline} / ${stats.maxPlayers ?? server.max_players}` : null}
           neonColor="var(--neon-cyan)"
+          expandable
+          isActive={activeTile === "players"}
+          onToggle={() => handleTileToggle("players")}
         />
         <StatTile
           icon={Cpu}
           label="CPU"
           value={stats.cpuPercent != null ? stats.cpuPercent.toFixed(1) : null}
           unit="%"
-          neonColor="var(--neon-purple)"
+          neonColor="var(--neon-green)"
+          expandable
+          isActive={activeTile === "cpu"}
+          onToggle={() => handleTileToggle("cpu")}
         />
         <StatTile
           icon={MemoryStick}
           label="RAM"
           value={stats.memoryMb != null ? (stats.memoryMb / 1024).toFixed(2) : null}
           unit="GB"
-          neonColor="var(--neon-purple)"
+          neonColor="var(--neon-cyan)"
+          expandable
+          isActive={activeTile === "mem"}
+          onToggle={() => handleTileToggle("mem")}
         />
         <StatTile
           icon={Clock}
@@ -500,7 +887,10 @@ export function OverviewTab({ server }: Props) {
               ? formatUptime(new Date(server.updated_at).getTime())
               : null
           }
-          neonColor="var(--neon-green)"
+          neonColor="var(--neon-purple)"
+          expandable
+          isActive={activeTile === "uptime"}
+          onToggle={() => handleTileToggle("uptime")}
         />
         <StatTile
           icon={Map}
@@ -524,6 +914,18 @@ export function OverviewTab({ server }: Props) {
         />
       </div>
 
+      {/* ── Expanded chart panel ── */}
+      {activeTile && (
+        <ChartPanel
+          server={server}
+          tile={activeTile}
+          timeframe={chartTimeframe}
+          onTimeframeChange={setChartTimeframe}
+          onClose={() => setActiveTile(null)}
+          startTime={startTime}
+        />
+      )}
+
       {/* ── Network info ── */}
       <div
         className="glass-card rounded-xl p-4"
@@ -541,10 +943,7 @@ export function OverviewTab({ server }: Props) {
           ].map(({ label, value }) => (
             <div key={label}>
               <div style={{ color: "var(--text-muted)" }} className="text-xs mb-0.5">{label}</div>
-              <div
-                className="font-mono font-semibold"
-                style={{ color: "var(--text-primary)" }}
-              >
+              <div className="font-mono font-semibold" style={{ color: "var(--text-primary)" }}>
                 {value}
               </div>
             </div>

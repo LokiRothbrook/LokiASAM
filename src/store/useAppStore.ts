@@ -8,6 +8,9 @@
  */
 
 import { create } from "zustand";
+import type { ChartPoint } from "@/lib/db";
+
+const LIVE_BUFFER_SIZE = 60; // 10 min × 10 s = 60 points
 
 interface AppState {
   /** True once setup_complete has been confirmed in SQLite. */
@@ -77,6 +80,14 @@ interface AppState {
   incrementUnread: () => void;
   /** Called after the user views/clears notifications. */
   resetUnreadBump: () => void;
+
+  /**
+   * Rolling 10-minute live stat buffers keyed by server ID.
+   * Each array holds up to LIVE_BUFFER_SIZE (60) points at 10s resolution.
+   */
+  statsLiveBuffers: Record<string, ChartPoint[]>;
+  addLiveSample: (serverId: string, point: ChartPoint) => void;
+  clearLiveBuffer: (serverId: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -126,4 +137,19 @@ export const useAppStore = create<AppState>((set) => ({
   stopVerifying: () => set({ verifying: false, verifyTotal: 0, verifyProgress: 0 }),
   incrementUnread: () => set((s) => ({ unreadBump: s.unreadBump + 1 })),
   resetUnreadBump: () => set({ unreadBump: 0 }),
+
+  statsLiveBuffers: {},
+  addLiveSample: (serverId, point) =>
+    set((s) => {
+      const prev = s.statsLiveBuffers[serverId] ?? [];
+      const next = [...prev, point];
+      if (next.length > LIVE_BUFFER_SIZE) next.shift();
+      return { statsLiveBuffers: { ...s.statsLiveBuffers, [serverId]: next } };
+    }),
+  clearLiveBuffer: (serverId) =>
+    set((s) => {
+      const next = { ...s.statsLiveBuffers };
+      delete next[serverId];
+      return { statsLiveBuffers: next };
+    }),
 }));
