@@ -157,7 +157,7 @@ pub fn run() {
 
             app.manage(state::AppState::new());
             app.manage(state::rcon_pool::RconPool::new());
-            app.manage(state::log_watcher::LogWatcherState::new());
+            app.manage(state::log_manager::LogManagerState::new());
             app.manage(state::scheduler::SchedulerState::new());
             app.manage(state::stats_recorder::StatsRecorderState::new());
 
@@ -433,9 +433,19 @@ pub fn run() {
             commands::rcon::rcon_disable_chat_poll,
             commands::rcon::rcon_read_ban_list,
             commands::rcon::rcon_read_whitelist,
-            // Log watcher
+            // Log watcher + archive + crash + chat
             commands::logs::watch_server_log,
             commands::logs::stop_log_watch,
+            commands::logs::list_archived_logs,
+            commands::logs::read_archived_log,
+            commands::logs::delete_archived_log,
+            commands::logs::list_crashes,
+            commands::logs::read_crash_report,
+            commands::logs::list_chat_logs,
+            commands::logs::read_chat_log,
+            commands::logs::cleanup_logs,
+            commands::logs::get_log_stats,
+            commands::logs::get_log_storage_root,
             // Config / INI
             commands::config::read_server_config,
             commands::config::write_server_config,

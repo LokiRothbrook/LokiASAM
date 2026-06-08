@@ -1,4 +1,4 @@
-use crate::{events, state::{AppState, rcon_pool::RconPool}};
+use crate::{events, state::{AppState, log_manager::LogManagerState, rcon_pool::RconPool}};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -319,52 +319,13 @@ async fn inner_start_server_with_state(
         cmd.env_remove("PYTHONPATH");
     }
 
-    // Rotate any existing ShooterGame.log before launching. We own log rotation
-    // from here on — archiving the old file ourselves so the fresh log starts at
-    // byte 0 and the readiness watcher below never has to deal with inodes.
-    let current_log_path = format!(
-        "{}/ShooterGame/Saved/Logs/ShooterGame.log",
-        params.install_path
-    );
-    let did_rotate: bool = if tokio::fs::metadata(&current_log_path).await.is_ok() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let (year, month, day, hh, mm, ss) = {
-            let secs_per_day = 86_400u64;
-            let days = now_secs / secs_per_day;
-            let day_secs = now_secs % secs_per_day;
-            let mut d = days;
-            let mut y = 1970u64;
-            loop {
-                let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-                let days_in_year = if leap { 366 } else { 365 };
-                if d < days_in_year { break; }
-                d -= days_in_year;
-                y += 1;
-            }
-            let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-            let days_in_month = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-            let mut mo = 0usize;
-            while mo < 12 && d >= days_in_month[mo] { d -= days_in_month[mo]; mo += 1; }
-            (y, (mo + 1) as u64, d + 1, day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60)
-        };
-        let archive_path = format!(
-            "{}/ShooterGame/Saved/Logs/ShooterGame_{year:04}-{month:02}-{day:02}_{hh:02}-{mm:02}-{ss:02}.log",
-            params.install_path
-        );
-        // Rename preferred; fall back to delete so we always start with a clean slate.
-        if tokio::fs::rename(&current_log_path, &archive_path).await.is_ok() {
-            true
-        } else {
-            tokio::fs::remove_file(&current_log_path).await.is_ok()
-        }
-    } else {
-        // No pre-existing log — fresh install or first ever start.
-        true
-    };
+    // Archive any existing ShooterGame.log to central LokiASAM log storage before
+    // launching so the fresh session always starts from byte 0.
+    let did_rotate = LogManagerState::archive_shootergame_log(
+        app_handle,
+        &params.server_id,
+        &params.install_path,
+    ).await;
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

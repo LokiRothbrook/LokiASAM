@@ -8,8 +8,10 @@ pub const SERVER_STATUS: &str = "server://status";
 pub const SERVER_ANY_CHANGE: &str = "server://any-change";
 /// SteamCMD stdout/stderr lines streamed during install / update / validate.
 pub const STEAMCMD_OUTPUT: &str = "steamcmd://output";
-/// ASA server log lines streamed from the ShooterGame.log file watcher.
+/// ASA server log lines streamed from the ShooterGame.log file watcher (new lines only).
 pub const LOG_LINE: &str = "log://line";
+/// Batch of existing log lines sent once when the watcher first opens a file (backfill).
+pub const LOG_BACKFILL: &str = "log://backfill";
 /// Backup progress update.
 pub const BACKUP_PROGRESS: &str = "backup://progress";
 /// ASA update check result (or update-applied notification).

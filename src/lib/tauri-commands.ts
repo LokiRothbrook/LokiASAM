@@ -104,6 +104,47 @@ export interface RconLogLine {
   kind: "command" | "response" | "chat" | "system" | "error";
 }
 
+export interface ArchivedLogInfo {
+  filename: string;
+  sizeBytes: number;
+  timestamp: string;
+  fullPath: string;
+}
+
+export interface CrashInfo {
+  folderName: string;
+  timestamp: string;
+  hasCallStack: boolean;
+  files: string[];
+  fullPath: string;
+}
+
+export interface CrashFile {
+  name: string;
+  content: string;
+}
+
+export interface CrashReport {
+  folderName: string;
+  files: CrashFile[];
+}
+
+export interface ChatLogInfo {
+  filename: string;
+  date: string;
+  sizeBytes: number;
+  fullPath: string;
+}
+
+export interface LogStats {
+  shootergameArchiveCount: number;
+  shootergameTotalBytes: number;
+  chatLogCount: number;
+  chatTotalBytes: number;
+  crashCount: number;
+  storageRoot: string;
+}
+
 /** Emitted on rcon://status/{id} and rcon://status-any when connection state changes. */
 export interface RconStatusPayload {
   serverId: string;
@@ -360,6 +401,34 @@ export const tauriCmd = {
   watchServerLog: (serverId: string, logPath: string) =>
     invoke<void>("watch_server_log", { serverId, logPath }),
   stopLogWatch: (serverId: string) => invoke<void>("stop_log_watch", { serverId }),
+
+  // Log archive
+  listArchivedLogs: (serverId: string) =>
+    invoke<ArchivedLogInfo[]>("list_archived_logs", { serverId }),
+  readArchivedLog: (serverId: string, filename: string, offset: number, limit: number) =>
+    invoke<string[]>("read_archived_log", { serverId, filename, offset, limit }),
+  deleteArchivedLog: (serverId: string, filename: string) =>
+    invoke<void>("delete_archived_log", { serverId, filename }),
+
+  // Crash reports
+  listCrashes: (installPath: string) =>
+    invoke<CrashInfo[]>("list_crashes", { installPath }),
+  readCrashReport: (installPath: string, folderName: string) =>
+    invoke<CrashReport>("read_crash_report", { installPath, folderName }),
+
+  // Chat logs
+  listChatLogs: (serverId: string) =>
+    invoke<ChatLogInfo[]>("list_chat_logs", { serverId }),
+  readChatLog: (serverId: string, filename: string, offset: number, limit: number) =>
+    invoke<string[]>("read_chat_log", { serverId, filename, offset, limit }),
+
+  // Log maintenance
+  cleanupLogs: (serverId: string, olderThanDays: number) =>
+    invoke<number>("cleanup_logs", { serverId, olderThanDays }),
+  getLogStats: (serverId: string) =>
+    invoke<LogStats>("get_log_stats", { serverId }),
+  getLogStorageRoot: () =>
+    invoke<string>("get_log_storage_root"),
 
   // Config / INI
   /** Read GameUserSettings.ini and Game.ini from the server's install path. */
