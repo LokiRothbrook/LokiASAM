@@ -258,11 +258,11 @@ function BackupRowCard({
 }
 
 // ---------------------------------------------------------------------------
-// SectionHeader — title + [Edit Schedules] + [Backup Now] button row
+// SectionHeader — title + [Backup X Now] (orange) + [Edit Schedule] (cyan)
 // ---------------------------------------------------------------------------
 
 function SectionHeader({
-  icon: Icon, title, color, count, onEditSchedules, onManualBackup, isBusy, manualLabel,
+  icon: Icon, title, color, count, onEditSchedules, onManualBackup, isBusy, backupLabel,
 }: {
   icon: React.ElementType;
   title: string;
@@ -271,7 +271,7 @@ function SectionHeader({
   onEditSchedules?: () => void;
   onManualBackup: () => void;
   isBusy: boolean;
-  manualLabel?: string;
+  backupLabel: string;
 }) {
   return (
     <div
@@ -291,26 +291,31 @@ function SectionHeader({
         {title}
       </span>
       {count > 0 && (
-        <span
-          className="px-1.5 py-0.5 rounded text-xs"
-          style={{ background: `${color}15`, color }}
-        >
+        <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: `${color}15`, color }}>
           {count}
         </span>
       )}
       <div className="flex items-center gap-2 ml-auto">
-        {onEditSchedules && (
-          <Button size="sm" variant="outline" onClick={onEditSchedules}
-            className="h-7 gap-1.5 cursor-pointer"
-            style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}>
-            <CalendarClock className="w-3 h-3" /> Edit Schedules
-          </Button>
-        )}
         <Button size="sm" onClick={onManualBackup} disabled={isBusy}
           className="h-7 gap-1.5 cursor-pointer"
-          style={{ background: `${color}15`, border: `1px solid ${color}35`, color }}>
-          <Plus className="w-3 h-3" /> {manualLabel ?? "Backup Now"}
+          style={{
+            background: "rgba(255,165,0,0.12)",
+            border: "1px solid rgba(255,165,0,0.4)",
+            color: "#ffa500",
+          }}>
+          <Plus className="w-3 h-3" /> {backupLabel}
         </Button>
+        {onEditSchedules && (
+          <Button size="sm" onClick={onEditSchedules}
+            className="h-7 gap-1.5 cursor-pointer"
+            style={{
+              background: "rgba(0,200,255,0.1)",
+              border: "1px solid rgba(0,200,255,0.35)",
+              color: "#00c8ff",
+            }}>
+            <CalendarClock className="w-3 h-3" /> Edit Schedule
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -322,7 +327,7 @@ function SectionHeader({
 
 function BackupSectionPanel({
   icon: Icon, title, color, backups, loading, onRestore, onDelete, onManualBackup,
-  onEditSchedules, restoreDisabled, children,
+  onEditSchedules, restoreDisabled, backupLabel, children,
 }: {
   icon: React.ElementType;
   title: string;
@@ -334,6 +339,7 @@ function BackupSectionPanel({
   onManualBackup: () => void;
   onEditSchedules?: () => void;
   restoreDisabled: boolean;
+  backupLabel: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -344,6 +350,7 @@ function BackupSectionPanel({
         onEditSchedules={onEditSchedules}
         onManualBackup={onManualBackup}
         isBusy={restoreDisabled}
+        backupLabel={backupLabel}
       />
       <div className="overflow-y-auto" style={{ maxHeight: "312px" }}>
         <div className="p-3 space-y-1.5">
@@ -410,7 +417,7 @@ function PlayerBackupSection({
         onEditSchedules={onEditSchedules}
         onManualBackup={onManualBackup}
         isBusy={restoreDisabled}
-        manualLabel="Backup All Players"
+        backupLabel="Backup Players Now"
       />
       <div className="overflow-y-auto" style={{ maxHeight: "312px" }}>
         <div className="p-3">
@@ -521,10 +528,10 @@ function IniBackupSection({
           </span>
         </div>
         {onEditSchedules && (
-          <Button size="sm" variant="outline" onClick={onEditSchedules}
+          <Button size="sm" onClick={onEditSchedules}
             className="h-7 gap-1.5 cursor-pointer ml-auto"
-            style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}>
-            <CalendarClock className="w-3 h-3" /> Edit Schedules
+            style={{ background: "rgba(0,200,255,0.1)", border: "1px solid rgba(0,200,255,0.35)", color: "#00c8ff" }}>
+            <CalendarClock className="w-3 h-3" /> Edit Schedule
           </Button>
         )}
       </div>
@@ -728,9 +735,18 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     }
   }
 
+  // ── Navigation helper — switch to automation tab then scroll to backup section
+  function handleEditSchedule() {
+    onNavigateToAutomation?.();
+    setTimeout(() => {
+      document.getElementById("backup-schedules-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const isBusy = progress.active;
+  const editScheduleBtn = onNavigateToAutomation ? handleEditSchedule : undefined;
 
   return (
     <div className="space-y-4">
@@ -786,7 +802,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
           installPath={server.install_path}
           isBusy={isBusy}
           onBusyChange={(b) => setProgress((p) => ({ ...p, active: b }))}
-          onEditSchedules={onNavigateToAutomation}
+          onEditSchedules={editScheduleBtn}
         />
       )}
 
@@ -796,8 +812,9 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         backups={serverBackups} loading={loading}
         onRestore={setRestoreTarget} onDelete={handleDelete}
         onManualBackup={handleServerBackup}
-        onEditSchedules={onNavigateToAutomation}
+        onEditSchedules={editScheduleBtn}
         restoreDisabled={isBusy}
+        backupLabel="Backup Server Now"
       />
 
       {/* Player backups */}
@@ -806,7 +823,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         playerBackups={playerBackups} loading={loading}
         onRestore={setRestoreTarget} onDelete={handleDelete}
         onManualBackup={() => toast.info("Player backups are triggered automatically by the scheduler.")}
-        onEditSchedules={onNavigateToAutomation}
+        onEditSchedules={editScheduleBtn}
         restoreDisabled={isBusy}
       />
 
@@ -816,8 +833,9 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         backups={fullBackups} loading={loading}
         onRestore={setRestoreTarget} onDelete={handleDelete}
         onManualBackup={handleFullBackupClick}
-        onEditSchedules={onNavigateToAutomation}
+        onEditSchedules={editScheduleBtn}
         restoreDisabled={isBusy}
+        backupLabel="Backup Full Now"
       />
 
       {restoreTarget && (
