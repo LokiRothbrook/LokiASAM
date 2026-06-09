@@ -42,8 +42,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # HTTP client (Discord webhooks, update checks)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
-# ZIP compression for backups
-zip = { version = "2" }
+# 7z compression for backups (pure Rust LZMA2, no external binary required)
+sevenz-rust = { version = "0.6", features = ["compress"] }
 
 # Email / SMTP notifications
 lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"], default-features = false }
@@ -54,7 +54,8 @@ sysinfo = { version = "0.32" }
 # INI file parsing
 configparser = { version = "3" }
 
-# Linux .tar.gz extraction for SteamCMD download
+# Archive extraction for SteamCMD download (zip on Windows, tar.gz on Linux)
+zip   = { version = "2" }
 flate2 = { version = "1" }
 tar   = { version = "0.4" }
 

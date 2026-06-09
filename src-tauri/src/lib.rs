@@ -446,11 +446,19 @@ pub fn run() {
             commands::config::read_server_config,
             commands::config::write_server_config,
             commands::config::import_ini_files,
-            // Backups (Phase 6)
-            commands::backup::create_backup,
-            commands::backup::restore_backup,
+            // Backups
+            commands::backup::create_server_backup,
+            commands::backup::create_player_backup,
+            commands::backup::create_ini_backup,
+            commands::backup::create_full_backup,
+            commands::backup::list_ini_backups,
+            commands::backup::restore_server_backup,
+            commands::backup::restore_player_backup,
+            commands::backup::restore_ini_backup,
+            commands::backup::restore_full_backup,
             commands::backup::delete_backup,
-            commands::backup::prune_backups,
+            commands::backup::cleanup_ark_own_backups,
+            commands::backup::estimate_dir_size,
             // Mods (Phase 5)
             commands::mods::install_mods,
             commands::mods::open_mod_browser,

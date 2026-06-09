@@ -72,6 +72,8 @@ export async function syncSchedulesToRust(): Promise<void> {
       const map = ARK_MAPS.find((m) => m.id === server.map_id);
       const mapPath = map?.mapPath ?? "TheIsland_WP";
 
+      // Exclude backup schedule types that don't use the standard cron approach.
+      // backup_server / backup_player / backup_full are included normally below.
       for (const schedule of enabled) {
         // Compute next_run_ms from either the stored ISO date or fresh from cron.
         let nextRunMs: number;

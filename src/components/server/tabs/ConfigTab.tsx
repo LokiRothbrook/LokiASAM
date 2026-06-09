@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import { INI_FIELD_GROUPS, LAUNCH_PARAMETERS, type IniFieldDef, type LaunchParameter } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, getAppSetting, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 
@@ -617,6 +617,14 @@ export function ConfigTab({ server }: Props) {
       );
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
+
+      // Snapshot INI files into the backup system (best-effort, non-blocking)
+      const backupDir = await getAppSetting("backup_dir").catch(() => null);
+      const plat = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows")
+        ? "LinuxServer" : "WindowsServer";
+      if (backupDir) {
+        tauriCmd.createIniBackup(server.id, server.install_path, backupDir, plat).catch(() => {});
+      }
     } catch (e) {
       setError(String(e));
     } finally {

@@ -200,6 +200,7 @@ async fn run_rcon_manager(
                                         .insert(server_id.clone(), players.clone());
                                 }
                                 let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
+                                let _ = app.emit("rcon://players-any", serde_json::json!({ "serverId": server_id, "players": players }));
                                 let _ = response_tx.send(Ok(players));
                             }
                             Err(e) => {
@@ -225,6 +226,7 @@ async fn run_rcon_manager(
                                 .insert(server_id.clone(), players.clone());
                         }
                         let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
+                        let _ = app.emit("rcon://players-any", serde_json::json!({ "serverId": server_id, "players": players }));
                     }
                     Err(ExecError::Io(_)) => break, // TCP dead
                     Err(ExecError::Timeout) => {} // server slow; skip this poll cycle

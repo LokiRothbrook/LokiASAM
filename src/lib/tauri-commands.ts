@@ -184,6 +184,19 @@ export interface BackupRecord {
   mapId: string;
   triggeredBy: string;
   createdAt: string;
+  /** server | player | full | ini */
+  backupType: string;
+  /** Comma-separated tier flags assigned by frontend: H, D, W, M */
+  tiers: string;
+  playerEosid: string | null;
+  playerName: string | null;
+}
+
+export interface IniBackupRecord {
+  id: string;
+  serverId: string;
+  folderPath: string;
+  createdAt: string;
 }
 
 /** Result of comparing the shared cache against the Steam UpToDateCheck API. */
@@ -459,27 +472,57 @@ export const tauriCmd = {
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
 
   // Backups
-  /**
-   * Zip the server's ShooterGame/Saved directory into backup_dir.
-   * Emits backup://progress/{serverId} events. Returns a BackupRecord to
-   * persist in SQLite via db.insertBackup().
-   */
-  createBackup: (
-    serverId: string,
-    serverName: string,
-    installPath: string,
-    backupDir: string,
-    mapId: string,
-    triggeredBy: string,
-  ) => invoke<BackupRecord>("create_backup", { serverId, serverName, installPath, backupDir, mapId, triggeredBy }),
-  /**
-   * Extract backup zip over ShooterGame/Saved. The frontend must stop the
-   * server before calling this and restart it after.
-   */
-  restoreBackup: (serverId: string, backupFilePath: string, installPath: string) =>
-    invoke<void>("restore_backup", { serverId, backupFilePath, installPath }),
-  /** Delete the zip file from disk. Frontend removes the SQLite record via db.deleteBackupRecord(). */
+  /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
+  createServerBackup: (
+    serverId: string, serverName: string, installPath: string, mapPath: string,
+    mapId: string, backupDir: string, triggeredBy: string,
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+
+  /** Player backup: 7z a single .arkprofile file. */
+  createPlayerBackup: (
+    serverId: string, serverName: string, installPath: string, mapPath: string,
+    mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string,
+  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy }),
+
+  /** INI backup: copy loose INI files into a rotating timestamped folder. */
+  createIniBackup: (serverId: string, installPath: string, backupDir: string, platform: string) =>
+    invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir, platform }),
+
+  /** Full backup: 7z the entire install_path directory. */
+  createFullBackup: (
+    serverId: string, serverName: string, installPath: string, mapId: string,
+    backupDir: string, triggeredBy: string,
+  ) => invoke<BackupRecord>("create_full_backup", { serverId, serverName, installPath, mapId, backupDir, triggeredBy }),
+
+  /** List timestamped INI snapshot folder names for a server, newest first. */
+  listIniBackups: (serverId: string, backupDir: string) =>
+    invoke<string[]>("list_ini_backups", { serverId, backupDir }),
+
+  /** Restore a server backup: extract 7z over SavedArks+SaveGames. */
+  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string) =>
+    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath }),
+
+  /** Restore a player backup: extract 7z into SavedArks/{mapPath}. */
+  restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, mapPath: string) =>
+    invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, mapPath }),
+
+  /** Restore an INI backup: copy loose INI files back to Config/{platform}. */
+  restoreIniBackup: (backupFolderPath: string, installPath: string, platform: string) =>
+    invoke<void>("restore_ini_backup", { backupFolderPath, installPath, platform }),
+
+  /** Restore a full backup: extract 7z over the entire install_path. */
+  restoreFullBackup: (serverId: string, backupFilePath: string, installPath: string) =>
+    invoke<void>("restore_full_backup", { serverId, backupFilePath, installPath }),
+
+  /** Delete a backup archive or INI folder from disk. */
   deleteBackup: (filePath: string) => invoke<void>("delete_backup", { filePath }),
+
+  /** Delete ARK's own timestamped .ark backups and .profilebak files. */
+  cleanupArkOwnBackups: (installPath: string, mapPath: string) =>
+    invoke<number>("cleanup_ark_own_backups", { installPath, mapPath }),
+
+  /** Estimate total uncompressed size of a directory in bytes. */
+  estimateDirSize: (dirPath: string) => invoke<number>("estimate_dir_size", { dirPath }),
 
   // Mods
   /**

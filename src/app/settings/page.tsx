@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  Folder, Terminal, Info,
+  Folder, Terminal, Info, Archive,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
   Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power,
@@ -81,6 +81,52 @@ function Section({
       </div>
       <div className="p-6 space-y-6">{children}</div>
     </div>
+  );
+}
+
+function BackupSettingsSection() {
+  const [dismissed, setDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getAppSetting("full_backup_warning_dismissed").then(
+      (v) => setDismissed(v === "true")
+    ).catch(() => setDismissed(false));
+  }, []);
+
+  const toggle = async () => {
+    const next = !dismissed;
+    setDismissed(next);
+    try {
+      await setAppSetting("full_backup_warning_dismissed", String(next));
+    } catch (e) {
+      toast.error(`Failed to save backup setting: ${e}`);
+      setDismissed(!next);
+    }
+  };
+
+  return (
+    <Section icon={Archive} title="Backups" description="Options for the backup system.">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            Hide full backup warning
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            When enabled, the size warning dialog is skipped when triggering a full backup.
+          </p>
+        </div>
+        {dismissed === null ? (
+          <div className="w-8 h-5 rounded-full animate-pulse" style={{ background: "rgba(255,255,255,0.08)" }} />
+        ) : (
+          <button onClick={toggle} className="cursor-pointer shrink-0">
+            {dismissed
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-muted)" }} />
+            }
+          </button>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -1595,6 +1641,8 @@ export default function SettingsPage() {
             <PathField label="Backup Directory" settingKey="backup_dir" placeholder="/path/to/Backups"
               hint="Where scheduled and manual backup zips are stored." validateDir />
           </Section>
+
+          <BackupSettingsSection />
 
           <Section icon={Terminal} title="Tools" description="Paths to SteamCMD and (on Linux) Proton-GE.">
             <ToolPathField

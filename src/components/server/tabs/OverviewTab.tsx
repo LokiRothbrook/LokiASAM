@@ -762,12 +762,14 @@ export function OverviewTab({ server }: Props) {
             onClick={async () => {
               const backupDir = await getAppSetting("backup_dir");
               if (!backupDir) return;
-              tauriCmd.createBackup(server.id, server.name, server.install_path, backupDir, server.map_id, "manual")
+              const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual")
                 .then(async (record: BackupRecord) => {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,
                     file_size_bytes: record.fileSizeBytes, map_id: record.mapId,
                     triggered_by: record.triggeredBy, created_at: record.createdAt,
+                    backup_type: "server", tiers: "", player_eosid: null, player_name: null,
                   });
                 })
                 .catch(() => null);

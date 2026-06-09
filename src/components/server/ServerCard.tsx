@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -118,7 +119,15 @@ export function ServerCard({ server }: Props) {
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
+  const [backupProgress, setBackupProgress] = useState<{ active: boolean; percent: number; label: string }>({
+    active: false, percent: 0, label: "",
+  });
   const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
+
+  useTauriEvent<{ percent: number; currentFile: string; label: string }>(
+    `backup://progress/${server.id}`,
+    (p) => setBackupProgress({ active: p.percent < 100, percent: p.percent, label: p.label })
+  );
 
   const hasUpdateAvailable  = server.update_available === 1;
   const isUpdateQueued      = server.status === "update_queued";
@@ -501,12 +510,27 @@ export function ServerCard({ server }: Props) {
         <div className="flex items-center gap-2">
           <HardDrive className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-green)" }} />
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Backup
+            {backupProgress.active ? backupProgress.label || "Backing up…" : "Backup"}
           </span>
           <span className="text-xs font-semibold ml-auto" style={{ color: "var(--text-primary)" }}>
-            {formatRelativeTime(lastBackup)}
+            {backupProgress.active
+              ? `${backupProgress.percent.toFixed(0)}%`
+              : formatRelativeTime(lastBackup)
+            }
           </span>
         </div>
+        {backupProgress.active && (
+          <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{
+                width: `${backupProgress.percent}%`,
+                background: "linear-gradient(90deg, var(--neon-purple), var(--neon-cyan))",
+                boxShadow: "0 0 6px rgba(191,0,255,0.5)",
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Next restart */}

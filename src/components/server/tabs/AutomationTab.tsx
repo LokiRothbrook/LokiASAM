@@ -38,11 +38,7 @@ import type { ServerRow } from "@/lib/db";
 // Types
 // ---------------------------------------------------------------------------
 
-type ScheduleType = "backup" | "restart" | "broadcast";
-
-interface BackupConfig {
-  // no extra options
-}
+type ScheduleType = "restart" | "broadcast";
 
 interface RestartConfig {
   broadcastWarning: boolean;
@@ -59,13 +55,11 @@ interface BroadcastConfig {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CRON: Record<ScheduleType, string> = {
-  backup:    CRON_PRESETS[3].cron,  // Every 6h
   restart:   "0 6 * * *",           // Daily at 6 AM
   broadcast: CRON_PRESETS[0].cron,  // Every hour
 };
 
 const DEFAULT_CONFIG: Record<ScheduleType, object> = {
-  backup:    {} as BackupConfig,
   restart:   { broadcastWarning: true, warningMinutes: 15, message: "Server restarting in {minutes} minutes. Progress will be saved." } as RestartConfig,
   broadcast: { message: "Welcome to the server! Type /help for commands." } as BroadcastConfig,
 };
@@ -380,6 +374,326 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 }
 
 // ---------------------------------------------------------------------------
+// Backup schedule section — TimeShift tiers per backup type
+// ---------------------------------------------------------------------------
+
+type BackupTier = "H" | "D" | "W" | "M";
+type BackupScheduleType = "backup_server" | "backup_player" | "backup_full";
+
+// Fixed cron expressions per tier (not exposed in UI — schedule timing is implicit)
+const TIER_FIXED_CRON: Record<BackupTier, string> = {
+  M: "0 4 1 * *",    // monthly — 1st at 4am
+  W: "0 3 * * 0",    // weekly — Sunday 3am
+  D: "0 2 * * *",    // daily  — 2am
+  H: "0 */6 * * *",  // hourly — every 6h
+};
+
+const TIER_DEFAULT_KEEP: Record<BackupTier, number> = {
+  M: 3, W: 4, D: 7, H: 24,
+};
+
+const TIER_LABEL: Record<BackupTier, string> = {
+  M: "monthly", W: "weekly", D: "daily", H: "hourly",
+};
+
+function findTierSchedule(
+  schedules: ScheduleRow[],
+  type: BackupScheduleType,
+  tier: BackupTier,
+): ScheduleRow | null {
+  return schedules.find((s) => {
+    if (s.schedule_type !== type) return false;
+    try { return (JSON.parse(s.config_json ?? "{}").tier ?? "H") === tier; }
+    catch { return false; }
+  }) ?? null;
+}
+
+function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
+  return schedules.find((s) => s.schedule_type === "backup_full") ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// BackupTypeSection — simple keep-count + toggle rows per tier
+// ---------------------------------------------------------------------------
+
+const TIER_ORDER: BackupTier[] = ["M", "W", "D", "H"];
+
+type TierState = { keep: number; enabled: boolean };
+
+function BackupTypeSection({
+  title, scheduleType, serverId, schedules, onRefresh, accentColor,
+}: {
+  title: string;
+  scheduleType: BackupScheduleType;
+  serverId: string;
+  schedules: ScheduleRow[];
+  onRefresh: () => void;
+  accentColor: string;
+}) {
+  const buildState = (): Record<BackupTier, TierState> => {
+    const s = {} as Record<BackupTier, TierState>;
+    for (const tier of TIER_ORDER) {
+      const row = findTierSchedule(schedules, scheduleType, tier);
+      const cfg = row?.config_json ? (() => { try { return JSON.parse(row.config_json); } catch { return {}; } })() : {};
+      s[tier] = { keep: cfg.keep ?? TIER_DEFAULT_KEEP[tier], enabled: row ? row.enabled === 1 : false };
+    }
+    return s;
+  };
+
+  const [tiers, setTiers] = useState<Record<BackupTier, TierState>>(buildState);
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  useEffect(() => { setTiers(buildState()); }, [schedules.length, serverId, scheduleType]);
+
+  const patch = (tier: BackupTier, delta: Partial<TierState>) =>
+    setTiers((s) => ({ ...s, [tier]: { ...s[tier], ...delta } }));
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      for (const tier of TIER_ORDER) {
+        const { keep, enabled } = tiers[tier];
+        const existing  = findTierSchedule(schedules, scheduleType, tier);
+        const configJson = JSON.stringify({ tier, keep });
+        const cron       = TIER_FIXED_CRON[tier];
+        const nextIso    = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+
+        if (existing) {
+          await updateScheduleConfig(existing.id, cron, configJson, nextIso);
+          if (enabled !== (existing.enabled === 1)) await updateScheduleEnabled(existing.id, enabled);
+        } else if (enabled) {
+          const newId = await tauriCmd.createSchedule({ serverId, scheduleType, cronExpression: cron, configJson });
+          await createSchedule({ id: newId, serverId, scheduleType, cronExpression: cron, enabled: true, configJson });
+          await updateScheduleConfig(newId, cron, configJson, nextIso);
+        }
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onRefresh();
+      syncSchedulesToRust();
+    } catch (e) {
+      toast.error(`Failed to save ${title}: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold pb-0.5" style={{ color: accentColor }}>{title}</p>
+      {TIER_ORDER.map((tier) => (
+        <div
+          key={tier}
+          className="flex items-center gap-3 px-3 py-2 rounded-lg"
+          style={{
+            background: tiers[tier].enabled ? `${accentColor}08` : "rgba(255,255,255,0.02)",
+            border: `1px solid ${tiers[tier].enabled ? `${accentColor}25` : "rgba(255,255,255,0.05)"}`,
+          }}
+        >
+          <Input
+            type="number" min={1} max={999}
+            value={tiers[tier].keep}
+            onChange={(e) => patch(tier, { keep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+            className="w-16 h-8 text-sm text-center shrink-0"
+            style={{
+              background: "rgba(0,0,0,0.4)",
+              border: `1px solid ${tiers[tier].enabled ? `${accentColor}35` : "rgba(191,0,255,0.15)"}`,
+              color: "var(--text-primary)",
+            }}
+          />
+          <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>
+            {TIER_LABEL[tier]} backups to keep
+          </span>
+          <button
+            onClick={() => patch(tier, { enabled: !tiers[tier].enabled })}
+            className="cursor-pointer shrink-0"
+            title={tiers[tier].enabled ? "Disable" : "Enable"}
+          >
+            {tiers[tier].enabled
+              ? <ToggleRight className="w-6 h-6" style={{ color: accentColor }} />
+              : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+            }
+          </button>
+        </div>
+      ))}
+      <Button
+        size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : `${accentColor}18`,
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : `1px solid ${accentColor}40`,
+          color:      saved ? "var(--neon-green)" : accentColor,
+        }}
+      >
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FullBackupScheduleSection — single keep-count + toggle
+// ---------------------------------------------------------------------------
+
+function FullBackupScheduleSection({
+  serverId, schedules, onRefresh,
+}: {
+  serverId: string;
+  schedules: ScheduleRow[];
+  onRefresh: () => void;
+}) {
+  const existing = findFullSchedule(schedules);
+  const cfg = existing?.config_json ? (() => { try { return JSON.parse(existing.config_json); } catch { return {}; } })() : {};
+
+  const [keep,    setKeep]    = useState<number>(cfg.keep ?? 3);
+  const [enabled, setEnabled] = useState(existing ? existing.enabled === 1 : false);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  useEffect(() => {
+    const row = findFullSchedule(schedules);
+    const c = row?.config_json ? (() => { try { return JSON.parse(row.config_json); } catch { return {}; } })() : {};
+    setKeep(c.keep ?? 3);
+    setEnabled(row ? row.enabled === 1 : false);
+  }, [schedules.length, serverId]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const configJson = JSON.stringify({ keep });
+      const cron       = "0 3 1 * *";
+      const nextIso    = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+
+      if (existing) {
+        await updateScheduleConfig(existing.id, cron, configJson, nextIso);
+        if (enabled !== (existing.enabled === 1)) await updateScheduleEnabled(existing.id, enabled);
+      } else if (enabled) {
+        const newId = await tauriCmd.createSchedule({ serverId, scheduleType: "backup_full", cronExpression: cron, configJson });
+        await createSchedule({ id: newId, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson });
+        await updateScheduleConfig(newId, cron, configJson, nextIso);
+      }
+
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onRefresh();
+      syncSchedulesToRust();
+    } catch (e) {
+      toast.error(`Failed to save full backup schedule: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold pb-0.5" style={{ color: "#ffa500" }}>Full Backups</p>
+      <div
+        className="flex items-center gap-3 px-3 py-2 rounded-lg"
+        style={{
+          background: enabled ? "rgba(255,165,0,0.05)" : "rgba(255,255,255,0.02)",
+          border: `1px solid ${enabled ? "rgba(255,165,0,0.25)" : "rgba(255,255,255,0.05)"}`,
+        }}
+      >
+        <Input
+          type="number" min={1} max={20}
+          value={keep}
+          onChange={(e) => setKeep(Math.max(1, parseInt(e.target.value, 10) || 1))}
+          className="w-16 h-8 text-sm text-center shrink-0"
+          style={{
+            background: "rgba(0,0,0,0.4)",
+            border: `1px solid ${enabled ? "rgba(255,165,0,0.35)" : "rgba(255,165,0,0.15)"}`,
+            color: "var(--text-primary)",
+          }}
+        />
+        <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>
+          full backups to keep
+        </span>
+        <button
+          onClick={() => setEnabled((v) => !v)}
+          className="cursor-pointer shrink-0"
+          title={enabled ? "Disable" : "Enable"}
+        >
+          {enabled
+            ? <ToggleRight className="w-6 h-6" style={{ color: "#ffa500" }} />
+            : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+          }
+        </button>
+      </div>
+      <p className="text-xs px-1" style={{ color: "var(--text-muted)" }}>
+        Zips the entire install folder — runs monthly on the 1st at 3am.
+      </p>
+      <Button
+        size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(255,165,0,0.1)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(255,165,0,0.35)",
+          color:      saved ? "var(--neon-green)" : "#ffa500",
+        }}
+      >
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BackupScheduleSection — groups all three backup type sections
+// ---------------------------------------------------------------------------
+
+function BackupScheduleSection({
+  serverId, schedules, onRefresh,
+}: {
+  serverId: string;
+  schedules: ScheduleRow[];
+  onRefresh: () => void;
+}) {
+  return (
+    <div
+      className="glass-card rounded-xl p-4 space-y-5"
+      style={{ border: "1px solid rgba(191,0,255,0.1)" }}
+    >
+      {/* Header */}
+      <div className="flex items-start gap-3">
+        <div
+          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.2)" }}
+        >
+          <HardDrive className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+        </div>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Backup Schedules</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            TimeShift — each tier keeps its own independent set of backups
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(191,0,255,0.08)" }}>
+        <BackupTypeSection
+          title="Server Backups" scheduleType="backup_server"
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
+          accentColor="var(--neon-purple)"
+        />
+        <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+        <BackupTypeSection
+          title="Player Backups" scheduleType="backup_player"
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
+          accentColor="var(--neon-cyan)"
+        />
+        <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+        <FullBackupScheduleSection serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AutomationTab
 // ---------------------------------------------------------------------------
 
@@ -393,12 +707,6 @@ const CARD_DEFS: {
   title: string;
   description: string;
 }[] = [
-  {
-    type: "backup",
-    icon: HardDrive,
-    title: "Auto-Backup",
-    description: "Automatically zip and archive the server's save directory on a schedule.",
-  },
   {
     type: "restart",
     icon: RotateCcw,
@@ -661,7 +969,10 @@ export function AutomationTab({ server }: Props) {
           {/* Update automation — uses new per-server settings instead of schedule rows */}
           <UpdateAutomationCard server={server} />
 
-          {/* Backup, restart, broadcast — cron-based schedule cards */}
+          {/* Backup schedules — TimeShift tiers (server, player, full) */}
+          <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
+
+          {/* Restart, broadcast — cron-based schedule cards */}
           {CARD_DEFS.map((def) => (
             <ScheduleCard
               key={def.type}
@@ -841,7 +1152,7 @@ function NotificationConfigSection({ serverId }: NotificationConfigSectionProps)
     >
       {/* Collapsible header */}
       <button
-        className="flex items-center justify-between w-full px-4 py-3 transition-colors hover:bg-white/[0.02]"
+        className="flex items-center justify-between w-full px-4 py-3 transition-colors hover:bg-white/2"
         onClick={() => setOpen((v) => !v)}
         style={{ background: "rgba(191,0,255,0.04)" }}
       >

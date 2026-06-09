@@ -120,7 +120,19 @@ async function runMigrations(db: Database): Promise<void> {
     file_size_bytes INTEGER NOT NULL DEFAULT 0,
     map_id          TEXT NOT NULL,
     triggered_by    TEXT NOT NULL,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    backup_type     TEXT NOT NULL DEFAULT 'server',
+    tiers           TEXT NOT NULL DEFAULT '',
+    player_eosid    TEXT,
+    player_name     TEXT
+  )`);
+
+  await db.execute(`CREATE TABLE IF NOT EXISTS player_name_map (
+    server_id   TEXT NOT NULL,
+    eos_id      TEXT NOT NULL,
+    player_name TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    PRIMARY KEY (server_id, eos_id)
   )`);
 
   await db.execute(`CREATE TABLE IF NOT EXISTS notification_configs (
@@ -181,7 +193,8 @@ async function runMigrations(db: Database): Promise<void> {
     ('asa_cached_build_id', ''),
     ('asa_latest_build_id', ''),
     ('asa_auto_check_hours', '1'),
-    ('auto_restart_downed', 'ask')`);
+    ('auto_restart_downed', 'ask'),
+    ('full_backup_warning_dismissed', 'false')`);
 
   // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
   try {
@@ -283,6 +296,22 @@ async function runMigrations(db: Database): Promise<void> {
   await db.execute(
     "CREATE INDEX IF NOT EXISTS idx_uptime_sessions_server ON server_uptime_sessions(server_id, started_at)"
   );
+
+  // ── Migration 008: backup system v2 ──────────────────────────────────────
+  try { await db.execute("ALTER TABLE backups ADD COLUMN backup_type TEXT NOT NULL DEFAULT 'server'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE backups ADD COLUMN tiers TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE backups ADD COLUMN player_eosid TEXT"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE backups ADD COLUMN player_name TEXT"); } catch { /* exists */ }
+  await db.execute(`CREATE TABLE IF NOT EXISTS player_name_map (
+    server_id   TEXT NOT NULL,
+    eos_id      TEXT NOT NULL,
+    player_name TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    PRIMARY KEY (server_id, eos_id)
+  )`);
+  // Rename old generic "backup" schedule rows to the new typed name.
+  await db.execute("UPDATE schedules SET schedule_type = 'backup_server' WHERE schedule_type = 'backup'");
+  try { await db.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('full_backup_warning_dismissed', 'false')"); } catch { /* exists */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -829,16 +858,25 @@ export interface BackupRow {
   file_path: string;
   file_size_bytes: number;
   map_id: string;
+  /** manual | schedule | pre_update | pre_restart | config_save */
   triggered_by: string;
   created_at: string;
+  /** server | player | full | ini */
+  backup_type: string;
+  /** Comma-separated tier flags: H, D, W, M — or empty for manual/full */
+  tiers: string;
+  player_eosid: string | null;
+  player_name: string | null;
 }
 
-/** Insert a backup record returned by the Rust create_backup command. */
+/** Insert a backup record. */
 export async function insertBackup(record: BackupRow): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT INTO backups (id, server_id, file_path, file_size_bytes, map_id, triggered_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO backups
+      (id, server_id, file_path, file_size_bytes, map_id, triggered_by, created_at,
+       backup_type, tiers, player_eosid, player_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       record.id,
       record.server_id,
@@ -847,6 +885,10 @@ export async function insertBackup(record: BackupRow): Promise<void> {
       record.map_id,
       record.triggered_by,
       record.created_at,
+      record.backup_type ?? 'server',
+      record.tiers ?? '',
+      record.player_eosid ?? null,
+      record.player_name ?? null,
     ]
   );
 }
@@ -860,10 +902,106 @@ export async function getServerBackups(serverId: string): Promise<BackupRow[]> {
   );
 }
 
+/** Fetch backups for a server filtered by type, newest first. */
+export async function getServerBackupsByType(
+  serverId: string,
+  backupType: string
+): Promise<BackupRow[]> {
+  const db = await getDb();
+  return db.select<BackupRow[]>(
+    "SELECT * FROM backups WHERE server_id = ? AND backup_type = ? ORDER BY created_at DESC",
+    [serverId, backupType]
+  );
+}
+
+/** Fetch all backups across every server, newest first (used by global /backups page). */
+export async function getAllBackups(): Promise<BackupRow[]> {
+  const db = await getDb();
+  return db.select<BackupRow[]>(
+    "SELECT * FROM backups ORDER BY created_at DESC"
+  );
+}
+
+/** Fetch all player backups for a specific EOS ID on a server. */
+export async function getPlayerBackups(
+  serverId: string,
+  eosId: string
+): Promise<BackupRow[]> {
+  const db = await getDb();
+  return db.select<BackupRow[]>(
+    "SELECT * FROM backups WHERE server_id = ? AND player_eosid = ? ORDER BY created_at DESC",
+    [serverId, eosId]
+  );
+}
+
+/** Update the tier flags on an existing backup (for TimeShift promotion). */
+export async function updateBackupTiers(backupId: string, tiers: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE backups SET tiers = ? WHERE id = ?", [tiers, backupId]);
+}
+
 /** Remove a backup record from the database (after the file has been deleted). */
 export async function deleteBackupRecord(backupId: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM backups WHERE id = ?", [backupId]);
+}
+
+// ---------------------------------------------------------------------------
+// Player name map
+// ---------------------------------------------------------------------------
+
+/** Insert or update an EOS ID → player name mapping. */
+export async function upsertPlayerName(
+  serverId: string,
+  eosId: string,
+  playerName: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO player_name_map (server_id, eos_id, player_name, last_seen)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(server_id, eos_id) DO UPDATE SET player_name = excluded.player_name, last_seen = excluded.last_seen`,
+    [serverId, eosId, playerName, new Date().toISOString()]
+  );
+}
+
+/** Bulk upsert multiple players from a listplayers result. */
+export async function upsertPlayerNames(
+  serverId: string,
+  players: { eosId: string; name: string }[]
+): Promise<void> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  for (const p of players) {
+    await db.execute(
+      `INSERT INTO player_name_map (server_id, eos_id, player_name, last_seen)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(server_id, eos_id) DO UPDATE SET player_name = excluded.player_name, last_seen = excluded.last_seen`,
+      [serverId, p.eosId, p.name, now]
+    );
+  }
+}
+
+/** Return an eosId → playerName map for a server. */
+export async function getPlayerNameMap(serverId: string): Promise<Record<string, string>> {
+  const db = await getDb();
+  const rows = await db.select<{ eos_id: string; player_name: string }[]>(
+    "SELECT eos_id, player_name FROM player_name_map WHERE server_id = ?",
+    [serverId]
+  );
+  return Object.fromEntries(rows.map((r) => [r.eos_id, r.player_name]));
+}
+
+/** Return all known players for a server (for the player backup browser). */
+export async function getKnownPlayers(
+  serverId: string
+): Promise<{ eosId: string; playerName: string; lastSeen: string }[]> {
+  const db = await getDb();
+  const rows = await db.select<{ eos_id: string; player_name: string; last_seen: string }[]>(
+    "SELECT eos_id, player_name, last_seen FROM player_name_map WHERE server_id = ? ORDER BY last_seen DESC",
+    [serverId]
+  );
+  return rows.map((r) => ({ eosId: r.eos_id, playerName: r.player_name, lastSeen: r.last_seen }));
 }
 
 // ---------------------------------------------------------------------------
