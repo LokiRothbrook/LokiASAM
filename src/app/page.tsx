@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Plus, Server, Activity, PowerOff, Power, RefreshCw, Upload,
-  ArrowUp, Loader2, CheckCircle2, AlertTriangle,
+  ArrowUp, Loader2, CheckCircle2, AlertTriangle, LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -159,7 +159,7 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
         disabled={checking}
         onClick={handleCheck}
         className="h-7 gap-1.5 text-xs"
-        style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
       >
         {checking
           ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -271,7 +271,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}
-            style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
             Not Now
           </Button>
           <Button
@@ -385,7 +385,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}
-            style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
             Cancel
           </Button>
           <Button
@@ -500,12 +500,15 @@ export default function DashboardPage() {
       {/* ── Page header ── */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1
-            className="text-2xl font-bold tracking-tight"
-            style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
-          >
-            Server Dashboard
-          </h1>
+          <div className="flex items-center gap-3">
+            <LayoutDashboard className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <h1
+              className="text-2xl font-bold tracking-tight"
+              style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+            >
+              Server Dashboard
+            </h1>
+          </div>
           <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
             Manage your Ark Survival Ascended dedicated servers.
           </p>
@@ -523,14 +526,16 @@ export default function DashboardPage() {
             variant="outline"
             onClick={() => setShowImport(true)}
             className="gap-2"
-            style={{ borderColor: "rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
             <Upload className="w-4 h-4" />
             Import Server
           </Button>
           <Button
+            variant="outline"
             onClick={() => setShowNewServerWizard(true)}
-            className="btn-neon-purple gap-2"
+            className="gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
             <Plus className="w-4 h-4" />
             New Server
@@ -580,7 +585,7 @@ export default function DashboardPage() {
         <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
           <div
             className="flex items-center justify-center w-16 h-16 rounded-full"
-            style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.15)" }}
+            style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
           >
             <Server className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
           </div>
@@ -591,9 +596,10 @@ export default function DashboardPage() {
             </p>
           </div>
           <Button
-            onClick={() => setShowNewServerWizard(true)}
             variant="outline"
-            className="btn-neon-purple mt-2 gap-2"
+            onClick={() => setShowNewServerWizard(true)}
+            className="mt-2 gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
             <Plus className="w-4 h-4" /> Create Server
           </Button>

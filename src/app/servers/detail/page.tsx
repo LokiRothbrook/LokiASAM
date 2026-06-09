@@ -164,7 +164,7 @@ export default function ServerDetailPage() {
         className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
         style={{
           background: "rgba(0,0,0,0.4)",
-          border: "1px solid rgba(191,0,255,0.15)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
         }}
       >
         {TABS.map(({ value, label, icon: Icon }) => {
@@ -177,8 +177,8 @@ export default function ServerDetailPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-all cursor-pointer"
               style={{
                 color: active ? "var(--neon-purple)" : "var(--text-muted)",
-                background: active ? "rgba(191,0,255,0.12)" : "transparent",
-                border: active ? "1px solid rgba(191,0,255,0.3)" : "1px solid transparent",
+                background: active ? "rgba(var(--neon-purple-rgb),0.12)" : "transparent",
+                border: active ? "1px solid rgba(var(--neon-purple-rgb),0.3)" : "1px solid transparent",
                 fontWeight: active ? 600 : 400,
                 textShadow: active ? "var(--glow-purple)" : "none",
               }}

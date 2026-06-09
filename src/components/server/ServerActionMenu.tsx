@@ -304,7 +304,7 @@ function CloneDialog({
             onClick={handleClone}
             disabled={cloning || !name.trim()}
             style={{
-              background: "rgba(191,0,255,0.15)",
+              background: "rgba(var(--neon-purple-rgb),0.15)",
               borderColor: "var(--neon-purple)",
               color: "var(--neon-purple)",
             }}

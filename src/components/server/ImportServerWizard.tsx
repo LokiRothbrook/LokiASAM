@@ -103,7 +103,7 @@ function Step1({ onDetected }: Step1Props) {
         onClick={handleScan}
         disabled={!path.trim() || scanning}
         className="gap-2"
-        style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+        style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
       >
         {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
         Scan Folder
@@ -205,7 +205,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
                 onClick={() => setMapId(m.id)}
                 className="text-xs px-3 py-1.5 rounded-lg transition-all"
                 style={{
-                  background: mapId === m.id ? "rgba(191,0,255,0.15)" : "transparent",
+                  background: mapId === m.id ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
                   border: `1px solid ${mapId === m.id ? "var(--neon-purple)" : "var(--border)"}`,
                   color: mapId === m.id ? "var(--neon-purple)" : "var(--text-muted)",
                 }}
@@ -252,7 +252,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
 
       <div
         className="flex items-start gap-2 p-3 rounded-lg text-xs"
-        style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.12)", color: "var(--text-muted)" }}
+        style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}
       >
         <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
         A new RCON password will be generated. Save data, configs, and mods are left untouched — only a database record is created.
@@ -296,12 +296,12 @@ export function ImportServerWizard({ onClose, onImported }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <div
         className="glass-card rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
-        style={{ border: "1px solid rgba(191,0,255,0.3)" }}
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}
       >
         {/* Header */}
         <div
           className="flex items-center justify-between px-6 py-4 border-b"
-          style={{ borderColor: "rgba(191,0,255,0.15)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
         >
           <div className="flex items-center gap-3">
             <Server className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
@@ -326,7 +326,7 @@ export function ImportServerWizard({ onClose, onImported }: Props) {
               <div
                 className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold"
                 style={{
-                  background: step >= n ? "rgba(191,0,255,0.2)" : "rgba(255,255,255,0.04)",
+                  background: step >= n ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(255,255,255,0.04)",
                   border: `1px solid ${step >= n ? "var(--neon-purple)" : "var(--border)"}`,
                   color: step >= n ? "var(--neon-purple)" : "var(--text-muted)",
                 }}

@@ -39,7 +39,7 @@
   --color-primary-foreground: #050510;
   --color-input:              rgba(var(--neon-purple-rgb), 0.2);
   --color-ring:               #bf00ff;
-  --color-muted:              rgba(10, 10, 30, 0.75);
+  --color-muted:              rgba(20, 20, 52, 0.85);
   --color-muted-foreground:   #5858a0;
 
   /* Fonts */
@@ -57,8 +57,8 @@
 :root {
   /* Backgrounds */
   --background:       #050510;
-  --surface:          rgba(10, 10, 30, 0.75);
-  --surface-elevated: rgba(15, 15, 40, 0.9);
+  --surface:          rgba(20, 20, 52, 0.85);
+  --surface-elevated: rgba(28, 28, 68, 0.92);
   --terminal-bg:      #000008;
 
   /* Accent RGB components — updated by applyThemeAccent() so all rgba() uses track the active color */
@@ -88,12 +88,12 @@
   --glow-red:         0 0 8px rgba(255,0,85,0.6),  0 0 24px rgba(255,0,85,0.2);
 
   /* Card glass — purple-tinted borders */
-  --glass-bg:        rgba(10, 10, 35, 0.6);
+  --glass-bg:        rgba(18, 18, 50, 0.72);
   --glass-border:    rgba(191, 0, 255, 0.12);
   --glass-blur:      12px;
 
   /* Popover / dropdown surface */
-  --popover:            #0c0c20;
+  --popover:            #101028;
   --popover-foreground: #e0e0ff;
 
   /* Accent — subtle purple highlight for menu item hover/focus */

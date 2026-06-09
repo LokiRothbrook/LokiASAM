@@ -315,7 +315,7 @@ function BaseDirMigrationSection() {
           )}
 
           <Button onClick={handleMigrate} disabled={migrating || !newDir.trim()} size="sm" className="gap-1.5 w-full"
-            style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
             {migrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <FolderOpen className="w-3 h-3" />}
             {migrating ? "Migrating…" : "Verify & Move"}
           </Button>
@@ -392,7 +392,7 @@ function PathField({
         </Button>
         <Button onClick={handleSave} disabled={saving || !dirty} size="sm" className="shrink-0 gap-1"
           style={{
-            background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
+            background: dirty ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
             border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
             color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
           }}
@@ -485,7 +485,7 @@ function ToolPathField({
         </Button>
         <Button onClick={handleVerifyAndSave} disabled={verifying || !dirty} size="sm" className="shrink-0 gap-1"
           style={{
-            background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
+            background: dirty ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
             border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
             color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
           }}
@@ -556,9 +556,9 @@ function ThemesSection() {
               <button key={p} onClick={() => handlePreset(p)}
                 className="rounded-lg p-3 text-left transition-all"
                 style={{
-                  background: isActive ? "rgba(191,0,255,0.12)" : info.surface,
+                  background: isActive ? "rgba(var(--neon-purple-rgb),0.12)" : info.surface,
                   border: `1px solid ${isActive ? "var(--neon-purple)" : "var(--border)"}`,
-                  boxShadow: isActive ? "0 0 12px rgba(191,0,255,0.15)" : "none",
+                  boxShadow: isActive ? "0 0 12px rgba(var(--neon-purple-rgb),0.15)" : "none",
                 }}
               >
                 <div className="w-full h-8 rounded mb-2" style={{ background: info.background, border: "1px solid rgba(255,255,255,0.06)" }} />
@@ -835,7 +835,7 @@ function ServerUpdatesSection() {
       </div>
       <div className="flex items-center gap-3 flex-wrap">
         <Button onClick={handleCheck} disabled={checking || hasCacheInstalled === false} size="sm" className="gap-1.5"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Check for ASA Server Update
         </Button>
@@ -853,7 +853,7 @@ function ServerUpdatesSection() {
           {AUTO_CHECK_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => handleAutoCheckChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: autoCheckHours === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
+                background: autoCheckHours === opt.value ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
                 border: `1px solid ${autoCheckHours === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
                 color: autoCheckHours === opt.value ? "var(--neon-purple)" : "var(--text-muted)",
               }}>
@@ -877,7 +877,7 @@ function ServerUpdatesSection() {
           </DialogHeader>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowApplyAll(false)}
-              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
               No, skip
             </Button>
             <Button onClick={handleApplyAll} disabled={applyingAll}
@@ -959,7 +959,7 @@ function AppUpdateSection() {
           {APP_UPDATE_MODE_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => handleModeChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: mode === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
+                background: mode === opt.value ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
                 border: `1px solid ${mode === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
                 color: mode === opt.value ? "var(--neon-purple)" : "var(--text-muted)",
               }}>
@@ -970,7 +970,7 @@ function AppUpdateSection() {
       </div>
       <Separator style={{ background: "var(--border)" }} />
       <Button onClick={handleCheckNow} disabled={checking} size="sm" className="gap-1.5"
-        style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+        style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
         {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
         Check for LokiASAM Update
       </Button>
@@ -1018,8 +1018,8 @@ function SteamcmdReinstallRow() {
         )}
         <Button onClick={handleReinstall} disabled={reinstalling} size="sm" className="gap-1.5 h-7 text-xs"
           style={{
-            background: done ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.08)",
-            border: `1px solid ${done ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.3)"}`,
+            background: done ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${done ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
             color: done ? "var(--neon-green)" : "var(--neon-purple)",
           }}>
           {reinstalling ? <Loader2 className="w-3 h-3 animate-spin" /> : done ? <CheckCircle2 className="w-3 h-3" /> : <RefreshCw className="w-3 h-3" />}
@@ -1139,8 +1139,8 @@ function ProtonGeUpdateSection() {
       {updateInfo && !downloadDone && (
         <div className="rounded-lg p-3 space-y-2"
           style={{
-            background: updateInfo.updateAvailable ? "rgba(191,0,255,0.08)" : "rgba(0,255,136,0.06)",
-            border: `1px solid ${updateInfo.updateAvailable ? "rgba(191,0,255,0.3)" : "rgba(0,255,136,0.25)"}`,
+            background: updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(0,255,136,0.06)",
+            border: `1px solid ${updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(0,255,136,0.25)"}`,
           }}>
           {updateInfo.currentVersion ? (
             <div className="flex items-center gap-2 text-xs flex-wrap">
@@ -1165,7 +1165,7 @@ function ProtonGeUpdateSection() {
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
         <Button onClick={handleCheckUpdate} disabled={checking || downloading} size="sm" className="gap-1.5"
-          style={{ background: "rgba(0,255,255,0.08)", border: "1px solid rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}>
+          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-cyan)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Check for Update
         </Button>
@@ -1173,8 +1173,8 @@ function ProtonGeUpdateSection() {
         {(updateInfo?.updateAvailable || (!protonPath && updateInfo)) && (isManaged || !looksExternal) && (
           <Button onClick={handleDownload} disabled={downloading || downloadDone} size="sm" className="gap-1.5"
             style={{
-              background: downloadDone ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${downloadDone ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: downloadDone ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${downloadDone ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: downloadDone ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {downloading ? <Loader2 className="w-3 h-3 animate-spin" /> : downloadDone ? <CheckCircle2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
@@ -1378,8 +1378,8 @@ function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fie
         <div className="flex gap-2">
           <Button size="sm" onClick={handleTestClick} disabled={testing || saving} className="h-7 text-xs gap-1"
             style={{
-              background: testPassed ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.12)",
-              border: `1px solid ${testPassed ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.35)"}`,
+              background: testPassed ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.12)",
+              border: `1px solid ${testPassed ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.35)"}`,
               color: testPassed ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : testPassed ? <CheckCircle2 className="w-3 h-3" /> : <Send className="w-3 h-3" />}
@@ -1489,7 +1489,7 @@ function AppImageIntegrationSection() {
           onClick={handleInstall}
           disabled={working}
           className="gap-2"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
         >
           {working
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1579,7 +1579,7 @@ function StartupSection() {
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent style={{ background: "rgba(10,10,30,0.97)", borderColor: "rgba(191,0,255,0.25)" }}>
+          <SelectContent style={{ background: "rgba(10,10,30,0.97)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}>
             <SelectItem value="ask">Ask each time</SelectItem>
             <SelectItem value="auto">Auto-restart</SelectItem>
             <SelectItem value="never">Do nothing</SelectItem>

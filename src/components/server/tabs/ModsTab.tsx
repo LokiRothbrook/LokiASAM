@@ -225,7 +225,7 @@ export function ModsTab({ server }: Props) {
           style={{
             minHeight: 220,
             maxHeight: 420,
-            borderColor: "rgba(191,0,255,0.15)",
+            borderColor: "rgba(var(--neon-purple-rgb),0.15)",
           }}
         >
           {loading ? (
@@ -261,7 +261,7 @@ export function ModsTab({ server }: Props) {
         {/* Add-by-ID form */}
         <div
           className="glass-card flex flex-col gap-2 rounded-xl p-3"
-          style={{ borderColor: "rgba(191,0,255,0.12)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}
         >
           <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
             Add mods by ID
@@ -274,7 +274,7 @@ export function ModsTab({ server }: Props) {
               onKeyDown={(e) => { if (e.key === "Enter") handleAddFromForm(); }}
               placeholder="e.g. 927090, 123456, 789012"
               className="flex-1 text-sm font-mono"
-              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)" }}
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
               disabled={verifying}
             />
             <Button
@@ -310,8 +310,8 @@ export function ModsTab({ server }: Props) {
         <div
           className="flex items-start gap-2 rounded-xl px-3 py-2.5"
           style={{
-            background: "rgba(0,255,255,0.04)",
-            border: "1px solid rgba(0,255,255,0.12)",
+            background: "rgba(var(--neon-purple-rgb),0.04)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.12)",
           }}
         >
           <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-cyan)" }} />
@@ -330,7 +330,7 @@ export function ModsTab({ server }: Props) {
         {/* Open / Close browser card */}
         <div
           className="glass-card flex flex-col gap-3 p-4 rounded-xl"
-          style={{ borderColor: "rgba(191,0,255,0.15)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
         >
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -344,9 +344,9 @@ export function ModsTab({ server }: Props) {
               <span
                 className="ml-auto text-xs px-1.5 py-0.5 rounded-full"
                 style={{
-                  background: "rgba(191,0,255,0.15)",
+                  background: "rgba(var(--neon-purple-rgb),0.15)",
                   color: "var(--neon-purple)",
-                  border: "1px solid rgba(191,0,255,0.3)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
                 }}
               >
                 Open
@@ -390,7 +390,7 @@ export function ModsTab({ server }: Props) {
         {/* Info card */}
         <div
           className="glass-card flex flex-col gap-2 p-4 rounded-xl"
-          style={{ borderColor: "rgba(0,255,255,0.1)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}
         >
           <p
             className="text-xs font-semibold uppercase tracking-wide"
@@ -444,8 +444,8 @@ function ModRowItem({
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg group transition-all"
       style={{
-        background: locked ? "rgba(0,255,255,0.04)" : "rgba(10,10,30,0.4)",
-        border: `1px solid ${locked ? "rgba(0,255,255,0.18)" : "rgba(191,0,255,0.08)"}`,
+        background: locked ? "rgba(var(--neon-purple-rgb),0.04)" : "rgba(10,10,30,0.4)",
+        border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.18)" : "rgba(var(--neon-purple-rgb),0.08)"}`,
         opacity: enabled ? 1 : 0.55,
       }}
     >
@@ -476,7 +476,7 @@ function ModRowItem({
             {mod.mod_name}
           </span>
           {locked && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,255,0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)" }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
               Map Mod
             </span>
           )}

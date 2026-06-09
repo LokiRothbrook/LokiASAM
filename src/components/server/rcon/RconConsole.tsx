@@ -302,7 +302,7 @@ export function RconConsole({ server }: Props) {
       {/* ── Status bar ── */}
       <div
         className="glass-card rounded-xl px-3 py-2 flex items-center gap-3 flex-wrap shrink-0"
-        style={{ borderColor: connected ? "rgba(0,255,136,0.3)" : error ? "rgba(255,50,50,0.25)" : "rgba(191,0,255,0.15)" }}
+        style={{ borderColor: connected ? "rgba(0,255,136,0.3)" : error ? "rgba(255,50,50,0.25)" : "rgba(var(--neon-purple-rgb),0.15)" }}
       >
         <div className="flex items-center gap-2">
           <div
@@ -343,8 +343,8 @@ export function RconConsole({ server }: Props) {
         <div className="flex flex-col gap-2 w-52 shrink-0">
 
           {/* Online players */}
-          <div className="glass-card rounded-xl flex flex-col" style={{ border: "1px solid rgba(0,255,255,0.15)", flex: "1 1 0", minHeight: 0 }}>
-            <div className="flex items-center gap-1.5 px-3 py-2 border-b shrink-0" style={{ borderColor: "rgba(0,255,255,0.1)" }}>
+          <div className="glass-card rounded-xl flex flex-col" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)", flex: "1 1 0", minHeight: 0 }}>
+            <div className="flex items-center gap-1.5 px-3 py-2 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
               <Users className="w-3.5 h-3.5" style={{ color: "var(--neon-cyan)" }} />
               <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
                 Online ({players.length})
@@ -455,7 +455,7 @@ export function RconConsole({ server }: Props) {
           <div
             ref={logRef}
             className="rounded-xl p-3 overflow-y-auto font-mono text-xs leading-relaxed"
-            style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.1)", flex: "1 1 0", minHeight: 0 }}
+            style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.1)", flex: "1 1 0", minHeight: 0 }}
           >
             {lines.map((l, i) => (
               <div key={i} className="flex gap-2 items-start mb-0.5">
@@ -475,12 +475,12 @@ export function RconConsole({ server }: Props) {
           {connected && (
             <div className="flex items-center gap-1.5 flex-wrap shrink-0">
               <Button size="sm" variant="ghost" className="text-xs h-7"
-                style={{ color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)", background: "rgba(0,255,255,0.04)" }}
+                style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", background: "rgba(var(--neon-purple-rgb),0.04)" }}
                 onClick={() => sendCommand("saveworld")} disabled={sending}>
                 Save World
               </Button>
               <Button size="sm" variant="ghost" className="text-xs h-7"
-                style={{ color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)", background: "rgba(0,255,255,0.04)" }}
+                style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", background: "rgba(var(--neon-purple-rgb),0.04)" }}
                 onClick={() => sendCommand("destroywilddinos")} disabled={sending}>
                 Wild Dinos
               </Button>
@@ -488,7 +488,7 @@ export function RconConsole({ server }: Props) {
               {/* SetTimeOfDay dropdown */}
               <div className="relative" ref={timeMenuRef}>
                 <Button size="sm" variant="ghost" className="text-xs h-7 flex items-center gap-1"
-                  style={{ color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)", background: "rgba(0,255,255,0.04)" }}
+                  style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", background: "rgba(var(--neon-purple-rgb),0.04)" }}
                   onClick={() => setShowTimeMenu((v) => !v)} disabled={sending}>
                   <Clock className="w-3 h-3" />
                   Time
@@ -496,7 +496,7 @@ export function RconConsole({ server }: Props) {
                 </Button>
                 {showTimeMenu && (
                   <div className="absolute top-full left-0 mt-1 z-50 rounded-lg overflow-hidden py-1"
-                    style={{ background: "rgba(5,5,16,0.98)", border: "1px solid rgba(0,255,255,0.2)", minWidth: "110px" }}>
+                    style={{ background: "rgba(5,5,16,0.98)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", minWidth: "110px" }}>
                     {TIME_PRESETS.map((p) => (
                       <button key={p.label} type="button"
                         className="w-full text-left text-xs px-3 py-1.5 hover:bg-white/5 transition-colors"
@@ -515,7 +515,7 @@ export function RconConsole({ server }: Props) {
           {connected && (
             <div className="flex items-center gap-1.5 shrink-0">
               <span className="text-xs shrink-0 px-2 py-1.5 rounded-lg"
-                style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--neon-purple)" }}>
+                style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)" }}>
                 Global Chat
               </span>
               <Input
@@ -525,7 +525,7 @@ export function RconConsole({ server }: Props) {
                 onChange={(e) => setMsgInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && sendMessage()}
                 disabled={!connected || sending}
-                style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.25)", color: "var(--text-primary)" }}
+                style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.25)", color: "var(--text-primary)" }}
               />
               <Button size="sm" className="btn-neon-purple h-8 shrink-0" onClick={sendMessage} disabled={!msgInput.trim() || sending}>
                 <Send className="w-3.5 h-3.5" />
@@ -544,7 +544,7 @@ export function RconConsole({ server }: Props) {
               onChange={(e) => { setCmdInput(e.target.value); setHistoryIdx(-1); }}
               onKeyDown={handleCmdKeyDown}
               disabled={!connected || sending}
-              style={{ background: "#000010", borderColor: connected ? "rgba(0,255,255,0.3)" : "rgba(255,255,255,0.1)", color: "var(--text-primary)" }}
+              style={{ background: "#000010", borderColor: connected ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.1)", color: "var(--text-primary)" }}
             />
             <Button size="sm" className="btn-neon-cyan h-9 shrink-0"
               onClick={() => sendCommand(cmdInput)}
@@ -564,11 +564,11 @@ export function RconConsole({ server }: Props) {
             left: playerMenuPos.x,
             top: playerMenuPos.y,
             background: "rgba(5,5,16,0.98)",
-            border: "1px solid rgba(191,0,255,0.3)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
             minWidth: "160px",
           }}
         >
-          <div className="px-3 py-1.5 border-b" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+          <div className="px-3 py-1.5 border-b" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
             <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>{selectedPlayer.name}</p>
             <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)", fontSize: "10px" }}>{selectedPlayer.playerId}</p>
           </div>

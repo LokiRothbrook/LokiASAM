@@ -159,7 +159,7 @@ function FieldRow({
         onChange={(e) => onChange(e.target.value)}
         placeholder={field.placeholder}
         className="h-8 text-sm max-w-xs"
-        style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+        style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
       />
     </div>
   );
@@ -214,7 +214,7 @@ function LaunchParamRow({
         placeholder={String(param.defaultValue) || "(empty = disabled)"}
         onChange={(e) => onChange(e.target.value)}
         className="h-8 text-xs font-mono"
-        style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+        style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
       />
     </div>
   );
@@ -231,13 +231,13 @@ function LaunchParamGroup({
   const args = (config.launchArgs ?? {}) as Record<string, string>;
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
       <button
         type="button"
         className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>
+        <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
           <Terminal className="w-3.5 h-3.5" />
           Launch Parameters
         </span>
@@ -281,13 +281,13 @@ function SectionGroup({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
       <button
         type="button"
         className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>{title}</span>
+        <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</span>
         {open
           ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
           : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
@@ -344,23 +344,23 @@ function FullIniModal({
         className="w-full max-w-3xl mx-4 flex flex-col rounded-2xl overflow-hidden"
         style={{
           background: "rgba(8,8,25,0.98)",
-          border: "1px solid rgba(191,0,255,0.25)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
           boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
           maxHeight: "90vh",
         }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
           <div className="flex items-center gap-2">
             <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-            <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>Full INI Editor</span>
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Full INI Editor</span>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0" style={{ color: "var(--text-muted)" }}>
             <X className="w-4 h-4" />
           </Button>
         </div>
 
-        <div className="px-3 py-2 shrink-0" style={{ background: "rgba(191,0,255,0.04)", borderBottom: "1px solid rgba(191,0,255,0.1)" }}>
+        <div className="px-3 py-2 shrink-0" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
           <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
             <AlertCircle className="w-3 h-3" style={{ color: "var(--neon-purple)" }} />
             Server name, passwords, and ports are managed on the overview page and are excluded here.
@@ -377,13 +377,13 @@ function FullIniModal({
             if (visibleFields.length === 0) return null;
             const open = expandedGroups.has(group.id);
             return (
-              <div key={group.id} className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.15)" }}>
+              <div key={group.id} className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
                 <button
                   onClick={() => toggleGroup(group.id)}
                   className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
                   style={{ background: "rgba(10,10,30,0.7)" }}
                 >
-                  <span className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>{group.title}</span>
+                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
                   {open
                     ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
                     : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
@@ -406,12 +406,12 @@ function FullIniModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
           <Button variant="ghost" onClick={onClose} size="sm" style={{ color: "var(--text-muted)" }}>Cancel</Button>
           <Button
             onClick={() => { onSave(local); onClose(); }}
             size="sm"
-            style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             <Save className="w-3.5 h-3.5 mr-1.5" /> Apply Changes
           </Button>
@@ -460,7 +460,7 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
   return (
     <div
       className="glass-card rounded-xl p-4 space-y-4"
-      style={{ border: "1px solid rgba(191,0,255,0.15)" }}
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
       <div className="flex items-center gap-2">
         <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
@@ -487,7 +487,7 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
             value={warnMinutes}
             onChange={(e) => setWarnMinutes(parseInt(e.target.value, 10) || 5)}
             className="h-7 w-24 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
           />
         </div>
         <div className="space-y-1">
@@ -499,7 +499,7 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
             onChange={(e) => setMessage(e.target.value)}
             placeholder="Server will shut down in {time}."
             className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
           />
         </div>
       </div>
@@ -509,8 +509,8 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
         onClick={handleSave}
         disabled={saving}
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color: saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}
       >
@@ -676,7 +676,7 @@ export function ConfigTab({ server }: Props) {
               variant="ghost"
               onClick={() => setShowFullModal(true)}
               disabled={!config}
-              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
             >
               <Settings2 className="w-3.5 h-3.5 mr-1.5" /> Full INI Editor
             </Button>
@@ -738,22 +738,22 @@ export function ConfigTab({ server }: Props) {
       {rawMode && (
         <div className="flex flex-col gap-4">
           <div>
-            <p className="text-xs font-semibold mb-2" style={{ color: "var(--neon-cyan)" }}>GameUserSettings.ini</p>
+            <p className="text-xs font-semibold mb-2" style={{ color: "var(--text-primary)" }}>GameUserSettings.ini</p>
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={20}
-              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGus}
               onChange={(e) => setRawGus(e.target.value)}
               spellCheck={false}
             />
           </div>
           <div>
-            <p className="text-xs font-semibold mb-2" style={{ color: "var(--neon-cyan)" }}>Game.ini</p>
+            <p className="text-xs font-semibold mb-2" style={{ color: "var(--text-primary)" }}>Game.ini</p>
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={10}
-              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGame}
               onChange={(e) => setRawGame(e.target.value)}
               spellCheck={false}

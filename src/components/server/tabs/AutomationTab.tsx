@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
-  AlertTriangle, Bell, Mail, MessageSquare, Monitor, ChevronDown, ChevronUp, Send,
+  AlertTriangle, ChevronDown, ChevronUp,
   ArrowUp, Clock, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -16,14 +16,12 @@ import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
   setServerUpdateAutomation,
-  getServerNotificationConfigs, saveNotificationConfig,
-  type ScheduleRow, type CreateScheduleInput, type NotificationConfigRow,
+  type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
 import { getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
-import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
@@ -133,7 +131,7 @@ function AddScheduleRow({
           onChange={(e) => setMode(e.target.value as AddMode)}
           className="h-8 text-xs px-2 rounded shrink-0"
           style={{
-            background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.25)",
+            background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
             color: "var(--text-primary)", outline: "none",
           }}
         >
@@ -147,14 +145,14 @@ function AddScheduleRow({
             type="number" min={1} max={mode === "minutes" ? 59 : 23} value={num}
             onChange={(e) => setNum(Math.max(1, parseInt(e.target.value) || 1))}
             className="w-20 h-8 text-xs text-center"
-            style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+            style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
           />
         )}
         {mode === "daily" && (
           <input
             type="time" value={time} onChange={(e) => setTime(e.target.value)}
             className="h-8 rounded px-2 text-xs font-mono"
-            style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(191,0,255,0.25)", color: "var(--text-primary)", outline: "none" }}
+            style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)", color: "var(--text-primary)", outline: "none" }}
           />
         )}
 
@@ -169,7 +167,7 @@ function AddScheduleRow({
             size="sm" onClick={onConfirm}
             disabled={busy || (showMessage && !message.trim())}
             className="h-8 gap-1.5 cursor-pointer"
-            style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
             {confirmLabel}
@@ -182,7 +180,7 @@ function AddScheduleRow({
           value={message} onChange={(e) => setMessage(e.target.value)}
           placeholder="Message to send in global chat"
           className="h-8 text-sm"
-          style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+          style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
         />
       )}
     </div>
@@ -234,7 +232,7 @@ function ScheduleListRow({ row, type, onDelete, onToggle, onSave }: {
 
   if (editing) {
     return (
-      <div className="rounded-lg p-2.5" style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.2)" }}>
+      <div className="rounded-lg p-2.5" style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
         <AddScheduleRow
           mode={mode} setMode={setMode} num={num} setNum={setNum}
           time={time} setTime={setTime}
@@ -250,8 +248,8 @@ function ScheduleListRow({ row, type, onDelete, onToggle, onSave }: {
     <div
       className="flex items-center gap-2 rounded-lg px-3 py-2"
       style={{
-        background: row.enabled === 1 ? "rgba(191,0,255,0.05)" : "rgba(255,255,255,0.02)",
-        border: `1px solid ${row.enabled === 1 ? "rgba(191,0,255,0.2)" : "rgba(255,255,255,0.05)"}`,
+        background: row.enabled === 1 ? "rgba(var(--neon-purple-rgb),0.05)" : "rgba(255,255,255,0.02)",
+        border: `1px solid ${row.enabled === 1 ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(255,255,255,0.05)"}`,
       }}
     >
       <div className="flex-1 min-w-0">
@@ -394,15 +392,15 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
   return (
     <div
       className="glass-card rounded-xl p-4 space-y-4"
-      style={{ border: hasSchedules ? "1px solid rgba(191,0,255,0.25)" : "1px solid rgba(191,0,255,0.1)" }}
+      style={{ border: hasSchedules ? "1px solid rgba(var(--neon-purple-rgb),0.25)" : "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
     >
       {/* Header */}
       <div className="flex items-start gap-3">
         <div
           className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
           style={{
-            background: hasSchedules ? "rgba(191,0,255,0.1)" : "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(191,0,255,0.2)",
+            background: hasSchedules ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
           }}
         >
           <Icon className="w-4 h-4" style={{ color: hasSchedules ? "var(--neon-purple)" : "var(--text-muted)" }} />
@@ -440,7 +438,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
                 <Input type="number" min={1} max={60} value={c.warningMinutes ?? 15}
                   onChange={(e) => patchConfig({ warningMinutes: parseInt(e.target.value, 10) || 15 })}
                   className="h-7 w-20 text-xs"
-                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }} />
+                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
               </div>
               <div className="flex-1 space-y-1">
                 <label className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -450,15 +448,15 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
                   onChange={(e) => patchConfig({ message: e.target.value })}
                   placeholder="Server restarting in {minutes} minutes."
                   className="h-7 text-xs"
-                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }} />
+                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
               </div>
             </div>
           )}
           <Button size="sm" onClick={handleSaveConfig} disabled={savingConfig}
             className="gap-1.5 cursor-pointer"
             style={{
-              background: savedConfig ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-              border:     savedConfig ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
+              background: savedConfig ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border:     savedConfig ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
               color:      savedConfig ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {savingConfig ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -593,14 +591,14 @@ function BackupTypeSection({
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-semibold pb-0.5" style={{ color: accentHex }}>{title}</p>
+      <p className="text-xs font-semibold pb-0.5" style={{ color: "var(--text-primary)" }}>{title}</p>
       {TIER_ORDER.map((tier) => (
         <div
           key={tier}
           className="flex items-center gap-3 px-3 py-2 rounded-lg"
           style={{
-            background: tiers[tier].enabled ? `${accentHex}12` : "rgba(255,255,255,0.02)",
-            border: `1px solid ${tiers[tier].enabled ? `${accentHex}40` : "rgba(255,255,255,0.05)"}`,
+            background: "rgba(255,255,255,0.02)",
+            border: `1px solid ${tiers[tier].enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
           }}
         >
           <Input
@@ -610,7 +608,7 @@ function BackupTypeSection({
             className="w-16 h-8 text-sm text-center shrink-0"
             style={{
               background: "rgba(0,0,0,0.4)",
-              border: `1px solid ${tiers[tier].enabled ? `${accentHex}50` : "rgba(191,0,255,0.15)"}`,
+              border: `1px solid ${tiers[tier].enabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
               color: "var(--text-primary)",
             }}
           />
@@ -620,7 +618,7 @@ function BackupTypeSection({
           <button onClick={() => patch(tier, { enabled: !tiers[tier].enabled })}
             className="cursor-pointer shrink-0" title={tiers[tier].enabled ? "Disable" : "Enable"}>
             {tiers[tier].enabled
-              ? <ToggleRight className="w-6 h-6" style={{ color: accentHex }} />
+              ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
               : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
             }
           </button>
@@ -629,8 +627,8 @@ function BackupTypeSection({
       <Button size="sm" onClick={handleSave} disabled={saving}
         className="gap-1.5 cursor-pointer"
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}>
         {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -690,24 +688,24 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-semibold pb-0.5" style={{ color: "#ffa500" }}>Full Backups</p>
+      <p className="text-xs font-semibold pb-0.5" style={{ color: "var(--text-primary)" }}>Full Backups</p>
       <div className="flex items-center gap-3 px-3 py-2 rounded-lg"
         style={{
-          background: enabled ? "rgba(255,165,0,0.06)" : "rgba(255,255,255,0.02)",
-          border: `1px solid ${enabled ? "rgba(255,165,0,0.35)" : "rgba(255,255,255,0.05)"}`,
+          background: "rgba(255,255,255,0.02)",
+          border: `1px solid ${enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
         }}>
         <Input type="number" min={1} max={20} value={keep}
           onChange={(e) => setKeep(Math.max(1, parseInt(e.target.value, 10) || 1))}
           className="w-16 h-8 text-sm text-center shrink-0"
           style={{
             background: "rgba(0,0,0,0.4)",
-            border: `1px solid ${enabled ? "rgba(255,165,0,0.45)" : "rgba(255,165,0,0.15)"}`,
+            border: `1px solid ${enabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
             color: "var(--text-primary)",
           }} />
         <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>full backups to keep</span>
         <button onClick={() => setEnabled((v) => !v)} className="cursor-pointer shrink-0">
           {enabled
-            ? <ToggleRight className="w-6 h-6" style={{ color: "#ffa500" }} />
+            ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
             : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
           }
         </button>
@@ -718,8 +716,8 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
       <Button size="sm" onClick={handleSave} disabled={saving}
         className="gap-1.5 cursor-pointer"
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}>
         {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -740,10 +738,10 @@ function BackupScheduleSection({ serverId, schedules, onRefresh }: {
   return (
     <div id="backup-schedules-section"
       className="glass-card rounded-xl p-4 space-y-5"
-      style={{ border: "1px solid rgba(191,0,255,0.1)" }}>
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
       <div className="flex items-start gap-3">
         <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-          style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.2)" }}>
+          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
           <HardDrive className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
         </div>
         <div>
@@ -754,7 +752,7 @@ function BackupScheduleSection({ serverId, schedules, onRefresh }: {
         </div>
       </div>
 
-      <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(191,0,255,0.08)" }}>
+      <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.08)" }}>
         <BackupTypeSection title="Server Backups" scheduleType="backup_server"
           serverId={serverId} schedules={schedules} onRefresh={onRefresh}
           accentHex="#bf00ff" />
@@ -819,13 +817,13 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
   return (
     <div className="glass-card rounded-xl p-4 space-y-4"
       style={{
-        border: isActive ? "1px solid rgba(255,165,0,0.25)" : "1px solid rgba(191,0,255,0.1)",
+        border: isActive ? "1px solid rgba(var(--neon-purple-rgb),0.3)" : "1px solid rgba(var(--neon-purple-rgb),0.1)",
         opacity: isActive ? 1 : 0.75,
       }}>
       <div className="flex items-start gap-3">
         <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-          style={{ background: isActive ? "rgba(255,165,0,0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(255,165,0,0.2)" }}>
-          <ArrowUp className="w-4 h-4" style={{ color: isActive ? "#ffa500" : "var(--text-muted)" }} />
+          style={{ background: isActive ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          <ArrowUp className="w-4 h-4" style={{ color: isActive ? "var(--neon-purple)" : "var(--text-muted)" }} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -864,9 +862,9 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
             <button key={value} type="button" onClick={() => handleSave({ mode: value })}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: automation.mode === value ? "rgba(255,165,0,0.15)" : "transparent",
-                border: `1px solid ${automation.mode === value ? "rgba(255,165,0,0.5)" : "rgba(191,0,255,0.2)"}`,
-                color: automation.mode === value ? "#ffa500" : "var(--text-muted)",
+                background: automation.mode === value ? "rgba(var(--neon-purple-rgb),0.12)" : "transparent",
+                border: `1px solid ${automation.mode === value ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)"}`,
+                color: automation.mode === value ? "var(--neon-purple)" : "var(--text-muted)",
               }}>
               {BtnIcon && <BtnIcon className="w-3 h-3" />}
               {label}
@@ -880,13 +878,13 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
             <input type="time" value={automation.update_time}
               onChange={(e) => handleSave({ update_time: e.target.value })}
               className="h-7 rounded px-2 text-xs font-mono"
-              style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)", outline: "none" }} />
+              style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)", outline: "none" }} />
           </div>
         )}
 
         {automation.mode !== "off" && (
           <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.12)", color: "var(--text-muted)" }}>
+            style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}>
             <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
             <span>
               Automated triggers are coming in a future update once proper RCON shutdown is implemented.
@@ -898,18 +896,20 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
       </div>
 
       {automation.mode !== "off" && (
-        <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(255,165,0,0.1)" }}>
+        <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" checked={automation.restart_after_update}
               onChange={(e) => handleSave({ restart_after_update: e.target.checked })}
-              className="w-3.5 h-3.5 accent-orange-500" />
+              className="w-3.5 h-3.5"
+              style={{ accentColor: "var(--neon-purple)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>Restart server after update</span>
           </label>
           {automation.restart_after_update && (
             <label className="flex items-center gap-2 cursor-pointer select-none pl-5">
               <input type="checkbox" checked={automation.only_if_running}
                 onChange={(e) => handleSave({ only_if_running: e.target.checked })}
-                className="w-3.5 h-3.5 accent-orange-500" />
+                className="w-3.5 h-3.5"
+                style={{ accentColor: "var(--neon-purple)" }} />
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>Only restart if server was already running</span>
             </label>
           )}
@@ -954,7 +954,7 @@ export function AutomationTab({ server }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-xs"
-        style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)", color: "var(--text-muted)" }}>
+        style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", color: "var(--text-muted)" }}>
         <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
         <span>
           Schedules only fire while <strong style={{ color: "var(--text-primary)" }}>LokiASAM is running</strong>.
@@ -978,7 +978,7 @@ export function AutomationTab({ server }: Props) {
         <div className="space-y-3">
           {[1, 2, 3, 4].map((n) => (
             <div key={n} className="glass-card rounded-xl h-28 animate-pulse"
-              style={{ border: "1px solid rgba(191,0,255,0.1)" }} />
+              style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }} />
           ))}
         </div>
       ) : (
@@ -1000,235 +1000,7 @@ export function AutomationTab({ server }: Props) {
         </div>
       )}
 
-      <NotificationConfigSection serverId={server.id} />
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// NotificationConfigSection
-// ---------------------------------------------------------------------------
-
-const CHANNEL_DEFS = [
-  { id: "desktop", label: "Desktop Notifications", icon: Monitor, desc: "OS-level toast notifications via the system tray.", fields: [] },
-  {
-    id: "discord", label: "Discord Webhook", icon: MessageSquare,
-    desc: "POST an embed to a Discord channel webhook URL.",
-    fields: [{ key: "webhookUrl", label: "Webhook URL", placeholder: "https://discord.com/api/webhooks/…", type: "url" }],
-  },
-  {
-    id: "email", label: "Email / SMTP", icon: Mail,
-    desc: "Send email alerts via your SMTP server.",
-    fields: [
-      { key: "host",        label: "SMTP Host",    placeholder: "smtp.example.com",    type: "text" },
-      { key: "port",        label: "Port",         placeholder: "587",                 type: "number" },
-      { key: "username",    label: "Username",     placeholder: "user@example.com",    type: "text" },
-      { key: "password",    label: "Password",     placeholder: "••••••••",            type: "password" },
-      { key: "fromAddress", label: "From",         placeholder: "noreply@example.com", type: "email" },
-      { key: "toAddress",   label: "To",           placeholder: "admin@example.com",   type: "email" },
-    ],
-  },
-];
-
-const EVENT_OPTIONS = [
-  { value: NOTIFICATION_EVENTS.SERVER_STARTED,      label: "Server Started" },
-  { value: NOTIFICATION_EVENTS.SERVER_STOPPED,      label: "Server Stopped" },
-  { value: NOTIFICATION_EVENTS.SERVER_CRASHED,      label: "Server Crashed" },
-  { value: NOTIFICATION_EVENTS.SERVER_START_FAILED, label: "Server Failed to Start" },
-  { value: NOTIFICATION_EVENTS.BACKUP_COMPLETED,    label: "Backup Completed" },
-  { value: NOTIFICATION_EVENTS.BACKUP_FAILED,       label: "Backup Failed" },
-  { value: NOTIFICATION_EVENTS.SERVER_UPDATED,      label: "Server Updated" },
-];
-
-function NotificationConfigSection({ serverId }: { serverId: string }) {
-  const [open, setOpen] = useState(false);
-  const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
-  const [saving, setSaving] = useState<string | null>(null);
-
-  const loadConfigs = useCallback(async () => {
-    try { setConfigs(await getServerNotificationConfigs(serverId)); }
-    catch (err) { toast.error("Failed to load notification configs", { description: String(err) }); }
-  }, [serverId]);
-
-  useEffect(() => { if (open) loadConfigs(); }, [open, loadConfigs]);
-
-  function getConfig(channelId: string) { return configs.find((c) => c.channel === channelId); }
-
-  async function handleToggle(channelId: string, enabled: boolean) {
-    const existing = getConfig(channelId);
-    const id = existing?.id ?? crypto.randomUUID();
-    await saveNotificationConfig({ id, serverId, channel: channelId, enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? "[]" });
-    await loadConfigs();
-  }
-
-  async function handleSaveConfig(channelId: string, configJson: string, eventsJson: string) {
-    setSaving(channelId);
-    try {
-      const existing = getConfig(channelId);
-      const id = existing?.id ?? crypto.randomUUID();
-      await saveNotificationConfig({ id, serverId, channel: channelId, enabled: existing?.enabled === 1, configJson, eventsJson });
-      await loadConfigs();
-      toast.success("Notification config saved.");
-    } catch (e) {
-      toast.error(`Failed to save config: ${e}`);
-    } finally {
-      setSaving(null);
-    }
-  }
-
-  async function handleTest(channelId: string) {
-    const config = getConfig(channelId);
-    const cfg = JSON.parse(config?.config_json ?? "{}") as Record<string, string | boolean | number>;
-    try {
-      if (channelId === "desktop") {
-        await tauriCmd.sendOsNotification("LokiASAM Test", "Desktop notifications are working.");
-      } else if (channelId === "discord") {
-        const url = cfg.webhookUrl as string | undefined;
-        if (!url) { toast.error("Enter a webhook URL first."); return; }
-        await tauriCmd.sendDiscordNotification(url, { title: "LokiASAM Test", description: "Discord notifications are working.", color: 0x00ff88, serverName: "Test", eventType: "test" });
-      } else if (channelId === "email") {
-        const to = cfg.toAddress as string | undefined;
-        if (!to) { toast.error("Enter a To address first."); return; }
-        await tauriCmd.sendEmailNotification(
-          { host: (cfg.host as string) ?? "", port: Number(cfg.port ?? 587), username: (cfg.username as string) ?? "", password: (cfg.password as string) ?? "", fromAddress: (cfg.fromAddress as string) ?? "noreply@lokiasam", toAddress: to, useTls: Boolean(cfg.useTls ?? false) },
-          { subject: "LokiASAM Test", body: "Email notifications are working." }
-        );
-      }
-      toast.success("Test notification sent.");
-    } catch (e) {
-      toast.error(`Test failed: ${e}`);
-    }
-  }
-
-  return (
-    <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
-      <button className="flex items-center justify-between w-full px-4 py-3 transition-colors hover:bg-white/2"
-        onClick={() => setOpen((v) => !v)} style={{ background: "rgba(191,0,255,0.04)" }}>
-        <div className="flex items-center gap-2">
-          <Bell className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-          <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Notification Channels</span>
-        </div>
-        {open ? <ChevronUp className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-               : <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
-      </button>
-
-      {open && (
-        <div className="flex flex-col divide-y" style={{ borderColor: "var(--border)" }}>
-          {CHANNEL_DEFS.map((ch) => {
-            const row = getConfig(ch.id);
-            const enabled = row?.enabled === 1;
-            const cfg = JSON.parse(row?.config_json ?? "{}") as Record<string, string>;
-            const events: string[] = JSON.parse(row?.events_json ?? "[]");
-            return (
-              <ChannelCard key={ch.id} channelId={ch.id} icon={ch.icon} label={ch.label} desc={ch.desc}
-                fields={ch.fields} enabled={enabled} cfg={cfg} events={events} saving={saving === ch.id}
-                onToggle={(v) => handleToggle(ch.id, v)}
-                onSave={(cfgJson, evJson) => handleSaveConfig(ch.id, cfgJson, evJson)}
-                onTest={() => handleTest(ch.id)} />
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ChannelCard
-// ---------------------------------------------------------------------------
-
-interface ChannelCardProps {
-  channelId: string;
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
-  label: string; desc: string;
-  fields: { key: string; label: string; placeholder: string; type: string }[];
-  enabled: boolean; cfg: Record<string, string>; events: string[];
-  saving: boolean;
-  onToggle: (v: boolean) => void;
-  onSave: (cfgJson: string, evJson: string) => void;
-  onTest: () => void;
-}
-
-function ChannelCard({ channelId, icon: Icon, label, desc, fields, enabled, cfg, events, saving, onToggle, onSave, onTest }: ChannelCardProps) {
-  const [localCfg,    setLocalCfg]    = useState<Record<string, string>>(cfg);
-  const [localEvents, setLocalEvents] = useState<string[]>(events);
-  const [expanded,    setExpanded]    = useState(false);
-
-  useEffect(() => { setLocalCfg(cfg); }, [JSON.stringify(cfg)]);
-  useEffect(() => { setLocalEvents(events); }, [JSON.stringify(events)]);
-
-  function toggleEvent(ev: string) {
-    setLocalEvents((prev) => prev.includes(ev) ? prev.filter((e) => e !== ev) : [...prev, ev]);
-  }
-
-  return (
-    <div className="px-4 py-3 flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
-          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{desc}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {enabled && (
-            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={onTest} title="Send test notification">
-              <Send className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
-            </Button>
-          )}
-          <button onClick={() => setExpanded((v) => !v)} className="text-xs" style={{ color: "var(--neon-purple)" }}>
-            {expanded ? "Hide" : "Configure"}
-          </button>
-          <button type="button" onClick={() => onToggle(!enabled)} className="shrink-0 flex items-center" aria-label={enabled ? "Disable" : "Enable"}>
-            {enabled
-              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-              : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-          </button>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="flex flex-col gap-3 pl-7">
-          {fields.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {fields.map((f) => (
-                <div key={f.key} className="flex flex-col gap-1">
-                  <Label className="text-[10px]" style={{ color: "var(--text-muted)" }}>{f.label}</Label>
-                  <Input type={f.type} value={localCfg[f.key] ?? ""}
-                    onChange={(e) => setLocalCfg((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                    placeholder={f.placeholder} className="h-7 text-xs"
-                    style={{ background: "var(--surface)", borderColor: "var(--border)" }} />
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="flex flex-col gap-1.5">
-            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-              Trigger on events <span style={{ color: "var(--text-subtle)" }}>(all if none selected)</span>
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {EVENT_OPTIONS.map((ev) => {
-                const active = localEvents.includes(ev.value);
-                return (
-                  <button key={ev.value} onClick={() => toggleEvent(ev.value)}
-                    className="text-[10px] px-2 py-1 rounded transition-all"
-                    style={{
-                      background: active ? "rgba(191,0,255,0.15)" : "transparent",
-                      border: `1px solid ${active ? "var(--neon-purple)" : "var(--border)"}`,
-                      color: active ? "var(--neon-purple)" : "var(--text-muted)",
-                    }}>
-                    {ev.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <Button size="sm" onClick={() => onSave(JSON.stringify(localCfg), JSON.stringify(localEvents))}
-            disabled={saving} className="h-7 text-xs self-end"
-            style={{ background: "transparent", border: "1px solid var(--neon-purple)", color: "var(--neon-purple)" }}>
-            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}

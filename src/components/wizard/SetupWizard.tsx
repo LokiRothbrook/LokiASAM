@@ -134,9 +134,9 @@ function WelcomeStep() {
         <div
           className="w-24 h-24 rounded-2xl flex items-center justify-center"
           style={{
-            background: "rgba(191,0,255,0.1)",
-            border: "1px solid rgba(191,0,255,0.3)",
-            boxShadow: "0 0 40px rgba(191,0,255,0.2)",
+            background: "rgba(var(--neon-purple-rgb),0.1)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+            boxShadow: "0 0 40px rgba(var(--neon-purple-rgb),0.2)",
           }}
         >
           <LokiIcon size={48} style={{ filter: "drop-shadow(0 0 6px var(--neon-purple))" }} />
@@ -166,8 +166,8 @@ function WelcomeStep() {
             key={feat.label}
             className="rounded-lg p-3 text-center"
             style={{
-              background: "rgba(191,0,255,0.05)",
-              border: "1px solid rgba(191,0,255,0.15)",
+              background: "rgba(var(--neon-purple-rgb),0.05)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
             }}
           >
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{feat.label}</p>
@@ -230,16 +230,16 @@ function ThemeStep() {
                 onClick={() => handlePreset(p)}
                 className="rounded-lg p-3 text-left transition-all"
                 style={{
-                  background: selected ? "rgba(191,0,255,0.12)" : preset.background,
-                  border: `1px solid ${selected ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-                  boxShadow: selected ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+                  background: selected ? "rgba(var(--neon-purple-rgb),0.12)" : preset.background,
+                  border: `1px solid ${selected ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                  boxShadow: selected ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
                 }}
               >
                 <div className="flex items-center gap-2 mb-1">
                   <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "00ffff"}` }} />
                   <span className="text-sm font-semibold" style={{ color: selected ? "var(--neon-purple)" : "#fff" }}>
                     {preset.label}
-                    {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(191,0,255,0.2)", color: "var(--neon-purple)" }}>Active</span>}
+                    {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)" }}>Active</span>}
                   </span>
                 </div>
                 <div className="flex gap-1 mt-1">
@@ -286,7 +286,7 @@ function ThemeStep() {
 
       <div
         className="rounded-lg p-3"
-        style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
       >
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Tip: </span>
@@ -387,7 +387,7 @@ function ImportVerifyPanel({
           <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>{info.steamcmd}</p>
           <div className="flex gap-2 flex-wrap">
             <Button onClick={handleInstallSteamcmd} disabled={installingSteamcmd} size="sm" className="gap-1.5 h-7 text-xs"
-              style={{ background: "rgba(191,0,255,0.12)", border: "1px solid rgba(191,0,255,0.35)", color: "var(--neon-purple)" }}>
+              style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--neon-purple)" }}>
               {installingSteamcmd ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
               Install Now
             </Button>
@@ -423,7 +423,7 @@ function ImportVerifyPanel({
           {info.proton && <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>{info.proton}</p>}
           <div className="flex gap-2 flex-wrap">
             <Button onClick={handleDownloadProton} disabled={installingProton} size="sm" className="gap-1.5 h-7 text-xs"
-              style={{ background: "rgba(191,0,255,0.12)", border: "1px solid rgba(191,0,255,0.35)", color: "var(--neon-purple)" }}>
+              style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--neon-purple)" }}>
               {installingProton ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
               Download Now
             </Button>
@@ -579,7 +579,7 @@ function BaseDirStep() {
 
   const borderColor = dirResult
     ? dirResult.writable ? "rgba(0,255,136,0.5)" : "rgba(255,60,60,0.5)"
-    : baseDir ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)";
+    : baseDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
     <div className="space-y-5">
@@ -594,8 +594,8 @@ function BaseDirStep() {
             onClick={() => { setImportMode(key); setImportError(""); }}
             className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all"
             style={{
-              background: importMode === key ? "rgba(191,0,255,0.12)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${importMode === key ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+              background: importMode === key ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${importMode === key ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
               color: importMode === key ? "var(--neon-purple)" : "var(--text-muted)",
             }}
           >
@@ -633,7 +633,7 @@ function BaseDirStep() {
                 onClick={pickDir}
                 variant="outline"
                 className="gap-2 shrink-0"
-                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
                 <FolderOpen className="w-4 h-4" />
                 Browse
@@ -672,7 +672,7 @@ function BaseDirStep() {
                 className="flex-1 font-mono text-sm"
                 style={{
                   background: "rgba(10,10,30,0.8)",
-                  borderColor: importValid ? "rgba(0,255,136,0.5)" : importDir ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)",
+                  borderColor: importValid ? "rgba(0,255,136,0.5)" : importDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                   color: "var(--text-primary)",
                 }}
               />
@@ -680,7 +680,7 @@ function BaseDirStep() {
                 onClick={pickImportDir}
                 variant="outline"
                 className="gap-2 shrink-0"
-                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
                 <FolderOpen className="w-4 h-4" />
                 Browse
@@ -693,8 +693,8 @@ function BaseDirStep() {
               size="sm"
               className="gap-2"
               style={{
-                background: importValid ? "rgba(0,255,136,0.08)" : "rgba(191,0,255,0.08)",
-                border: `1px solid ${importValid ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.3)"}`,
+                background: importValid ? "rgba(0,255,136,0.08)" : "rgba(var(--neon-purple-rgb),0.08)",
+                border: `1px solid ${importValid ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
                 color: importValid ? "var(--neon-green)" : "var(--neon-purple)",
               }}
             >
@@ -766,7 +766,7 @@ function BackupDirStep() {
 
   const borderColor = dirResult
     ? dirResult.writable ? "rgba(0,255,136,0.5)" : "rgba(255,60,60,0.5)"
-    : backupDir ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)";
+    : backupDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
     <div className="space-y-6">
@@ -796,7 +796,7 @@ function BackupDirStep() {
             onClick={pickDir}
             variant="outline"
             className="gap-2 shrink-0"
-            style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
           >
             <FolderOpen className="w-4 h-4" />
             Browse
@@ -949,9 +949,9 @@ function SteamCmdStep() {
             disabled={isLoading || steamcmdValidated}
             className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
-              background: steamcmdMode === mode ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${steamcmdMode === mode ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-              boxShadow: steamcmdMode === mode ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+              background: steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              boxShadow: steamcmdMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
             }}
           >
             <p className="text-sm font-semibold" style={{ color: steamcmdMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
@@ -969,8 +969,8 @@ function SteamCmdStep() {
             disabled={isLoading || !baseDir || steamcmdValidated}
             className="w-full gap-2"
             style={{
-              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1003,7 +1003,7 @@ function SteamCmdStep() {
               className="flex-1 font-mono text-sm"
               style={{
                 background: "rgba(10,10,30,0.8)",
-                borderColor: steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.2)",
+                borderColor: steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                 color: "var(--text-primary)",
               }}
             />
@@ -1011,7 +1011,7 @@ function SteamCmdStep() {
               onClick={pickExe}
               variant="outline"
               className="gap-2 shrink-0"
-              style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
             >
               <FolderOpen className="w-4 h-4" /> Browse
             </Button>
@@ -1021,8 +1021,8 @@ function SteamCmdStep() {
             disabled={isLoading || !steamcmdPath || steamcmdValidated}
             className="w-full gap-2"
             style={{
-              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1201,9 +1201,9 @@ function ProtonGEStep() {
             disabled={isLoading || protonValidated}
             className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
-              background: protonMode === mode ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${protonMode === mode ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-              boxShadow: protonMode === mode ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+              background: protonMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${protonMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              boxShadow: protonMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
             }}
           >
             <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
@@ -1221,8 +1221,8 @@ function ProtonGEStep() {
             disabled={isLoading || !baseDir || protonValidated}
             className="w-full gap-2"
             style={{
-              background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: protonValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1301,8 +1301,8 @@ function ProtonGEStep() {
                       disabled={!!validating}
                       className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all disabled:opacity-60"
                       style={{
-                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-                        border: `1px solid ${isSelected ? "rgba(0,255,136,0.4)" : isValidating ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.15)"}`,
+                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                        border: `1px solid ${isSelected ? "rgba(0,255,136,0.4)" : isValidating ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                       }}
                     >
                       <span className="flex items-center gap-2">
@@ -1338,13 +1338,13 @@ function ProtonGEStep() {
                 onChange={(e) => setManualPath(e.target.value)}
                 placeholder="/home/user/.steam/root/compatibilitytools.d/GE-Proton9-27"
                 className="flex-1 font-mono text-sm"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
               />
               <Button
                 onClick={pickDir}
                 variant="outline"
                 className="shrink-0"
-                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
                 <FolderOpen className="w-4 h-4" />
               </Button>
@@ -1354,7 +1354,7 @@ function ProtonGEStep() {
               disabled={!manualPath.trim()}
               size="sm"
               className="gap-2"
-              style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.3)", color: "var(--neon-purple)" }}
+              style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
             >
               Validate Path
             </Button>
@@ -1477,7 +1477,7 @@ function NotificationsStep() {
       {/* Discord webhook */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div className="flex items-center justify-between">
           <Label htmlFor="discord-webhook" style={{ color: "var(--text-primary)" }}>
@@ -1506,7 +1506,7 @@ function NotificationsStep() {
           className="font-mono text-sm"
           style={{
             background: "rgba(10,10,30,0.8)",
-            borderColor: discordWebhook ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)",
+            borderColor: discordWebhook ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
             color: "var(--text-primary)",
           }}
         />
@@ -1518,7 +1518,7 @@ function NotificationsStep() {
       {/* Email / SMTP */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -1544,14 +1544,14 @@ function NotificationsStep() {
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>SMTP Host</Label>
             <Input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)}
               placeholder="smtp.example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Port</Label>
             <Input value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)}
               placeholder="587" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -1560,14 +1560,14 @@ function NotificationsStep() {
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Username</Label>
             <Input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)}
               placeholder="user@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Password</Label>
             <Input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
               placeholder="••••••••" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -1576,14 +1576,14 @@ function NotificationsStep() {
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>From Address</Label>
             <Input value={smtpFrom} onChange={(e) => setSmtpFrom(e.target.value)}
               placeholder="noreply@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>To Address</Label>
             <Input value={smtpTo} onChange={(e) => setSmtpTo(e.target.value)}
               placeholder="admin@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -1593,7 +1593,7 @@ function NotificationsStep() {
       {/* Notification event matrix */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div>
           <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Notification Events</p>
@@ -1641,15 +1641,15 @@ function TrayStep() {
             onClick={() => setCloseToTray(value)}
             className="w-full text-left rounded-lg p-4 transition-all"
             style={{
-              background: closeToTray === value ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${closeToTray === value ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-              boxShadow: closeToTray === value ? "0 0 16px rgba(191,0,255,0.12)" : "none",
+              background: closeToTray === value ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${closeToTray === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              boxShadow: closeToTray === value ? "0 0 16px rgba(var(--neon-purple-rgb),0.12)" : "none",
             }}
           >
             <div className="flex items-center gap-2 mb-1">
               <div
                 className="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 flex items-center justify-center"
-                style={{ borderColor: closeToTray === value ? "var(--neon-purple)" : "rgba(191,0,255,0.3)" }}
+                style={{ borderColor: closeToTray === value ? "var(--neon-purple)" : "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 {closeToTray === value && (
                   <div className="w-2 h-2 rounded-full" style={{ background: "var(--neon-purple)" }} />
@@ -1658,7 +1658,7 @@ function TrayStep() {
               <p className="text-sm font-semibold" style={{ color: closeToTray === value ? "var(--neon-purple)" : "var(--text-primary)" }}>
                 {label}
                 {recommended && (
-                  <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded" style={{ background: "rgba(191,0,255,0.15)", color: "var(--neon-purple)" }}>
+                  <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)" }}>
                     Recommended
                   </span>
                 )}
@@ -1672,7 +1672,7 @@ function TrayStep() {
       <div className="space-y-2">
         <div
           className="rounded-lg p-3"
-          style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
         >
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Note: </span>
@@ -1736,7 +1736,7 @@ function AutoUpdateStep() {
       <div className="space-y-4">
         {rows.map((row) => (
           <div key={row.key} className="rounded-xl px-4 py-3"
-            style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.12)" }}>
+            style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
             <ToggleRow label={row.label} description={row.desc} value={row.value} onChange={row.set} />
           </div>
         ))}
@@ -1784,7 +1784,7 @@ function AppImageIntegrationPanel() {
   return (
     <div
       className="w-full rounded-xl p-4 text-left space-y-3"
-      style={{ background: "rgba(191,0,255,0.06)", border: "1px solid rgba(191,0,255,0.2)" }}
+      style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
     >
       <div className="flex items-start gap-3">
         <Layers className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
@@ -1823,7 +1823,7 @@ function AppImageIntegrationPanel() {
           onClick={handleInstall}
           disabled={working}
           className="gap-2"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
         >
           {working
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1872,7 +1872,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
           <div
             key={label}
             className="rounded-lg px-4 py-3 flex items-center justify-between gap-4"
-            style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(191,0,255,0.15)" }}
+            style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
           >
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
             <span className="text-xs font-mono truncate max-w-xs" style={{ color: "var(--text-primary)" }}>{value || "—"}</span>
@@ -1888,10 +1888,10 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
         size="lg"
         className="gap-2 px-8"
         style={{
-          background: "rgba(191,0,255,0.2)",
-          border: "1px solid rgba(191,0,255,0.5)",
+          background: "rgba(var(--neon-purple-rgb),0.2)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.5)",
           color: "var(--neon-purple)",
-          boxShadow: "0 0 20px rgba(191,0,255,0.2)",
+          boxShadow: "0 0 20px rgba(var(--neon-purple-rgb),0.2)",
         }}
       >
         Go to Dashboard
@@ -2107,18 +2107,18 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(191,0,255,0.08) 0%, transparent 60%)",
+          backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(var(--neon-purple-rgb),0.08) 0%, transparent 60%)",
         }}
       />
 
       {/* Progress bar at top */}
-      <div className="relative z-10 w-full h-1" style={{ background: "rgba(191,0,255,0.1)" }}>
+      <div className="relative z-10 w-full h-1" style={{ background: "rgba(var(--neon-purple-rgb),0.1)" }}>
         <div
           className="h-full transition-all duration-500"
           style={{
             width: `${((step + 1) / TOTAL_STEPS) * 100}%`,
             background: "var(--neon-purple)",
-            boxShadow: "0 0 8px rgba(191,0,255,0.6)",
+            boxShadow: "0 0 8px rgba(var(--neon-purple-rgb),0.6)",
           }}
         />
       </div>
@@ -2130,9 +2130,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             key={s.label}
             className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs transition-all duration-300"
             style={{
-              background: i === step ? "rgba(191,0,255,0.15)" : "transparent",
-              border: `1px solid ${i <= step ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.1)"}`,
-              color: i === step ? "var(--neon-purple)" : i < step ? "rgba(191,0,255,0.6)" : "var(--text-subtle)",
+              background: i === step ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
+              border: `1px solid ${i <= step ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.1)"}`,
+              color: i === step ? "var(--neon-purple)" : i < step ? "rgba(var(--neon-purple-rgb),0.6)" : "var(--text-subtle)",
             }}
           >
             <s.icon className="w-3 h-3" />
@@ -2147,10 +2147,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           className="w-full max-w-2xl flex flex-col"
           style={{
             background: "rgba(10,10,30,0.8)",
-            border: "1px solid rgba(191,0,255,0.2)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
             borderRadius: "1rem",
             backdropFilter: "blur(12px)",
-            boxShadow: "0 0 60px rgba(191,0,255,0.1)",
+            boxShadow: "0 0 60px rgba(var(--neon-purple-rgb),0.1)",
             maxHeight: "calc(100vh - 160px)",
             minHeight: "420px",
           }}
@@ -2180,7 +2180,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
             {/* Navigation — hidden on the Complete step */}
             {step < TOTAL_STEPS - 1 && (
-              <div className="flex items-center justify-between mt-6 pt-4 border-t" style={{ borderColor: "rgba(191,0,255,0.1)" }}>
+              <div className="flex items-center justify-between mt-6 pt-4 border-t" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
                 {/* Back button — hidden on page 0 */}
                 {step === 0 ? (
                   <div />
@@ -2207,8 +2207,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     disabled={!canAdvance() || isLoading || saving}
                     className="gap-2"
                     style={{
-                      background: canAdvance() && !isLoading ? "rgba(191,0,255,0.15)" : "rgba(191,0,255,0.05)",
-                      border: "1px solid rgba(191,0,255,0.4)",
+                      background: canAdvance() && !isLoading ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.05)",
+                      border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
                       color: canAdvance() && !isLoading ? "var(--neon-purple)" : "var(--text-muted)",
                     }}
                   >

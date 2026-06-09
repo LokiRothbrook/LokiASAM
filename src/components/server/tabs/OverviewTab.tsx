@@ -89,8 +89,8 @@ function TimeframeSelect({
         size="sm"
         className="h-6 w-17 text-xs border-0 px-2 gap-1"
         style={{
-          background: "rgba(191,0,255,0.08)",
-          border: "1px solid rgba(191,0,255,0.25)",
+          background: "rgba(var(--neon-purple-rgb),0.08)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
           color: "var(--neon-purple)",
         }}
         // Prevent tile-level click handlers from seeing this interaction
@@ -149,7 +149,7 @@ function ChartTooltip({
       className="rounded-lg px-3 py-2 text-xs"
       style={{
         background: "rgba(10,10,30,0.95)",
-        border: "1px solid rgba(191,0,255,0.25)",
+        border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
         color: "var(--text-primary)",
       }}
     >
@@ -390,7 +390,7 @@ function ChartStatTile({
   return (
     <div
       className="glass-card rounded-xl p-4 flex flex-col gap-3"
-      style={{ borderColor: `${neonColor}28` }}
+      style={{ borderColor: "var(--border)" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
@@ -398,7 +398,7 @@ function ChartStatTile({
           <Icon className="w-4 h-4 shrink-0" style={{ color: neonColor }} />
           <span
             className="text-xs font-medium uppercase tracking-wider"
-            style={{ color: "var(--text-muted)" }}
+            style={{ color: "var(--text-primary)" }}
           >
             {label}
           </span>
@@ -672,9 +672,9 @@ export function OverviewTab({ server }: Props) {
           never shift position when the primary status button changes label. */}
       <div
         className="glass-card rounded-xl p-4 flex items-center gap-3 overflow-hidden"
-        style={{ borderColor: "rgba(191,0,255,0.15)" }}
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
       >
-        <span className="text-sm font-medium shrink-0" style={{ color: "var(--text-muted)" }}>
+        <span className="text-sm font-medium shrink-0" style={{ color: "var(--text-primary)" }}>
           Actions
         </span>
 
@@ -695,7 +695,7 @@ export function OverviewTab({ server }: Props) {
               </Button>
               <Button
                 size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5"
-                style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 <RotateCcw className="w-3.5 h-3.5" /> Reinstall
               </Button>
@@ -847,8 +847,8 @@ export function OverviewTab({ server }: Props) {
       </div>
 
       {/* ── Network / install info ── */}
-      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
-        <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-muted)" }}>Network</h3>
+      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Network</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           {[
             { label: "Game Port",   value: server.port },
@@ -871,8 +871,8 @@ export function OverviewTab({ server }: Props) {
           <button
             className="flex items-center gap-1.5 ml-auto shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
             style={{
-              background: "rgba(191,0,255,0.06)",
-              border: "1px solid rgba(191,0,255,0.2)",
+              background: "rgba(var(--neon-purple-rgb),0.06)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
               color: "var(--text-muted)",
             }}
             onClick={() => tauriCmd.openFolder(server.install_path).catch(() => null)}
@@ -885,9 +885,9 @@ export function OverviewTab({ server }: Props) {
       </div>
 
       {/* ── Player list ── */}
-      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(0,255,255,0.15)" }}>
+      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold" style={{ color: "var(--text-muted)" }}>Online Players</h3>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Online Players</h3>
           <Button size="sm" variant="ghost" onClick={refreshPlayers} disabled={!isRunning || playersLoading}>
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${playersLoading ? "animate-spin" : ""}`} />
             Refresh
@@ -905,7 +905,7 @@ export function OverviewTab({ server }: Props) {
               <div
                 key={p.playerId}
                 className="flex items-center justify-between text-sm px-3 py-2 rounded-lg"
-                style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.1)" }}
+                style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
               >
                 <span style={{ color: "var(--text-primary)" }}>{p.name}</span>
                 <span className="font-mono text-xs" style={{ color: "var(--text-muted)" }}>{p.playerId}</span>
@@ -945,7 +945,7 @@ export function OverviewTab({ server }: Props) {
 
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowUpdateConfirm(false)}
-              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
               Cancel
             </Button>
             <Button onClick={handleApplyUpdate} disabled={applyingUpdate}

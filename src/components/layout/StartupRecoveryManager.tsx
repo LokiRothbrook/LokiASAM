@@ -113,7 +113,7 @@ export function StartupRecoveryManager() {
 
   return (
     <Dialog open={showDownedDialog} onOpenChange={setShowDownedDialog}>
-      <DialogContent style={{ borderColor: "rgba(191,0,255,0.25)", background: "rgba(10,10,30,0.97)" }}>
+      <DialogContent style={{ borderColor: "rgba(var(--neon-purple-rgb),0.25)", background: "rgba(10,10,30,0.97)" }}>
         <DialogHeader>
           <DialogTitle style={{ color: "var(--text-primary)" }}>Servers Went Offline</DialogTitle>
           <DialogDescription style={{ color: "var(--text-muted)" }}>

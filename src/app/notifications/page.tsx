@@ -89,9 +89,9 @@ function NotificationRow({
       style={{
         borderColor: "var(--border)",
         background: highlighted
-          ? "rgba(191,0,255,0.12)"
+          ? "rgba(var(--neon-purple-rgb),0.12)"
           : "transparent",
-        outline: highlighted ? "1px solid rgba(191,0,255,0.4)" : "none",
+        outline: highlighted ? "1px solid rgba(var(--neon-purple-rgb),0.4)" : "none",
       }}
     >
       <SeverityDot severity={n.severity} />
@@ -224,12 +224,15 @@ function NotificationsContent() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
-          >
-            Notifications
-          </h1>
+          <div className="flex items-center gap-3">
+            <Bell className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <h1
+              className="text-2xl font-bold"
+              style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+            >
+              Notifications
+            </h1>
+          </div>
           <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
             Event log for all managed servers.
           </p>

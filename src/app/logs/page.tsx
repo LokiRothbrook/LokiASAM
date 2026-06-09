@@ -40,11 +40,11 @@ export default function LogsPage() {
       <div className="flex items-center gap-3 shrink-0">
         <ScrollText
           className="w-6 h-6 shrink-0"
-          style={{ color: "var(--neon-cyan)" }}
+          style={{ color: "var(--neon-purple)" }}
         />
         <h1
           className="text-2xl font-bold"
-          style={{ color: "var(--neon-cyan)", textShadow: "0 0 12px rgba(0,255,255,0.4)" }}
+          style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
         >
           Logs
         </h1>
@@ -53,7 +53,7 @@ export default function LogsPage() {
       {/* ── Server selector ── */}
       <div
         className="glass-card rounded-xl p-3 flex items-center gap-3 flex-wrap shrink-0"
-        style={{ borderColor: "rgba(0,255,255,0.2)" }}
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
       >
         <span className="text-sm font-medium shrink-0" style={{ color: "var(--text-muted)" }}>
           Server:
@@ -73,7 +73,7 @@ export default function LogsPage() {
               className="w-full h-9 pl-3 pr-8 text-sm rounded-lg appearance-none cursor-pointer"
               style={{
                 background: "rgba(0,0,0,0.4)",
-                border: "1px solid rgba(0,255,255,0.25)",
+                border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
                 color: "var(--text-primary)",
               }}
             >
@@ -108,7 +108,7 @@ export default function LogsPage() {
       ) : !isLoading && servers.length === 0 ? (
         <div
           className="glass-card rounded-2xl p-16 flex flex-col items-center gap-4 shrink-0"
-          style={{ borderColor: "rgba(191,0,255,0.15)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
         >
           <ScrollText className="w-10 h-10" style={{ color: "var(--text-muted)" }} />
           <p className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>

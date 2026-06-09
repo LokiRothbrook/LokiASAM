@@ -43,12 +43,12 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
           className={cn(
             "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
             active
-              ? "bg-[rgba(191,0,255,0.1)] text-[var(--neon-purple)]"
+              ? "bg-[rgba(var(--neon-purple-rgb),0.1)] text-[var(--neon-purple)]"
               : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.05)]"
           )}
           style={
             active
-              ? { boxShadow: "0 0 12px rgba(191,0,255,0.15)", borderLeft: "2px solid var(--neon-purple)" }
+              ? { boxShadow: "0 0 12px rgba(var(--neon-purple-rgb),0.15)", borderLeft: "2px solid var(--neon-purple)" }
               : {}
           }
         >
@@ -69,7 +69,9 @@ export function Sidebar() {
     <aside
       className="flex flex-col items-center w-16 h-full py-4 gap-2 border-r shrink-0"
       style={{
-        background: "rgba(5, 5, 20, 0.95)",
+        background: "var(--glass-bg)",
+        backdropFilter: "blur(var(--glass-blur))",
+        WebkitBackdropFilter: "blur(var(--glass-blur))",
         borderColor: "var(--border)",
       }}
     >

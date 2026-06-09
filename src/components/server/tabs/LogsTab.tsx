@@ -116,10 +116,10 @@ function ScrollBanner({ onClick }: { onClick: () => void }) {
       className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-full cursor-pointer text-xs font-medium select-none z-10"
       style={{
         background: "rgba(0,0,0,0.85)",
-        border: "1px solid rgba(0,255,255,0.3)",
+        border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
         color: "var(--neon-cyan)",
         backdropFilter: "blur(8px)",
-        boxShadow: "0 0 12px rgba(0,255,255,0.15)",
+        boxShadow: "0 0 12px rgba(var(--neon-purple-rgb),0.15)",
       }}
       onClick={onClick}
     >
@@ -227,7 +227,7 @@ function LivePanel({ server }: { server: ServerRow }) {
 
   // Derive toolbar appearance from server state
   const toolbarBorder = isActive
-    ? (ready ? "rgba(0,255,136,0.3)" : "rgba(191,0,255,0.15)")
+    ? (ready ? "rgba(0,255,136,0.3)" : "rgba(var(--neon-purple-rgb),0.15)")
     : "rgba(255,170,68,0.2)";
   const dotStyle = isActive
     ? (ready
@@ -283,7 +283,7 @@ function LivePanel({ server }: { server: ServerRow }) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9 h-8 text-sm"
-          style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+          style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
         />
         {search && (
           <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -298,7 +298,7 @@ function LivePanel({ server }: { server: ServerRow }) {
           ref={logRef}
           onScroll={handleScroll}
           className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3"
-          style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.1)" }}
+          style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
         >
           {visibleLines.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-2">
@@ -421,11 +421,11 @@ function ArchivePanel({ server }: { server: ServerRow }) {
         </div>
         <div className="relative shrink-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none" style={{ color: "var(--text-muted)" }} />
-          <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-8 text-sm" style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }} />
+          <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-8 text-sm" style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
           {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /></button>}
         </div>
         <div className="relative flex-1 min-h-0">
-          <div className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3" style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.1)" }}>
+          <div className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3" style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
             {loadingFile ? (
               <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
             ) : visibleLines.length === 0 ? (
@@ -465,7 +465,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
         </Button>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Delete older than</span>
-          <select value={cleanupDays} onChange={(e) => setCleanupDays(Number(e.target.value))} className="h-7 text-xs rounded px-2" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(191,0,255,0.2)", color: "var(--text-primary)" }}>
+          <select value={cleanupDays} onChange={(e) => setCleanupDays(Number(e.target.value))} className="h-7 text-xs rounded px-2" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}>
             {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
           </select>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={doCleanup} disabled={cleanupPending} style={{ borderColor: "rgba(255,100,50,0.4)", color: "#ff8866" }}>
@@ -491,7 +491,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
               <div className="flex flex-col gap-1">
                 <p className="text-xs font-medium px-1 mb-1" style={{ color: "var(--text-muted)" }}>ShooterGame Sessions</p>
                 {archives.map((a) => (
-                  <div key={a.filename} className="glass-card rounded-lg px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-[rgba(0,255,255,0.3)] transition-colors group" style={{ borderColor: "rgba(191,0,255,0.15)" }} onClick={() => openFile(a.filename, "shootergame")}>
+                  <div key={a.filename} className="glass-card rounded-lg px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-[rgba(var(--neon-purple-rgb),0.3)] transition-colors group" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }} onClick={() => openFile(a.filename, "shootergame")}>
                     <FileText className="w-4 h-4 shrink-0" style={{ color: "var(--neon-cyan)" }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-mono truncate" style={{ color: "var(--text-primary)" }}>{a.filename}</p>
@@ -510,7 +510,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
               <div className="flex flex-col gap-1">
                 <p className="text-xs font-medium px-1 mb-1" style={{ color: "var(--text-muted)" }}>Other Server Logs</p>
                 {otherLogs.map((o) => (
-                  <div key={o.filename} className="glass-card rounded-lg px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-[rgba(191,0,255,0.3)] transition-colors" style={{ borderColor: "rgba(191,0,255,0.1)" }} onClick={() => openFile(o.filename, "other")}>
+                  <div key={o.filename} className="glass-card rounded-lg px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-[rgba(var(--neon-purple-rgb),0.3)] transition-colors" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }} onClick={() => openFile(o.filename, "other")}>
                     <FileText className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-mono truncate" style={{ color: "var(--text-primary)" }}>{o.filename}</p>
@@ -711,7 +711,7 @@ function ChatPanel({ server }: { server: ServerRow }) {
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>No chat logs yet — captured when RCON is connected</p>
         ) : (
           chatLogs.map((cl) => (
-            <button key={cl.filename} onClick={() => openFile(cl)} className="px-2.5 py-1 text-xs rounded-lg transition-all" style={{ background: selected?.filename === cl.filename ? "rgba(0,255,255,0.12)" : "rgba(0,0,0,0.3)", border: selected?.filename === cl.filename ? "1px solid rgba(0,255,255,0.3)" : "1px solid rgba(255,255,255,0.06)", color: selected?.filename === cl.filename ? "var(--neon-cyan)" : "var(--text-muted)" }}>
+            <button key={cl.filename} onClick={() => openFile(cl)} className="px-2.5 py-1 text-xs rounded-lg transition-all" style={{ background: selected?.filename === cl.filename ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(0,0,0,0.3)", border: selected?.filename === cl.filename ? "1px solid rgba(var(--neon-purple-rgb),0.3)" : "1px solid rgba(255,255,255,0.06)", color: selected?.filename === cl.filename ? "var(--neon-cyan)" : "var(--text-muted)" }}>
               {cl.date}
               <span className="ml-1.5 opacity-60">{formatBytes(cl.sizeBytes)}</span>
             </button>
@@ -726,7 +726,7 @@ function ChatPanel({ server }: { server: ServerRow }) {
         <>
           <div className="relative shrink-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none" style={{ color: "var(--text-muted)" }} />
-            <Input placeholder="Search chat…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-8 text-sm" style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }} />
+            <Input placeholder="Search chat…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-8 text-sm" style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
             {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /></button>}
           </div>
           <div className="relative flex-1 min-h-0">
@@ -775,7 +775,7 @@ export function LogsTab({ server }: Props) {
       {/* Sub-tab bar */}
       <div
         className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
-        style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(191,0,255,0.12)" }}
+        style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
       >
         {VIEW_TABS.map(({ value, label, icon: Icon }) => {
           const active = view === value;
@@ -786,9 +786,9 @@ export function LogsTab({ server }: Props) {
               onClick={() => setView(value)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all cursor-pointer"
               style={{
-                color: active ? "var(--neon-cyan)" : "var(--text-muted)",
-                background: active ? "rgba(0,255,255,0.08)" : "transparent",
-                border: active ? "1px solid rgba(0,255,255,0.25)" : "1px solid transparent",
+                color: active ? "var(--neon-purple)" : "var(--text-muted)",
+                background: active ? "rgba(var(--neon-purple-rgb),0.08)" : "transparent",
+                border: active ? "1px solid rgba(var(--neon-purple-rgb),0.25)" : "1px solid transparent",
                 fontWeight: active ? 600 : 400,
               }}
             >

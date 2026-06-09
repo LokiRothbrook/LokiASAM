@@ -189,13 +189,13 @@ export function CommandOutputPanel({
       className={cn("rounded-lg overflow-hidden border", className)}
       style={{
         background: "var(--terminal-bg)",
-        borderColor: "rgba(191,0,255,0.2)",
+        borderColor: "rgba(var(--neon-purple-rgb),0.2)",
       }}
     >
       {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-2 border-b"
-        style={{ borderColor: "rgba(191,0,255,0.15)", background: "rgba(10,10,30,0.8)" }}
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "rgba(10,10,30,0.8)" }}
       >
         <div className="flex items-center gap-2">
           <Terminal className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />
@@ -277,9 +277,9 @@ export function CommandOutputPanel({
         <div
           className="px-3 py-1 text-center cursor-pointer text-xs border-t"
           style={{
-            borderColor: "rgba(191,0,255,0.15)",
+            borderColor: "rgba(var(--neon-purple-rgb),0.15)",
             color: "var(--neon-purple)",
-            background: "rgba(191,0,255,0.05)",
+            background: "rgba(var(--neon-purple-rgb),0.05)",
           }}
           onClick={() => {
             setAutoScroll(true);

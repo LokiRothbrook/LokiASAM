@@ -103,7 +103,7 @@ function RestoreConfirmDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div
         className="glass-card rounded-2xl p-6 max-w-md w-full mx-4 space-y-4"
-        style={{ border: "1px solid rgba(191,0,255,0.3)" }}
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}
       >
         <div className="flex items-center gap-3">
           <div
@@ -217,7 +217,7 @@ function BackupRowCard({
   return (
     <div
       className="glass-card rounded-xl px-4 py-2.5 flex items-center gap-3"
-      style={{ border: "1px solid rgba(191,0,255,0.1)" }}
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
     >
       <div className="flex-1 min-w-0">
         {/* Tier tags + date */}
@@ -277,13 +277,13 @@ function SectionHeader({
     <div
       className="flex items-center gap-3 px-4 py-3"
       style={{
-        background: "rgba(191,0,255,0.02)",
-        borderBottom: "1px solid rgba(191,0,255,0.08)",
+        background: "rgba(var(--neon-purple-rgb),0.02)",
+        borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)",
       }}
     >
       <div
         className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-        style={{ background: `${color}18`, border: `1px solid ${color}30` }}
+        style={{ background: `color-mix(in srgb, ${color} 10%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 20%, transparent)` }}
       >
         <Icon className="w-3.5 h-3.5" style={{ color }} />
       </div>
@@ -291,7 +291,7 @@ function SectionHeader({
         {title}
       </span>
       {count > 0 && (
-        <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: `${color}15`, color }}>
+        <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: `color-mix(in srgb, ${color} 12%, transparent)`, color }}>
           {count}
         </span>
       )}
@@ -299,9 +299,9 @@ function SectionHeader({
         <Button size="sm" onClick={onManualBackup} disabled={isBusy}
           className="h-7 gap-1.5 cursor-pointer"
           style={{
-            background: "rgba(255,165,0,0.12)",
-            border: "1px solid rgba(255,165,0,0.4)",
-            color: "#ffa500",
+            background: "rgba(var(--neon-purple-rgb),0.1)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+            color: "var(--neon-purple)",
           }}>
           <Plus className="w-3 h-3" /> {backupLabel}
         </Button>
@@ -309,9 +309,9 @@ function SectionHeader({
           <Button size="sm" onClick={onEditSchedules}
             className="h-7 gap-1.5 cursor-pointer"
             style={{
-              background: "rgba(0,200,255,0.1)",
-              border: "1px solid rgba(0,200,255,0.35)",
-              color: "#00c8ff",
+              background: "rgba(var(--neon-purple-rgb),0.1)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+              color: "var(--neon-purple)",
             }}>
             <CalendarClock className="w-3 h-3" /> Edit Schedule
           </Button>
@@ -343,7 +343,7 @@ function BackupSectionPanel({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.1)" }}>
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
       <SectionHeader
         icon={Icon} title={title} color={color}
         count={backups.length}
@@ -410,7 +410,7 @@ function PlayerBackupSection({
     ?? eosId;
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.1)" }}>
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
       <SectionHeader
         icon={User} title="Player Backups" color="var(--neon-cyan)"
         count={playerIds.length}
@@ -508,10 +508,10 @@ function IniBackupSection({
   }
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.1)" }}>
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
       <div
         className="flex items-center gap-3 px-4 py-3"
-        style={{ background: "rgba(191,0,255,0.02)", borderBottom: "1px solid rgba(191,0,255,0.08)" }}
+        style={{ background: "rgba(var(--neon-purple-rgb),0.02)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}
       >
         <div
           className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
@@ -530,7 +530,7 @@ function IniBackupSection({
         {onEditSchedules && (
           <Button size="sm" onClick={onEditSchedules}
             className="h-7 gap-1.5 cursor-pointer ml-auto"
-            style={{ background: "rgba(0,200,255,0.1)", border: "1px solid rgba(0,200,255,0.35)", color: "#00c8ff" }}>
+            style={{ background: "rgba(var(--neon-purple-rgb),0.1)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--neon-purple)" }}>
             <CalendarClock className="w-3 h-3" /> Edit Schedule
           </Button>
         )}
@@ -753,7 +753,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       {/* Progress overlay */}
       {progress.active && (
         <div className="glass-card rounded-xl p-4 space-y-2"
-          style={{ border: "1px solid rgba(191,0,255,0.3)" }}>
+          style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
           <div className="flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin shrink-0" style={{ color: "var(--neon-purple)" }} />
             <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>

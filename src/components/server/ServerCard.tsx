@@ -388,7 +388,7 @@ export function ServerCard({ server }: Props) {
     ? "rgba(0,255,136,0.35)"
     : server.status === "error" || server.status === "crashed" || isReinstallable
     ? "rgba(255,0,85,0.35)"
-    : "rgba(191,0,255,0.2)";
+    : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
     <div
@@ -526,7 +526,7 @@ export function ServerCard({ server }: Props) {
               style={{
                 width: `${backupProgress.percent}%`,
                 background: "linear-gradient(90deg, var(--neon-purple), var(--neon-cyan))",
-                boxShadow: "0 0 6px rgba(191,0,255,0.5)",
+                boxShadow: "0 0 6px rgba(var(--neon-purple-rgb),0.5)",
               }}
             />
           </div>
@@ -546,7 +546,7 @@ export function ServerCard({ server }: Props) {
       {/* ── Action buttons ── */}
       {/* Two non-wrapping groups: left (status-dependent) + right (nav arrow).
           This prevents the arrow from shifting when left-side buttons change. */}
-      <div className="flex items-center gap-2 pt-1 border-t overflow-hidden" style={{ borderColor: "rgba(191,0,255,0.1)" }}>
+      <div className="flex items-center gap-2 pt-1 border-t overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
 
         {/* Left: all status-dependent actions */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -567,7 +567,7 @@ export function ServerCard({ server }: Props) {
               <Button
                 size="sm" variant="outline" onClick={() => setShowProgress(true)}
                 className="gap-1.5 flex-1"
-                style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 <Terminal className="w-3.5 h-3.5" /> View Progress
               </Button>
@@ -584,7 +584,7 @@ export function ServerCard({ server }: Props) {
                   queryClient.invalidateQueries({ queryKey: ["servers"] });
                 }}
                 className="gap-1.5 ml-auto"
-                style={{ color: "var(--text-muted)", borderColor: "rgba(191,0,255,0.2)" }}
+                style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
               >
                 <Ban className="w-3.5 h-3.5" /> Cancel
               </Button>
@@ -602,7 +602,7 @@ export function ServerCard({ server }: Props) {
                   queryClient.invalidateQueries({ queryKey: ["servers"] });
                 }}
                 className="gap-1.5 ml-auto"
-                style={{ color: "var(--text-muted)", borderColor: "rgba(191,0,255,0.2)" }}
+                style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
               >
                 <Ban className="w-3.5 h-3.5" /> Cancel
               </Button>
@@ -623,7 +623,7 @@ export function ServerCard({ server }: Props) {
               )}
               <Button
                 size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5 flex-1"
-                style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 <RotateCcw className="w-3.5 h-3.5" /> Reinstall
               </Button>
@@ -668,7 +668,7 @@ export function ServerCard({ server }: Props) {
               {isRunning && (
                 <Button
                   size="sm" variant="outline" disabled={actionPending} onClick={handleRestart} className="gap-1.5"
-                  style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+                  style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Restart
                 </Button>
@@ -698,7 +698,7 @@ export function ServerCard({ server }: Props) {
         <Button
           asChild size="sm" variant="outline"
           className="gap-1 shrink-0 ml-auto"
-          style={{ color: "var(--neon-cyan)", borderColor: "rgba(0,255,255,0.3)" }}
+          style={{ color: "var(--neon-cyan)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
         >
           <Link href={`/servers/detail?id=${server.id}`}>
             <ChevronRight className="w-3.5 h-3.5" />
@@ -736,7 +736,7 @@ export function ServerCard({ server }: Props) {
 
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowUpdateConfirm(false)}
-              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
               Cancel
             </Button>
             <Button onClick={handleApplyUpdate}
@@ -802,7 +802,7 @@ export function ServerCard({ server }: Props) {
                 }
                 setShowProgress(false);
               }}
-              style={isActiveInstall ? { color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" } : undefined}
+              style={isActiveInstall ? { color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" } : undefined}
             >
               {isActiveInstall ? "Continue in Background" : "Close"}
             </Button>
