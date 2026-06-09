@@ -180,7 +180,8 @@ async function runMigrations(db: Database): Promise<void> {
     ('asa_last_checked', ''),
     ('asa_cached_build_id', ''),
     ('asa_latest_build_id', ''),
-    ('asa_auto_check_hours', '1')`);
+    ('asa_auto_check_hours', '1'),
+    ('auto_restart_downed', 'ask')`);
 
   // ── Migration 002: add settings_json to clusters if missing (old DBs) ──
   try {
@@ -225,6 +226,21 @@ async function runMigrations(db: Database): Promise<void> {
   try {
     await db.execute("ALTER TABLE servers ADD COLUMN shutdown_message TEXT NOT NULL DEFAULT 'Server will shut down in {time}.'");
   } catch { /* already exists */ }
+
+  // ── Migration 007: per-server auto_start flag ─────────────────────────────
+  // auto_start = 1 means this server always starts when the app opens,
+  // regardless of what state it was in when the app closed.
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0");
+  } catch { /* already exists */ }
+
+  // Reset partial "updating" status — the update did not complete and must be re-triggered.
+  // update_available remains 1 so the badge shows.
+  // startup_queued and update_queued are intentionally preserved — StartupRecoveryManager
+  // detects them on launch and re-queues them automatically.
+  await db.execute(
+    "UPDATE servers SET status = 'stopped' WHERE status = 'updating'"
+  );
 
   // ── Migration 006: server stats history tables ────────────────────────────
   // Raw 60-second samples retained for 30 days; rolled up to daily after that.
@@ -294,6 +310,7 @@ export interface ServerRow {
   shutdown_warn_players: number;  // 0 | 1
   shutdown_warn_minutes: number;  // default 5
   shutdown_message: string;       // template with {time} placeholder
+  auto_start: number;             // 0 | 1 — always start on app launch
   created_at: string;
   updated_at: string;
 }
@@ -645,6 +662,36 @@ export async function updateServerShutdownSettings(
   await db.execute(
     "UPDATE servers SET shutdown_warn_players = ?, shutdown_warn_minutes = ?, shutdown_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [warnPlayers ? 1 : 0, warnMinutes, message, id]
+  );
+}
+
+/** Set the auto_start flag for a server. */
+export async function setServerAutoStart(id: string, autoStart: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET auto_start = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [autoStart ? 1 : 0, id]
+  );
+}
+
+/** Fetch all servers that have a given status value. */
+export async function getServersWithStatus(status: string): Promise<ServerRow[]> {
+  const db = await getDb();
+  return db.select<ServerRow[]>(
+    "SELECT * FROM servers WHERE status = ? ORDER BY name ASC",
+    [status]
+  );
+}
+
+/** Bulk-reset servers matching a given status to a new status. */
+export async function resetServersFromStatus(
+  fromStatus: string,
+  toStatus: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE status = ?",
+    [toStatus, fromStatus]
   );
 }
 

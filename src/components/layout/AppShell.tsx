@@ -12,6 +12,8 @@ import { UpdateManager } from "@/components/layout/UpdateManager";
 import { CloseWarningManager } from "@/components/layout/CloseWarningManager";
 import { RconManager } from "@/components/layout/RconManager";
 import { StartupReconciliationManager } from "@/components/layout/StartupReconciliationManager";
+import { StartupQueueManager } from "@/components/layout/StartupQueueManager";
+import { StartupRecoveryManager } from "@/components/layout/StartupRecoveryManager";
 import { ServerStatsRecorderProvider } from "@/providers/ServerStatsRecorderProvider";
 import { Toaster } from "sonner";
 
@@ -35,6 +37,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <CloseWarningManager />
         <RconManager />
         <StartupReconciliationManager />
+        <StartupQueueManager />
+        <StartupRecoveryManager />
         <ServerStatsRecorderProvider />
         <Toaster position="bottom-right" toastOptions={toasterOptions} />
         <div className="flex h-full">

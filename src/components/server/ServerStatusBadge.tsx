@@ -6,6 +6,8 @@ export type ServerStatusValue =
   | "running"
   | "stopping"
   | "updating"
+  | "update_queued"
+  | "startup_queued"
   | "error"
   | "crashed"
   | "installing"
@@ -23,7 +25,9 @@ const STATUS_MAP: Record<ServerStatusValue, StatusConfig> = {
   running:        { label: "Running",         color: "var(--neon-green)",  pulse: true  },
   starting:       { label: "Starting",        color: "var(--neon-cyan)",   pulse: true  },
   stopping:       { label: "Shutting Down",   color: "#ff6400",            pulse: true  },
-  updating:       { label: "Updating",        color: "var(--neon-cyan)",   pulse: true  },
+  updating:       { label: "Updating",        color: "#ffa500",            pulse: true  },
+  update_queued:  { label: "Update Queued",   color: "#ffa500",            pulse: false },
+  startup_queued: { label: "Startup Queued",  color: "var(--neon-cyan)",   pulse: false },
   stopped:        { label: "Stopped",         color: "var(--text-muted)",  pulse: false },
   error:          { label: "Error",           color: "var(--neon-red)",    pulse: false },
   crashed:        { label: "Crashed",         color: "var(--neon-red)",    pulse: false },

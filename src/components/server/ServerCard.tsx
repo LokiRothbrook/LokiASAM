@@ -21,6 +21,7 @@ import {
   Terminal,
   Loader2,
   X,
+  Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,6 +33,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { CommandOutputPanel, clearOutputBuffer } from "@/components/shared/CommandOutputPanel";
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
@@ -45,6 +48,7 @@ import {
   getLastBackupTime,
   getNextScheduledRestart,
   getAppSetting,
+  resetServersFromStatus,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -113,11 +117,13 @@ export function ServerCard({ server }: Props) {
   const [showProgress, setShowProgress] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+  const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
+  const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
 
-  // Derive update badge directly from the DB column (set by runPerServerUpdateCheck).
-  const hasUpdateAvailable = server.update_available === 1;
+  const hasUpdateAvailable  = server.update_available === 1;
+  const isUpdateQueued      = server.status === "update_queued";
+  const isStartupQueued     = server.status === "startup_queued";
 
-  // Force a re-render every 30 s so the uptime counter advances visually.
   const [, setTick] = useState(0);
   useEffect(() => {
     const active = server.status === "running" || server.status === "starting";
@@ -129,13 +135,14 @@ export function ServerCard({ server }: Props) {
   const mapDisplay =
     ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
-  const isRunning = server.status === "running";
-  const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
-  const isInstalling = server.status === "installing";
-  const isUpdating = server.status === "updating";
+  const isRunning       = server.status === "running";
+  const isStarting      = server.status === "starting";
+  const isTransitioning = ["starting", "stopping", "updating", "update_queued"].includes(server.status);
+  const isInstalling    = server.status === "installing";
+  const isUpdating      = server.status === "updating";
   const isActiveInstall = isInstalling || isUpdating;
   const isInstallFailed = server.status === "install_failed";
-  const isStartFailed = server.status === "start-failed";
+  const isStartFailed   = server.status === "start-failed";
   const isReinstallable = isInstallFailed || isStartFailed;
 
   // Load secondary card data (mod count, backup, schedule, auto-check state).
@@ -304,6 +311,7 @@ export function ServerCard({ server }: Props) {
           server.name,
           server.install_path,
           wasRunning,
+          restartAfterUpdate,
           (msg) => toast.info(msg),
         );
       } catch (err) {
@@ -512,179 +520,166 @@ export function ServerCard({ server }: Props) {
       )}
 
       {/* ── Action buttons ── */}
-      <div className="flex items-center gap-2 pt-1 border-t" style={{ borderColor: "rgba(191,0,255,0.1)" }}>
-        {isActiveInstall ? (
-          /* Installing/Updating — Cancel and View Progress */
-          <>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={async () => {
-                await tauriCmd.abortOperation(`server_${server.id}`).catch(() => {});
-                await updateServerStatus(server.id, "install_failed", null).catch(() => {});
-                queryClient.invalidateQueries({ queryKey: ["servers"] });
-              }}
-              className="gap-1.5"
-              style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
-            >
-              <XCircle className="w-3.5 h-3.5" />
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowProgress(true)}
-              className="gap-1.5 flex-1"
-              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
-            >
-              <Terminal className="w-3.5 h-3.5" />
-              View Progress
-            </Button>
-          </>
-        ) : isReinstallable ? (
-          /* Install/Start failed */
-          <>
-            <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--neon-red)" }}>
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              {isInstallFailed ? "Install Failed" : "Start Failed"}
-            </div>
-            {/* For start-failed only: Retry Start avoids a full re-download.
-                Hidden when the failure was a missing executable — retry would
-                immediately fail again, only reinstall can fix it. */}
-            {isStartFailed && !noRetry && (
-              <Button
-                size="sm"
-                disabled={actionPending}
-                onClick={handleStart}
-                className="gap-1.5"
-                style={{
-                  background: "rgba(0,255,136,0.12)",
-                  borderColor: "rgba(0,255,136,0.4)",
-                  color: "var(--neon-green)",
-                }}
-              >
-                <Play className="w-3.5 h-3.5" />
-                Retry
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleReinstall}
-              className="gap-1.5 flex-1"
-              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reinstall
-            </Button>
-          </>
-        ) : isServerScanPending ? (
-          <Button size="sm" disabled className="gap-1.5 flex-1">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            Detecting...
-          </Button>
-        ) : (
-          <>
-            {/* Start / Stop / Force Stop */}
-            {server.status === "stopping" ? (
-              <Button
-                size="sm"
-                onClick={handleForceStop}
-                className="gap-1.5 flex-1"
-                style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
-              >
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Force Stop
-              </Button>
-            ) : server.status === "starting" ? (
-              <Button
-                size="sm"
-                onClick={handleForceStop}
-                className="gap-1.5 flex-1"
-                style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
-              >
-                <X className="w-3.5 h-3.5" />
-                Cancel Startup
-              </Button>
-            ) : isRunning ? (
-              <Button
-                size="sm"
-                disabled={actionPending}
-                onClick={handleStop}
-                className="gap-1.5 flex-1"
-                style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
-              >
-                <Square className="w-3.5 h-3.5" />
-                Stop
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={actionPending}
-                onClick={handleStart}
-                className="gap-1.5 flex-1"
-                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
-              >
-                <Play className="w-3.5 h-3.5" />
-                Start
-              </Button>
-            )}
+      {/* Two non-wrapping groups: left (status-dependent) + right (nav arrow).
+          This prevents the arrow from shifting when left-side buttons change. */}
+      <div className="flex items-center gap-2 pt-1 border-t overflow-hidden" style={{ borderColor: "rgba(191,0,255,0.1)" }}>
 
-            {/* Restart — only shown when fully running */}
-            {isRunning && (
+        {/* Left: all status-dependent actions */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {isActiveInstall ? (
+            <>
               <Button
-                size="sm"
-                variant="outline"
-                disabled={actionPending}
-                onClick={handleRestart}
+                size="sm" variant="outline"
+                onClick={async () => {
+                  await tauriCmd.abortOperation(`server_${server.id}`).catch(() => {});
+                  await updateServerStatus(server.id, "install_failed", null).catch(() => {});
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }}
                 className="gap-1.5"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+              >
+                <XCircle className="w-3.5 h-3.5" /> Cancel
+              </Button>
+              <Button
+                size="sm" variant="outline" onClick={() => setShowProgress(true)}
+                className="gap-1.5 flex-1"
                 style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Restart
+                <Terminal className="w-3.5 h-3.5" /> View Progress
               </Button>
-            )}
-
-            {/* Update — shown only when update is available */}
-            {hasUpdateAvailable && (
+            </>
+          ) : isUpdateQueued ? (
+            <>
+              <span className="text-xs flex items-center gap-1" style={{ color: "#ffa500" }}>
+                <Loader2 className="w-3 h-3" /> Update queued
+              </span>
               <Button
-                size="sm"
-                disabled={actionPending || !autoCheckEnabled || isTransitioning}
-                onClick={() => autoCheckEnabled ? setShowUpdateConfirm(true) : undefined}
-                title={!autoCheckEnabled ? "Enable auto update checks in Settings to use this feature" : undefined}
-                className="gap-1.5"
-                style={{
-                  background: autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
-                  borderColor: autoCheckEnabled ? "rgba(255,165,0,0.5)" : "rgba(255,165,0,0.2)",
-                  color: autoCheckEnabled ? "#ffa500" : "rgba(255,165,0,0.4)",
+                size="sm" variant="outline"
+                onClick={async () => {
+                  await updateServerStatus(server.id, "stopped", null);
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
                 }}
+                className="gap-1.5 ml-auto"
+                style={{ color: "var(--text-muted)", borderColor: "rgba(191,0,255,0.2)" }}
               >
-                <ArrowUp className="w-3.5 h-3.5" />
-                Update
+                <Ban className="w-3.5 h-3.5" /> Cancel
               </Button>
-            )}
-          </>
-        )}
+            </>
+          ) : isStartupQueued ? (
+            <>
+              <span className="text-xs flex items-center gap-1" style={{ color: "var(--neon-cyan)" }}>
+                <Loader2 className="w-3 h-3" /> Startup queued
+              </span>
+              <Button
+                size="sm" variant="outline"
+                onClick={async () => {
+                  removeFromStartupQueue(server.id);
+                  await updateServerStatus(server.id, "stopped", null);
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }}
+                className="gap-1.5 ml-auto"
+                style={{ color: "var(--text-muted)", borderColor: "rgba(191,0,255,0.2)" }}
+              >
+                <Ban className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isReinstallable ? (
+            <>
+              <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--neon-red)" }}>
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                {isInstallFailed ? "Install Failed" : "Start Failed"}
+              </div>
+              {isStartFailed && !noRetry && (
+                <Button
+                  size="sm" disabled={actionPending} onClick={handleStart} className="gap-1.5"
+                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                >
+                  <Play className="w-3.5 h-3.5" /> Retry
+                </Button>
+              )}
+              <Button
+                size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5 flex-1"
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Reinstall
+              </Button>
+            </>
+          ) : isServerScanPending ? (
+            <Button size="sm" disabled className="gap-1.5 flex-1">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Detecting...
+            </Button>
+          ) : (
+            <>
+              {/* Primary status button — always flex-1 so width is consistent */}
+              {server.status === "stopping" ? (
+                <Button
+                  size="sm" onClick={handleForceStop} className="gap-1.5 flex-1"
+                  style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
+                >
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
+                </Button>
+              ) : isStarting ? (
+                <Button
+                  size="sm" onClick={handleForceStop} className="gap-1.5 flex-1"
+                  style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
+                >
+                  <X className="w-3.5 h-3.5" /> Cancel Startup
+                </Button>
+              ) : isRunning ? (
+                <Button
+                  size="sm" disabled={actionPending} onClick={handleStop} className="gap-1.5 flex-1"
+                  style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+                >
+                  <Square className="w-3.5 h-3.5" /> Stop
+                </Button>
+              ) : (
+                <Button
+                  size="sm" disabled={actionPending} onClick={handleStart} className="gap-1.5 flex-1"
+                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                >
+                  <Play className="w-3.5 h-3.5" /> Start
+                </Button>
+              )}
 
-        {/* Right side: optional note + always-visible detail arrow */}
-        <div className="flex items-center gap-2 ml-auto">
-          {hasUpdateAvailable && !autoCheckEnabled && (
-            <span className="text-xs" style={{ color: "rgba(255,165,0,0.5)" }}>
-              Enable auto checks in Settings
-            </span>
+              {isRunning && (
+                <Button
+                  size="sm" variant="outline" disabled={actionPending} onClick={handleRestart} className="gap-1.5"
+                  style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Restart
+                </Button>
+              )}
+
+              {hasUpdateAvailable && (
+                <Button
+                  size="sm"
+                  disabled={actionPending || !autoCheckEnabled || isTransitioning || isStarting}
+                  onClick={() => autoCheckEnabled && setShowUpdateConfirm(true)}
+                  title={!autoCheckEnabled ? "Enable auto update checks in Settings" : undefined}
+                  className="gap-1.5"
+                  style={{
+                    background:   autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
+                    borderColor:  autoCheckEnabled ? "rgba(255,165,0,0.5)"  : "rgba(255,165,0,0.2)",
+                    color:        autoCheckEnabled ? "#ffa500"              : "rgba(255,165,0,0.4)",
+                  }}
+                >
+                  <ArrowUp className="w-3.5 h-3.5" /> Update
+                </Button>
+              )}
+            </>
           )}
-          <Button
-            asChild
-            size="sm"
-            variant="outline"
-            className="gap-1 shrink-0"
-            style={{ color: "var(--neon-cyan)", borderColor: "rgba(0,255,255,0.3)" }}
-          >
-            <Link href={`/servers/detail?id=${server.id}`}>
-              <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-          </Button>
         </div>
+
+        {/* Right: detail arrow — never moves */}
+        <Button
+          asChild size="sm" variant="outline"
+          className="gap-1 shrink-0 ml-auto"
+          style={{ color: "var(--neon-cyan)", borderColor: "rgba(0,255,255,0.3)" }}
+        >
+          <Link href={`/servers/detail?id=${server.id}`}>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
+        </Button>
       </div>
 
       {/* ── Update confirmation dialog ── */}
@@ -694,10 +689,27 @@ export function ServerCard({ server }: Props) {
             <DialogTitle>Apply Server Update?</DialogTitle>
             <DialogDescription>
               {isRunning
-                ? `${server.name} is currently running. It will be stopped, updated, and restarted automatically.`
+                ? `${server.name} is currently running and will be stopped to apply the update.`
                 : `${server.name} will be updated from the shared cache.`}
             </DialogDescription>
           </DialogHeader>
+
+          {isRunning && (
+            <div
+              className="flex items-center gap-3 px-1 py-2 rounded-lg"
+              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            >
+              <Switch
+                id={`sc-restart-toggle-${server.id}`}
+                checked={restartAfterUpdate}
+                onCheckedChange={setRestartAfterUpdate}
+              />
+              <Label htmlFor={`sc-restart-toggle-${server.id}`} className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+                Restart server after update
+              </Label>
+            </div>
+          )}
+
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowUpdateConfirm(false)}
               style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
@@ -705,8 +717,7 @@ export function ServerCard({ server }: Props) {
             </Button>
             <Button onClick={handleApplyUpdate}
               style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
-              <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
-              Update
+              <ArrowUp className="w-3.5 h-3.5 mr-1.5" /> Update
             </Button>
           </DialogFooter>
         </DialogContent>

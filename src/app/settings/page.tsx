@@ -5,13 +5,16 @@ import {
   Folder, Terminal, Info,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription,
   DialogFooter, DialogHeader, DialogTitle,
@@ -726,7 +729,7 @@ function ServerUpdatesSection() {
             server.name,
             server.install_path,
             server.status === "running",
-            undefined,
+            false,
           );
         } catch (err) {
           // restartNeeded signal — server updated successfully, restart handled inside.
@@ -1484,6 +1487,64 @@ function CloseToTraySection() {
 }
 
 // ---------------------------------------------------------------------------
+// Startup section
+// ---------------------------------------------------------------------------
+
+type AutoRestartPref = "ask" | "auto" | "never";
+
+function StartupSection() {
+  const [pref, setPref] = useState<AutoRestartPref>("ask");
+
+  useEffect(() => {
+    getAppSetting("auto_restart_downed").then((v) => {
+      if (v === "auto" || v === "never") setPref(v);
+      else setPref("ask");
+    });
+  }, []);
+
+  const handleChange = async (v: AutoRestartPref) => {
+    setPref(v);
+    await setAppSetting("auto_restart_downed", v);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-6 flex-wrap">
+        <div className="space-y-1.5 flex-1 min-w-0">
+          <Label className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            Downed Servers on Launch
+          </Label>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            When the app starts and detects servers that were running during the previous session but
+            are now offline, LokiASAM can prompt you to restart them, restart them automatically,
+            or do nothing.
+          </p>
+          {pref === "never" && (
+            <p className="text-xs mt-1" style={{ color: "#ffa500" }}>
+              The downed-servers dialog is suppressed. Change this setting back to{" "}
+              <strong>Ask each time</strong> to re-enable it.
+            </p>
+          )}
+        </div>
+        <Select value={pref} onValueChange={(v) => handleChange(v as AutoRestartPref)}>
+          <SelectTrigger
+            className="w-44 shrink-0"
+            style={{ borderColor: "var(--border)", background: "rgba(255,255,255,0.04)", color: "var(--text-primary)" }}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent style={{ background: "rgba(10,10,30,0.97)", borderColor: "rgba(191,0,255,0.25)" }}>
+            <SelectItem value="ask">Ask each time</SelectItem>
+            <SelectItem value="auto">Auto-restart</SelectItem>
+            <SelectItem value="never">Do nothing</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Tab navigation
 // ---------------------------------------------------------------------------
 
@@ -1563,6 +1624,10 @@ export default function SettingsPage() {
 
           <Section icon={Monitor} title="System Tray" description="Control how LokiASAM behaves when minimized or closed.">
             <CloseToTraySection />
+          </Section>
+
+          <Section icon={Power} title="Startup" description="Behaviour when the app starts and detects servers that went offline.">
+            <StartupSection />
           </Section>
 
           {IS_LINUX && (
