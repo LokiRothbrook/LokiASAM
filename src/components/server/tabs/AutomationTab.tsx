@@ -830,7 +830,7 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
             <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Update</h3>
             {isActive && (
               <span className="px-1.5 py-0.5 rounded text-xs"
-                style={{ background: "rgba(255,165,0,0.08)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.2)" }}>
+                style={{ background: "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>
                 Active
               </span>
             )}

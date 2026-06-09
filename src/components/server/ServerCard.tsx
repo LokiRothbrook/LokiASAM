@@ -546,7 +546,7 @@ export function ServerCard({ server }: Props) {
       {/* ── Action buttons ── */}
       {/* Two non-wrapping groups: left (status-dependent) + right (nav arrow).
           This prevents the arrow from shifting when left-side buttons change. */}
-      <div className="flex items-center gap-2 pt-1 border-t overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
+      <div className="flex items-center gap-2 pt-1 border-t overflow-hidden mt-auto" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
 
         {/* Left: all status-dependent actions */}
         <div className="flex items-center gap-2 flex-1 min-w-0">

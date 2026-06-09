@@ -158,7 +158,7 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
         variant="outline"
         disabled={checking}
         onClick={handleCheck}
-        className="h-7 gap-1.5 text-xs"
+        className="gap-1.5"
         style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
       >
         {checking

@@ -128,7 +128,7 @@ export default function ServerDetailPage() {
     // When the RCON tab is active the root div fills main's content area exactly
     // so the log scrolls internally without creating a page-level scrollbar.
     // Other tabs keep normal flow (gap-6, no height constraint).
-    <div className={`flex flex-col gap-6${(activeTab === "rcon" || activeTab === "logs") ? " h-full overflow-hidden" : ""}`}>
+    <div className={`flex flex-col gap-6${(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? " h-full overflow-hidden" : ""}`}>
       {/* ── Header ── */}
       <div className="flex items-start gap-3 shrink-0">
         <Button
@@ -191,16 +191,16 @@ export default function ServerDetailPage() {
       </div>
 
       {/* ── Tab content ── */}
-      {(activeTab === "rcon" || activeTab === "logs") ? (
+      {(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? (
         <div className="flex-1 min-h-0">
           {activeTab === "rcon" && <RconTab  server={server} />}
           {activeTab === "logs" && <LogsTab  server={server} />}
+          {activeTab === "mods" && <ModsTab  server={server} />}
         </div>
       ) : (
         <div className="mt-2">
           {activeTab === "overview"   && <OverviewTab   server={server} />}
           {activeTab === "config"     && <ConfigTab     server={server} />}
-          {activeTab === "mods"       && <ModsTab       server={server} />}
           {activeTab === "backups"    && <BackupsTab    server={server} />}
           {activeTab === "automation" && <AutomationTab server={server} />}
         </div>
