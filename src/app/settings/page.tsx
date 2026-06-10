@@ -5,7 +5,7 @@ import {
   Folder, Terminal, Info, Archive,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
 import { runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
+import { tempDir } from "@tauri-apps/api/path";
 import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress } from "@/lib/tauri-commands";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -1031,6 +1032,87 @@ function SteamcmdReinstallRow() {
 }
 
 // ---------------------------------------------------------------------------
+// Amazon Root CA certificate install row
+// ---------------------------------------------------------------------------
+
+function CertInstallRow() {
+  const [phase, setPhase] = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
+  const [error, setError] = useState("");
+
+  const handleInstall = async () => {
+    setError("");
+    try {
+      const baseDir = await getAppSetting("base_dir");
+      const tmp = await tempDir();
+      setPhase("downloading");
+      const certPath = await tauriCmd.downloadAmazonRootCa(tmp);
+
+      setPhase("installing");
+      const protonPath  = IS_LINUX ? (await getAppSetting("proton_path"))        ?? undefined : undefined;
+      const prefixPath  = IS_LINUX ? (await getAppSetting("proton_prefix_path")) ?? undefined : undefined;
+      // If prefix path isn't saved yet, compute it from base dir.
+      const resolvedPrefix = prefixPath ?? (IS_LINUX && baseDir
+        ? (() => {
+            const sep = baseDir.includes("\\") ? "\\" : "/";
+            return `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}proton${sep}prefix`;
+          })()
+        : undefined);
+      await tauriCmd.installAmazonRootCa(certPath, protonPath, resolvedPrefix);
+      setPhase("done");
+      toast.success("Amazon Root CA 1 installed successfully.");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+      toast.error(`Certificate install failed: ${e}`);
+    }
+  };
+
+  const busy = phase === "downloading" || phase === "installing";
+
+  return (
+    <div className="flex flex-col gap-1.5 pt-1">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Amazon Root CA 1</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {IS_LINUX
+              ? "Install into the Wine prefix so CurseForge mod API TLS works correctly."
+              : "Install into the Windows cert store so CurseForge mod API TLS works correctly."}
+          </p>
+        </div>
+        <Button
+          onClick={handleInstall}
+          disabled={busy}
+          size="sm"
+          className="gap-1.5 h-7 text-xs shrink-0 ml-4"
+          style={{
+            background: phase === "done" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${phase === "done" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            color: phase === "done" ? "var(--neon-green)" : "var(--neon-purple)",
+          }}
+        >
+          {busy
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : phase === "done"
+              ? <CheckCircle2 className="w-3 h-3" />
+              : <ShieldCheck className="w-3 h-3" />}
+          {busy
+            ? (phase === "downloading" ? "Downloading…" : "Installing…")
+            : phase === "done"
+              ? "Installed"
+              : "Install / Reinstall"}
+        </Button>
+      </div>
+      {phase === "error" && (
+        <p className="text-xs break-all" style={{ color: "var(--neon-red, #f87171)" }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Proton-GE Update section (Linux only)
 // ---------------------------------------------------------------------------
 
@@ -1664,6 +1746,8 @@ export default function SettingsPage() {
                 />
               </>
             )}
+            <Separator style={{ background: "var(--border)" }} />
+            <CertInstallRow />
           </Section>
 
           <Section icon={Palette} title="Themes" description="Choose a background preset and accent color.">

@@ -38,6 +38,10 @@ interface SetupState {
   protonPath: string;
   protonValidated: boolean;
 
+  // Certificate step (both platforms)
+  certInstalled: boolean;
+  certSkipped: boolean;
+
   // Notifications step — Discord
   discordWebhook: string;
 
@@ -90,6 +94,8 @@ interface SetupState {
   setProtonMode: (mode: ProtonMode) => void;
   setProtonPath: (path: string) => void;
   setProtonValidated: (ok: boolean) => void;
+  setCertInstalled: (ok: boolean) => void;
+  setCertSkipped: (ok: boolean) => void;
   setDiscordWebhook: (url: string) => void;
   setSmtpHost: (v: string) => void;
   setSmtpPort: (v: string) => void;
@@ -128,6 +134,8 @@ const initialState = {
   protonMode: "managed" as ProtonMode,
   protonPath: "",
   protonValidated: false,
+  certInstalled: false,
+  certSkipped: false,
   discordWebhook: "",
   smtpHost: "",
   smtpPort: "587",
@@ -170,6 +178,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setProtonMode: (protonMode) => set({ protonMode }),
   setProtonPath: (protonPath) => set({ protonPath }),
   setProtonValidated: (protonValidated) => set({ protonValidated }),
+  setCertInstalled: (certInstalled) => set({ certInstalled }),
+  setCertSkipped: (certSkipped) => set({ certSkipped }),
   setDiscordWebhook: (discordWebhook) => set({ discordWebhook }),
   setSmtpHost: (smtpHost) => set({ smtpHost }),
   setSmtpPort: (smtpPort) => set({ smtpPort }),

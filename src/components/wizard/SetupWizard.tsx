@@ -26,7 +26,7 @@ import {
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
   X, BookOpen, LayoutDashboard, Activity, SlidersHorizontal, CalendarClock,
-  Archive, Network,
+  Archive, Network, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -40,7 +40,7 @@ import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type Theme
 import { setAppSetting, initDb } from "@/lib/db";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
-import { homeDir } from "@tauri-apps/api/path";
+import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
 
 interface SetupWizardProps {
@@ -56,6 +56,7 @@ const STEPS_WIN = [
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
+  { label: "Mod API Cert",  icon: ShieldCheck },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
   { label: "Updates",       icon: RefreshCw },
@@ -69,6 +70,7 @@ const STEPS_LINUX = [
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
   { label: "Proton-GE",     icon: Cpu },
+  { label: "Mod API Cert",  icon: ShieldCheck },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
   { label: "Updates",       icon: RefreshCw },
@@ -1413,6 +1415,193 @@ function ToggleRow({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Certificate step
+// ---------------------------------------------------------------------------
+
+type CertPhase = "checking" | "idle" | "downloading" | "installing" | "done" | "error";
+
+function CertStep() {
+  const {
+    baseDir,
+    protonPath,
+    certInstalled, setCertInstalled,
+    certSkipped,   setCertSkipped,
+  } = useSetupStore();
+
+  const [phase, setPhase] = useState<CertPhase>("checking");
+  const [error, setError]  = useState("");
+
+  // On mount, check whether the cert is already installed so we can show the
+  // "already installed" state immediately rather than prompting the user.
+  useEffect(() => {
+    (async () => {
+      try {
+        const sep = baseDir.includes("\\") ? "\\" : "/";
+        const prefix = IS_LINUX
+          ? baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix"
+          : undefined;
+        const proton = IS_LINUX && protonPath ? protonPath : undefined;
+        const installed = await tauriCmd.checkAmazonRootCaInstalled(proton, prefix);
+        if (installed) {
+          setCertInstalled(true);
+          setPhase("done");
+        } else {
+          setPhase("idle");
+        }
+      } catch {
+        setPhase("idle");
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleInstall = async () => {
+    setError("");
+    try {
+      const tmp = await tempDir();
+      setPhase("downloading");
+      const certPath = await tauriCmd.downloadAmazonRootCa(tmp);
+
+      setPhase("installing");
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const prefix = IS_LINUX
+        ? baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix"
+        : undefined;
+      const proton = IS_LINUX && protonPath ? protonPath : undefined;
+      await tauriCmd.installAmazonRootCa(certPath, proton, prefix);
+
+      setCertInstalled(true);
+      setPhase("done");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  };
+
+  const handleSkip = () => {
+    setCertSkipped(true);
+  };
+
+  const phaseLabel: Record<CertPhase, string> = {
+    checking:    "Checking installation status…",
+    idle:        "",
+    downloading: "Downloading Amazon Root CA 1…",
+    installing:  IS_LINUX
+      ? "Installing certificate into Wine prefix… (may take up to 30 s on first run)"
+      : "Installing certificate…",
+    done:        "Certificate installed successfully.",
+    error:       "",
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+          Mod API Certificate
+        </h2>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          ARK SA uses the CurseForge API (secured by Amazon TLS) to load mod
+          metadata at startup. Installing the Amazon Root CA certificate ensures
+          that connection is trusted, preventing intermittent
+          "serverUnreachable" errors when starting servers with mods.
+        </p>
+      </div>
+
+      {/* Status / progress */}
+      <div
+        className="rounded-lg p-4 flex flex-col gap-3"
+        style={{
+          background: "rgba(var(--neon-purple-rgb),0.04)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
+        }}
+      >
+        {phase === "checking" && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Checking installation status…
+          </div>
+        )}
+
+        {(phase === "downloading" || phase === "installing") && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {phaseLabel[phase]}
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--neon-purple)" }}>
+            <ShieldCheck className="w-4 h-4" />
+            Amazon Root CA 1 is installed. You&apos;re all set.
+          </div>
+        )}
+
+        {phase === "idle" && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+            <ShieldCheck className="w-4 h-4" />
+            Certificate not yet installed.
+          </div>
+        )}
+
+        {phase === "error" && (
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-sm" style={{ color: "var(--neon-red, #f87171)" }}>
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Installation failed.
+            </div>
+            <p className="text-xs ml-6 break-all" style={{ color: "var(--text-muted)" }}>{error}</p>
+          </div>
+        )}
+
+        {certSkipped && phase !== "done" && (
+          <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-subtle)" }}>
+            <AlertCircle className="w-3.5 h-3.5" />
+            Skipped — servers with mods may encounter intermittent startup errors.
+            You can install the certificate later via Settings → General.
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      {phase !== "done" && (
+        <div className="flex gap-3">
+          <Button
+            onClick={handleInstall}
+            disabled={phase === "checking" || phase === "downloading" || phase === "installing"}
+            className="flex-1 gap-2"
+            style={{
+              background: "rgba(var(--neon-purple-rgb),0.15)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+              color: "var(--neon-purple)",
+            }}
+          >
+            {(phase === "downloading" || phase === "installing") ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ShieldCheck className="w-4 h-4" />
+            )}
+            {phase === "error" ? "Retry Installation" : "Install Certificate"}
+          </Button>
+
+          {!certSkipped && (
+            <Button
+              onClick={handleSkip}
+              variant="outline"
+              disabled={phase === "downloading" || phase === "installing"}
+              style={{
+                border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
+                color: "var(--text-muted)",
+              }}
+            >
+              Skip
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NotificationsStep() {
   const {
     discordWebhook, setDiscordWebhook,
@@ -2238,6 +2427,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     steamcmdPath, steamcmdValidated,
     themePreset, themeAccent,
     protonPath, protonValidated, protonMode,
+    certInstalled, certSkipped,
     setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
     setProtonPath, setProtonValidated,
     discordWebhook,
@@ -2282,10 +2472,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case 2: return baseDirWritable;
       case 3: return backupDirWritable;
       case 4: return steamcmdValidated;
-      case 5: return IS_LINUX ? protonValidated : true; // proton on linux, notifications on windows
-      case 6: return true;  // notifications — always ok
-      case 7: return true;  // tray — always ok
-      case 8: return true;  // updates — always ok
+      // step 5: Proton-GE (Linux) | Cert (Windows)
+      case 5: return IS_LINUX ? protonValidated : (certInstalled || certSkipped);
+      // step 6: Cert (Linux) | Notifications (Windows)
+      case 6: return IS_LINUX ? (certInstalled || certSkipped) : true;
+      case 7: return true;  // notifications (Linux) / tray (Windows)
+      case 8: return true;  // tray (Linux) / updates (Windows)
+      case 9: return true;  // updates (Linux)
       default: return false;
     }
   };
@@ -2408,6 +2601,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
+        <CertStep key="cert" />,
         <NotificationsStep key="notifications" />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
@@ -2419,6 +2613,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BaseDirStep key="basedir" />,
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
+        <CertStep key="cert" />,
         <NotificationsStep key="notifications" />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,

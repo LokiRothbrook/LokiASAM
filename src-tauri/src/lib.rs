@@ -402,6 +402,11 @@ pub fn run() {
             commands::server::scan_running_servers,
             commands::server::clone_server,
             commands::server::delete_server,
+            commands::server::force_server_start_failed,
+            // Certificates
+            commands::certs::download_amazon_root_ca,
+            commands::certs::install_amazon_root_ca,
+            commands::certs::check_amazon_root_ca_installed,
             // SteamCMD / installation
             commands::steamcmd::install_steamcmd,
             commands::steamcmd::validate_steamcmd,

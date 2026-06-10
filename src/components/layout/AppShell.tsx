@@ -15,6 +15,7 @@ import { RconManager } from "@/components/layout/RconManager";
 import { StartupReconciliationManager } from "@/components/layout/StartupReconciliationManager";
 import { StartupQueueManager } from "@/components/layout/StartupQueueManager";
 import { StartupRecoveryManager } from "@/components/layout/StartupRecoveryManager";
+import { CfcoreRetryManager } from "@/components/layout/CfcoreRetryManager";
 import { ServerStatsRecorderProvider } from "@/providers/ServerStatsRecorderProvider";
 import { Toaster } from "sonner";
 
@@ -36,6 +37,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <NotificationManager />
         <UpdateManager />
         <CloseWarningManager />
+        <CfcoreRetryManager />
         <RconManager />
         <StartupReconciliationManager />
         <StartupQueueManager />

@@ -344,6 +344,10 @@ async fn inner_start_server_with_state(
     // The watcher task reads this on exit to distinguish a startup failure
     // (process died before ever being ready) from a runtime crash.
     let confirmed_running = Arc::new(AtomicBool::new(false));
+    // Set to true by the readiness task if the CurseForge mod API unreachable
+    // error is seen in the log. The watcher task emits a dedicated retry event
+    // instead of "start-failed" so the frontend can auto-retry silently.
+    let cfcore_unreachable = Arc::new(AtomicBool::new(false));
 
     // Register in the running map.
     {
@@ -379,6 +383,7 @@ async fn inner_start_server_with_state(
     let install_path_watcher = params.install_path.clone();
     let handle_clone         = app_handle.clone();
     let confirmed_clone      = Arc::clone(&confirmed_running);
+    let cfcore_clone         = Arc::clone(&cfcore_unreachable);
     tauri::async_runtime::spawn(async move {
         let (_, raw_stderr) = tokio::join!(
             child.wait(),
@@ -456,6 +461,16 @@ async fn inner_start_server_with_state(
         // ── Genuine start failure ─────────────────────────────────────────────
         app_state.running_servers.lock().unwrap().remove(&sid);
         LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
+
+        // CurseForge mod API was unreachable — this is almost always a transient
+        // network issue. Emit a dedicated event so CfcoreRetryManager can silently
+        // retry up to 3 times before surfacing a failure to the user. The server
+        // status stays "starting" in the DB (no start-failed event emitted here).
+        if cfcore_clone.load(Ordering::Relaxed) {
+            let _ = handle_clone.emit("server://cfcore-error", serde_json::json!({ "serverId": sid }));
+            return;
+        }
+
         let cleaned = strip_ansi(raw_stderr.trim());
         let filtered = filter_steam_noise(&cleaned);
         let trimmed = if filtered.len() > 800 {
@@ -556,7 +571,8 @@ async fn inner_start_server_with_state(
         params.install_path
     );
 
-    let confirmed2 = Arc::clone(&confirmed_running);
+    let confirmed2  = Arc::clone(&confirmed_running);
+    let cfcore2     = Arc::clone(&cfcore_unreachable);
     tauri::async_runtime::spawn(async move {
         use std::io::SeekFrom;
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
@@ -642,6 +658,9 @@ async fn inner_start_server_with_state(
                         confirmed2.store(true, Ordering::Relaxed);
                         confirm_running(&handle2, &sid2);
                         return;
+                    }
+                    if buf.contains("Error querying server mods: ApiError: Failed (serverUnreachable)") {
+                        cfcore2.store(true, Ordering::Relaxed);
                     }
                     buf.clear();
                 }
@@ -1179,5 +1198,24 @@ pub async fn graceful_stop_server(
         error: None,
     });
 
+    Ok(())
+}
+
+/// Called by CfcoreRetryManager after all 3 auto-retry attempts have failed.
+/// Emits the standard "start-failed" status event with a user-friendly
+/// explanation so the UI and NotificationManager treat it as a normal failure.
+#[tauri::command]
+pub async fn force_server_start_failed(
+    server_id: String,
+    error: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    emit_status(&app, &ServerStatus {
+        server_id,
+        status: "start-failed".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: Some(error),
+    });
     Ok(())
 }

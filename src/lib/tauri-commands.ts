@@ -658,4 +658,20 @@ export const tauriCmd = {
    * and migrates the old database from app_data_dir if present.
    */
   writeBootstrap: (baseDir: string) => invoke<void>("write_bootstrap", { baseDir }),
+
+  // CFCore retry
+  /** Emit a standard "start-failed" status event after all CFCore auto-retries are exhausted. */
+  forceServerStartFailed: (serverId: string, error: string) =>
+    invoke<void>("force_server_start_failed", { serverId, error }),
+
+  // Amazon Root CA certificate
+  /** Download Amazon Root CA 1 to tempDir and return the saved file path. */
+  downloadAmazonRootCa: (tempDir: string) =>
+    invoke<string>("download_amazon_root_ca", { tempDir }),
+  /** Install the downloaded cert into the Windows cert store (Windows) or Wine prefix (Linux). */
+  installAmazonRootCa: (certPath: string, protonPath?: string, prefixPath?: string) =>
+    invoke<void>("install_amazon_root_ca", { certPath, protonPath, prefixPath }),
+  /** Check whether Amazon Root CA 1 is already installed. */
+  checkAmazonRootCaInstalled: (protonPath?: string, prefixPath?: string) =>
+    invoke<boolean>("check_amazon_root_ca_installed", { protonPath, prefixPath }),
 };
