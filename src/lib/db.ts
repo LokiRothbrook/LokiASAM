@@ -194,6 +194,7 @@ async function runMigrations(db: Database): Promise<void> {
     ('asa_cached_build_id', ''),
     ('asa_latest_build_id', ''),
     ('asa_auto_check_hours', '1'),
+    ('app_update_check_mode', 'startup'),
     ('auto_restart_downed', 'ask'),
     ('full_backup_warning_dismissed', 'false')`);
 

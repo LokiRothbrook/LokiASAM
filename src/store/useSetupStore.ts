@@ -61,8 +61,8 @@ interface SetupState {
   closeToTray: boolean;
 
   // Auto-update step
-  asaAutoUpdateEnabled: boolean;
-  appAutoUpdateEnabled: boolean;
+  asaAutoCheckHours: string;    // "0"|"1"|"6"|"12"|"24"
+  appUpdateCheckMode: string;   // "startup"|"periodic"|"off"
   protonAutoCheckEnabled: boolean;
 
   // Theme step
@@ -104,8 +104,8 @@ interface SetupState {
   setNotifyServerStop: (v: boolean) => void;
   setNotifyUpdateAvailable: (v: boolean) => void;
   setCloseToTray: (v: boolean) => void;
-  setAsaAutoUpdateEnabled: (v: boolean) => void;
-  setAppAutoUpdateEnabled: (v: boolean) => void;
+  setAsaAutoCheckHours: (v: string) => void;
+  setAppUpdateCheckMode: (v: string) => void;
   setProtonAutoCheckEnabled: (v: boolean) => void;
   setThemePreset: (v: string) => void;
   setThemeAccent: (v: string) => void;
@@ -142,8 +142,8 @@ const initialState = {
   notifyServerStop: false,
   notifyUpdateAvailable: true,
   closeToTray: true,
-  asaAutoUpdateEnabled: true,
-  appAutoUpdateEnabled: true,
+  asaAutoCheckHours: "1",
+  appUpdateCheckMode: "startup",
   protonAutoCheckEnabled: true,
   themePreset: "storm",
   themeAccent: "blue",
@@ -184,8 +184,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setNotifyServerStop: (notifyServerStop) => set({ notifyServerStop }),
   setNotifyUpdateAvailable: (notifyUpdateAvailable) => set({ notifyUpdateAvailable }),
   setCloseToTray: (closeToTray) => set({ closeToTray }),
-  setAsaAutoUpdateEnabled: (asaAutoUpdateEnabled) => set({ asaAutoUpdateEnabled }),
-  setAppAutoUpdateEnabled: (appAutoUpdateEnabled) => set({ appAutoUpdateEnabled }),
+  setAsaAutoCheckHours: (asaAutoCheckHours) => set({ asaAutoCheckHours }),
+  setAppUpdateCheckMode: (appUpdateCheckMode) => set({ appUpdateCheckMode }),
   setProtonAutoCheckEnabled: (protonAutoCheckEnabled) => set({ protonAutoCheckEnabled }),
   setThemePreset: (themePreset) => set({ themePreset }),
   setThemeAccent: (themeAccent) => set({ themeAccent }),

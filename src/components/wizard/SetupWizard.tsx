@@ -25,6 +25,8 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
+  X, BookOpen, LayoutDashboard, Activity, SlidersHorizontal, CalendarClock,
+  Archive, Network,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -344,7 +346,7 @@ function ImportVerifyPanel({
 
   const handleDownloadProton = async () => {
     const sep = importDir.includes("\\") ? "\\" : "/";
-    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "proton";
+    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton";
     setInstallingProton(true);
     try {
       const path = await tauriCmd.downloadProtonGe(targetDir);
@@ -775,7 +777,7 @@ function BackupDirStep() {
           Where would you like to save backups?
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          This is where Server, INI and other backup ZIP archives will be stored.
+          This is where Server, INI and other backup 7z archives will be stored.
           We&apos;ve pre-filled this based on your install directory.
         </p>
       </div>
@@ -817,7 +819,7 @@ function BackupDirStep() {
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           <span className="font-semibold" style={{ color: "var(--neon-green)" }}>Tip: </span>
           Pointing backups to a separate drive protects you if your main drive fails.
-          Backups are ZIP files and can be large (5–30 GB per server).
+          Backups are 7z archives and can be large (5–30 GB per server).
         </p>
       </div>
     </div>
@@ -1699,47 +1701,112 @@ function TrayStep() {
 
 function AutoUpdateStep() {
   const {
-    asaAutoUpdateEnabled, setAsaAutoUpdateEnabled,
-    appAutoUpdateEnabled, setAppAutoUpdateEnabled,
+    asaAutoCheckHours, setAsaAutoCheckHours,
+    appUpdateCheckMode, setAppUpdateCheckMode,
     protonAutoCheckEnabled, setProtonAutoCheckEnabled,
   } = useSetupStore();
 
-  const rows = [
-    {
-      key: "asa", label: "ASA Server Updates",
-      desc: "Automatically check for ARK: Survival Ascended server updates via Steam.",
-      value: asaAutoUpdateEnabled, set: setAsaAutoUpdateEnabled,
-    },
-    {
-      key: "app", label: "LokiASAM App Updates",
-      desc: "Automatically check for LokiASAM application updates on startup.",
-      value: appAutoUpdateEnabled, set: setAppAutoUpdateEnabled,
-    },
-    ...(IS_LINUX ? [{
-      key: "proton", label: "Proton-GE Updates",
-      desc: "Automatically check GitHub for new GE-Proton releases once per day.",
-      value: protonAutoCheckEnabled, set: setProtonAutoCheckEnabled,
-    }] : []),
+  const asaIntervals = [
+    { value: "0",  label: "Disabled" },
+    { value: "1",  label: "Hourly" },
+    { value: "6",  label: "Every 6h" },
+    { value: "12", label: "Every 12h" },
+    { value: "24", label: "Daily" },
+  ];
+
+  const appModes = [
+    { value: "startup",  label: "On Startup" },
+    { value: "periodic", label: "Every Hour" },
+    { value: "off",      label: "Disabled" },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           Auto-Update Settings
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          Choose which components LokiASAM checks for updates automatically. You can change these anytime in Settings.
+          Auto-updates are one of LokiASAM&apos;s core features. Set how often each component checks for new versions — adjustable at any time in Settings.
         </p>
       </div>
 
-      <div className="space-y-4">
-        {rows.map((row) => (
-          <div key={row.key} className="rounded-xl px-4 py-3"
-            style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-            <ToggleRow label={row.label} description={row.desc} value={row.value} onChange={row.set} />
-          </div>
-        ))}
+      {/* ASA Server Updates */}
+      <div className="rounded-xl p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>ASA Server Updates</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Checks Steam for new ARK server builds and flags any servers that need updating. Updates are never applied automatically — you stay in control.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {asaIntervals.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setAsaAutoCheckHours(value)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+              style={{
+                background: asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                color: asaAutoCheckHours === value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+          When an update is detected, affected servers are flagged on the Dashboard. Apply updates per-server or all at once.
+        </p>
+      </div>
+
+      {/* LokiASAM App Updates */}
+      <div className="rounded-xl p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>LokiASAM App Updates</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Check for new versions of LokiASAM itself. Updates are downloaded in the background — you choose when to install.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {appModes.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setAppUpdateCheckMode(value)}
+              className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+              style={{
+                background: appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                color: appUpdateCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Proton-GE (Linux only) */}
+      {IS_LINUX && (
+        <div className="rounded-xl px-4 py-3"
+          style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+          <ToggleRow
+            label="Proton-GE Daily Auto-Check"
+            description="Check GitHub once per day for new GE-Proton releases. A notification appears when a new version is available."
+            value={protonAutoCheckEnabled}
+            onChange={setProtonAutoCheckEnabled}
+          />
+        </div>
+      )}
+
+      <div className="rounded-lg p-3"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Per-server automation: </span>
+          Each server also has an Automation tab where you can choose whether updates apply immediately when detected or at a specific time of day.
+        </p>
       </div>
     </div>
   );
@@ -1835,8 +1902,227 @@ function AppImageIntegrationPanel() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Quick Start Guide (tour modal)
+// ---------------------------------------------------------------------------
+
+const TOUR_SLIDES = [
+  {
+    Icon: LayoutDashboard,
+    title: "Dashboard",
+    description: "Your mission control — see the state of every server at a glance and act in one place.",
+    imagePlaceholder: "Screenshot: Main Dashboard showing server cards with status, player count, and CPU/memory stats",
+    bullets: [
+      "Server cards show live status, player count, CPU and memory at a glance",
+      "Start, stop, or restart any server directly from the dashboard",
+      "\"Check for Updates\" scans Steam for new ASA builds across all servers",
+      "Click any server card to open its full detail view",
+      "Use the + button in the sidebar to add your first server",
+    ],
+  },
+  {
+    Icon: Activity,
+    title: "Server Overview & Controls",
+    description: "Live stats, full controls, and everything you need to know about a running server.",
+    imagePlaceholder: "Screenshot: Overview tab on a running server — stat chart, control buttons (Start/Stop/Restart), server info panel",
+    bullets: [
+      "Live stat charts: CPU %, memory, player count — zoom from 1 hour to 1 year of history",
+      "Start, Stop, Restart, and Force Update with a single click",
+      "Enable Auto-Start to launch the server automatically when LokiASAM opens",
+      "See current map, ports, last backup time, and next scheduled restart at a glance",
+    ],
+  },
+  {
+    Icon: SlidersHorizontal,
+    title: "Config, Mods & RCON",
+    description: "Deep control over every aspect of your server.",
+    imagePlaceholder: "Screenshot: Config tab showing game settings fields (server name, max players, passwords, INI editor)",
+    bullets: [
+      "Config: edit all game settings — INI files, server name, passwords, max players, and launch arguments",
+      "Mods: add, remove, and reorder mods with built-in CurseForge integration",
+      "RCON: send commands to your live server — kick players, broadcast messages, save the world, and more",
+    ],
+  },
+  {
+    Icon: CalendarClock,
+    title: "Automation & Scheduling",
+    description: "Set it and forget it — LokiASAM handles restarts, backups, and broadcasts on your schedule.",
+    imagePlaceholder: "Screenshot: Automation tab showing backup schedule tiers and a restart schedule with warning settings",
+    bullets: [
+      "Schedule automatic backups: hourly, daily, weekly, and monthly tiers with configurable retention",
+      "Schedule restarts at specific times with in-game countdown warnings sent to players",
+      "Set up recurring in-game broadcast messages on any cron schedule",
+      "Per-server update automation: apply updates immediately when found, or at a specific time of day",
+    ],
+  },
+  {
+    Icon: Archive,
+    title: "Logs & Backups",
+    description: "Full history of what happened and a safety net for when things go wrong.",
+    imagePlaceholder: "Screenshot: Backups sidebar page showing a list of backup entries with map, size, and date",
+    bullets: [
+      "Logs page (sidebar): browse real-time and archived server logs across all servers in one place",
+      "Backups page (sidebar): every backup catalogued — map, player count, size, and when it was taken",
+      "Restore any backup to a server with a single click",
+      "Backups are stored as 7z archives in the backup directory you chose during setup",
+    ],
+  },
+  {
+    Icon: Network,
+    title: "Clusters, Notifications & Settings",
+    description: "The finishing touches that tie your whole setup together.",
+    imagePlaceholder: "Screenshot: Clusters page showing a cluster with linked servers, or the Settings page showing the Updates tab",
+    bullets: [
+      "Clusters: group servers together for cross-server travel and shared tribe data",
+      "Notifications page: browse all in-app alerts — filter by type and severity, see full event history",
+      "Settings → Updates: adjust auto-update intervals for ASA, the app, and Proton-GE at any time",
+      "Settings → General: change your theme, manage install paths, and configure notification channels",
+    ],
+  },
+];
+
+function TourModal({ onClose }: { onClose: () => void }) {
+  const [slide, setSlide] = useState(0);
+  const current = TOUR_SLIDES[slide];
+  const { Icon } = current;
+
+  return (
+    <div
+      className="fixed inset-0 z-60 flex items-center justify-center p-6 text-left"
+      style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)" }}
+    >
+      <div
+        className="relative w-full max-w-xl rounded-2xl flex flex-col overflow-hidden"
+        style={{
+          background: "var(--surface-elevated)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+          boxShadow: "0 0 60px rgba(var(--neon-purple-rgb),0.15)",
+          maxHeight: "90vh",
+        }}
+      >
+        {/* Header */}
+        <div
+          className="flex items-center justify-between px-6 pt-5 pb-4"
+          style={{ borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+              style={{ background: "rgba(var(--neon-purple-rgb),0.12)" }}>
+              <Icon className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+            </div>
+            <div>
+              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                Quick Start Guide · {slide + 1} of {TOUR_SLIDES.length}
+              </p>
+              <p className="text-base font-bold leading-tight" style={{ color: "var(--text-primary)" }}>
+                {current.title}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 transition-colors"
+            style={{ color: "var(--text-muted)" }}
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          {/* Placeholder image */}
+          <div
+            className="w-full rounded-xl flex flex-col items-center justify-center gap-2.5"
+            style={{
+              height: "160px",
+              background: "rgba(var(--neon-purple-rgb),0.04)",
+              border: "1px dashed rgba(var(--neon-purple-rgb),0.2)",
+            }}
+          >
+            <Icon className="w-10 h-10" style={{ color: "rgba(var(--neon-purple-rgb),0.25)" }} />
+            <p className="text-[10px] text-center px-6" style={{ color: "var(--text-subtle)" }}>
+              {current.imagePlaceholder}
+            </p>
+          </div>
+
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>{current.description}</p>
+
+          <ul className="space-y-2">
+            {current.bullets.map((b, i) => (
+              <li
+                key={i}
+                className="text-xs"
+                style={{ color: "var(--text-primary)", paddingLeft: "14px", textIndent: "-14px" }}
+              >
+                <span
+                  className="inline-block rounded-full"
+                  style={{ width: "6px", height: "6px", marginRight: "8px", verticalAlign: "0.1em", background: "var(--neon-purple)" }}
+                />
+                {b}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Footer */}
+        <div
+          className="flex items-center justify-between px-6 py-4"
+          style={{ borderTop: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+        >
+          {/* Dot indicators */}
+          <div className="flex gap-1.5 items-center">
+            {TOUR_SLIDES.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setSlide(i)}
+                className="rounded-full transition-all"
+                style={{
+                  width: i === slide ? "20px" : "8px",
+                  height: "8px",
+                  background: i === slide ? "var(--neon-purple)" : "rgba(var(--neon-purple-rgb),0.2)",
+                }}
+                aria-label={`Slide ${i + 1}`}
+              />
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            {slide > 0 && (
+              <Button size="sm" variant="ghost" onClick={() => setSlide((s) => s - 1)}
+                className="gap-1.5" style={{ color: "var(--text-muted)" }}>
+                <ArrowLeft className="w-3.5 h-3.5" /> Back
+              </Button>
+            )}
+            {slide < TOUR_SLIDES.length - 1 ? (
+              <Button size="sm" onClick={() => setSlide((s) => s + 1)} className="gap-1.5"
+                style={{
+                  background: "rgba(var(--neon-purple-rgb),0.15)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+                  color: "var(--neon-purple)",
+                }}>
+                Next <ArrowRight className="w-3.5 h-3.5" />
+              </Button>
+            ) : (
+              <Button size="sm" onClick={onClose} className="gap-1.5"
+                style={{
+                  background: "rgba(0,255,136,0.12)",
+                  border: "1px solid rgba(0,255,136,0.4)",
+                  color: "var(--neon-green)",
+                }}>
+                Done <CheckCircle2 className="w-3.5 h-3.5" />
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CompleteStep({ onComplete }: { onComplete: () => void }) {
   const { baseDir, backupDir, steamcmdPath, protonPath } = useSetupStore();
+  const [tourOpen, setTourOpen] = useState(false);
 
   const summaryRows = [
     { label: "Servers Directory", value: baseDir },
@@ -1846,7 +2132,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
   ];
 
   return (
-    <div className="flex flex-col items-center text-center gap-6 pt-6">
+    <div className="flex flex-col items-center text-center gap-5 pt-6">
       <div
         className="w-20 h-20 rounded-full flex items-center justify-center"
         style={{
@@ -1880,23 +2166,63 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
         ))}
       </div>
 
+      {/* What's next */}
+      <div className="w-full rounded-xl p-4 text-left space-y-2"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+        <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>What&apos;s next?</p>
+        <ul className="space-y-1.5">
+          {[
+            "Click + New Server in the sidebar to add your first server",
+            "Open a server's Automation tab to schedule backups and restarts",
+            "Visit Settings → Updates any time to adjust auto-update intervals",
+          ].map((tip, i) => (
+            <li
+              key={i}
+              className="text-xs"
+              style={{ color: "var(--text-muted)", paddingLeft: "14px", textIndent: "-14px" }}
+            >
+              <span className="inline-block rounded-full"
+                style={{ width: "6px", height: "6px", marginRight: "8px", verticalAlign: "0.1em", background: "var(--neon-purple)" }} />
+              {tip}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       {/* AppImage-only: offer application menu integration */}
       <AppImageIntegrationPanel />
 
-      <Button
-        onClick={onComplete}
-        size="lg"
-        className="gap-2 px-8"
-        style={{
-          background: "rgba(var(--neon-purple-rgb),0.2)",
-          border: "1px solid rgba(var(--neon-purple-rgb),0.5)",
-          color: "var(--neon-purple)",
-          boxShadow: "0 0 20px rgba(var(--neon-purple-rgb),0.2)",
-        }}
-      >
-        Go to Dashboard
-        <ArrowRight className="w-4 h-4" />
-      </Button>
+      {/* Action buttons */}
+      <div className="flex gap-3 w-full">
+        <Button
+          onClick={() => setTourOpen(true)}
+          variant="outline"
+          className="flex-1 gap-2"
+          style={{
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+            color: "var(--text-muted)",
+            background: "rgba(var(--neon-purple-rgb),0.04)",
+          }}
+        >
+          <BookOpen className="w-4 h-4" />
+          Quick Start Guide
+        </Button>
+        <Button
+          onClick={onComplete}
+          className="flex-1 gap-2"
+          style={{
+            background: "rgba(var(--neon-purple-rgb),0.2)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.5)",
+            color: "var(--neon-purple)",
+            boxShadow: "0 0 20px rgba(var(--neon-purple-rgb),0.2)",
+          }}
+        >
+          Go to Dashboard
+          <ArrowRight className="w-4 h-4" />
+        </Button>
+      </div>
+
+      {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
     </div>
   );
 }
@@ -1911,13 +2237,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     baseDir, backupDir, baseDirWritable, backupDirWritable,
     steamcmdPath, steamcmdValidated,
     themePreset, themeAccent,
-    protonPath, protonValidated,
+    protonPath, protonValidated, protonMode,
     setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
     setProtonPath, setProtonValidated,
     discordWebhook,
     smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTls, smtpFrom, smtpTo,
     closeToTray,
-    asaAutoUpdateEnabled, appAutoUpdateEnabled, protonAutoCheckEnabled,
+    asaAutoCheckHours, appUpdateCheckMode, protonAutoCheckEnabled,
     isLoading,
     importMode, importValid, importDir,
   } = useSetupStore();
@@ -2022,7 +2348,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("steamcmd_path", steamcmdPath);
         if (IS_LINUX && protonPath) {
           await setAppSetting("proton_path", protonPath);
-          const prefix = baseDir.replace(/[/\\]$/, "") + sep + "proton" + sep + "prefix";
+          await setAppSetting("proton_ge_managed", String(protonMode === "managed"));
+          const prefix = baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix";
           await setAppSetting("proton_prefix_path", prefix);
         }
         if (discordWebhook) await setAppSetting("discord_webhook", discordWebhook);
@@ -2042,8 +2369,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("close_to_tray", String(closeToTray));
 
         // Auto-update preferences
-        await setAppSetting("asa_auto_update_enabled",  String(asaAutoUpdateEnabled));
-        await setAppSetting("app_auto_update_enabled",  String(appAutoUpdateEnabled));
+        await setAppSetting("asa_auto_check_hours",   asaAutoCheckHours);
+        await setAppSetting("app_update_check_mode",  appUpdateCheckMode);
         if (IS_LINUX) await setAppSetting("proton_ge_auto_check", String(protonAutoCheckEnabled));
 
         // Theme
