@@ -31,7 +31,8 @@ import { runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { tempDir } from "@tauri-apps/api/path";
-import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress } from "@/lib/tauri-commands";
+import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
+import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { listen } from "@tauri-apps/api/event";
 import {
   applyTheme, applyThemeAccent, applyThemePreset,
@@ -1113,6 +1114,147 @@ function CertInstallRow() {
 }
 
 // ---------------------------------------------------------------------------
+// Firewall check/repair row
+// ---------------------------------------------------------------------------
+
+function FirewallRepairRow() {
+  const [phase, setPhase] = useState<"idle" | "checking" | "ready" | "error">("idle");
+  const [isFixing, setIsFixing] = useState(false);
+  const [fwStatus, setFwStatus] = useState<FirewallStatus | null>(null);
+  const [error, setError] = useState("");
+
+  const runCheck = async () => {
+    setError("");
+    setPhase("checking");
+    try {
+      const servers = await getServers();
+      const seen = new Map<string, PortDef>();
+      for (const srv of servers) {
+        for (const p of getServerFirewallPorts(srv)) {
+          seen.set(`${p.port}/${p.protocol}`, p);
+        }
+      }
+      const allPorts = [...seen.values()];
+      if (allPorts.length === 0) {
+        setFwStatus({ firewallType: "none", active: false, ports: [] });
+        setPhase("ready");
+        return;
+      }
+      const result = await tauriCmd.checkFirewallPorts(allPorts);
+      setFwStatus(result);
+      setPhase("ready");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  };
+
+  const handleFix = async () => {
+    if (!fwStatus) return;
+    const missingPorts: PortDef[] = fwStatus.ports
+      .filter((p) => !p.covered)
+      .map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" }));
+    setIsFixing(true);
+    try {
+      const protonPath = IS_LINUX ? (await getAppSetting("proton_path")) ?? undefined : undefined;
+      await tauriCmd.addFirewallRules(missingPorts, protonPath);
+      toast.success("Firewall rules added.");
+      await runCheck();
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+      toast.error(`Failed to add firewall rules: ${e}`);
+    } finally {
+      setIsFixing(false);
+    }
+  };
+
+  const missing = fwStatus?.ports.filter((p) => !p.covered) ?? [];
+  const allGood = fwStatus !== null && (!fwStatus.active || missing.length === 0);
+  const busy = phase === "checking" || isFixing;
+
+  return (
+    <div className="flex flex-col gap-2 pt-1">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Firewall Rules</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Check and repair port rules for all configured servers.
+          </p>
+        </div>
+        <Button
+          onClick={runCheck}
+          disabled={busy}
+          size="sm"
+          className="gap-1.5 h-7 text-xs shrink-0 ml-4"
+          style={{
+            background: allGood ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${allGood ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            color: allGood ? "var(--neon-green)" : "var(--neon-purple)",
+          }}
+        >
+          {phase === "checking"
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : allGood
+              ? <CheckCircle2 className="w-3 h-3" />
+              : <ShieldCheck className="w-3 h-3" />}
+          {phase === "checking" ? "Checking…" : allGood ? "All Good" : "Check & Repair"}
+        </Button>
+      </div>
+
+      {phase === "ready" && fwStatus && (
+        <div className="pl-1 flex flex-col gap-1">
+          {!fwStatus.active ? (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-green)" }}>
+              <CheckCircle2 className="w-3 h-3 shrink-0" />
+              No active firewall detected — nothing to do.
+            </p>
+          ) : fwStatus.ports.length === 0 ? (
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>No servers configured.</p>
+          ) : (
+            <>
+              {fwStatus.ports.map((p) => (
+                <p
+                  key={`${p.port}/${p.protocol}`}
+                  className="text-xs flex items-center gap-1.5"
+                  style={{ color: p.covered ? "var(--neon-green)" : "var(--neon-orange, #fb923c)" }}
+                >
+                  {p.covered
+                    ? <CheckCircle2 className="w-3 h-3 shrink-0" />
+                    : <AlertCircle className="w-3 h-3 shrink-0" />}
+                  {p.port}/{p.protocol.toUpperCase()} — {p.covered ? "allowed" : "missing"}
+                </p>
+              ))}
+              {missing.length > 0 && (
+                <Button
+                  onClick={handleFix}
+                  disabled={isFixing}
+                  size="sm"
+                  className="gap-1.5 h-7 text-xs mt-1 self-start"
+                  style={{
+                    background: "rgba(251,146,60,0.1)",
+                    border: "1px solid rgba(251,146,60,0.4)",
+                    color: "var(--neon-orange, #fb923c)",
+                  }}
+                >
+                  {isFixing
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Adding rules…</>
+                    : `Fix ${missing.length} Missing Rule${missing.length > 1 ? "s" : ""}`}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {phase === "error" && (
+        <p className="text-xs break-all" style={{ color: "var(--neon-red, #f87171)" }}>{error}</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Proton-GE Update section (Linux only)
 // ---------------------------------------------------------------------------
 
@@ -1748,6 +1890,8 @@ export default function SettingsPage() {
             )}
             <Separator style={{ background: "var(--border)" }} />
             <CertInstallRow />
+            <Separator style={{ background: "var(--border)" }} />
+            <FirewallRepairRow />
           </Section>
 
           <Section icon={Palette} title="Themes" description="Choose a background preset and accent color.">

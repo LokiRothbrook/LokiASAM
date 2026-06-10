@@ -314,6 +314,17 @@ async function runMigrations(db: Database): Promise<void> {
   // Rename old generic "backup" schedule rows to the new typed name.
   await db.execute("UPDATE schedules SET schedule_type = 'backup_server' WHERE schedule_type = 'backup'");
   try { await db.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('full_backup_warning_dismissed', 'false')"); } catch { /* exists */ }
+
+  // ── Migration 009: firewall rule tracking ────────────────────────────────
+  // Tracks ports we have opened in the system firewall (iptables fallback).
+  // UFW and firewalld derive state from the system directly; this table is
+  // used as a fallback when the live firewall state cannot be read without root.
+  await db.execute(`CREATE TABLE IF NOT EXISTS firewall_rules (
+    port     INTEGER NOT NULL,
+    protocol TEXT    NOT NULL CHECK(protocol IN ('tcp', 'udp')),
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (port, protocol)
+  )`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,4 +1568,31 @@ export async function saveGlobalChannelEvents(
     configJson: existing?.config_json ?? "{}",
     eventsJson: JSON.stringify(events),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Firewall rules (iptables fallback state)
+// ---------------------------------------------------------------------------
+
+export async function getFirewallRules(): Promise<{ port: number; protocol: string }[]> {
+  const db = await getDb();
+  return db.select<{ port: number; protocol: string }[]>(
+    "SELECT port, protocol FROM firewall_rules ORDER BY port, protocol"
+  );
+}
+
+export async function addFirewallRule(port: number, protocol: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT OR IGNORE INTO firewall_rules (port, protocol) VALUES (?, ?)",
+    [port, protocol]
+  );
+}
+
+export async function removeFirewallRule(port: number, protocol: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "DELETE FROM firewall_rules WHERE port = ? AND protocol = ?",
+    [port, protocol]
+  );
 }

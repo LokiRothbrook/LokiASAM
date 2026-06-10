@@ -73,3 +73,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Replaces hand-rolled /proc string parsing with a tested, maintained library.
 [target.'cfg(target_os = "linux")'.dependencies]
 procfs = { version = "0.17", default-features = false }
+
+# Windows elevation: spawn a child process with "runas" verb (UAC prompt).
+# Used for netsh firewall rule management which requires admin rights.
+[target.'cfg(target_os = "windows")'.dependencies]
+runas = { version = "0.2" }

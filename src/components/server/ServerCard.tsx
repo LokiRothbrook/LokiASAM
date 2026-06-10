@@ -52,6 +52,7 @@ import {
   resetServersFromStatus,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
+import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
@@ -226,6 +227,7 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
 
+      await warnIfFirewallMissing(server);
       const params = await buildStartParams();
       const pid = await tauriCmd.startServer(params);
 

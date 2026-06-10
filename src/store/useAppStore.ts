@@ -101,6 +101,11 @@ interface AppState {
   /** Called after the user views/clears notifications. */
   resetUnreadBump: () => void;
 
+  /** Set to true by the setup wizard "Quick Start Guide" button so the Sidebar
+   *  opens the tour after navigating to the dashboard. Cleared once consumed. */
+  pendingTour: boolean;
+  setPendingTour: (v: boolean) => void;
+
   /**
    * Rolling 10-minute live stat buffers keyed by server ID.
    * Each array holds up to LIVE_BUFFER_SIZE (60) points at 10s resolution.
@@ -175,6 +180,8 @@ export const useAppStore = create<AppState>((set) => ({
   stopVerifying: () => set({ verifying: false, verifyTotal: 0, verifyProgress: 0 }),
   incrementUnread: () => set((s) => ({ unreadBump: s.unreadBump + 1 })),
   resetUnreadBump: () => set({ unreadBump: 0 }),
+  pendingTour: false,
+  setPendingTour: (v) => set({ pendingTour: v }),
 
   statsLiveBuffers: {},
   addLiveSample: (serverId, point) =>

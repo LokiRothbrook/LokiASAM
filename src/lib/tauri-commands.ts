@@ -33,6 +33,25 @@ export interface PortConfig {
   rconPort: number;
 }
 
+export interface PortDef {
+  port: number;
+  protocol: "tcp" | "udp";
+}
+
+export interface PortStatus {
+  port: number;
+  protocol: string;
+  covered: boolean;
+}
+
+export interface FirewallStatus {
+  /** "none" | "ufw" | "firewalld" | "iptables" | "nftables" | "windows" */
+  firewallType: string;
+  /** false = no active firewall detected; no action needed */
+  active: boolean;
+  ports: PortStatus[];
+}
+
 export interface ServerStatus {
   serverId: string;
   /** One of: stopped | starting | running | stopping | updating | error | crashed | start-failed */
@@ -674,4 +693,18 @@ export const tauriCmd = {
   /** Check whether Amazon Root CA 1 is already installed. */
   checkAmazonRootCaInstalled: (protonPath?: string, prefixPath?: string) =>
     invoke<boolean>("check_amazon_root_ca_installed", { protonPath, prefixPath }),
+
+  // Firewall management
+  /** Check firewall status for the given ports. Non-elevated on all platforms. */
+  checkFirewallPorts: (ports: PortDef[]) =>
+    invoke<FirewallStatus>("check_firewall_ports", { ports }),
+  /** Add firewall rules for the given ports. Triggers UAC / pkexec elevation. */
+  addFirewallRules: (ports: PortDef[], protonPath?: string) =>
+    invoke<void>("add_firewall_rules", { ports, protonPath }),
+  /** Remove firewall rules. Called when user opts in during server deletion. */
+  removeFirewallRules: (ports: PortDef[]) =>
+    invoke<void>("remove_firewall_rules", { ports }),
+  /** Return all ports currently tracked by LokiASAM's firewall state. */
+  getAllFirewallPorts: () =>
+    invoke<PortDef[]>("get_all_firewall_ports"),
 };

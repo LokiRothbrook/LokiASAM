@@ -407,6 +407,11 @@ pub fn run() {
             commands::certs::download_amazon_root_ca,
             commands::certs::install_amazon_root_ca,
             commands::certs::check_amazon_root_ca_installed,
+            // Firewall management
+            commands::firewall::check_firewall_ports,
+            commands::firewall::add_firewall_rules,
+            commands::firewall::remove_firewall_rules,
+            commands::firewall::get_all_firewall_ports,
             // SteamCMD / installation
             commands::steamcmd::install_steamcmd,
             commands::steamcmd::validate_steamcmd,

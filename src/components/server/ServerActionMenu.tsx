@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MoreVertical, Trash2, Copy, FolderOpen, HardDrive, Loader2 } from "lucide-react";
 import {
   DropdownMenu,
@@ -36,10 +36,13 @@ import {
   getAppSetting,
   isServerNameTaken,
   insertBackup,
+  getServers,
 } from "@/lib/db";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
+import { getExclusivePorts as computeExclusivePorts } from "@/lib/firewall-utils";
+import type { PortDef } from "@/lib/tauri-commands";
 const uuidv4 = () => crypto.randomUUID();
 
 interface Props {
@@ -61,11 +64,25 @@ function DeleteDialog({
 }) {
   const queryClient = useQueryClient();
   const [deleteFiles, setDeleteFiles] = useState(false);
+  const [removeRules, setRemoveRules] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [exclusivePorts, setExclusivePorts] = useState<PortDef[]>([]);
+
+  // Compute exclusive ports when the dialog opens
+  useEffect(() => {
+    if (!open) return;
+    getServers().then((all) => {
+      setExclusivePorts(computeExclusivePorts(server, all));
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const handleDelete = async () => {
     setDeleting(true);
     try {
+      if (removeRules && exclusivePorts.length > 0) {
+        await tauriCmd.removeFirewallRules(exclusivePorts).catch(() => {});
+      }
       await tauriCmd.deleteServer(server.id, server.install_path, deleteFiles);
       await deleteServerRecord(server.id);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -76,6 +93,10 @@ function DeleteDialog({
       setDeleting(false);
     }
   };
+
+  const exclusivePortList = exclusivePorts
+    .map((p) => `${p.port}/${p.protocol.toUpperCase()}`)
+    .join(", ");
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -89,20 +110,39 @@ function DeleteDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <label className="flex items-center gap-3 cursor-pointer select-none mt-1">
-          <input
-            type="checkbox"
-            checked={deleteFiles}
-            onChange={(e) => setDeleteFiles(e.target.checked)}
-            className="w-4 h-4 accent-red-500"
-          />
-          <span className="text-sm" style={{ color: "var(--text-primary)" }}>
-            Also delete server files on disk
-            <span className="block text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-              {server.install_path}
+        <div className="space-y-3 mt-1">
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={deleteFiles}
+              onChange={(e) => setDeleteFiles(e.target.checked)}
+              className="w-4 h-4 accent-red-500"
+            />
+            <span className="text-sm" style={{ color: "var(--text-primary)" }}>
+              Also delete server files on disk
+              <span className="block text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                {server.install_path}
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+
+          {exclusivePorts.length > 0 && (
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={removeRules}
+                onChange={(e) => setRemoveRules(e.target.checked)}
+                className="w-4 h-4 accent-orange-500"
+              />
+              <span className="text-sm" style={{ color: "var(--text-primary)" }}>
+                Also remove firewall rules for ports {exclusivePortList}
+                <span className="block text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                  Only ports not used by any other server will be removed
+                </span>
+              </span>
+            </label>
+          )}
+        </div>
 
         <DialogFooter className="gap-2 mt-2">
           <Button variant="outline" onClick={onClose} disabled={deleting}>Cancel</Button>

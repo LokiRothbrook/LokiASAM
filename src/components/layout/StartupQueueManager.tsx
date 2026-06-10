@@ -19,6 +19,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { getServer, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { buildStartParams } from "@/lib/server-utils";
+import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { toast } from "sonner";
@@ -63,6 +64,7 @@ export function StartupQueueManager() {
         await updateServerStatus(server.id, "starting", null);
         queryClient.invalidateQueries({ queryKey: ["servers"] });
 
+        await warnIfFirewallMissing(server);
         const params = await buildStartParams(server);
         const pid    = await tauriCmd.startServer(params);
 

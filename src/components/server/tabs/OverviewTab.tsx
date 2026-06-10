@@ -31,6 +31,7 @@ import {
   setServerAutoStart,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
+import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 import { toast } from "sonner";
@@ -525,6 +526,7 @@ export function OverviewTab({ server }: Props) {
     try {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await warnIfFirewallMissing(server);
       const params = await buildStartParams();
       const pid = await tauriCmd.startServer(params);
       await updateServerStatus(server.id, "starting", pid);

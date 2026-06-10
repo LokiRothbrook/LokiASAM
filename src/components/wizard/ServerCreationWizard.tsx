@@ -24,6 +24,7 @@ import {
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
+  Shield, Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,7 +46,7 @@ import {
   createSchedule, getClusters, isServerNameTaken, updateServerStatus,
   type ClusterRow,
 } from "@/lib/db";
-import { tauriCmd } from "@/lib/tauri-commands";
+import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -170,6 +171,7 @@ function computeSteps(data: WizardData): StepDef[] {
   }
   steps.push(
     { id: "network",    label: "Network",    icon: Network },
+    { id: "firewall",   label: "Firewall",   icon: Shield },
     { id: "cluster",    label: "Cluster",    icon: GitBranch },
     { id: "automation", label: "Automation", icon: Clock },
     { id: "launch",     label: "Launch Args", icon: Terminal },
@@ -904,6 +906,175 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           <Loader2 className="w-3 h-3 animate-spin" /> Checking port availability…
         </p>
       )}
+      {/* Port forwarding info */}
+      <div
+        className="flex gap-2.5 rounded-lg px-3 py-2.5"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          These ports also need to be forwarded on your router or VPN service for players outside
+          your home network to connect. See the{" "}
+          <span style={{ color: "var(--neon-purple)" }}>Quick Start Guide</span>
+          {" "}(? in the sidebar) for details on router forwarding and VPN options.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Firewall Step
+// ---------------------------------------------------------------------------
+
+type FirewallPhase = "checking" | "ready" | "adding" | "done" | "skipped" | "error";
+
+function FirewallStep({ data }: { data: WizardData }) {
+  const [phase, setPhase] = useState<FirewallPhase>("checking");
+  const [status, setStatus] = useState<FirewallStatus | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const ports: PortDef[] = [
+    { port: data.port,          protocol: "udp" },
+    { port: data.port + 1,      protocol: "udp" },
+    { port: data.queryPort,     protocol: "udp" },
+    { port: data.rconPort,      protocol: "tcp" },
+  ];
+
+  useEffect(() => {
+    tauriCmd.checkFirewallPorts(ports).then((result) => {
+      setStatus(result);
+      const allCovered = !result.active || result.ports.every((p) => p.covered);
+      setPhase(allCovered ? "done" : "ready");
+    }).catch(() => setPhase("ready"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleAddRules = async () => {
+    if (!status) return;
+    const missing = status.ports.filter((p) => !p.covered);
+    if (missing.length === 0) { setPhase("done"); return; }
+    setPhase("adding");
+    try {
+      const protonPath = (await getAppSetting("proton_path")) ?? undefined;
+      await tauriCmd.addFirewallRules(missing.map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" })), protonPath);
+      setPhase("done");
+    } catch (e) {
+      setErrorMsg(String(e));
+      setPhase("error");
+    }
+  };
+
+  const firewallLabel: Record<string, string> = {
+    ufw: "UFW", firewalld: "firewalld", iptables: "iptables",
+    nftables: "nftables", windows: "Windows Firewall", none: "None detected",
+  };
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        LokiASAM can open the required ports in your system firewall so players can connect.
+        This requires a one-time administrator prompt.
+      </p>
+
+      {/* Status */}
+      {phase === "checking" && (
+        <div className="flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="text-sm">Checking firewall…</span>
+        </div>
+      )}
+
+      {status && !status.active && (phase === "done" || phase === "ready") && (
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.2)" }}>
+          <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
+          <p className="text-sm" style={{ color: "var(--neon-green)" }}>
+            No active firewall detected — nothing to configure.
+          </p>
+        </div>
+      )}
+
+      {status && status.active && (phase === "ready" || phase === "done") && (
+        <div className="space-y-2">
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Firewall: <span style={{ color: "var(--text-primary)" }}>{firewallLabel[status.firewallType] ?? status.firewallType}</span>
+          </p>
+          {status.ports.map((p) => (
+            <div key={`${p.port}-${p.protocol}`}
+              className="flex items-center justify-between text-xs px-3 py-1.5 rounded-lg"
+              style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+              <span style={{ color: "var(--text-primary)" }}>
+                {p.port}/{p.protocol.toUpperCase()}
+                {p.port === data.port + 1 ? " (Steam P2P)" : ""}
+              </span>
+              {p.covered
+                ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />
+                : <AlertCircle className="w-3.5 h-3.5" style={{ color: "var(--neon-orange, #f97316)" }} />}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {phase === "done" && status?.active && status.ports.every((p) => p.covered) && (
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.2)" }}>
+          <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
+          <p className="text-sm" style={{ color: "var(--neon-green)" }}>All ports are open.</p>
+        </div>
+      )}
+
+      {phase === "adding" && (
+        <div className="flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="text-sm">Waiting for administrator approval…</span>
+        </div>
+      )}
+
+      {phase === "error" && (
+        <div className="rounded-lg px-3 py-2.5 space-y-1"
+          style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.25)" }}>
+          <p className="text-sm font-medium" style={{ color: "var(--neon-red)" }}>Failed to add rules</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{errorMsg}</p>
+        </div>
+      )}
+
+      {phase === "skipped" && (
+        <div className="rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.25)" }}>
+          <p className="text-xs" style={{ color: "var(--neon-orange, #f97316)" }}>
+            Firewall rules will not be managed by LokiASAM. You are responsible for opening the
+            required ports. Players outside your local network may not be able to connect.
+          </p>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex flex-col gap-2">
+        {(phase === "ready" || phase === "error") && status?.active && (
+          <button
+            onClick={handleAddRules}
+            className="w-full py-2.5 rounded-lg text-sm font-medium transition-all"
+            style={{
+              background: "rgba(var(--neon-purple-rgb),0.15)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+              color: "var(--neon-purple)",
+            }}
+          >
+            <Shield className="w-4 h-4 inline mr-2" />
+            Open Ports in Firewall
+          </button>
+        )}
+        {phase !== "done" && phase !== "skipped" && phase !== "adding" && (
+          <button
+            onClick={() => setPhase("skipped")}
+            className="text-xs text-center py-1.5"
+            style={{ color: "var(--text-subtle)" }}
+          >
+            Skip — I'll manage manually
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1705,6 +1876,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       case "guided":     return <GuidedRatesStep data={data} onChange={onChange} />;
       case "full_ini":   return <FullIniStep data={data} onChange={onChange} />;
       case "network":    return <NetworkStep data={data} onChange={onChange} />;
+      case "firewall":   return <FirewallStep data={data} />;
       case "cluster":    return <ClusterStep data={data} onChange={onChange} />;
       case "automation": return <AutomationStep data={data} onChange={onChange} />;
       case "launch":     return <LaunchParamsStep data={data} onChange={onChange} />;
