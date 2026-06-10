@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { LokiIcon } from "@/components/shared/LokiIcon";
 
 interface NavItem {
   href: string;
@@ -44,7 +43,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
             "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
             active
               ? "bg-[rgba(var(--neon-purple-rgb),0.1)] text-[var(--neon-purple)]"
-              : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.05)]"
+              : "text-[var(--text-muted)] hover:text-(--neon-purple) hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
           )}
           style={
             active
@@ -75,14 +74,6 @@ export function Sidebar() {
         borderColor: "var(--border)",
       }}
     >
-      {/* Logo */}
-      <div className="mb-4 flex items-center justify-center w-10 h-10">
-        <LokiIcon
-          size={36}
-          style={{ filter: "drop-shadow(0 0 6px var(--neon-purple))" }}
-        />
-      </div>
-
       {/* Top nav items */}
       <div className="flex flex-col gap-1 w-full px-2">
         {TOP_NAV.map((item) => (
