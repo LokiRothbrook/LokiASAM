@@ -42,12 +42,14 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
           className={cn(
             "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
             active
-              ? "bg-[rgba(var(--neon-purple-rgb),0.1)] text-[var(--neon-purple)]"
-              : "text-[var(--text-muted)] hover:text-(--neon-purple) hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
+              ? "text-(--neon-purple)"
+              : "text-text-muted hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
           )}
           style={
             active
-              ? { boxShadow: "0 0 12px rgba(var(--neon-purple-rgb),0.15)", borderLeft: "2px solid var(--neon-purple)" }
+              ? {
+                  background: "rgba(var(--neon-purple-rgb),0.12)",
+                }
               : {}
           }
         >
