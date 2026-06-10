@@ -296,8 +296,8 @@ function ClusterDetailContent() {
           <div
             className="flex items-center justify-center w-10 h-10 rounded-lg"
             style={{
-              background: "rgba(191,0,255,0.1)",
-              border: "1px solid rgba(191,0,255,0.3)",
+              background: "rgba(var(--neon-purple-rgb),0.1)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
             }}
           >
             <Network className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
@@ -333,7 +333,7 @@ function ClusterDetailContent() {
                 style={{
                   background: "rgba(0,0,0,0.3)",
                   color: "var(--neon-cyan)",
-                  border: "1px solid rgba(0,255,255,0.15)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
                 }}
               >
                 {cluster.id}

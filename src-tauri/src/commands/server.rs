@@ -1,4 +1,4 @@
-use crate::{events, state::{AppState, rcon_pool::RconPool}};
+use crate::{events, state::{AppState, log_manager::LogManagerState, rcon_pool::RconPool}};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -92,6 +92,8 @@ fn filter_steam_noise(s: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct StartServerParams {
     pub server_id: String,
+    /// Human-readable server name — used only for log archiving context.
+    pub server_name: String,
     /// Absolute path to the server install directory.
     pub install_path: String,
     /// ASA map identifier, e.g. "TheIsland_WP".
@@ -319,53 +321,6 @@ async fn inner_start_server_with_state(
         cmd.env_remove("PYTHONPATH");
     }
 
-    // Rotate any existing ShooterGame.log before launching. We own log rotation
-    // from here on — archiving the old file ourselves so the fresh log starts at
-    // byte 0 and the readiness watcher below never has to deal with inodes.
-    let current_log_path = format!(
-        "{}/ShooterGame/Saved/Logs/ShooterGame.log",
-        params.install_path
-    );
-    let did_rotate: bool = if tokio::fs::metadata(&current_log_path).await.is_ok() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let (year, month, day, hh, mm, ss) = {
-            let secs_per_day = 86_400u64;
-            let days = now_secs / secs_per_day;
-            let day_secs = now_secs % secs_per_day;
-            let mut d = days;
-            let mut y = 1970u64;
-            loop {
-                let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-                let days_in_year = if leap { 366 } else { 365 };
-                if d < days_in_year { break; }
-                d -= days_in_year;
-                y += 1;
-            }
-            let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-            let days_in_month = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-            let mut mo = 0usize;
-            while mo < 12 && d >= days_in_month[mo] { d -= days_in_month[mo]; mo += 1; }
-            (y, (mo + 1) as u64, d + 1, day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60)
-        };
-        let archive_path = format!(
-            "{}/ShooterGame/Saved/Logs/ShooterGame_{year:04}-{month:02}-{day:02}_{hh:02}-{mm:02}-{ss:02}.log",
-            params.install_path
-        );
-        // Rename preferred; fall back to delete so we always start with a clean slate.
-        if tokio::fs::rename(&current_log_path, &archive_path).await.is_ok() {
-            true
-        } else {
-            tokio::fs::remove_file(&current_log_path).await.is_ok()
-        }
-    } else {
-        // No pre-existing log — fresh install or first ever start.
-        true
-    };
-
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -389,6 +344,10 @@ async fn inner_start_server_with_state(
     // The watcher task reads this on exit to distinguish a startup failure
     // (process died before ever being ready) from a runtime crash.
     let confirmed_running = Arc::new(AtomicBool::new(false));
+    // Set to true by the readiness task if the CurseForge mod API unreachable
+    // error is seen in the log. The watcher task emits a dedicated retry event
+    // instead of "start-failed" so the frontend can auto-retry silently.
+    let cfcore_unreachable = Arc::new(AtomicBool::new(false));
 
     // Register in the running map.
     {
@@ -424,6 +383,7 @@ async fn inner_start_server_with_state(
     let install_path_watcher = params.install_path.clone();
     let handle_clone         = app_handle.clone();
     let confirmed_clone      = Arc::clone(&confirmed_running);
+    let cfcore_clone         = Arc::clone(&cfcore_unreachable);
     tauri::async_runtime::spawn(async move {
         let (_, raw_stderr) = tokio::join!(
             child.wait(),
@@ -450,6 +410,7 @@ async fn inner_start_server_with_state(
         // ── Intentional stop ─────────────────────────────────────────────────
         if was_intentional {
             app_state.running_servers.lock().unwrap().remove(&sid);
+            LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
             emit_status(&handle_clone, &ServerStatus {
                 server_id: sid, status: "stopped".into(),
                 pid: None, uptime_seconds: None, error: None,
@@ -460,6 +421,7 @@ async fn inner_start_server_with_state(
         // ── Runtime crash (was confirmed running) ────────────────────────────
         if confirmed_clone.load(Ordering::Relaxed) {
             app_state.running_servers.lock().unwrap().remove(&sid);
+            LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
             emit_status(&handle_clone, &ServerStatus {
                 server_id: sid, status: "crashed".into(),
                 pid: None, uptime_seconds: None, error: None,
@@ -498,6 +460,17 @@ async fn inner_start_server_with_state(
 
         // ── Genuine start failure ─────────────────────────────────────────────
         app_state.running_servers.lock().unwrap().remove(&sid);
+        LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
+
+        // CurseForge mod API was unreachable — this is almost always a transient
+        // network issue. Emit a dedicated event so CfcoreRetryManager can silently
+        // retry up to 3 times before surfacing a failure to the user. The server
+        // status stays "starting" in the DB (no start-failed event emitted here).
+        if cfcore_clone.load(Ordering::Relaxed) {
+            let _ = handle_clone.emit("server://cfcore-error", serde_json::json!({ "serverId": sid }));
+            return;
+        }
+
         let cleaned = strip_ansi(raw_stderr.trim());
         let filtered = filter_steam_noise(&cleaned);
         let trimmed = if filtered.len() > 800 {
@@ -598,7 +571,8 @@ async fn inner_start_server_with_state(
         params.install_path
     );
 
-    let confirmed2 = Arc::clone(&confirmed_running);
+    let confirmed2  = Arc::clone(&confirmed_running);
+    let cfcore2     = Arc::clone(&cfcore_unreachable);
     tauri::async_runtime::spawn(async move {
         use std::io::SeekFrom;
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
@@ -641,11 +615,8 @@ async fn inner_start_server_with_state(
         };
 
         // ── Wait for the fresh log file to appear ────────────────────────────
-        // We rotated any pre-existing ShooterGame.log before spawning, so the
-        // first file to appear at this path belongs to the current session.
-        // Read from byte 0 — no need for inode detection or seek-to-end.
-        // If rotation failed (permissions, locked file), did_rotate is false
-        // and we seek to end to skip stale content from the previous session.
+        // Rotation happens on stop/crash/startup, so by the time the server
+        // starts there is no pre-existing ShooterGame.log. Read from byte 0.
         let file = loop {
             if Instant::now() >= deadline { return; }
 
@@ -663,12 +634,6 @@ async fn inner_start_server_with_state(
             }
         };
 
-        let mut file = file;
-        if !did_rotate {
-            // Rotation failed — old file is still in place. Seek past stale
-            // content so we don't false-positive on a READY_MSG from a prior run.
-            let _ = file.seek(SeekFrom::End(0)).await;
-        }
         let mut reader = BufReader::new(file);
         let mut buf = String::new();
 
@@ -693,6 +658,9 @@ async fn inner_start_server_with_state(
                         confirmed2.store(true, Ordering::Relaxed);
                         confirm_running(&handle2, &sid2);
                         return;
+                    }
+                    if buf.contains("Error querying server mods: ApiError: Failed (serverUnreachable)") {
+                        cfcore2.store(true, Ordering::Relaxed);
                     }
                     buf.clear();
                 }
@@ -899,11 +867,14 @@ pub async fn scan_running_servers(
     servers: Vec<ScanEntry>,
 ) -> Result<Vec<ScanResult>, String> {
     let mut results = Vec::new();
+    let mut to_rotate: Vec<(String, String)> = Vec::new();
 
     for entry in servers {
         let pid = find_server_process(&entry.install_path);
 
         if let Some(pid) = pid {
+            // Keep a copy of install_path for the watcher closure before it's moved.
+            let install_path_watcher = entry.install_path.clone();
             {
                 let mut registry = state.running_servers.lock().unwrap();
                 registry.insert(
@@ -939,6 +910,10 @@ pub async fn scan_running_servers(
 
                         app_state.running_servers.lock().unwrap().remove(&sid);
 
+                        // Rotate logs before announcing the status change so the
+                        // frontend can display the archived last-session log immediately.
+                        LogManagerState::archive_all_server_logs(&handle, &sid, &install_path_watcher).await;
+
                         let status = if was_intentional { "stopped" } else { "crashed" };
                         let payload = ServerStatus {
                             server_id: sid.clone(),
@@ -957,9 +932,18 @@ pub async fn scan_running_servers(
                     }
                 }
             });
+        } else {
+            // Not running — schedule for startup rotation.
+            to_rotate.push((entry.server_id.clone(), entry.install_path.clone()));
         }
 
         results.push(ScanResult { server_id: entry.server_id, pid });
+    }
+
+    // Rotate all stopped servers before returning so the scan-complete signal
+    // only reaches the frontend after logs are already in central storage.
+    for (server_id, install_path) in to_rotate {
+        LogManagerState::archive_all_server_logs(&app_handle, &server_id, &install_path).await;
     }
 
     Ok(results)
@@ -1201,6 +1185,11 @@ pub async fn graceful_stop_server(
     pool.chat_poll_active.lock().await.remove(&server_id);
     pool.player_cache.lock().await.remove(&server_id);
 
+    // Rotate logs now that the process is confirmed dead. Covers servers that
+    // were found running at startup (watched by the scan watcher which exits
+    // cleanly when running_servers is cleared above, bypassing its rotation).
+    LogManagerState::archive_all_server_logs(&app_handle, &server_id, &install_path).await;
+
     emit_status(&app_handle, &ServerStatus {
         server_id,
         status: "stopped".into(),
@@ -1209,5 +1198,24 @@ pub async fn graceful_stop_server(
         error: None,
     });
 
+    Ok(())
+}
+
+/// Called by CfcoreRetryManager after all 3 auto-retry attempts have failed.
+/// Emits the standard "start-failed" status event with a user-friendly
+/// explanation so the UI and NotificationManager treat it as a normal failure.
+#[tauri::command]
+pub async fn force_server_start_failed(
+    server_id: String,
+    error: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    emit_status(&app, &ServerStatus {
+        server_id,
+        status: "start-failed".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: Some(error),
+    });
     Ok(())
 }

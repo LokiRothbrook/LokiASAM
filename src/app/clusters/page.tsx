@@ -237,8 +237,8 @@ function ClusterCard({ cluster, onDelete }: ClusterCardProps) {
           <div
             className="flex items-center justify-center w-10 h-10 rounded-lg"
             style={{
-              background: "rgba(191,0,255,0.1)",
-              border: "1px solid rgba(191,0,255,0.3)",
+              background: "rgba(var(--neon-purple-rgb),0.1)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
             }}
           >
             <Network className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
@@ -317,12 +317,15 @@ export default function ClustersPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
-          >
-            Clusters
-          </h1>
+          <div className="flex items-center gap-3">
+            <Network className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <h1
+              className="text-2xl font-bold"
+              style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+            >
+              Clusters
+            </h1>
+          </div>
           <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
             Group servers for cross-ARK travel and shared data.
           </p>

@@ -1,4 +1,4 @@
-use crate::state::{scheduler::SchedulerState, AppState};
+use crate::state::{scheduler::SchedulerState, AppState, rcon_pool::RconPool};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -129,20 +129,6 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
     transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {message}")).await;
     let _ = app; // no app events needed for chat
     Ok(())
-}
-
-async fn fire_backup(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
-    crate::commands::backup::create_backup(
-        app.clone(),
-        entry.server_id.clone(),
-        entry.server_name.clone(),
-        entry.install_path.clone(),
-        entry.backup_dir.clone(),
-        entry.map_id.clone(),
-        "schedule".to_string(),
-    )
-    .await
-    .map(Some)
 }
 
 async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
@@ -360,6 +346,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
 fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> StartServerParams {
     StartServerParams {
         server_id: entry.server_id.clone(),
+        server_name: entry.server_name.clone(),
         install_path: entry.install_path.clone(),
         map_path: entry.map_path.clone(),
         port: entry.port,
@@ -370,6 +357,126 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
         proton_path: entry.proton_path.clone(),
         prefix_path: entry.prefix_path.clone(),
     }
+}
+
+/// Returns true if a server is currently running (checked via AppState).
+fn is_server_running(app: &AppHandle, server_id: &str) -> bool {
+    app.state::<AppState>()
+        .running_servers
+        .lock()
+        .unwrap()
+        .contains_key(server_id)
+}
+
+/// Fire a Server backup: cleanup ARK own files → SaveWorld → 7z SavedArks+SaveGames.
+/// Skips silently if the server is stopped (scheduled runs only back up live servers).
+async fn fire_server_backup(
+    app: &AppHandle,
+    entry: &crate::state::scheduler::ScheduleEntry,
+) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
+    // Scheduled server backups only run when the server is live.
+    if !is_server_running(app, &entry.server_id) {
+        return Ok(None);
+    }
+
+    let pool = app.state::<RconPool>();
+    crate::commands::backup::create_server_backup(
+        app.clone(),
+        entry.server_id.clone(),
+        entry.server_name.clone(),
+        entry.install_path.clone(),
+        entry.map_path.clone(),
+        entry.map_id.clone(),
+        entry.backup_dir.clone(),
+        "schedule".to_string(),
+        pool,
+    )
+    .await
+    .map(Some)
+}
+
+/// Fire a Player backup for all known .arkprofile files.
+/// Reads the config_json for optional eos_id filter; defaults to all players.
+/// Skips silently if the server is stopped.
+async fn fire_player_backup(
+    app: &AppHandle,
+    entry: &crate::state::scheduler::ScheduleEntry,
+) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
+    if !is_server_running(app, &entry.server_id) {
+        return Ok(None);
+    }
+
+    // Enumerate all .arkprofile files and zip each one.
+    // Returns the record for the last successful player backup (the count is
+    // captured in the frontend via per-player BackupRecord events).
+    let saved_dir = std::path::PathBuf::from(&entry.install_path)
+        .join("ShooterGame").join("Saved")
+        .join("SavedArks").join(&entry.map_path);
+
+    if !saved_dir.exists() {
+        return Ok(None);
+    }
+
+    let profiles: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(&saved_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path().extension().and_then(|x| x.to_str()) == Some("arkprofile")
+        })
+        .map(|e| {
+            let path = e.path();
+            let eos_id = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            (eos_id, path)
+        })
+        .filter(|(id, _)| !id.is_empty())
+        .collect();
+
+    if profiles.is_empty() {
+        return Ok(None);
+    }
+
+    let mut last_record: Option<crate::commands::backup::BackupRecord> = None;
+    for (eos_id, _) in &profiles {
+        match crate::commands::backup::create_player_backup(
+            app.clone(),
+            entry.server_id.clone(),
+            entry.server_name.clone(),
+            entry.install_path.clone(),
+            entry.map_path.clone(),
+            entry.map_id.clone(),
+            entry.backup_dir.clone(),
+            eos_id.clone(),
+            eos_id.clone(), // frontend resolves to display name; eos_id as fallback
+            "schedule".to_string(),
+        )
+        .await
+        {
+            Ok(rec) => last_record = Some(rec),
+            Err(_)  => {} // best-effort per player
+        }
+    }
+    Ok(last_record)
+}
+
+/// Fire a Full backup. No server-running check — full backups may run any time.
+async fn fire_full_backup(
+    app: &AppHandle,
+    entry: &crate::state::scheduler::ScheduleEntry,
+) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
+    crate::commands::backup::create_full_backup(
+        app.clone(),
+        entry.server_id.clone(),
+        entry.server_name.clone(),
+        entry.install_path.clone(),
+        entry.map_id.clone(),
+        entry.backup_dir.clone(),
+        "schedule".to_string(),
+    )
+    .await
+    .map(Some)
 }
 
 /// Called by the background scheduler loop in lib.rs.
@@ -404,7 +511,15 @@ pub fn tick_scheduler(app: &AppHandle) {
                     Ok(_) => (true, None, None),
                     Err(e) => (false, Some(e), None),
                 },
-                "backup" => match fire_backup(&app, &entry).await {
+                "backup_server" => match fire_server_backup(&app, &entry).await {
+                    Ok(rec) => (true, None, rec),
+                    Err(e) => (false, Some(e), None),
+                },
+                "backup_player" => match fire_player_backup(&app, &entry).await {
+                    Ok(rec) => (true, None, rec),
+                    Err(e) => (false, Some(e), None),
+                },
+                "backup_full" => match fire_full_backup(&app, &entry).await {
                     Ok(rec) => (true, None, rec),
                     Err(e) => (false, Some(e), None),
                 },

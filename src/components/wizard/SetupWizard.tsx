@@ -25,6 +25,7 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
+  X, BookOpen, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -33,12 +34,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
+import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb } from "@/lib/db";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
-import { homeDir } from "@tauri-apps/api/path";
+import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
 
 interface SetupWizardProps {
@@ -54,6 +56,7 @@ const STEPS_WIN = [
   { label: "Install Dir",   icon: HardDrive },
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
+  { label: "Mod API Cert",  icon: ShieldCheck },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
   { label: "Updates",       icon: RefreshCw },
@@ -67,6 +70,7 @@ const STEPS_LINUX = [
   { label: "Backup Dir",    icon: FolderOpen },
   { label: "SteamCMD",      icon: Terminal },
   { label: "Proton-GE",     icon: Cpu },
+  { label: "Mod API Cert",  icon: ShieldCheck },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
   { label: "Updates",       icon: RefreshCw },
@@ -134,9 +138,9 @@ function WelcomeStep() {
         <div
           className="w-24 h-24 rounded-2xl flex items-center justify-center"
           style={{
-            background: "rgba(191,0,255,0.1)",
-            border: "1px solid rgba(191,0,255,0.3)",
-            boxShadow: "0 0 40px rgba(191,0,255,0.2)",
+            background: "rgba(var(--neon-purple-rgb),0.1)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+            boxShadow: "0 0 40px rgba(var(--neon-purple-rgb),0.2)",
           }}
         >
           <LokiIcon size={48} style={{ filter: "drop-shadow(0 0 6px var(--neon-purple))" }} />
@@ -166,8 +170,8 @@ function WelcomeStep() {
             key={feat.label}
             className="rounded-lg p-3 text-center"
             style={{
-              background: "rgba(191,0,255,0.05)",
-              border: "1px solid rgba(191,0,255,0.15)",
+              background: "rgba(var(--neon-purple-rgb),0.05)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
             }}
           >
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{feat.label}</p>
@@ -230,16 +234,16 @@ function ThemeStep() {
                 onClick={() => handlePreset(p)}
                 className="rounded-lg p-3 text-left transition-all"
                 style={{
-                  background: selected ? "rgba(191,0,255,0.12)" : preset.background,
-                  border: `1px solid ${selected ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-                  boxShadow: selected ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+                  background: selected ? "rgba(var(--neon-purple-rgb),0.12)" : preset.background,
+                  border: `1px solid ${selected ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                  boxShadow: selected ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
                 }}
               >
                 <div className="flex items-center gap-2 mb-1">
                   <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "00ffff"}` }} />
                   <span className="text-sm font-semibold" style={{ color: selected ? "var(--neon-purple)" : "#fff" }}>
                     {preset.label}
-                    {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(191,0,255,0.2)", color: "var(--neon-purple)" }}>Active</span>}
+                    {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)" }}>Active</span>}
                   </span>
                 </div>
                 <div className="flex gap-1 mt-1">
@@ -258,7 +262,7 @@ function ThemeStep() {
         <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
           Accent Color
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 px-1.5 py-1">
           {ACCENT_OPTIONS.map(({ value, label }) => {
             const selected = themeAccent === value;
             const hexMap: Record<ThemeAccent, string> = {
@@ -286,7 +290,7 @@ function ThemeStep() {
 
       <div
         className="rounded-lg p-3"
-        style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
       >
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Tip: </span>
@@ -318,7 +322,7 @@ function ImportVerifyPanel({
 
   const handleInstallSteamcmd = async () => {
     const sep = importDir.includes("\\") ? "\\" : "/";
-    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "steamcmd";
+    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "steamcmd";
     setInstallingSteamcmd(true);
     try {
       await tauriCmd.installSteamcmd(targetDir);
@@ -344,7 +348,7 @@ function ImportVerifyPanel({
 
   const handleDownloadProton = async () => {
     const sep = importDir.includes("\\") ? "\\" : "/";
-    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "proton";
+    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton";
     setInstallingProton(true);
     try {
       const path = await tauriCmd.downloadProtonGe(targetDir);
@@ -387,7 +391,7 @@ function ImportVerifyPanel({
           <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>{info.steamcmd}</p>
           <div className="flex gap-2 flex-wrap">
             <Button onClick={handleInstallSteamcmd} disabled={installingSteamcmd} size="sm" className="gap-1.5 h-7 text-xs"
-              style={{ background: "rgba(191,0,255,0.12)", border: "1px solid rgba(191,0,255,0.35)", color: "var(--neon-purple)" }}>
+              style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--neon-purple)" }}>
               {installingSteamcmd ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
               Install Now
             </Button>
@@ -423,7 +427,7 @@ function ImportVerifyPanel({
           {info.proton && <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>{info.proton}</p>}
           <div className="flex gap-2 flex-wrap">
             <Button onClick={handleDownloadProton} disabled={installingProton} size="sm" className="gap-1.5 h-7 text-xs"
-              style={{ background: "rgba(191,0,255,0.12)", border: "1px solid rgba(191,0,255,0.35)", color: "var(--neon-purple)" }}>
+              style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--neon-purple)" }}>
               {installingProton ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
               Download Now
             </Button>
@@ -499,7 +503,7 @@ function BaseDirStep() {
       try {
         const home = await homeDir();
         const sep = home.includes("\\") ? "\\" : "/";
-        const defaultDir = home.replace(/[/\\]$/, "") + sep + "LokiASAM";
+        const defaultDir = home.replace(/[/\\]$/, "") + sep + "Ark-Servers";
         setBaseDir(defaultDir);
         setBackupDir(defaultDir + sep + "Backups");
         await validateDir(defaultDir);
@@ -579,7 +583,7 @@ function BaseDirStep() {
 
   const borderColor = dirResult
     ? dirResult.writable ? "rgba(0,255,136,0.5)" : "rgba(255,60,60,0.5)"
-    : baseDir ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)";
+    : baseDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
     <div className="space-y-5">
@@ -594,8 +598,8 @@ function BaseDirStep() {
             onClick={() => { setImportMode(key); setImportError(""); }}
             className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all"
             style={{
-              background: importMode === key ? "rgba(191,0,255,0.12)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${importMode === key ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+              background: importMode === key ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${importMode === key ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
               color: importMode === key ? "var(--neon-purple)" : "var(--text-muted)",
             }}
           >
@@ -633,7 +637,7 @@ function BaseDirStep() {
                 onClick={pickDir}
                 variant="outline"
                 className="gap-2 shrink-0"
-                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
                 <FolderOpen className="w-4 h-4" />
                 Browse
@@ -672,7 +676,7 @@ function BaseDirStep() {
                 className="flex-1 font-mono text-sm"
                 style={{
                   background: "rgba(10,10,30,0.8)",
-                  borderColor: importValid ? "rgba(0,255,136,0.5)" : importDir ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)",
+                  borderColor: importValid ? "rgba(0,255,136,0.5)" : importDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                   color: "var(--text-primary)",
                 }}
               />
@@ -680,7 +684,7 @@ function BaseDirStep() {
                 onClick={pickImportDir}
                 variant="outline"
                 className="gap-2 shrink-0"
-                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
                 <FolderOpen className="w-4 h-4" />
                 Browse
@@ -693,8 +697,8 @@ function BaseDirStep() {
               size="sm"
               className="gap-2"
               style={{
-                background: importValid ? "rgba(0,255,136,0.08)" : "rgba(191,0,255,0.08)",
-                border: `1px solid ${importValid ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.3)"}`,
+                background: importValid ? "rgba(0,255,136,0.08)" : "rgba(var(--neon-purple-rgb),0.08)",
+                border: `1px solid ${importValid ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
                 color: importValid ? "var(--neon-green)" : "var(--neon-purple)",
               }}
             >
@@ -766,7 +770,7 @@ function BackupDirStep() {
 
   const borderColor = dirResult
     ? dirResult.writable ? "rgba(0,255,136,0.5)" : "rgba(255,60,60,0.5)"
-    : backupDir ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)";
+    : backupDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
     <div className="space-y-6">
@@ -775,7 +779,7 @@ function BackupDirStep() {
           Where would you like to save backups?
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          This is where Server, INI and other backup ZIP archives will be stored.
+          This is where Server, INI and other backup 7z archives will be stored.
           We&apos;ve pre-filled this based on your install directory.
         </p>
       </div>
@@ -796,7 +800,7 @@ function BackupDirStep() {
             onClick={pickDir}
             variant="outline"
             className="gap-2 shrink-0"
-            style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
           >
             <FolderOpen className="w-4 h-4" />
             Browse
@@ -817,7 +821,7 @@ function BackupDirStep() {
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           <span className="font-semibold" style={{ color: "var(--neon-green)" }}>Tip: </span>
           Pointing backups to a separate drive protects you if your main drive fails.
-          Backups are ZIP files and can be large (5–30 GB per server).
+          Backups are 7z archives and can be large (5–30 GB per server).
         </p>
       </div>
     </div>
@@ -838,8 +842,8 @@ function SteamCmdStep() {
   const [canceled, setCanceled] = useState(false);
 
   const autoSteamcmdTarget = baseDir
-    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/steamcmd"
-    : "/your/base/dir/steamcmd";
+    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/lokiasam/steamcmd"
+    : "/your/base/dir/lokiasam/steamcmd";
 
   const autoExePath = autoSteamcmdTarget +
     (typeof window !== "undefined" && navigator.userAgent.includes("Windows") ? "\\steamcmd.exe" : "/steamcmd.sh");
@@ -949,9 +953,9 @@ function SteamCmdStep() {
             disabled={isLoading || steamcmdValidated}
             className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
-              background: steamcmdMode === mode ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${steamcmdMode === mode ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-              boxShadow: steamcmdMode === mode ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+              background: steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              boxShadow: steamcmdMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
             }}
           >
             <p className="text-sm font-semibold" style={{ color: steamcmdMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
@@ -969,8 +973,8 @@ function SteamCmdStep() {
             disabled={isLoading || !baseDir || steamcmdValidated}
             className="w-full gap-2"
             style={{
-              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1003,7 +1007,7 @@ function SteamCmdStep() {
               className="flex-1 font-mono text-sm"
               style={{
                 background: "rgba(10,10,30,0.8)",
-                borderColor: steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.2)",
+                borderColor: steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                 color: "var(--text-primary)",
               }}
             />
@@ -1011,7 +1015,7 @@ function SteamCmdStep() {
               onClick={pickExe}
               variant="outline"
               className="gap-2 shrink-0"
-              style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
             >
               <FolderOpen className="w-4 h-4" /> Browse
             </Button>
@@ -1021,8 +1025,8 @@ function SteamCmdStep() {
             disabled={isLoading || !steamcmdPath || steamcmdValidated}
             className="w-full gap-2"
             style={{
-              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1114,7 +1118,7 @@ function ProtonGEStep() {
   };
 
   const handleDownload = async () => {
-    const targetDir = baseDir.replace(/[/\\]$/, "") + "/proton";
+    const targetDir = baseDir.replace(/[/\\]$/, "") + "/lokiasam/proton";
     setError("");
     setCanceled(false);
     setAttempt((a) => a + 1);
@@ -1176,8 +1180,8 @@ function ProtonGEStep() {
   };
 
   const managedTarget = baseDir
-    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/proton"
-    : "/your/base/dir/proton";
+    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/lokiasam/proton"
+    : "/your/base/dir/lokiasam/proton";
 
   return (
     <div className="space-y-5">
@@ -1201,9 +1205,9 @@ function ProtonGEStep() {
             disabled={isLoading || protonValidated}
             className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
-              background: protonMode === mode ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${protonMode === mode ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-              boxShadow: protonMode === mode ? "0 0 16px rgba(191,0,255,0.15)" : "none",
+              background: protonMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${protonMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              boxShadow: protonMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
             }}
           >
             <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
@@ -1221,8 +1225,8 @@ function ProtonGEStep() {
             disabled={isLoading || !baseDir || protonValidated}
             className="w-full gap-2"
             style={{
-              background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: protonValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1301,8 +1305,8 @@ function ProtonGEStep() {
                       disabled={!!validating}
                       className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all disabled:opacity-60"
                       style={{
-                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-                        border: `1px solid ${isSelected ? "rgba(0,255,136,0.4)" : isValidating ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.15)"}`,
+                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                        border: `1px solid ${isSelected ? "rgba(0,255,136,0.4)" : isValidating ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                       }}
                     >
                       <span className="flex items-center gap-2">
@@ -1338,13 +1342,13 @@ function ProtonGEStep() {
                 onChange={(e) => setManualPath(e.target.value)}
                 placeholder="/home/user/.steam/root/compatibilitytools.d/GE-Proton9-27"
                 className="flex-1 font-mono text-sm"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
               />
               <Button
                 onClick={pickDir}
                 variant="outline"
                 className="shrink-0"
-                style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
                 <FolderOpen className="w-4 h-4" />
               </Button>
@@ -1354,7 +1358,7 @@ function ProtonGEStep() {
               disabled={!manualPath.trim()}
               size="sm"
               className="gap-2"
-              style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.3)", color: "var(--neon-purple)" }}
+              style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
             >
               Validate Path
             </Button>
@@ -1407,6 +1411,193 @@ function ToggleRow({
           <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />
         )}
       </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Certificate step
+// ---------------------------------------------------------------------------
+
+type CertPhase = "checking" | "idle" | "downloading" | "installing" | "done" | "error";
+
+function CertStep() {
+  const {
+    baseDir,
+    protonPath,
+    certInstalled, setCertInstalled,
+    certSkipped,   setCertSkipped,
+  } = useSetupStore();
+
+  const [phase, setPhase] = useState<CertPhase>("checking");
+  const [error, setError]  = useState("");
+
+  // On mount, check whether the cert is already installed so we can show the
+  // "already installed" state immediately rather than prompting the user.
+  useEffect(() => {
+    (async () => {
+      try {
+        const sep = baseDir.includes("\\") ? "\\" : "/";
+        const prefix = IS_LINUX
+          ? baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix"
+          : undefined;
+        const proton = IS_LINUX && protonPath ? protonPath : undefined;
+        const installed = await tauriCmd.checkAmazonRootCaInstalled(proton, prefix);
+        if (installed) {
+          setCertInstalled(true);
+          setPhase("done");
+        } else {
+          setPhase("idle");
+        }
+      } catch {
+        setPhase("idle");
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleInstall = async () => {
+    setError("");
+    try {
+      const tmp = await tempDir();
+      setPhase("downloading");
+      const certPath = await tauriCmd.downloadAmazonRootCa(tmp);
+
+      setPhase("installing");
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const prefix = IS_LINUX
+        ? baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix"
+        : undefined;
+      const proton = IS_LINUX && protonPath ? protonPath : undefined;
+      await tauriCmd.installAmazonRootCa(certPath, proton, prefix);
+
+      setCertInstalled(true);
+      setPhase("done");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  };
+
+  const handleSkip = () => {
+    setCertSkipped(true);
+  };
+
+  const phaseLabel: Record<CertPhase, string> = {
+    checking:    "Checking installation status…",
+    idle:        "",
+    downloading: "Downloading Amazon Root CA 1…",
+    installing:  IS_LINUX
+      ? "Installing certificate into Wine prefix… (may take up to 30 s on first run)"
+      : "Installing certificate…",
+    done:        "Certificate installed successfully.",
+    error:       "",
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
+          Mod API Certificate
+        </h2>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          ARK SA uses the CurseForge API (secured by Amazon TLS) to load mod
+          metadata at startup. Installing the Amazon Root CA certificate ensures
+          that connection is trusted, preventing intermittent
+          "serverUnreachable" errors when starting servers with mods.
+        </p>
+      </div>
+
+      {/* Status / progress */}
+      <div
+        className="rounded-lg p-4 flex flex-col gap-3"
+        style={{
+          background: "rgba(var(--neon-purple-rgb),0.04)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
+        }}
+      >
+        {phase === "checking" && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Checking installation status…
+          </div>
+        )}
+
+        {(phase === "downloading" || phase === "installing") && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {phaseLabel[phase]}
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--neon-purple)" }}>
+            <ShieldCheck className="w-4 h-4" />
+            Amazon Root CA 1 is installed. You&apos;re all set.
+          </div>
+        )}
+
+        {phase === "idle" && (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+            <ShieldCheck className="w-4 h-4" />
+            Certificate not yet installed.
+          </div>
+        )}
+
+        {phase === "error" && (
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-sm" style={{ color: "var(--neon-red, #f87171)" }}>
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Installation failed.
+            </div>
+            <p className="text-xs ml-6 break-all" style={{ color: "var(--text-muted)" }}>{error}</p>
+          </div>
+        )}
+
+        {certSkipped && phase !== "done" && (
+          <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-subtle)" }}>
+            <AlertCircle className="w-3.5 h-3.5" />
+            Skipped — servers with mods may encounter intermittent startup errors.
+            You can install the certificate later via Settings → General.
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      {phase !== "done" && (
+        <div className="flex gap-3">
+          <Button
+            onClick={handleInstall}
+            disabled={phase === "checking" || phase === "downloading" || phase === "installing"}
+            className="flex-1 gap-2"
+            style={{
+              background: "rgba(var(--neon-purple-rgb),0.15)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+              color: "var(--neon-purple)",
+            }}
+          >
+            {(phase === "downloading" || phase === "installing") ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ShieldCheck className="w-4 h-4" />
+            )}
+            {phase === "error" ? "Retry Installation" : "Install Certificate"}
+          </Button>
+
+          {!certSkipped && (
+            <Button
+              onClick={handleSkip}
+              variant="outline"
+              disabled={phase === "downloading" || phase === "installing"}
+              style={{
+                border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
+                color: "var(--text-muted)",
+              }}
+            >
+              Skip
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1477,7 +1668,7 @@ function NotificationsStep() {
       {/* Discord webhook */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div className="flex items-center justify-between">
           <Label htmlFor="discord-webhook" style={{ color: "var(--text-primary)" }}>
@@ -1506,7 +1697,7 @@ function NotificationsStep() {
           className="font-mono text-sm"
           style={{
             background: "rgba(10,10,30,0.8)",
-            borderColor: discordWebhook ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.2)",
+            borderColor: discordWebhook ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
             color: "var(--text-primary)",
           }}
         />
@@ -1518,7 +1709,7 @@ function NotificationsStep() {
       {/* Email / SMTP */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -1544,14 +1735,14 @@ function NotificationsStep() {
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>SMTP Host</Label>
             <Input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)}
               placeholder="smtp.example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Port</Label>
             <Input value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)}
               placeholder="587" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -1560,14 +1751,14 @@ function NotificationsStep() {
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Username</Label>
             <Input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)}
               placeholder="user@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Password</Label>
             <Input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
               placeholder="••••••••" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -1576,14 +1767,14 @@ function NotificationsStep() {
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>From Address</Label>
             <Input value={smtpFrom} onChange={(e) => setSmtpFrom(e.target.value)}
               placeholder="noreply@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>To Address</Label>
             <Input value={smtpTo} onChange={(e) => setSmtpTo(e.target.value)}
               placeholder="admin@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -1593,7 +1784,7 @@ function NotificationsStep() {
       {/* Notification event matrix */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div>
           <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Notification Events</p>
@@ -1641,15 +1832,15 @@ function TrayStep() {
             onClick={() => setCloseToTray(value)}
             className="w-full text-left rounded-lg p-4 transition-all"
             style={{
-              background: closeToTray === value ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${closeToTray === value ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
-              boxShadow: closeToTray === value ? "0 0 16px rgba(191,0,255,0.12)" : "none",
+              background: closeToTray === value ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              border: `1px solid ${closeToTray === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              boxShadow: closeToTray === value ? "0 0 16px rgba(var(--neon-purple-rgb),0.12)" : "none",
             }}
           >
             <div className="flex items-center gap-2 mb-1">
               <div
                 className="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 flex items-center justify-center"
-                style={{ borderColor: closeToTray === value ? "var(--neon-purple)" : "rgba(191,0,255,0.3)" }}
+                style={{ borderColor: closeToTray === value ? "var(--neon-purple)" : "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 {closeToTray === value && (
                   <div className="w-2 h-2 rounded-full" style={{ background: "var(--neon-purple)" }} />
@@ -1658,7 +1849,7 @@ function TrayStep() {
               <p className="text-sm font-semibold" style={{ color: closeToTray === value ? "var(--neon-purple)" : "var(--text-primary)" }}>
                 {label}
                 {recommended && (
-                  <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded" style={{ background: "rgba(191,0,255,0.15)", color: "var(--neon-purple)" }}>
+                  <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)" }}>
                     Recommended
                   </span>
                 )}
@@ -1672,7 +1863,7 @@ function TrayStep() {
       <div className="space-y-2">
         <div
           className="rounded-lg p-3"
-          style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.12)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
         >
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Note: </span>
@@ -1699,47 +1890,112 @@ function TrayStep() {
 
 function AutoUpdateStep() {
   const {
-    asaAutoUpdateEnabled, setAsaAutoUpdateEnabled,
-    appAutoUpdateEnabled, setAppAutoUpdateEnabled,
+    asaAutoCheckHours, setAsaAutoCheckHours,
+    appUpdateCheckMode, setAppUpdateCheckMode,
     protonAutoCheckEnabled, setProtonAutoCheckEnabled,
   } = useSetupStore();
 
-  const rows = [
-    {
-      key: "asa", label: "ASA Server Updates",
-      desc: "Automatically check for ARK: Survival Ascended server updates via Steam.",
-      value: asaAutoUpdateEnabled, set: setAsaAutoUpdateEnabled,
-    },
-    {
-      key: "app", label: "LokiASAM App Updates",
-      desc: "Automatically check for LokiASAM application updates on startup.",
-      value: appAutoUpdateEnabled, set: setAppAutoUpdateEnabled,
-    },
-    ...(IS_LINUX ? [{
-      key: "proton", label: "Proton-GE Updates",
-      desc: "Automatically check GitHub for new GE-Proton releases once per day.",
-      value: protonAutoCheckEnabled, set: setProtonAutoCheckEnabled,
-    }] : []),
+  const asaIntervals = [
+    { value: "0",  label: "Disabled" },
+    { value: "1",  label: "Hourly" },
+    { value: "6",  label: "Every 6h" },
+    { value: "12", label: "Every 12h" },
+    { value: "24", label: "Daily" },
+  ];
+
+  const appModes = [
+    { value: "startup",  label: "On Startup" },
+    { value: "periodic", label: "Every Hour" },
+    { value: "off",      label: "Disabled" },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
           Auto-Update Settings
         </h2>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          Choose which components LokiASAM checks for updates automatically. You can change these anytime in Settings.
+          Auto-updates are one of LokiASAM&apos;s core features. Set how often each component checks for new versions — adjustable at any time in Settings.
         </p>
       </div>
 
-      <div className="space-y-4">
-        {rows.map((row) => (
-          <div key={row.key} className="rounded-xl px-4 py-3"
-            style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.12)" }}>
-            <ToggleRow label={row.label} description={row.desc} value={row.value} onChange={row.set} />
-          </div>
-        ))}
+      {/* ASA Server Updates */}
+      <div className="rounded-xl p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>ASA Server Updates</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Checks Steam for new ARK server builds and flags any servers that need updating. Updates are never applied automatically — you stay in control.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {asaIntervals.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setAsaAutoCheckHours(value)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+              style={{
+                background: asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                color: asaAutoCheckHours === value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+          When an update is detected, affected servers are flagged on the Dashboard. Apply updates per-server or all at once.
+        </p>
+      </div>
+
+      {/* LokiASAM App Updates */}
+      <div className="rounded-xl p-4 space-y-3"
+        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>LokiASAM App Updates</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Check for new versions of LokiASAM itself. Updates are downloaded in the background — you choose when to install.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {appModes.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setAppUpdateCheckMode(value)}
+              className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+              style={{
+                background: appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                color: appUpdateCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Proton-GE (Linux only) */}
+      {IS_LINUX && (
+        <div className="rounded-xl px-4 py-3"
+          style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+          <ToggleRow
+            label="Proton-GE Daily Auto-Check"
+            description="Check GitHub once per day for new GE-Proton releases. A notification appears when a new version is available."
+            value={protonAutoCheckEnabled}
+            onChange={setProtonAutoCheckEnabled}
+          />
+        </div>
+      )}
+
+      <div className="rounded-lg p-3"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <span className="font-semibold" style={{ color: "var(--neon-purple)" }}>Per-server automation: </span>
+          Each server also has an Automation tab where you can choose whether updates apply immediately when detected or at a specific time of day.
+        </p>
       </div>
     </div>
   );
@@ -1784,7 +2040,7 @@ function AppImageIntegrationPanel() {
   return (
     <div
       className="w-full rounded-xl p-4 text-left space-y-3"
-      style={{ background: "rgba(191,0,255,0.06)", border: "1px solid rgba(191,0,255,0.2)" }}
+      style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
     >
       <div className="flex items-start gap-3">
         <Layers className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
@@ -1823,7 +2079,7 @@ function AppImageIntegrationPanel() {
           onClick={handleInstall}
           disabled={working}
           className="gap-2"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
         >
           {working
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1837,6 +2093,7 @@ function AppImageIntegrationPanel() {
 
 function CompleteStep({ onComplete }: { onComplete: () => void }) {
   const { baseDir, backupDir, steamcmdPath, protonPath } = useSetupStore();
+  const setPendingTour = useAppStore((s) => s.setPendingTour);
 
   const summaryRows = [
     { label: "Servers Directory", value: baseDir },
@@ -1846,7 +2103,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
   ];
 
   return (
-    <div className="flex flex-col items-center text-center gap-6">
+    <div className="flex flex-col items-center text-center gap-5 pt-6">
       <div
         className="w-20 h-20 rounded-full flex items-center justify-center"
         style={{
@@ -1872,7 +2129,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
           <div
             key={label}
             className="rounded-lg px-4 py-3 flex items-center justify-between gap-4"
-            style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(191,0,255,0.15)" }}
+            style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
           >
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
             <span className="text-xs font-mono truncate max-w-xs" style={{ color: "var(--text-primary)" }}>{value || "—"}</span>
@@ -1880,23 +2137,62 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
         ))}
       </div>
 
+      {/* What's next */}
+      <div className="w-full rounded-xl p-4 text-left space-y-2"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+        <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>What&apos;s next?</p>
+        <ul className="space-y-1.5">
+          {[
+            "Click + New Server in the sidebar to add your first server",
+            "Open a server's Automation tab to schedule backups and restarts",
+            "Visit Settings → Updates any time to adjust auto-update intervals",
+          ].map((tip, i) => (
+            <li
+              key={i}
+              className="text-xs"
+              style={{ color: "var(--text-muted)", paddingLeft: "14px", textIndent: "-14px" }}
+            >
+              <span className="inline-block rounded-full"
+                style={{ width: "6px", height: "6px", marginRight: "8px", verticalAlign: "0.1em", background: "var(--neon-purple)" }} />
+              {tip}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       {/* AppImage-only: offer application menu integration */}
       <AppImageIntegrationPanel />
 
-      <Button
-        onClick={onComplete}
-        size="lg"
-        className="gap-2 px-8"
-        style={{
-          background: "rgba(191,0,255,0.2)",
-          border: "1px solid rgba(191,0,255,0.5)",
-          color: "var(--neon-purple)",
-          boxShadow: "0 0 20px rgba(191,0,255,0.2)",
-        }}
-      >
-        Go to Dashboard
-        <ArrowRight className="w-4 h-4" />
-      </Button>
+      {/* Action buttons */}
+      <div className="flex gap-3 w-full">
+        <Button
+          onClick={() => { setPendingTour(true); onComplete(); }}
+          variant="outline"
+          className="flex-1 gap-2"
+          style={{
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+            color: "var(--text-muted)",
+            background: "rgba(var(--neon-purple-rgb),0.04)",
+          }}
+        >
+          <BookOpen className="w-4 h-4" />
+          Quick Start Guide
+        </Button>
+        <Button
+          onClick={onComplete}
+          className="flex-1 gap-2"
+          style={{
+            background: "rgba(var(--neon-purple-rgb),0.2)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.5)",
+            color: "var(--neon-purple)",
+            boxShadow: "0 0 20px rgba(var(--neon-purple-rgb),0.2)",
+          }}
+        >
+          Go to Dashboard
+          <ArrowRight className="w-4 h-4" />
+        </Button>
+      </div>
+
     </div>
   );
 }
@@ -1911,13 +2207,14 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     baseDir, backupDir, baseDirWritable, backupDirWritable,
     steamcmdPath, steamcmdValidated,
     themePreset, themeAccent,
-    protonPath, protonValidated,
+    protonPath, protonValidated, protonMode,
+    certInstalled, certSkipped,
     setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
     setProtonPath, setProtonValidated,
     discordWebhook,
     smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTls, smtpFrom, smtpTo,
     closeToTray,
-    asaAutoUpdateEnabled, appAutoUpdateEnabled, protonAutoCheckEnabled,
+    asaAutoCheckHours, appUpdateCheckMode, protonAutoCheckEnabled,
     isLoading,
     importMode, importValid, importDir,
   } = useSetupStore();
@@ -1956,10 +2253,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case 2: return baseDirWritable;
       case 3: return backupDirWritable;
       case 4: return steamcmdValidated;
-      case 5: return IS_LINUX ? protonValidated : true; // proton on linux, notifications on windows
-      case 6: return true;  // notifications — always ok
-      case 7: return true;  // tray — always ok
-      case 8: return true;  // updates — always ok
+      // step 5: Proton-GE (Linux) | Cert (Windows)
+      case 5: return IS_LINUX ? protonValidated : (certInstalled || certSkipped);
+      // step 6: Cert (Linux) | Notifications (Windows)
+      case 6: return IS_LINUX ? (certInstalled || certSkipped) : true;
+      case 7: return true;  // notifications (Linux) / tray (Windows)
+      case 8: return true;  // tray (Linux) / updates (Windows)
+      case 9: return true;  // updates (Linux)
       default: return false;
     }
   };
@@ -2022,7 +2322,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("steamcmd_path", steamcmdPath);
         if (IS_LINUX && protonPath) {
           await setAppSetting("proton_path", protonPath);
-          const prefix = baseDir.replace(/[/\\]$/, "") + sep + "proton" + sep + "prefix";
+          await setAppSetting("proton_ge_managed", String(protonMode === "managed"));
+          const prefix = baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix";
           await setAppSetting("proton_prefix_path", prefix);
         }
         if (discordWebhook) await setAppSetting("discord_webhook", discordWebhook);
@@ -2042,8 +2343,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         await setAppSetting("close_to_tray", String(closeToTray));
 
         // Auto-update preferences
-        await setAppSetting("asa_auto_update_enabled",  String(asaAutoUpdateEnabled));
-        await setAppSetting("app_auto_update_enabled",  String(appAutoUpdateEnabled));
+        await setAppSetting("asa_auto_check_hours",   asaAutoCheckHours);
+        await setAppSetting("app_update_check_mode",  appUpdateCheckMode);
         if (IS_LINUX) await setAppSetting("proton_ge_auto_check", String(protonAutoCheckEnabled));
 
         // Theme
@@ -2081,6 +2382,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
+        <CertStep key="cert" />,
         <NotificationsStep key="notifications" />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
@@ -2092,6 +2394,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BaseDirStep key="basedir" />,
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
+        <CertStep key="cert" />,
         <NotificationsStep key="notifications" />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
@@ -2107,18 +2410,18 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(191,0,255,0.08) 0%, transparent 60%)",
+          backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(var(--neon-purple-rgb),0.08) 0%, transparent 60%)",
         }}
       />
 
       {/* Progress bar at top */}
-      <div className="relative z-10 w-full h-1" style={{ background: "rgba(191,0,255,0.1)" }}>
+      <div className="relative z-10 w-full h-1" style={{ background: "rgba(var(--neon-purple-rgb),0.1)" }}>
         <div
           className="h-full transition-all duration-500"
           style={{
             width: `${((step + 1) / TOTAL_STEPS) * 100}%`,
             background: "var(--neon-purple)",
-            boxShadow: "0 0 8px rgba(191,0,255,0.6)",
+            boxShadow: "0 0 8px rgba(var(--neon-purple-rgb),0.6)",
           }}
         />
       </div>
@@ -2130,9 +2433,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             key={s.label}
             className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs transition-all duration-300"
             style={{
-              background: i === step ? "rgba(191,0,255,0.15)" : "transparent",
-              border: `1px solid ${i <= step ? "rgba(191,0,255,0.4)" : "rgba(191,0,255,0.1)"}`,
-              color: i === step ? "var(--neon-purple)" : i < step ? "rgba(191,0,255,0.6)" : "var(--text-subtle)",
+              background: i === step ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
+              border: `1px solid ${i <= step ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.1)"}`,
+              color: i === step ? "var(--neon-purple)" : i < step ? "rgba(var(--neon-purple-rgb),0.6)" : "var(--text-subtle)",
             }}
           >
             <s.icon className="w-3 h-3" />
@@ -2146,11 +2449,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <div
           className="w-full max-w-2xl flex flex-col"
           style={{
-            background: "rgba(10,10,30,0.8)",
-            border: "1px solid rgba(191,0,255,0.2)",
+            background: "var(--glass-bg)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
             borderRadius: "1rem",
             backdropFilter: "blur(12px)",
-            boxShadow: "0 0 60px rgba(191,0,255,0.1)",
+            boxShadow: "0 0 60px rgba(var(--neon-purple-rgb),0.1)",
             maxHeight: "calc(100vh - 160px)",
             minHeight: "420px",
           }}
@@ -2180,7 +2483,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
             {/* Navigation — hidden on the Complete step */}
             {step < TOTAL_STEPS - 1 && (
-              <div className="flex items-center justify-between mt-6 pt-4 border-t" style={{ borderColor: "rgba(191,0,255,0.1)" }}>
+              <div className="flex items-center justify-between mt-6 pt-4 border-t" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
                 {/* Back button — hidden on page 0 */}
                 {step === 0 ? (
                   <div />
@@ -2207,8 +2510,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     disabled={!canAdvance() || isLoading || saving}
                     className="gap-2"
                     style={{
-                      background: canAdvance() && !isLoading ? "rgba(191,0,255,0.15)" : "rgba(191,0,255,0.05)",
-                      border: "1px solid rgba(191,0,255,0.4)",
+                      background: canAdvance() && !isLoading ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.05)",
+                      border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
                       color: canAdvance() && !isLoading ? "var(--neon-purple)" : "var(--text-muted)",
                     }}
                   >

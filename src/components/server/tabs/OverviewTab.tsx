@@ -4,7 +4,8 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
-  Save, RefreshCw, ArrowUp, Loader2, X, BarChart2,
+  Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,8 @@ import {
   Dialog, DialogContent, DialogDescription,
   DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   ResponsiveContainer, ComposedChart, Area, Line,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -25,8 +28,10 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup,
+  setServerAutoStart,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
+import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 import { toast } from "sonner";
@@ -85,8 +90,8 @@ function TimeframeSelect({
         size="sm"
         className="h-6 w-17 text-xs border-0 px-2 gap-1"
         style={{
-          background: "rgba(191,0,255,0.08)",
-          border: "1px solid rgba(191,0,255,0.25)",
+          background: "rgba(var(--neon-purple-rgb),0.08)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
           color: "var(--neon-purple)",
         }}
         // Prevent tile-level click handlers from seeing this interaction
@@ -145,7 +150,7 @@ function ChartTooltip({
       className="rounded-lg px-3 py-2 text-xs"
       style={{
         background: "rgba(10,10,30,0.95)",
-        border: "1px solid rgba(191,0,255,0.25)",
+        border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
         color: "var(--text-primary)",
       }}
     >
@@ -300,12 +305,14 @@ function ServerSummaryPanel({
   modCount,
   lastBackup,
   nextRestart,
+  onAutoStartChange,
 }: {
   server: ServerRow;
   startTime: number | undefined;
   modCount: number | null;
   lastBackup: string | null;
   nextRestart: string | null;
+  onAutoStartChange: (v: boolean) => void;
 }) {
   const isRunning = server.status === "running" || server.status === "starting";
   const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
@@ -327,13 +334,35 @@ function ServerSummaryPanel({
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1">
-      {items.map(({ label, value }) => (
-        <div key={label}>
-          <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
-          <div className="text-sm font-semibold truncate" style={{ color: "var(--text-primary)" }}>{value}</div>
+    <div className="flex flex-col gap-3 pt-1">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+        {items.map(({ label, value }) => (
+          <div key={label}>
+            <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
+            <div className="text-sm font-semibold truncate" style={{ color: "var(--text-primary)" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Auto-start toggle */}
+      <div
+        className="flex items-center gap-3 pt-2"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}
+      >
+        <Switch
+          id={`auto-start-${server.id}`}
+          checked={server.auto_start === 1}
+          onCheckedChange={onAutoStartChange}
+        />
+        <div>
+          <Label htmlFor={`auto-start-${server.id}`} className="text-xs font-medium cursor-pointer" style={{ color: "var(--text-primary)" }}>
+            Auto-start on launch
+          </Label>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Start this server automatically when the app opens
+          </p>
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -362,7 +391,7 @@ function ChartStatTile({
   return (
     <div
       className="glass-card rounded-xl p-4 flex flex-col gap-3"
-      style={{ borderColor: `${neonColor}28` }}
+      style={{ borderColor: "var(--border)" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
@@ -370,7 +399,7 @@ function ChartStatTile({
           <Icon className="w-4 h-4 shrink-0" style={{ color: neonColor }} />
           <span
             className="text-xs font-medium uppercase tracking-wider"
-            style={{ color: "var(--text-muted)" }}
+            style={{ color: "var(--text-primary)" }}
           >
             {label}
           </span>
@@ -416,6 +445,7 @@ export function OverviewTab({ server }: Props) {
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+  const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
 
   // Per-tile timeframe selectors
   const [playersTf, setPlayersTf] = useState<Timeframe>("Live");
@@ -475,6 +505,7 @@ export function OverviewTab({ server }: Props) {
     const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
     const params: StartServerParams = {
       serverId: server.id,
+      serverName: server.name,
       installPath: server.install_path,
       mapPath: map?.mapPath ?? "TheIsland_WP",
       port: server.port,
@@ -495,6 +526,7 @@ export function OverviewTab({ server }: Props) {
     try {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await warnIfFirewallMissing(server);
       const params = await buildStartParams();
       const pid = await tauriCmd.startServer(params);
       await updateServerStatus(server.id, "starting", pid);
@@ -578,6 +610,7 @@ export function OverviewTab({ server }: Props) {
           server.name,
           server.install_path,
           wasRunning,
+          restartAfterUpdate,
           (msg) => toast.info(msg),
         );
       } catch (err) {
@@ -637,76 +670,81 @@ export function OverviewTab({ server }: Props) {
     <div className="flex flex-col gap-6">
 
       {/* ── Quick actions ── */}
+      {/* Structured as two non-wrapping groups so the right-side buttons
+          never shift position when the primary status button changes label. */}
       <div
-        className="glass-card rounded-xl p-4 flex items-center gap-3 flex-wrap"
-        style={{ borderColor: "rgba(191,0,255,0.15)" }}
+        className="glass-card rounded-xl p-4 flex items-center gap-3 overflow-hidden"
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
       >
-        <span className="text-sm font-medium mr-2" style={{ color: "var(--text-muted)" }}>
+        <span className="text-sm font-medium shrink-0" style={{ color: "var(--text-primary)" }}>
           Actions
         </span>
 
-        {isServerScanPending ? (
-          <Button key="detecting" size="sm" disabled className="gap-1.5">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            Detecting...
-          </Button>
-        ) : isStartFailed ? (
-          <React.Fragment key="start-failed">
+        {/* Left group — status-dependent buttons */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {isServerScanPending ? (
+            <Button size="sm" disabled className="gap-1.5">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Detecting...
+            </Button>
+          ) : isStartFailed ? (
+            <>
+              <Button
+                size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+              >
+                <Play className="w-3.5 h-3.5" /> Retry Start
+              </Button>
+              <Button
+                size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5"
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Reinstall
+              </Button>
+            </>
+          ) : server.status === "stopping" ? (
+            <Button
+              size="sm" onClick={handleForceStop} className="gap-1.5"
+              style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
+            </Button>
+          ) : server.status === "starting" ? (
+            <Button
+              size="sm" onClick={handleForceStop} className="gap-1.5"
+              style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
+            >
+              <X className="w-3.5 h-3.5" /> Cancel Startup
+            </Button>
+          ) : isRunning ? (
+            <Button
+              size="sm" onClick={handleStop} disabled={actionPending} className="gap-1.5"
+              style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+            >
+              <Square className="w-3.5 h-3.5" /> Stop
+            </Button>
+          ) : (
             <Button
               size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
             >
-              <Play className="w-3.5 h-3.5" /> Retry Start
+              <Play className="w-3.5 h-3.5" /> Start
             </Button>
-            <Button
-              size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5"
-              style={{ color: "var(--neon-purple)", borderColor: "rgba(191,0,255,0.3)" }}
-            >
-              <RotateCcw className="w-3.5 h-3.5" /> Reinstall
+          )}
+
+          {isRunning && !isServerScanPending && (
+            <Button size="sm" variant="outline" className="btn-neon-purple gap-1.5" onClick={handleRestart} disabled={actionPending}>
+              <RotateCcw className="w-3.5 h-3.5" /> Restart
             </Button>
-          </React.Fragment>
-        ) : server.status === "stopping" ? (
-          <Button
-            key="force-stop" size="sm" onClick={handleForceStop} className="gap-1.5"
-            style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
-          >
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
-          </Button>
-        ) : server.status === "starting" ? (
-          <Button
-            key="cancel-startup" size="sm" onClick={handleForceStop} className="gap-1.5"
-            style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
-          >
-            <X className="w-3.5 h-3.5" /> Cancel Startup
-          </Button>
-        ) : isRunning ? (
-          <Button
-            key="stop" size="sm" onClick={handleStop} disabled={actionPending || isTransitioning} className="gap-1.5"
-            style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
-          >
-            <Square className="w-3.5 h-3.5" /> Stop
-          </Button>
-        ) : (
-          <Button
-            key="start" size="sm" onClick={handleStart} disabled={actionPending || isTransitioning} className="gap-1.5"
-            style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
-          >
-            <Play className="w-3.5 h-3.5" />
-            {server.status === "starting" ? "Starting…" : "Start"}
-          </Button>
-        )}
+          )}
+        </div>
 
-        {isRunning && !isServerScanPending && (
-          <Button size="sm" variant="outline" className="btn-neon-purple" onClick={handleRestart} disabled={actionPending}>
-            <RotateCcw className="w-3.5 h-3.5 mr-1.5" /> Restart
-          </Button>
-        )}
-
-        {hasUpdateAvailable && (
-          <>
+        {/* Right group — persistent buttons that never move */}
+        <div className="flex items-center gap-2 shrink-0">
+          {hasUpdateAvailable && (
             <Button
               size="sm"
-              disabled={applyingUpdate || isTransitioning || !autoCheckEnabled}
+              disabled={applyingUpdate || isTransitioning || isStarting || !autoCheckEnabled}
               onClick={() => autoCheckEnabled && setShowUpdateConfirm(true)}
               title={!autoCheckEnabled ? "Enable auto update checks in Settings to use this feature" : undefined}
               className="gap-1.5"
@@ -719,32 +757,29 @@ export function OverviewTab({ server }: Props) {
               {applyingUpdate ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
               Apply Update
             </Button>
-            {!autoCheckEnabled && (
-              <span className="text-xs self-center" style={{ color: "rgba(255,165,0,0.5)" }}>
-                Enable auto checks in Settings
-              </span>
-            )}
-          </>
-        )}
+          )}
 
-        <Button
-          size="sm" variant="outline" className="ml-auto" disabled={isTransitioning}
-          onClick={async () => {
-            const backupDir = await getAppSetting("backup_dir");
-            if (!backupDir) return;
-            tauriCmd.createBackup(server.id, server.name, server.install_path, backupDir, server.map_id, "manual")
-              .then(async (record: BackupRecord) => {
-                await insertBackup({
-                  id: record.id, server_id: record.serverId, file_path: record.filePath,
-                  file_size_bytes: record.fileSizeBytes, map_id: record.mapId,
-                  triggered_by: record.triggeredBy, created_at: record.createdAt,
-                });
-              })
-              .catch(() => null);
-          }}
-        >
-          <Save className="w-3.5 h-3.5 mr-1.5" /> Backup Now
-        </Button>
+          <Button
+            size="sm" variant="outline" disabled={isTransitioning}
+            onClick={async () => {
+              const backupDir = await getAppSetting("backup_dir");
+              if (!backupDir) return;
+              const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual")
+                .then(async (record: BackupRecord) => {
+                  await insertBackup({
+                    id: record.id, server_id: record.serverId, file_path: record.filePath,
+                    file_size_bytes: record.fileSizeBytes, map_id: record.mapId,
+                    triggered_by: record.triggeredBy, created_at: record.createdAt,
+                    backup_type: "server", tiers: "", player_eosid: null, player_name: null,
+                  });
+                })
+                .catch(() => null);
+            }}
+          >
+            <Save className="w-3.5 h-3.5 mr-1.5" /> Backup Now
+          </Button>
+        </div>
       </div>
 
       {/* ── Chart tiles (2-column) ── */}
@@ -769,6 +804,10 @@ export function OverviewTab({ server }: Props) {
             modCount={modCount}
             lastBackup={lastBackup}
             nextRestart={nextRestart}
+            onAutoStartChange={async (v) => {
+              await setServerAutoStart(server.id, v);
+              queryClient.invalidateQueries({ queryKey: ["servers"] });
+            }}
           />
         </ChartStatTile>
 
@@ -809,9 +848,9 @@ export function OverviewTab({ server }: Props) {
 
       </div>
 
-      {/* ── Network info ── */}
-      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(191,0,255,0.15)" }}>
-        <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-muted)" }}>Network</h3>
+      {/* ── Network / install info ── */}
+      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Network</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           {[
             { label: "Game Port",   value: server.port },
@@ -825,12 +864,32 @@ export function OverviewTab({ server }: Props) {
             </div>
           ))}
         </div>
+
+        <div className="mt-4 pt-3 flex items-center gap-6 flex-wrap" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          <div className="min-w-0">
+            <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>Server UUID</div>
+            <div className="font-mono text-xs" style={{ color: "var(--text-primary)", opacity: 0.7 }}>{server.id}</div>
+          </div>
+          <button
+            className="flex items-center gap-1.5 ml-auto shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
+            style={{
+              background: "rgba(var(--neon-purple-rgb),0.06)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
+              color: "var(--text-muted)",
+            }}
+            onClick={() => tauriCmd.openFolder(server.install_path).catch(() => null)}
+            title="Open install folder"
+          >
+            <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+            Open Install Folder
+          </button>
+        </div>
       </div>
 
       {/* ── Player list ── */}
-      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(0,255,255,0.15)" }}>
+      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold" style={{ color: "var(--text-muted)" }}>Online Players</h3>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Online Players</h3>
           <Button size="sm" variant="ghost" onClick={refreshPlayers} disabled={!isRunning || playersLoading}>
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${playersLoading ? "animate-spin" : ""}`} />
             Refresh
@@ -848,7 +907,7 @@ export function OverviewTab({ server }: Props) {
               <div
                 key={p.playerId}
                 className="flex items-center justify-between text-sm px-3 py-2 rounded-lg"
-                style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.1)" }}
+                style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
               >
                 <span style={{ color: "var(--text-primary)" }}>{p.name}</span>
                 <span className="font-mono text-xs" style={{ color: "var(--text-muted)" }}>{p.playerId}</span>
@@ -865,13 +924,30 @@ export function OverviewTab({ server }: Props) {
             <DialogTitle>Apply Server Update?</DialogTitle>
             <DialogDescription>
               {isRunning
-                ? `${server.name} is currently running. It will be stopped, updated, and restarted automatically.`
+                ? `${server.name} is currently running and will be stopped to apply the update.`
                 : `${server.name} will be updated from the shared cache.`}
             </DialogDescription>
           </DialogHeader>
+
+          {isRunning && (
+            <div
+              className="flex items-center gap-3 px-1 py-2 rounded-lg"
+              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            >
+              <Switch
+                id="ov-restart-toggle"
+                checked={restartAfterUpdate}
+                onCheckedChange={setRestartAfterUpdate}
+              />
+              <Label htmlFor="ov-restart-toggle" className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+                Restart server after update
+              </Label>
+            </div>
+          )}
+
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowUpdateConfirm(false)}
-              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
               Cancel
             </Button>
             <Button onClick={handleApplyUpdate} disabled={applyingUpdate}

@@ -79,8 +79,8 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
               className="absolute flex flex-col items-center"
               style={{ left: `${defaultPct}%`, transform: "translateX(-50%)" }}
             >
-              <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(191,0,255,0.7)" }}>def</span>
-              <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(191,0,255,0.6)" }} />
+              <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(var(--neon-purple-rgb),0.7)" }}>def</span>
+              <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(var(--neon-purple-rgb),0.6)" }} />
             </div>
           )}
         </div>
@@ -107,7 +107,7 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
         className="w-20 h-7 text-xs font-mono text-right rounded px-2 shrink-0"
         style={{
           background: "rgba(0,0,0,0.35)",
-          border: "1px solid rgba(191,0,255,0.2)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
           color: "var(--text-primary)",
           outline: "none",
         }}

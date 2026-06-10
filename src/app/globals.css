@@ -35,11 +35,11 @@
 
   /* Primary — drives shadcn Switch checked state, focus rings, etc.
      Overridden at runtime by applyThemeAccent() to match the chosen accent. */
-  --color-primary:            #bf00ff;
+  --color-primary:            var(--neon-purple);
   --color-primary-foreground: #050510;
   --color-input:              rgba(var(--neon-purple-rgb), 0.2);
-  --color-ring:               #bf00ff;
-  --color-muted:              rgba(10, 10, 30, 0.75);
+  --color-ring:               var(--neon-purple);
+  --color-muted:              rgba(20, 20, 52, 0.85);
   --color-muted-foreground:   #5858a0;
 
   /* Fonts */
@@ -55,49 +55,49 @@
    CSS Custom Properties (design tokens)
    --------------------------------------------------------------------------- */
 :root {
-  /* Backgrounds */
-  --background:       #050510;
-  --surface:          rgba(10, 10, 30, 0.75);
-  --surface-elevated: rgba(15, 15, 40, 0.9);
+  /* Backgrounds — defaults match storm preset */
+  --background:       #0e1018;
+  --surface:          rgba(18, 22, 35, 0.8);
+  --surface-elevated: rgba(24, 28, 44, 0.9);
   --terminal-bg:      #000008;
 
-  /* Accent RGB components — updated by applyThemeAccent() so all rgba() uses track the active color */
-  --neon-purple-rgb:  191, 0, 255;
+  /* Accent RGB components — defaults match blue accent; updated by applyThemeAccent() */
+  --neon-purple-rgb:  64, 128, 255;
 
-  /* Borders — purple is the primary accent */
-  --border:           rgba(191, 0, 255, 0.15);
-  --border-hover:     rgba(191, 0, 255, 0.4);
+  /* Borders */
+  --border:           rgba(64, 128, 255, 0.15);
+  --border-hover:     rgba(64, 128, 255, 0.4);
 
-  /* Neon colors */
+  /* Neon colors — --neon-purple tracks the active accent */
   --neon-cyan:        #00ffff;
-  --neon-purple:      #bf00ff;
+  --neon-purple:      #4080ff;
   --neon-green:       #00ff88;
   --neon-red:         #ff0055;
   --neon-orange:      #ff8800;
 
-  /* Text */
+  /* Text — defaults match storm preset */
   --foreground:       #e0e0ff;
   --text-primary:     #e0e0ff;
-  --text-muted:       #5858a0;
-  --text-subtle:      #3a3a70;
+  --text-muted:       #606880;
+  --text-subtle:      #464e64;
 
   /* Glow shadows (used in box-shadow) */
   --glow-cyan:        0 0 8px rgba(0,255,255,0.6), 0 0 24px rgba(0,255,255,0.2);
-  --glow-purple:      0 0 8px rgba(191,0,255,0.6), 0 0 24px rgba(191,0,255,0.2);
+  --glow-purple:      0 0 8px rgba(64,128,255,0.6), 0 0 24px rgba(64,128,255,0.2);
   --glow-green:       0 0 8px rgba(0,255,136,0.6), 0 0 24px rgba(0,255,136,0.2);
   --glow-red:         0 0 8px rgba(255,0,85,0.6),  0 0 24px rgba(255,0,85,0.2);
 
-  /* Card glass — purple-tinted borders */
-  --glass-bg:        rgba(10, 10, 35, 0.6);
-  --glass-border:    rgba(191, 0, 255, 0.12);
+  /* Card glass */
+  --glass-bg:        rgba(18, 22, 38, 0.65);
+  --glass-border:    rgba(64, 128, 255, 0.12);
   --glass-blur:      12px;
 
   /* Popover / dropdown surface */
-  --popover:            #0c0c20;
+  --popover:            #12161e;
   --popover-foreground: #e0e0ff;
 
-  /* Accent — subtle purple highlight for menu item hover/focus */
-  --accent:            rgba(191, 0, 255, 0.15);
+  /* Accent — subtle highlight for menu item hover/focus */
+  --accent:            rgba(64, 128, 255, 0.15);
   --accent-foreground: #e0e0ff;
 }
 

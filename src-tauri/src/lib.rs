@@ -133,13 +133,6 @@ pub fn run() {
         );
     }
 
-    // Disable WebKit's DMA-BUF renderer before the WebView is created.
-    // The DMA-BUF path breaks on modern Linux distributions (Arch, CachyOS, etc.)
-    // with newer mesa/kernel versions, producing a blank white window. Falling back
-    // to the SHM renderer has no visible effect for a desktop management UI.
-    #[cfg(target_os = "linux")]
-    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-
     tauri::Builder::default()
         // ── Single-instance guard ──────────────────────────────────────────
         // If a second instance is launched, focus the existing window and exit.
@@ -157,7 +150,7 @@ pub fn run() {
 
             app.manage(state::AppState::new());
             app.manage(state::rcon_pool::RconPool::new());
-            app.manage(state::log_watcher::LogWatcherState::new());
+            app.manage(state::log_manager::LogManagerState::new());
             app.manage(state::scheduler::SchedulerState::new());
             app.manage(state::stats_recorder::StatsRecorderState::new());
 
@@ -409,6 +402,16 @@ pub fn run() {
             commands::server::scan_running_servers,
             commands::server::clone_server,
             commands::server::delete_server,
+            commands::server::force_server_start_failed,
+            // Certificates
+            commands::certs::download_amazon_root_ca,
+            commands::certs::install_amazon_root_ca,
+            commands::certs::check_amazon_root_ca_installed,
+            // Firewall management
+            commands::firewall::check_firewall_ports,
+            commands::firewall::add_firewall_rules,
+            commands::firewall::remove_firewall_rules,
+            commands::firewall::get_all_firewall_ports,
             // SteamCMD / installation
             commands::steamcmd::install_steamcmd,
             commands::steamcmd::validate_steamcmd,
@@ -433,18 +436,39 @@ pub fn run() {
             commands::rcon::rcon_disable_chat_poll,
             commands::rcon::rcon_read_ban_list,
             commands::rcon::rcon_read_whitelist,
-            // Log watcher
+            // Log watcher + archive + crash + chat
             commands::logs::watch_server_log,
             commands::logs::stop_log_watch,
+            commands::logs::list_archived_logs,
+            commands::logs::read_archived_log,
+            commands::logs::delete_archived_log,
+            commands::logs::list_crashes,
+            commands::logs::read_crash_report,
+            commands::logs::delete_crash_report,
+            commands::logs::list_other_logs,
+            commands::logs::read_other_log,
+            commands::logs::list_chat_logs,
+            commands::logs::read_chat_log,
+            commands::logs::cleanup_logs,
+            commands::logs::get_log_stats,
+            commands::logs::get_log_storage_root,
             // Config / INI
             commands::config::read_server_config,
             commands::config::write_server_config,
             commands::config::import_ini_files,
-            // Backups (Phase 6)
-            commands::backup::create_backup,
-            commands::backup::restore_backup,
+            // Backups
+            commands::backup::create_server_backup,
+            commands::backup::create_player_backup,
+            commands::backup::create_ini_backup,
+            commands::backup::create_full_backup,
+            commands::backup::list_ini_backups,
+            commands::backup::restore_server_backup,
+            commands::backup::restore_player_backup,
+            commands::backup::restore_ini_backup,
+            commands::backup::restore_full_backup,
             commands::backup::delete_backup,
-            commands::backup::prune_backups,
+            commands::backup::cleanup_ark_own_backups,
+            commands::backup::estimate_dir_size,
             // Mods (Phase 5)
             commands::mods::install_mods,
             commands::mods::open_mod_browser,

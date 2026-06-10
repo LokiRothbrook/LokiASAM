@@ -2,16 +2,19 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  Folder, Terminal, Info,
+  Folder, Terminal, Info, Archive,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription,
   DialogFooter, DialogHeader, DialogTitle,
@@ -27,7 +30,9 @@ import {
 import { runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
-import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress } from "@/lib/tauri-commands";
+import { tempDir } from "@tauri-apps/api/path";
+import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
+import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { listen } from "@tauri-apps/api/event";
 import {
   applyTheme, applyThemeAccent, applyThemePreset,
@@ -78,6 +83,52 @@ function Section({
       </div>
       <div className="p-6 space-y-6">{children}</div>
     </div>
+  );
+}
+
+function BackupSettingsSection() {
+  const [dismissed, setDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getAppSetting("full_backup_warning_dismissed").then(
+      (v) => setDismissed(v === "true")
+    ).catch(() => setDismissed(false));
+  }, []);
+
+  const toggle = async () => {
+    const next = !dismissed;
+    setDismissed(next);
+    try {
+      await setAppSetting("full_backup_warning_dismissed", String(next));
+    } catch (e) {
+      toast.error(`Failed to save backup setting: ${e}`);
+      setDismissed(!next);
+    }
+  };
+
+  return (
+    <Section icon={Archive} title="Backups" description="Options for the backup system.">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            Hide full backup warning
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            When enabled, the size warning dialog is skipped when triggering a full backup.
+          </p>
+        </div>
+        {dismissed === null ? (
+          <div className="w-8 h-5 rounded-full animate-pulse" style={{ background: "rgba(255,255,255,0.08)" }} />
+        ) : (
+          <button onClick={toggle} className="cursor-pointer shrink-0">
+            {dismissed
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-muted)" }} />
+            }
+          </button>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -266,7 +317,7 @@ function BaseDirMigrationSection() {
           )}
 
           <Button onClick={handleMigrate} disabled={migrating || !newDir.trim()} size="sm" className="gap-1.5 w-full"
-            style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
             {migrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <FolderOpen className="w-3 h-3" />}
             {migrating ? "Migrating…" : "Verify & Move"}
           </Button>
@@ -343,7 +394,7 @@ function PathField({
         </Button>
         <Button onClick={handleSave} disabled={saving || !dirty} size="sm" className="shrink-0 gap-1"
           style={{
-            background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
+            background: dirty ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
             border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
             color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
           }}
@@ -436,7 +487,7 @@ function ToolPathField({
         </Button>
         <Button onClick={handleVerifyAndSave} disabled={verifying || !dirty} size="sm" className="shrink-0 gap-1"
           style={{
-            background: dirty ? "rgba(191,0,255,0.15)" : "transparent",
+            background: dirty ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
             border: `1px solid ${dirty ? "var(--neon-purple)" : "var(--border)"}`,
             color: dirty ? "var(--neon-purple)" : "var(--text-muted)",
           }}
@@ -507,9 +558,9 @@ function ThemesSection() {
               <button key={p} onClick={() => handlePreset(p)}
                 className="rounded-lg p-3 text-left transition-all"
                 style={{
-                  background: isActive ? "rgba(191,0,255,0.12)" : info.surface,
+                  background: isActive ? "rgba(var(--neon-purple-rgb),0.12)" : info.surface,
                   border: `1px solid ${isActive ? "var(--neon-purple)" : "var(--border)"}`,
-                  boxShadow: isActive ? "0 0 12px rgba(191,0,255,0.15)" : "none",
+                  boxShadow: isActive ? "0 0 12px rgba(var(--neon-purple-rgb),0.15)" : "none",
                 }}
               >
                 <div className="w-full h-8 rounded mb-2" style={{ background: info.background, border: "1px solid rgba(255,255,255,0.06)" }} />
@@ -726,7 +777,7 @@ function ServerUpdatesSection() {
             server.name,
             server.install_path,
             server.status === "running",
-            undefined,
+            false,
           );
         } catch (err) {
           // restartNeeded signal — server updated successfully, restart handled inside.
@@ -786,7 +837,7 @@ function ServerUpdatesSection() {
       </div>
       <div className="flex items-center gap-3 flex-wrap">
         <Button onClick={handleCheck} disabled={checking || hasCacheInstalled === false} size="sm" className="gap-1.5"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Check for ASA Server Update
         </Button>
@@ -804,7 +855,7 @@ function ServerUpdatesSection() {
           {AUTO_CHECK_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => handleAutoCheckChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: autoCheckHours === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
+                background: autoCheckHours === opt.value ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
                 border: `1px solid ${autoCheckHours === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
                 color: autoCheckHours === opt.value ? "var(--neon-purple)" : "var(--text-muted)",
               }}>
@@ -828,7 +879,7 @@ function ServerUpdatesSection() {
           </DialogHeader>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowApplyAll(false)}
-              style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}>
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
               No, skip
             </Button>
             <Button onClick={handleApplyAll} disabled={applyingAll}
@@ -910,7 +961,7 @@ function AppUpdateSection() {
           {APP_UPDATE_MODE_OPTIONS.map((opt) => (
             <button key={opt.value} onClick={() => handleModeChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: mode === opt.value ? "rgba(191,0,255,0.15)" : "transparent",
+                background: mode === opt.value ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
                 border: `1px solid ${mode === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
                 color: mode === opt.value ? "var(--neon-purple)" : "var(--text-muted)",
               }}>
@@ -921,7 +972,7 @@ function AppUpdateSection() {
       </div>
       <Separator style={{ background: "var(--border)" }} />
       <Button onClick={handleCheckNow} disabled={checking} size="sm" className="gap-1.5"
-        style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+        style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
         {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
         Check for LokiASAM Update
       </Button>
@@ -969,14 +1020,236 @@ function SteamcmdReinstallRow() {
         )}
         <Button onClick={handleReinstall} disabled={reinstalling} size="sm" className="gap-1.5 h-7 text-xs"
           style={{
-            background: done ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.08)",
-            border: `1px solid ${done ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.3)"}`,
+            background: done ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${done ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
             color: done ? "var(--neon-green)" : "var(--neon-purple)",
           }}>
           {reinstalling ? <Loader2 className="w-3 h-3 animate-spin" /> : done ? <CheckCircle2 className="w-3 h-3" /> : <RefreshCw className="w-3 h-3" />}
           {done ? "Done" : "Reinstall SteamCMD"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Amazon Root CA certificate install row
+// ---------------------------------------------------------------------------
+
+function CertInstallRow() {
+  const [phase, setPhase] = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
+  const [error, setError] = useState("");
+
+  const handleInstall = async () => {
+    setError("");
+    try {
+      const baseDir = await getAppSetting("base_dir");
+      const tmp = await tempDir();
+      setPhase("downloading");
+      const certPath = await tauriCmd.downloadAmazonRootCa(tmp);
+
+      setPhase("installing");
+      const protonPath  = IS_LINUX ? (await getAppSetting("proton_path"))        ?? undefined : undefined;
+      const prefixPath  = IS_LINUX ? (await getAppSetting("proton_prefix_path")) ?? undefined : undefined;
+      // If prefix path isn't saved yet, compute it from base dir.
+      const resolvedPrefix = prefixPath ?? (IS_LINUX && baseDir
+        ? (() => {
+            const sep = baseDir.includes("\\") ? "\\" : "/";
+            return `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}proton${sep}prefix`;
+          })()
+        : undefined);
+      await tauriCmd.installAmazonRootCa(certPath, protonPath, resolvedPrefix);
+      setPhase("done");
+      toast.success("Amazon Root CA 1 installed successfully.");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+      toast.error(`Certificate install failed: ${e}`);
+    }
+  };
+
+  const busy = phase === "downloading" || phase === "installing";
+
+  return (
+    <div className="flex flex-col gap-1.5 pt-1">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Amazon Root CA 1</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {IS_LINUX
+              ? "Install into the Wine prefix so CurseForge mod API TLS works correctly."
+              : "Install into the Windows cert store so CurseForge mod API TLS works correctly."}
+          </p>
+        </div>
+        <Button
+          onClick={handleInstall}
+          disabled={busy}
+          size="sm"
+          className="gap-1.5 h-7 text-xs shrink-0 ml-4"
+          style={{
+            background: phase === "done" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${phase === "done" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            color: phase === "done" ? "var(--neon-green)" : "var(--neon-purple)",
+          }}
+        >
+          {busy
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : phase === "done"
+              ? <CheckCircle2 className="w-3 h-3" />
+              : <ShieldCheck className="w-3 h-3" />}
+          {busy
+            ? (phase === "downloading" ? "Downloading…" : "Installing…")
+            : phase === "done"
+              ? "Installed"
+              : "Install / Reinstall"}
+        </Button>
+      </div>
+      {phase === "error" && (
+        <p className="text-xs break-all" style={{ color: "var(--neon-red, #f87171)" }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Firewall check/repair row
+// ---------------------------------------------------------------------------
+
+function FirewallRepairRow() {
+  const [phase, setPhase] = useState<"idle" | "checking" | "ready" | "error">("idle");
+  const [isFixing, setIsFixing] = useState(false);
+  const [fwStatus, setFwStatus] = useState<FirewallStatus | null>(null);
+  const [error, setError] = useState("");
+
+  const runCheck = async () => {
+    setError("");
+    setPhase("checking");
+    try {
+      const servers = await getServers();
+      const seen = new Map<string, PortDef>();
+      for (const srv of servers) {
+        for (const p of getServerFirewallPorts(srv)) {
+          seen.set(`${p.port}/${p.protocol}`, p);
+        }
+      }
+      const allPorts = [...seen.values()];
+      if (allPorts.length === 0) {
+        setFwStatus({ firewallType: "none", active: false, ports: [] });
+        setPhase("ready");
+        return;
+      }
+      const result = await tauriCmd.checkFirewallPorts(allPorts);
+      setFwStatus(result);
+      setPhase("ready");
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+    }
+  };
+
+  const handleFix = async () => {
+    if (!fwStatus) return;
+    const missingPorts: PortDef[] = fwStatus.ports
+      .filter((p) => !p.covered)
+      .map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" }));
+    setIsFixing(true);
+    try {
+      const protonPath = IS_LINUX ? (await getAppSetting("proton_path")) ?? undefined : undefined;
+      await tauriCmd.addFirewallRules(missingPorts, protonPath);
+      toast.success("Firewall rules added.");
+      await runCheck();
+    } catch (e) {
+      setError(String(e));
+      setPhase("error");
+      toast.error(`Failed to add firewall rules: ${e}`);
+    } finally {
+      setIsFixing(false);
+    }
+  };
+
+  const missing = fwStatus?.ports.filter((p) => !p.covered) ?? [];
+  const allGood = fwStatus !== null && (!fwStatus.active || missing.length === 0);
+  const busy = phase === "checking" || isFixing;
+
+  return (
+    <div className="flex flex-col gap-2 pt-1">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Firewall Rules</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Check and repair port rules for all configured servers.
+          </p>
+        </div>
+        <Button
+          onClick={runCheck}
+          disabled={busy}
+          size="sm"
+          className="gap-1.5 h-7 text-xs shrink-0 ml-4"
+          style={{
+            background: allGood ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${allGood ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            color: allGood ? "var(--neon-green)" : "var(--neon-purple)",
+          }}
+        >
+          {phase === "checking"
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : allGood
+              ? <CheckCircle2 className="w-3 h-3" />
+              : <ShieldCheck className="w-3 h-3" />}
+          {phase === "checking" ? "Checking…" : allGood ? "All Good" : "Check & Repair"}
+        </Button>
+      </div>
+
+      {phase === "ready" && fwStatus && (
+        <div className="pl-1 flex flex-col gap-1">
+          {!fwStatus.active ? (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-green)" }}>
+              <CheckCircle2 className="w-3 h-3 shrink-0" />
+              No active firewall detected — nothing to do.
+            </p>
+          ) : fwStatus.ports.length === 0 ? (
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>No servers configured.</p>
+          ) : (
+            <>
+              {fwStatus.ports.map((p) => (
+                <p
+                  key={`${p.port}/${p.protocol}`}
+                  className="text-xs flex items-center gap-1.5"
+                  style={{ color: p.covered ? "var(--neon-green)" : "var(--neon-orange, #fb923c)" }}
+                >
+                  {p.covered
+                    ? <CheckCircle2 className="w-3 h-3 shrink-0" />
+                    : <AlertCircle className="w-3 h-3 shrink-0" />}
+                  {p.port}/{p.protocol.toUpperCase()} — {p.covered ? "allowed" : "missing"}
+                </p>
+              ))}
+              {missing.length > 0 && (
+                <Button
+                  onClick={handleFix}
+                  disabled={isFixing}
+                  size="sm"
+                  className="gap-1.5 h-7 text-xs mt-1 self-start"
+                  style={{
+                    background: "rgba(251,146,60,0.1)",
+                    border: "1px solid rgba(251,146,60,0.4)",
+                    color: "var(--neon-orange, #fb923c)",
+                  }}
+                >
+                  {isFixing
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Adding rules…</>
+                    : `Fix ${missing.length} Missing Rule${missing.length > 1 ? "s" : ""}`}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {phase === "error" && (
+        <p className="text-xs break-all" style={{ color: "var(--neon-red, #f87171)" }}>{error}</p>
+      )}
     </div>
   );
 }
@@ -1090,8 +1363,8 @@ function ProtonGeUpdateSection() {
       {updateInfo && !downloadDone && (
         <div className="rounded-lg p-3 space-y-2"
           style={{
-            background: updateInfo.updateAvailable ? "rgba(191,0,255,0.08)" : "rgba(0,255,136,0.06)",
-            border: `1px solid ${updateInfo.updateAvailable ? "rgba(191,0,255,0.3)" : "rgba(0,255,136,0.25)"}`,
+            background: updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(0,255,136,0.06)",
+            border: `1px solid ${updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(0,255,136,0.25)"}`,
           }}>
           {updateInfo.currentVersion ? (
             <div className="flex items-center gap-2 text-xs flex-wrap">
@@ -1116,7 +1389,7 @@ function ProtonGeUpdateSection() {
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
         <Button onClick={handleCheckUpdate} disabled={checking || downloading} size="sm" className="gap-1.5"
-          style={{ background: "rgba(0,255,255,0.08)", border: "1px solid rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}>
+          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-cyan)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Check for Update
         </Button>
@@ -1124,8 +1397,8 @@ function ProtonGeUpdateSection() {
         {(updateInfo?.updateAvailable || (!protonPath && updateInfo)) && (isManaged || !looksExternal) && (
           <Button onClick={handleDownload} disabled={downloading || downloadDone} size="sm" className="gap-1.5"
             style={{
-              background: downloadDone ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-              border: `1px solid ${downloadDone ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.4)"}`,
+              background: downloadDone ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${downloadDone ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: downloadDone ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {downloading ? <Loader2 className="w-3 h-3 animate-spin" /> : downloadDone ? <CheckCircle2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
@@ -1329,8 +1602,8 @@ function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fie
         <div className="flex gap-2">
           <Button size="sm" onClick={handleTestClick} disabled={testing || saving} className="h-7 text-xs gap-1"
             style={{
-              background: testPassed ? "rgba(0,255,136,0.1)" : "rgba(191,0,255,0.12)",
-              border: `1px solid ${testPassed ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.35)"}`,
+              background: testPassed ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.12)",
+              border: `1px solid ${testPassed ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.35)"}`,
               color: testPassed ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : testPassed ? <CheckCircle2 className="w-3 h-3" /> : <Send className="w-3 h-3" />}
@@ -1440,7 +1713,7 @@ function AppImageIntegrationSection() {
           onClick={handleInstall}
           disabled={working}
           className="gap-2"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
         >
           {working
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1478,6 +1751,64 @@ function CloseToTraySection() {
           )}
         </div>
         <SettingsToggle checked={closeToTray} onChange={handleToggle} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Startup section
+// ---------------------------------------------------------------------------
+
+type AutoRestartPref = "ask" | "auto" | "never";
+
+function StartupSection() {
+  const [pref, setPref] = useState<AutoRestartPref>("ask");
+
+  useEffect(() => {
+    getAppSetting("auto_restart_downed").then((v) => {
+      if (v === "auto" || v === "never") setPref(v);
+      else setPref("ask");
+    });
+  }, []);
+
+  const handleChange = async (v: AutoRestartPref) => {
+    setPref(v);
+    await setAppSetting("auto_restart_downed", v);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-6 flex-wrap">
+        <div className="space-y-1.5 flex-1 min-w-0">
+          <Label className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            Downed Servers on Launch
+          </Label>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            When the app starts and detects servers that were running during the previous session but
+            are now offline, LokiASAM can prompt you to restart them, restart them automatically,
+            or do nothing.
+          </p>
+          {pref === "never" && (
+            <p className="text-xs mt-1" style={{ color: "#ffa500" }}>
+              The downed-servers dialog is suppressed. Change this setting back to{" "}
+              <strong>Ask each time</strong> to re-enable it.
+            </p>
+          )}
+        </div>
+        <Select value={pref} onValueChange={(v) => handleChange(v as AutoRestartPref)}>
+          <SelectTrigger
+            className="w-44 shrink-0"
+            style={{ borderColor: "var(--border)", background: "rgba(255,255,255,0.04)", color: "var(--text-primary)" }}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent style={{ background: "rgba(10,10,30,0.97)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}>
+            <SelectItem value="ask">Ask each time</SelectItem>
+            <SelectItem value="auto">Auto-restart</SelectItem>
+            <SelectItem value="never">Do nothing</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
     </div>
   );
@@ -1535,6 +1866,8 @@ export default function SettingsPage() {
               hint="Where scheduled and manual backup zips are stored." validateDir />
           </Section>
 
+          <BackupSettingsSection />
+
           <Section icon={Terminal} title="Tools" description="Paths to SteamCMD and (on Linux) Proton-GE.">
             <ToolPathField
               label="SteamCMD Path" settingKey="steamcmd_path" placeholder="/path/to/steamcmd"
@@ -1555,6 +1888,10 @@ export default function SettingsPage() {
                 />
               </>
             )}
+            <Separator style={{ background: "var(--border)" }} />
+            <CertInstallRow />
+            <Separator style={{ background: "var(--border)" }} />
+            <FirewallRepairRow />
           </Section>
 
           <Section icon={Palette} title="Themes" description="Choose a background preset and accent color.">
@@ -1563,6 +1900,10 @@ export default function SettingsPage() {
 
           <Section icon={Monitor} title="System Tray" description="Control how LokiASAM behaves when minimized or closed.">
             <CloseToTraySection />
+          </Section>
+
+          <Section icon={Power} title="Startup" description="Behaviour when the app starts and detects servers that went offline.">
+            <StartupSection />
           </Section>
 
           {IS_LINUX && (

@@ -47,6 +47,14 @@ interface AppState {
   setIsServerScanPending: (v: boolean) => void;
 
   /**
+   * Server statuses captured immediately before the startup scan runs.
+   * Set by StartupReconciliationManager; read by StartupRecoveryManager to
+   * detect which servers were running before a crash.  Null until the first scan.
+   */
+  preScanStatuses: Record<string, string> | null;
+  setPreScanStatuses: (statuses: Record<string, string>) => void;
+
+  /**
    * Wall-clock timestamp (ms since epoch) when each server process first started.
    * Keyed by server ID.  Set when the first "starting" event arrives; cleared on
    * "stopped" or "crashed".  Used to display uptime from process-start, not from
@@ -65,6 +73,18 @@ interface AppState {
   setNoRetryServer: (id: string) => void;
   clearNoRetryServer: (id: string) => void;
 
+  /**
+   * Ordered list of server IDs waiting to start sequentially.
+   * StartupQueueManager processes this list one at a time — it starts the
+   * next server only after the current one reaches "running" or "start-failed".
+   * DB status for queued servers is set to "startup_queued" so the badge shows.
+   */
+  startupQueue: string[];
+  enqueueStartup: (ids: string[]) => void;
+  dequeueNextStartup: () => string | undefined;
+  removeFromStartupQueue: (id: string) => void;
+  clearStartupQueue: () => void;
+
   setSetupChecked: (checked: boolean) => void;
   setSetupComplete: (complete: boolean) => void;
   setNotificationBellOpen: (open: boolean) => void;
@@ -80,6 +100,11 @@ interface AppState {
   incrementUnread: () => void;
   /** Called after the user views/clears notifications. */
   resetUnreadBump: () => void;
+
+  /** Set to true by the setup wizard "Quick Start Guide" button so the Sidebar
+   *  opens the tour after navigating to the dashboard. Cleared once consumed. */
+  pendingTour: boolean;
+  setPendingTour: (v: boolean) => void;
 
   /**
    * Rolling 10-minute live stat buffers keyed by server ID.
@@ -105,6 +130,8 @@ export const useAppStore = create<AppState>((set) => ({
   unreadBump: 0,
   isServerScanPending: false,
   setIsServerScanPending: (v) => set({ isServerScanPending: v }),
+  preScanStatuses: null,
+  setPreScanStatuses: (statuses) => set({ preScanStatuses: statuses }),
   serverStartTimes: {},
   setServerStartTime: (id, ts) =>
     set((s) => ({ serverStartTimes: { ...s.serverStartTimes, [id]: ts } })),
@@ -124,6 +151,22 @@ export const useAppStore = create<AppState>((set) => ({
       return { noRetryServerIds: next };
     }),
 
+  startupQueue: [],
+  enqueueStartup: (ids) =>
+    set((s) => ({ startupQueue: [...s.startupQueue, ...ids.filter((id) => !s.startupQueue.includes(id))] })),
+  dequeueNextStartup: () => {
+    let dequeued: string | undefined;
+    set((s) => {
+      if (s.startupQueue.length === 0) return s;
+      dequeued = s.startupQueue[0];
+      return { startupQueue: s.startupQueue.slice(1) };
+    });
+    return dequeued;
+  },
+  removeFromStartupQueue: (id) =>
+    set((s) => ({ startupQueue: s.startupQueue.filter((qId) => qId !== id) })),
+  clearStartupQueue: () => set({ startupQueue: [] }),
+
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
   setNotificationBellOpen: (open) => set({ notificationBellOpen: open }),
@@ -137,6 +180,8 @@ export const useAppStore = create<AppState>((set) => ({
   stopVerifying: () => set({ verifying: false, verifyTotal: 0, verifyProgress: 0 }),
   incrementUnread: () => set((s) => ({ unreadBump: s.unreadBump + 1 })),
   resetUnreadBump: () => set({ unreadBump: 0 }),
+  pendingTour: false,
+  setPendingTour: (v) => set({ pendingTour: v }),
 
   statsLiveBuffers: {},
   addLiveSample: (serverId, point) =>

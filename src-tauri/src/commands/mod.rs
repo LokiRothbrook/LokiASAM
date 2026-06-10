@@ -1,4 +1,6 @@
 pub mod backup;
+pub mod certs;
+pub mod firewall;
 pub mod cluster;
 pub mod config;
 pub mod logs;

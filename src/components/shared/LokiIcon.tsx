@@ -73,9 +73,6 @@ export function LokiIcon({ size = 32, className, style }: LokiIconProps) {
         </filter>
       </defs>
 
-      {/* Background */}
-      <rect width="512" height="512" fill="url(#loki-bg)"/>
-
       {/* ── Ring system ── */}
       <circle cx="256" cy="256" r="185" fill="none" stroke="#00d4aa" strokeWidth="1.5" strokeDasharray="11 5.7" opacity={0.55}/>
       {/* 24 radial ticks */}

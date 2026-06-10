@@ -1,16 +1,26 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { Plus, Server, Activity, PowerOff, Power, RefreshCw, Upload, ArrowUp, CheckCircle2, Loader2 } from "lucide-react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import {
+  Plus, Server, Activity, PowerOff, Power, RefreshCw, Upload,
+  ArrowUp, Loader2, CheckCircle2, AlertTriangle, LayoutDashboard,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog, DialogContent, DialogDescription,
+  DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
 import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getAppSetting, setAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
-import { runPerServerUpdateCheck } from "@/lib/update-utils";
+import { runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
+import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,32 +29,33 @@ import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { toast } from "sonner";
 
 // ---------------------------------------------------------------------------
-// Update status chip
+// UpdateStatusChip — Check for Updates button + post-check dialogs
 // ---------------------------------------------------------------------------
 
-function UpdateStatusChip() {
-  const [checking, setChecking]       = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [cachedBuild, setCachedBuild] = useState("");
+interface UpdateStatusChipProps {
+  servers: ReturnType<typeof useServers>["data"];
+  onUpdateAllClick: () => void;
+  onUpdatesFound: (updates: ServerUpdateInfo[]) => void;
+}
+
+function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: UpdateStatusChipProps) {
+  const queryClient             = useQueryClient();
+  const [checking, setChecking] = useState(false);
   const [latestBuild, setLatestBuild] = useState("");
-  const [lastChecked, setLastChecked] = useState("");
+  const [cachedBuild, setCachedBuild] = useState("");
 
   const load = useCallback(async () => {
-    const [avail, cached, latest, checked] = await Promise.all([
-      getAppSetting("asa_update_available"),
+    const [cached, latest] = await Promise.all([
       getAppSetting("asa_cached_build_id"),
       getAppSetting("asa_latest_build_id"),
-      getAppSetting("asa_last_checked"),
     ]);
-    setUpdateAvailable(avail === "true");
     setCachedBuild(cached ?? "");
     setLatestBuild(latest ?? "");
-    setLastChecked(checked ?? "");
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  // Listen for background check results fired from the Rust scheduler.
+  // Background check result — refresh state + run per-server check (with toasts).
   useTauriEvent<UpdateCheckResult | { updateApplied?: boolean }>("asa://update-check", async (payload) => {
     if ("updateApplied" in payload && payload.updateApplied) {
       await setAppSetting("asa_update_available", "false");
@@ -60,9 +71,9 @@ function UpdateStatusChip() {
       await setAppSetting("asa_latest_build_id", r.latestBuildId);
       await setAppSetting("asa_last_checked", now);
       load();
-      // Always run per-server check — a server may be behind the cache even
-      // if the cache itself is current (e.g. server was never updated).
-      await runPerServerUpdateCheck();
+      // Background check: toasts fire per-server, no dialog.
+      await runPerServerUpdateCheck(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   });
 
@@ -77,134 +88,454 @@ function UpdateStatusChip() {
         toast.error("Base directory or SteamCMD not configured.");
         return;
       }
-      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const sep      = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
       const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
       const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
-      const now = new Date().toISOString();
-      const cacheUpdated = !!newBuild && newBuild !== oldBuild;
+      const now      = new Date().toISOString();
       await Promise.all([
         setAppSetting("asa_cached_build_id", newBuild),
         setAppSetting("asa_latest_build_id", newBuild),
         setAppSetting("asa_last_checked",    now),
       ]);
-      await runPerServerUpdateCheck();
+      // Manual check: silent mode suppresses per-server toasts; we show dialog.
+      const summary = await runPerServerUpdateCheck(true);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       load();
-      if (cacheUpdated) {
+
+      if (summary.allWithUpdates.length > 0) {
+        // Show the updates-found dialog to the user.
+        onUpdatesFound(summary.allWithUpdates);
+      } else {
+        toast.success("All servers are up to date.");
+      }
+
+      // Only notify Discord/email if the cache actually changed.
+      if (newBuild && newBuild !== oldBuild) {
         await dispatchNotification({
           eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
           serverId:   null,
           serverName: "ASA Cache",
           title:      "Cache Updated",
-          body:       `Cache updated to build ${newBuild}. Outdated servers have been flagged.`,
+          body:       `Cache updated to build ${newBuild}. Check for server updates.`,
           severity:   "info",
         });
-      } else {
-        toast.success(`Cache is up to date (build ${newBuild}).`);
       }
     } catch (e) {
-      await dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
-        serverId:   null,
-        serverName: "ASA Cache",
-        title:      "Cache Update Failed",
-        body:       `Failed to update cache: ${e}`,
-        severity:   "error",
-      });
+      toast.error("Update check failed", { description: String(e) });
     } finally {
       setChecking(false);
     }
   };
 
-  const busy = checking;
-  const neverChecked = !lastChecked;
+  const serversWithUpdates = (servers ?? []).filter((s) => s.update_available === 1);
+  const anyStarting        = (servers ?? []).some(
+    (s) => s.update_available === 1 && s.status === "starting"
+  );
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      {updateAvailable ? (
-        <div
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium"
+      {serversWithUpdates.length > 0 && (
+        <Button
+          size="sm"
+          disabled={anyStarting}
+          onClick={onUpdateAllClick}
+          title={anyStarting ? "A server with a pending update is currently starting" : undefined}
+          className="h-7 gap-1.5 text-xs"
           style={{
-            background: "rgba(255,165,0,0.1)",
-            border: "1px solid rgba(255,165,0,0.4)",
-            color: "#ffa500",
+            background:  "rgba(255,165,0,0.12)",
+            border:      "1px solid rgba(255,165,0,0.4)",
+            color:       "#ffa500",
           }}
         >
           <ArrowUp className="w-3 h-3" />
-          Update Available
-          {cachedBuild && latestBuild && cachedBuild !== latestBuild && (
-            <span className="opacity-70 ml-0.5">
-              (build {latestBuild})
-            </span>
-          )}
-        </div>
-      ) : !neverChecked ? (
-        <div
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs"
-          style={{ background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.2)", color: "var(--neon-green)" }}
-        >
-          <CheckCircle2 className="w-3 h-3" />
-          Up to date
-        </div>
-      ) : null}
+          Update All ({serversWithUpdates.length})
+        </Button>
+      )}
 
       <Button
         size="sm"
         variant="outline"
-        disabled={busy}
+        disabled={checking}
         onClick={handleCheck}
-        className="h-7 gap-1.5 text-xs"
-        style={{ borderColor: "rgba(191,0,255,0.3)", color: "var(--text-muted)" }}
+        className="gap-1.5"
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
       >
         {checking
           ? <Loader2 className="w-3 h-3 animate-spin" />
           : <RefreshCw className="w-3 h-3" />}
-        Check for Update
+        Check for Updates
       </Button>
     </div>
   );
 }
 
-export default function DashboardPage() {
+// ---------------------------------------------------------------------------
+// UpdatesFoundDialog — shown after manual "Check for Updates" finds results
+// ---------------------------------------------------------------------------
 
+interface UpdatesFoundDialogProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  updates: ServerUpdateInfo[];
+  onUpdateAll: (restartAfterUpdate: boolean) => void;
+}
+
+function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: UpdatesFoundDialogProps) {
+  const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
+  const anyRunning = updates.some((s) => s.status === "running");
+  const anyStarting = updates.some((s) => s.status === "starting");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ArrowUp className="w-4 h-4" style={{ color: "#ffa500" }} />
+            {updates.length === 1 ? "Update Available" : `${updates.length} Updates Available`}
+          </DialogTitle>
+          <DialogDescription>
+            The following servers have updates ready to apply from the shared cache.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Server list */}
+        <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
+          {updates.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
+              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            >
+              <div>
+                <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
+                {s.installedBuild !== "unknown" && (
+                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
+                    {s.installedBuild} → {s.cachedBuild}
+                  </span>
+                )}
+              </div>
+              <span
+                className="text-xs px-1.5 py-0.5 rounded capitalize"
+                style={{
+                  color: s.status === "running" ? "var(--neon-green)"
+                       : s.status === "starting" ? "var(--neon-cyan)"
+                       : "var(--text-muted)",
+                  background: s.status === "running" ? "rgba(0,255,136,0.08)"
+                            : s.status === "starting" ? "rgba(0,255,255,0.08)"
+                            : "rgba(255,255,255,0.04)",
+                }}
+              >
+                {s.status}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Warnings */}
+        {anyRunning && (
+          <div
+            className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+            style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "#ffa500" }}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            Running servers will be stopped to apply the update.
+          </div>
+        )}
+        {anyStarting && (
+          <div
+            className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+            style={{ background: "rgba(255,200,0,0.06)", border: "1px solid rgba(255,200,0,0.2)", color: "#ffc800" }}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            One or more servers are currently starting. Their startup will be cancelled to apply the update.
+          </div>
+        )}
+
+        {/* Restart toggle */}
+        {(anyRunning || anyStarting) && (
+          <div
+            className="flex items-center gap-3 px-1 py-2 rounded-lg"
+            style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+          >
+            <Switch
+              id="ua-restart-toggle"
+              checked={restartAfterUpdate}
+              onCheckedChange={setRestartAfterUpdate}
+            />
+            <Label htmlFor="ua-restart-toggle" className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+              Restart running servers after update
+            </Label>
+          </div>
+        )}
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
+            Not Now
+          </Button>
+          <Button
+            onClick={() => { onOpenChange(false); onUpdateAll(restartAfterUpdate); }}
+            style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}
+          >
+            <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
+            Update All
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// UpdateAllDialog — confirmation before applying updates from the header button
+// ---------------------------------------------------------------------------
+
+interface UpdateAllDialogProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  updates: ServerUpdateInfo[];
+  anyStarting: boolean;
+  onConfirm: (restartAfterUpdate: boolean) => void;
+}
+
+function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }: UpdateAllDialogProps) {
+  const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
+  const anyRunning = updates.some((s) => s.status === "running");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ArrowUp className="w-4 h-4" style={{ color: "#ffa500" }} />
+            Update All Servers
+          </DialogTitle>
+          <DialogDescription>
+            Updates will be applied sequentially from the shared cache.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
+          {updates.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
+              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            >
+              <div>
+                <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
+                {s.installedBuild !== "unknown" && (
+                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
+                    {s.installedBuild} → {s.cachedBuild}
+                  </span>
+                )}
+              </div>
+              <span
+                className="text-xs px-1.5 py-0.5 rounded capitalize"
+                style={{
+                  color: s.status === "running" ? "var(--neon-green)"
+                       : s.status === "starting" ? "var(--neon-cyan)"
+                       : "var(--text-muted)",
+                  background: s.status === "running" ? "rgba(0,255,136,0.08)"
+                            : s.status === "starting" ? "rgba(0,255,255,0.08)"
+                            : "rgba(255,255,255,0.04)",
+                }}
+              >
+                {s.status}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {anyRunning && (
+          <div
+            className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+            style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "#ffa500" }}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            Running servers will be stopped to apply the update.
+          </div>
+        )}
+        {anyStarting && (
+          <div
+            className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+            style={{ background: "rgba(255,200,0,0.06)", border: "1px solid rgba(255,200,0,0.2)", color: "#ffc800" }}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            One or more servers are currently starting. Their startup will be cancelled to apply the update.
+          </div>
+        )}
+
+        {(anyRunning || anyStarting) && (
+          <div
+            className="flex items-center gap-3 px-1 py-2 rounded-lg"
+            style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+          >
+            <Switch
+              id="ua-conf-restart-toggle"
+              checked={restartAfterUpdate}
+              onCheckedChange={setRestartAfterUpdate}
+            />
+            <Label htmlFor="ua-conf-restart-toggle" className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+              Restart running servers after update
+            </Label>
+          </div>
+        )}
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => { onOpenChange(false); onConfirm(restartAfterUpdate); }}
+            style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}
+          >
+            <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
+            Update All
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DashboardPage
+// ---------------------------------------------------------------------------
+
+export default function DashboardPage() {
   const { data: servers = [], isLoading } = useServers();
-  const { setShowNewServerWizard } = useAppStore();
-  const [showImport, setShowImport] = useState(false);
+  const { setShowNewServerWizard, enqueueStartup } = useAppStore();
+  const [showImport, setShowImport]               = useState(false);
+  const [showUpdateAllDialog, setShowUpdateAllDialog] = useState(false);
+  const [showUpdatesFoundDialog, setShowUpdatesFoundDialog] = useState(false);
+  const [pendingUpdates, setPendingUpdates]        = useState<ServerUpdateInfo[]>([]);
+  const [updatingAll, setUpdatingAll]              = useState(false);
   const queryClient = useQueryClient();
 
   const total   = servers.length;
   const running = servers.filter((s) => s.status === "running").length;
   const stopped = total - running;
 
+  // Build the ServerUpdateInfo list from the live servers data.
+  const serversWithUpdates: ServerUpdateInfo[] = servers
+    .filter((s) => s.update_available === 1)
+    .map((s) => ({
+      id:             s.id,
+      name:           s.name,
+      status:         s.status,
+      installedBuild: "—",
+      cachedBuild:    "—",
+    }));
+
+  const anyUpdatesStarting = serversWithUpdates.some((s) => s.status === "starting");
+
+  // ── Update All handler ────────────────────────────────────────────────────
+
+  const runUpdateAll = useCallback(async (restartAfterUpdate: boolean) => {
+    if (updatingAll) return;
+    setUpdatingAll(true);
+
+    const targets = servers.filter((s) => s.update_available === 1);
+    if (targets.length === 0) { setUpdatingAll(false); return; }
+
+    try {
+      // First: mark all targets with their initial status.
+      // Active server = first in list → "updating"
+      // Rest → "update_queued"
+      const [first, ...rest] = targets;
+
+      if (rest.length > 0) {
+        await Promise.all(
+          rest.map((s) => updateServerStatus(s.id, "update_queued", null))
+        );
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }
+
+      // Process sequentially
+      for (const server of targets) {
+        await updateServerStatus(server.id, "updating", null);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+
+        const wasRunning = server.status === "running" || server.status === "starting";
+
+        try {
+          await applyUpdateToServer(
+            server.id,
+            server.name,
+            server.install_path,
+            wasRunning,
+            restartAfterUpdate,
+            (msg) => toast.info(msg, { id: `update-${server.id}` }),
+          );
+        } catch (err) {
+          if (err && typeof err === "object" && "restartNeeded" in err) {
+            // Queue this server for startup after update
+            await updateServerStatus(server.id, "startup_queued", null);
+            queryClient.invalidateQueries({ queryKey: ["servers"] });
+            const serverData = servers.find((s) => s.id === server.id);
+            if (serverData) enqueueStartup([serverData.id]);
+            continue;
+          }
+          toast.error(`Failed to update ${server.name}`, { description: String(err) });
+          await updateServerStatus(server.id, "stopped", null).catch(() => {});
+          queryClient.invalidateQueries({ queryKey: ["servers"] });
+        }
+
+        await updateServerStatus(server.id, "stopped", null).catch(() => {});
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }
+
+      toast.success(`Updated ${targets.length} server${targets.length === 1 ? "" : "s"} successfully.`);
+    } finally {
+      setUpdatingAll(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    }
+  }, [servers, updatingAll, queryClient, enqueueStartup]);
+
   return (
     <div className="flex flex-col gap-6">
       {/* ── Page header ── */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1
-            className="text-2xl font-bold tracking-tight"
-            style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
-          >
-            Server Dashboard
-          </h1>
+          <div className="flex items-center gap-3">
+            <LayoutDashboard className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <h1
+              className="text-2xl font-bold tracking-tight"
+              style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+            >
+              Server Dashboard
+            </h1>
+          </div>
           <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
             Manage your Ark Survival Ascended dedicated servers.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <UpdateStatusChip />
+          <UpdateStatusChip
+            servers={servers}
+            onUpdateAllClick={() => setShowUpdateAllDialog(true)}
+            onUpdatesFound={(updates) => {
+              setPendingUpdates(updates);
+              setShowUpdatesFoundDialog(true);
+            }}
+          />
           <Button
             variant="outline"
             onClick={() => setShowImport(true)}
             className="gap-2"
-            style={{ borderColor: "rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
             <Upload className="w-4 h-4" />
             Import Server
           </Button>
           <Button
+            variant="outline"
             onClick={() => setShowNewServerWizard(true)}
-            className="btn-neon-purple gap-2"
+            className="gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
             <Plus className="w-4 h-4" />
             New Server
@@ -215,25 +546,11 @@ export default function DashboardPage() {
       {/* ── Global stats bar ── */}
       {total > 0 && (
         <div className="flex flex-wrap gap-3">
-          <StatCard
-            label="Total Servers"
-            value={total}
-            icon={Server}
-            color="var(--neon-purple)"
-          />
-          <StatCard
-            label="Running"
-            value={running}
-            icon={Power}
-            color="var(--neon-green)"
-            sub={running === total ? "all online" : undefined}
-          />
-          <StatCard
-            label="Stopped"
-            value={stopped}
-            icon={PowerOff}
-            color={stopped > 0 ? "var(--text-muted)" : "var(--neon-green)"}
-          />
+          <StatCard label="Total Servers" value={total} icon={Server}   color="var(--neon-purple)" />
+          <StatCard label="Running"       value={running} icon={Power}  color="var(--neon-green)"
+            sub={running === total ? "all online" : undefined} />
+          <StatCard label="Stopped"       value={stopped} icon={PowerOff}
+            color={stopped > 0 ? "var(--text-muted)" : "var(--neon-green)"} />
           {servers.some((s) => s.status === "crashed" || s.status === "error") && (
             <StatCard
               label="Needs Attention"
@@ -268,28 +585,23 @@ export default function DashboardPage() {
         <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
           <div
             className="flex items-center justify-center w-16 h-16 rounded-full"
-            style={{
-              background: "rgba(191,0,255,0.05)",
-              border: "1px solid rgba(191,0,255,0.15)",
-            }}
+            style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
           >
             <Server className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
           </div>
           <div>
-            <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
-              No servers yet
-            </h2>
+            <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>No servers yet</h2>
             <p className="text-sm mt-1 max-w-sm" style={{ color: "var(--text-muted)" }}>
               Create your first Ark Survival Ascended server to get started.
             </p>
           </div>
           <Button
-            onClick={() => setShowNewServerWizard(true)}
             variant="outline"
-            className="btn-neon-purple mt-2 gap-2"
+            onClick={() => setShowNewServerWizard(true)}
+            className="mt-2 gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
-            <Plus className="w-4 h-4" />
-            Create Server
+            <Plus className="w-4 h-4" /> Create Server
           </Button>
         </div>
       )}
@@ -313,6 +625,23 @@ export default function DashboardPage() {
           }}
         />
       )}
+
+      {/* ── Update All confirmation dialog (from header button) ── */}
+      <UpdateAllDialog
+        open={showUpdateAllDialog}
+        onOpenChange={setShowUpdateAllDialog}
+        updates={serversWithUpdates}
+        anyStarting={anyUpdatesStarting}
+        onConfirm={runUpdateAll}
+      />
+
+      {/* ── Updates found dialog (after manual Check for Updates) ── */}
+      <UpdatesFoundDialog
+        open={showUpdatesFoundDialog}
+        onOpenChange={setShowUpdatesFoundDialog}
+        updates={pendingUpdates}
+        onUpdateAll={runUpdateAll}
+      />
     </div>
   );
 }

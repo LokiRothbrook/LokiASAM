@@ -154,9 +154,9 @@ export function CronBuilder({ value, onChange, label }: Props) {
               onClick={() => handlePresetChange(preset)}
               className="px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer"
               style={{
-                background: active ? "rgba(191,0,255,0.15)" : "rgba(255,255,255,0.04)",
+                background: active ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(255,255,255,0.04)",
                 border: active
-                  ? "1px solid rgba(191,0,255,0.5)"
+                  ? "1px solid rgba(var(--neon-purple-rgb),0.5)"
                   : "1px solid rgba(255,255,255,0.08)",
                 color: active ? "var(--neon-purple)" : "var(--text-muted)",
                 fontWeight: active ? 600 : 400,
@@ -181,7 +181,7 @@ export function CronBuilder({ value, onChange, label }: Props) {
               background: "rgba(0,0,0,0.4)",
               border: customError
                 ? "1px solid rgba(255,0,85,0.5)"
-                : "1px solid rgba(191,0,255,0.2)",
+                : "1px solid rgba(var(--neon-purple-rgb),0.2)",
               color: "var(--text-primary)",
             }}
           />
@@ -201,8 +201,8 @@ export function CronBuilder({ value, onChange, label }: Props) {
         <div
           className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md"
           style={{
-            background: "rgba(0,255,255,0.04)",
-            border: "1px solid rgba(0,255,255,0.12)",
+            background: "rgba(var(--neon-purple-rgb),0.04)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.12)",
             color: "var(--text-muted)",
           }}
         >

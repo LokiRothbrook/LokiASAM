@@ -1,48 +1,35 @@
 "use client";
 
-/**
- * AutomationTab — manage per-server cron schedules (backup, update, restart, broadcast).
- *
- * Schedule data lives in SQLite. Firing is handled by the Tokio background task in lib.rs
- * via the Rust SchedulerState (immune to JS timer throttling when minimized to tray).
- * Schedules only fire while the LokiASAM app is running.
- */
-
 import { useState, useCallback, useEffect } from "react";
 import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
-  AlertTriangle, Bell, Mail, MessageSquare, Monitor, ChevronDown, ChevronUp, Send,
+  AlertTriangle, ChevronDown, ChevronUp,
   ArrowUp, Clock, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CronBuilder, getNextCronDate, CRON_PRESETS } from "@/components/shared/CronBuilder";
+import { getNextCronDate } from "@/components/shared/CronBuilder";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
   setServerUpdateAutomation,
-  getServerNotificationConfigs, saveNotificationConfig,
-  type ScheduleRow, type CreateScheduleInput, type NotificationConfigRow,
+  type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
 import { getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
-import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type ScheduleType = "backup" | "restart" | "broadcast";
-
-interface BackupConfig {
-  // no extra options
-}
+type ScheduleType = "restart" | "broadcast";
+type AddMode = "minutes" | "hours" | "daily";
 
 interface RestartConfig {
   broadcastWarning: boolean;
@@ -50,25 +37,57 @@ interface RestartConfig {
   message: string;
 }
 
-interface BroadcastConfig {
-  message: string;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_CRON: Record<ScheduleType, string> = {
-  backup:    CRON_PRESETS[3].cron,  // Every 6h
-  restart:   "0 6 * * *",           // Daily at 6 AM
-  broadcast: CRON_PRESETS[0].cron,  // Every hour
-};
+function parseCfg(json: string | null | undefined): Record<string, unknown> {
+  try { return JSON.parse(json ?? "{}"); } catch { return {}; }
+}
 
-const DEFAULT_CONFIG: Record<ScheduleType, object> = {
-  backup:    {} as BackupConfig,
-  restart:   { broadcastWarning: true, warningMinutes: 15, message: "Server restarting in {minutes} minutes. Progress will be saved." } as RestartConfig,
-  broadcast: { message: "Welcome to the server! Type /help for commands." } as BroadcastConfig,
-};
+function buildCronFromMode(mode: AddMode, val: number | string): string {
+  if (mode === "minutes") return `*/${Math.max(1, Math.min(59, val as number))} * * * *`;
+  if (mode === "hours")   return `0 */${Math.max(1, Math.min(23, val as number))} * * *`;
+  const [h, m] = String(val).split(":").map(Number);
+  return `${isNaN(m) ? 0 : m} ${isNaN(h) ? 6 : h} * * *`;
+}
+
+function describeSchedule(cron: string): string {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return cron;
+  const [min, hour, dom, mon, dow] = parts;
+  const minMatch = min.match(/^\*\/(\d+)$/);
+  if (minMatch && hour === "*" && dom === "*" && mon === "*" && dow === "*") {
+    const n = minMatch[1];
+    return `Every ${n} minute${n === "1" ? "" : "s"}`;
+  }
+  const hourMatch = hour.match(/^\*\/(\d+)$/);
+  if (hourMatch && min === "0" && dom === "*" && mon === "*" && dow === "*") {
+    const n = hourMatch[1];
+    return `Every ${n} hour${n === "1" ? "" : "s"}`;
+  }
+  const minNum = parseInt(min), hourNum = parseInt(hour);
+  if (!isNaN(minNum) && !isNaN(hourNum) && dom === "*" && mon === "*" && dow === "*") {
+    const d = new Date(); d.setHours(hourNum, minNum, 0);
+    return `Daily at ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  }
+  return cron;
+}
+
+function cronToMode(cron: string): { mode: AddMode; num: number; time: string } {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return { mode: "daily", num: 6, time: "06:00" };
+  const [min, hour] = parts;
+  const minMatch = min.match(/^\*\/(\d+)$/);
+  if (minMatch && hour === "*") return { mode: "minutes", num: parseInt(minMatch[1]) || 30, time: "06:00" };
+  const hourMatch = hour.match(/^\*\/(\d+)$/);
+  if (hourMatch && min === "0") return { mode: "hours", num: parseInt(hourMatch[1]) || 6, time: "06:00" };
+  const h = parseInt(hour ?? "6"), m = parseInt(min ?? "0");
+  return {
+    mode: "daily", num: 6,
+    time: `${String(isNaN(h) ? 6 : h).padStart(2, "0")}:${String(isNaN(m) ? 0 : m).padStart(2, "0")}`,
+  };
+}
 
 function formatNextRun(iso: string | null): string {
   if (!iso) return "—";
@@ -84,21 +103,188 @@ function formatNextRun(iso: string | null): string {
   return `in ${Math.floor(h / 24)}d`;
 }
 
-function formatLastRun(iso: string | null): string {
-  if (!iso) return "Never";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "—";
-  const diff = Date.now() - d.getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const h = Math.floor(mins / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+// ---------------------------------------------------------------------------
+// AddScheduleRow — shared picker for add and inline edit
+// ---------------------------------------------------------------------------
+
+interface AddScheduleRowProps {
+  mode: AddMode; setMode: (m: AddMode) => void;
+  num: number;   setNum:  (n: number) => void;
+  time: string;  setTime: (t: string) => void;
+  showMessage: boolean; message: string; setMessage: (m: string) => void;
+  onConfirm: () => void;
+  onCancel?: () => void;
+  confirmLabel?: string;
+  busy: boolean;
+}
+
+function AddScheduleRow({
+  mode, setMode, num, setNum, time, setTime,
+  showMessage, message, setMessage,
+  onConfirm, onCancel, confirmLabel = "Add", busy,
+}: AddScheduleRowProps) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as AddMode)}
+          className="h-8 text-xs px-2 rounded shrink-0"
+          style={{
+            background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
+            color: "var(--text-primary)", outline: "none",
+          }}
+        >
+          <option value="minutes">Every X minutes</option>
+          <option value="hours">Every X hours</option>
+          <option value="daily">Daily at time</option>
+        </select>
+
+        {(mode === "minutes" || mode === "hours") && (
+          <Input
+            type="number" min={1} max={mode === "minutes" ? 59 : 23} value={num}
+            onChange={(e) => setNum(Math.max(1, parseInt(e.target.value) || 1))}
+            className="w-20 h-8 text-xs text-center"
+            style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+          />
+        )}
+        {mode === "daily" && (
+          <input
+            type="time" value={time} onChange={(e) => setTime(e.target.value)}
+            className="h-8 rounded px-2 text-xs font-mono"
+            style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)", color: "var(--text-primary)", outline: "none" }}
+          />
+        )}
+
+        <div className="flex items-center gap-2 ml-auto">
+          {onCancel && (
+            <Button size="sm" variant="ghost" onClick={onCancel}
+              className="h-8 cursor-pointer text-xs" style={{ color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+          )}
+          <Button
+            size="sm" onClick={onConfirm}
+            disabled={busy || (showMessage && !message.trim())}
+            className="h-8 gap-1.5 cursor-pointer"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+          >
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+
+      {showMessage && (
+        <Input
+          value={message} onChange={(e) => setMessage(e.target.value)}
+          placeholder="Message to send in global chat"
+          className="h-8 text-sm"
+          style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+        />
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
-// ScheduleCard — one card per schedule type
+// ScheduleListRow — one schedule entry with inline edit
+// ---------------------------------------------------------------------------
+
+function ScheduleListRow({ row, type, onDelete, onToggle, onSave }: {
+  row: ScheduleRow;
+  type: ScheduleType;
+  onDelete: () => Promise<void>;
+  onToggle: () => Promise<void>;
+  onSave: (cron: string, configJson: string) => Promise<void>;
+}) {
+  const parsed = cronToMode(row.cron_expression);
+  const [editing,  setEditing]  = useState(false);
+  const [mode,     setMode]     = useState<AddMode>(parsed.mode);
+  const [num,      setNum]      = useState(parsed.num);
+  const [time,     setTime]     = useState(parsed.time);
+  const [msg,      setMsg]      = useState<string>((parseCfg(row.config_json).message as string) ?? "");
+  const [saving,   setSaving]   = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const cron = buildCronFromMode(mode, mode === "daily" ? time : num);
+      const cfg  = parseCfg(row.config_json);
+      const configJson = type === "broadcast"
+        ? JSON.stringify({ ...cfg, message: msg })
+        : row.config_json ?? "{}";
+      await onSave(cron, configJson);
+      setEditing(false);
+    } catch (e) {
+      toast.error(`Save failed: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try { await onDelete(); }
+    finally { setDeleting(false); }
+  }
+
+  if (editing) {
+    return (
+      <div className="rounded-lg p-2.5" style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+        <AddScheduleRow
+          mode={mode} setMode={setMode} num={num} setNum={setNum}
+          time={time} setTime={setTime}
+          showMessage={type === "broadcast"} message={msg} setMessage={setMsg}
+          onConfirm={handleSave} onCancel={() => setEditing(false)}
+          confirmLabel="Save" busy={saving}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg px-3 py-2"
+      style={{
+        background: row.enabled === 1 ? "rgba(var(--neon-purple-rgb),0.05)" : "rgba(255,255,255,0.02)",
+        border: `1px solid ${row.enabled === 1 ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(255,255,255,0.05)"}`,
+      }}
+    >
+      <div className="flex-1 min-w-0">
+        <p className="text-sm" style={{ color: "var(--text-primary)" }}>
+          {describeSchedule(row.cron_expression)}
+        </p>
+        {type === "broadcast" && msg && (
+          <p className="text-xs truncate" style={{ color: "var(--text-muted)" }}>{msg}</p>
+        )}
+        {row.next_run && (
+          <p className="text-[10px]" style={{ color: "var(--neon-cyan)" }}>
+            Next: {formatNextRun(row.next_run)}
+          </p>
+        )}
+      </div>
+      <Button size="sm" variant="ghost" onClick={() => setEditing(true)}
+        className="h-7 px-2 cursor-pointer text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+        Edit
+      </Button>
+      <Button size="sm" variant="ghost" disabled={deleting} onClick={handleDelete}
+        className="h-7 w-7 p-0 cursor-pointer shrink-0" style={{ color: "var(--neon-red)" }}>
+        {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+      </Button>
+      <button onClick={onToggle} className="cursor-pointer shrink-0">
+        {row.enabled === 1
+          ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+          : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }}  />
+        }
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ScheduleCard — list-based restart / broadcast schedule manager
 // ---------------------------------------------------------------------------
 
 interface CardProps {
@@ -107,314 +293,483 @@ interface CardProps {
   icon: React.ElementType;
   title: string;
   description: string;
-  existing: ScheduleRow | null;
+  existing: ScheduleRow[];
   onRefresh: () => void;
 }
 
+const DEFAULT_RESTART_CFG: RestartConfig = {
+  broadcastWarning: true,
+  warningMinutes: 15,
+  message: "Server restarting in {minutes} minutes. Progress will be saved.",
+};
+
 function ScheduleCard({ serverId, type, icon: Icon, title, description, existing, onRefresh }: CardProps) {
-  const [cron, setCron]         = useState(existing?.cron_expression ?? DEFAULT_CRON[type]);
-  const [enabled, setEnabled]   = useState(existing ? existing.enabled === 1 : false);
-  const [config, setConfig]     = useState<object>(
-    existing?.config_json ? JSON.parse(existing.config_json) : DEFAULT_CONFIG[type]
-  );
-  const [saving, setSaving]     = useState(false);
-  const [saved, setSaved]       = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [config, setConfig] = useState<RestartConfig>(() => ({
+    ...DEFAULT_RESTART_CFG,
+    ...(parseCfg(existing[0]?.config_json) as Partial<RestartConfig>),
+  }));
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [savedConfig,  setSavedConfig]  = useState(false);
 
-  const nextDate = getNextCronDate(cron);
-  const nextRun  = existing?.next_run ?? (nextDate ? nextDate.toISOString() : null);
+  const [addMode, setAddMode] = useState<AddMode>("daily");
+  const [addNum,  setAddNum]  = useState(6);
+  const [addTime, setAddTime] = useState("06:00");
+  const [addMsg,  setAddMsg]  = useState("");
+  const [adding,  setAdding]  = useState(false);
 
-  function patchConfig(patch: Partial<RestartConfig & BroadcastConfig>) {
+  const hasSchedules = existing.length > 0;
+
+  function patchConfig(patch: Partial<RestartConfig>) {
     setConfig((c) => ({ ...c, ...patch }));
   }
 
-  async function handleSave() {
-    if (!cron) return;
-    setSaving(true);
+  async function handleSaveConfig() {
+    setSavingConfig(true);
     try {
-      const configJson = JSON.stringify(config);
-      const nextDate   = getNextCronDate(cron);
-      const nextIso    = nextDate?.toISOString() ?? new Date().toISOString();
-
-      if (existing) {
-        // Update existing schedule
-        await updateScheduleConfig(existing.id, cron, configJson, nextIso);
-        if (enabled !== (existing.enabled === 1)) {
-          await updateScheduleEnabled(existing.id, enabled);
-        }
-      } else {
-        // Create new schedule — get UUID from Rust, then persist to SQLite
-        const newId = await tauriCmd.createSchedule({
-          serverId,
-          scheduleType: type,
-          cronExpression: cron,
-          configJson,
-        });
-        const input: CreateScheduleInput = {
-          id: newId,
-          serverId,
-          scheduleType: type,
-          cronExpression: cron,
-          enabled,
-          configJson,
-        };
-        await createSchedule(input);
-        // Update next_run after insert
-        await updateScheduleConfig(newId, cron, configJson, nextIso);
+      for (const row of existing) {
+        const merged = { ...parseCfg(row.config_json), ...config };
+        const nextIso = getNextCronDate(row.cron_expression)?.toISOString() ?? new Date().toISOString();
+        await updateScheduleConfig(row.id, row.cron_expression, JSON.stringify(merged), nextIso);
       }
-
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setSavedConfig(true);
+      setTimeout(() => setSavedConfig(false), 2000);
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
-      toast.error(`Failed to save schedule: ${e}`);
+      toast.error(`Failed to save config: ${e}`);
     } finally {
-      setSaving(false);
+      setSavingConfig(false);
     }
   }
 
-  async function handleDelete() {
-    if (!existing) return;
-    setDeleting(true);
+  async function handleAdd() {
+    setAdding(true);
     try {
-      await tauriCmd.deleteSchedule(existing.id);
-      await deleteScheduleRecord(existing.id);
+      const cron = buildCronFromMode(addMode, addMode === "daily" ? addTime : addNum);
+      const configJson = type === "broadcast"
+        ? JSON.stringify({ message: addMsg })
+        : JSON.stringify(config);
+      const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+      const newId = await tauriCmd.createSchedule({ serverId, scheduleType: type, cronExpression: cron, configJson });
+      const input: CreateScheduleInput = { id: newId, serverId, scheduleType: type, cronExpression: cron, enabled: true, configJson };
+      await createSchedule(input);
+      await updateScheduleConfig(newId, cron, configJson, nextIso);
+      if (type === "broadcast") setAddMsg("");
+      toast.success("Schedule added.");
       onRefresh();
       syncSchedulesToRust();
-      toast.success(`${title} schedule removed.`);
     } catch (e) {
-      toast.error(`Failed to delete: ${e}`);
+      toast.error(`Failed to add schedule: ${e}`);
     } finally {
-      setDeleting(false);
+      setAdding(false);
     }
   }
 
-  async function handleToggle() {
-    const newVal = !enabled;
-    setEnabled(newVal);
-    if (existing) {
-      try {
-        await tauriCmd.toggleSchedule(existing.id, newVal);
-        await updateScheduleEnabled(existing.id, newVal);
-        onRefresh();
-        syncSchedulesToRust();
-      } catch (e) {
-        toast.error(`Toggle failed: ${e}`);
-        setEnabled(!newVal);
-      }
-    }
+  async function handleDelete(id: string) {
+    await tauriCmd.deleteSchedule(id);
+    await deleteScheduleRecord(id);
+    onRefresh();
+    syncSchedulesToRust();
   }
 
-  const c = config as RestartConfig & BroadcastConfig;
+  async function handleToggle(row: ScheduleRow) {
+    const newVal = !(row.enabled === 1);
+    await tauriCmd.toggleSchedule(row.id, newVal);
+    await updateScheduleEnabled(row.id, newVal);
+    onRefresh();
+    syncSchedulesToRust();
+  }
+
+  async function handleSaveRow(row: ScheduleRow, cron: string, configJson: string) {
+    const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+    await updateScheduleConfig(row.id, cron, configJson, nextIso);
+    onRefresh();
+    syncSchedulesToRust();
+  }
+
+  const c = config;
 
   return (
     <div
       className="glass-card rounded-xl p-4 space-y-4"
-      style={{
-        border: enabled
-          ? "1px solid rgba(191,0,255,0.25)"
-          : "1px solid rgba(191,0,255,0.1)",
-        opacity: enabled ? 1 : 0.75,
-      }}
+      style={{ border: hasSchedules ? "1px solid rgba(var(--neon-purple-rgb),0.25)" : "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
     >
       {/* Header */}
       <div className="flex items-start gap-3">
         <div
           className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
           style={{
-            background: enabled ? "rgba(191,0,255,0.1)" : "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(191,0,255,0.2)",
+            background: hasSchedules ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
           }}
         >
-          <Icon className="w-4 h-4" style={{ color: enabled ? "var(--neon-purple)" : "var(--text-muted)" }} />
+          <Icon className="w-4 h-4" style={{ color: hasSchedules ? "var(--neon-purple)" : "var(--text-muted)" }} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h3>
-            {existing && (
-              <span
-                className="px-1.5 py-0.5 rounded text-xs"
-                style={{
-                  background: enabled ? "rgba(0,255,136,0.08)" : "rgba(255,255,255,0.04)",
-                  color: enabled ? "var(--neon-green)" : "var(--text-muted)",
-                  border: `1px solid ${enabled ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.08)"}`,
-                }}
-              >
-                {enabled ? "Active" : "Paused"}
+            {hasSchedules && (
+              <span className="px-1.5 py-0.5 rounded text-xs"
+                style={{ background: "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>
+                {existing.length} schedule{existing.length !== 1 ? "s" : ""}
               </span>
             )}
           </div>
           <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{description}</p>
         </div>
-        <button
-          type="button"
-          onClick={handleToggle}
-          title={enabled ? "Disable schedule" : "Enable schedule"}
-          className="shrink-0 cursor-pointer"
-        >
-          {enabled
-            ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
-            : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }}  />
-          }
-        </button>
       </div>
 
-      {/* Last / next run */}
-      {existing && (
-        <div className="flex gap-4 text-xs" style={{ color: "var(--text-muted)" }}>
-          <span>Last run: <strong style={{ color: "var(--text-primary)" }}>{formatLastRun(existing.last_run)}</strong></span>
-          <span>Next run: <strong style={{ color: "var(--neon-cyan)" }}>{formatNextRun(existing.next_run)}</strong></span>
-        </div>
-      )}
-
-      {/* Cron picker */}
-      <CronBuilder value={cron} onChange={setCron} label="Schedule" />
-
-      {/* Restart-specific options */}
+      {/* Restart shared config */}
       {type === "restart" && (
-        <div className="space-y-2">
+        <div className="rounded-lg p-3 space-y-2"
+          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
           <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={c.broadcastWarning ?? true}
+            <input type="checkbox" checked={c.broadcastWarning ?? true}
               onChange={(e) => patchConfig({ broadcastWarning: e.target.checked })}
-              className="w-3.5 h-3.5 accent-purple-500"
-            />
+              className="w-3.5 h-3.5"
+              style={{ accentColor: "var(--neon-purple)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Send in-game chat warning before restart
+              Send in-game warning before restart
             </span>
           </label>
           {c.broadcastWarning && (
             <div className="flex gap-3 items-end pl-5">
               <div className="space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Warning (minutes)</label>
-                <Input
-                  type="number" min={1} max={60}
-                  value={c.warningMinutes ?? 15}
+                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Warning minutes</label>
+                <Input type="number" min={1} max={60} value={c.warningMinutes ?? 15}
                   onChange={(e) => patchConfig({ warningMinutes: parseInt(e.target.value, 10) || 15 })}
                   className="h-7 w-20 text-xs"
-                  style={{
-                    background: "rgba(0,0,0,0.4)",
-                    border: "1px solid rgba(191,0,255,0.2)",
-                    color: "var(--text-primary)",
-                  }}
-                />
+                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
               </div>
               <div className="flex-1 space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Chat message ({"{minutes}"} = countdown)</label>
-                <Input
-                  value={c.message ?? ""}
+                <label className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Message <span style={{ color: "var(--text-subtle)" }}>({"{minutes}"} = countdown)</span>
+                </label>
+                <Input value={c.message ?? ""}
                   onChange={(e) => patchConfig({ message: e.target.value })}
                   placeholder="Server restarting in {minutes} minutes."
                   className="h-7 text-xs"
-                  style={{
-                    background: "rgba(0,0,0,0.4)",
-                    border: "1px solid rgba(191,0,255,0.2)",
-                    color: "var(--text-primary)",
-                  }}
-                />
+                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {type === "broadcast" && (
-        <div className="space-y-1">
-          <label className="text-xs" style={{ color: "var(--text-muted)" }}>Message to send in global chat</label>
-          <Input
-            value={c.message ?? ""}
-            onChange={(e) => patchConfig({ message: e.target.value })}
-            placeholder="Welcome to the server!"
-            className="h-8 text-sm"
-            style={{
-              background: "rgba(0,0,0,0.4)",
-              border: "1px solid rgba(191,0,255,0.2)",
-              color: "var(--text-primary)",
-            }}
-          />
-        </div>
-      )}
-
-      {/* Save / delete row */}
-      <div className="flex gap-2 pt-1">
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={saving}
-          className="gap-1.5 cursor-pointer"
-          style={{
-            background: saved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-            border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
-            color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
-          }}
-        >
-          {saving ? (
-            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-          ) : saved ? (
-            <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
-          ) : existing ? (
-            "Save Changes"
-          ) : (
-            <><Plus className="w-3.5 h-3.5" /> Enable Schedule</>
-          )}
-        </Button>
-
-        {existing && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleDelete}
-            disabled={deleting}
+          <Button size="sm" onClick={handleSaveConfig} disabled={savingConfig}
             className="gap-1.5 cursor-pointer"
-            style={{ color: "var(--neon-red)" }}
-          >
-            {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-            Remove
+            style={{
+              background: savedConfig ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border:     savedConfig ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+              color:      savedConfig ? "var(--neon-green)" : "var(--neon-purple)",
+            }}>
+            {savingConfig ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+            : savedConfig  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+            : "Save Config"}
           </Button>
-        )}
+        </div>
+      )}
+
+      {/* Existing schedule list */}
+      {hasSchedules && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Active Schedules</p>
+          {existing.map((row) => (
+            <ScheduleListRow
+              key={row.id} row={row} type={type}
+              onDelete={() => handleDelete(row.id)}
+              onToggle={() => handleToggle(row)}
+              onSave={(cron, configJson) => handleSaveRow(row, cron, configJson)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Add new schedule */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Add Schedule</p>
+        <AddScheduleRow
+          mode={addMode} setMode={setAddMode}
+          num={addNum} setNum={setAddNum}
+          time={addTime} setTime={setAddTime}
+          showMessage={type === "broadcast"} message={addMsg} setMessage={setAddMsg}
+          onConfirm={handleAdd} busy={adding}
+        />
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// AutomationTab
+// Backup schedule section — TimeShift tiers per backup type
 // ---------------------------------------------------------------------------
 
-interface Props {
-  server: ServerRow;
+type BackupTier = "H" | "D" | "W" | "M";
+type BackupScheduleType = "backup_server" | "backup_player" | "backup_full";
+
+const TIER_FIXED_CRON: Record<BackupTier, string> = {
+  M: "0 4 1 * *",
+  W: "0 3 * * 0",
+  D: "0 2 * * *",
+  H: "0 */6 * * *",
+};
+
+const TIER_DEFAULT_KEEP: Record<BackupTier, number> = { M: 3, W: 4, D: 7, H: 24 };
+const TIER_LABEL: Record<BackupTier, string> = { M: "monthly", W: "weekly", D: "daily", H: "hourly" };
+const TIER_ORDER: BackupTier[] = ["M", "W", "D", "H"];
+type TierState = { keep: number; enabled: boolean };
+
+function findTierSchedule(schedules: ScheduleRow[], type: BackupScheduleType, tier: BackupTier): ScheduleRow | null {
+  return schedules.find((s) => {
+    if (s.schedule_type !== type) return false;
+    try { return (JSON.parse(s.config_json ?? "{}").tier ?? "H") === tier; }
+    catch { return false; }
+  }) ?? null;
 }
 
-const CARD_DEFS: {
-  type: ScheduleType;
-  icon: React.ElementType;
-  title: string;
-  description: string;
-}[] = [
-  {
-    type: "backup",
-    icon: HardDrive,
-    title: "Auto-Backup",
-    description: "Automatically zip and archive the server's save directory on a schedule.",
-  },
-  {
-    type: "restart",
-    icon: RotateCcw,
-    title: "Auto-Restart",
-    description: "Gracefully restart the server on a schedule with optional in-game warnings.",
-  },
-  {
-    type: "broadcast",
-    icon: Megaphone,
-    title: "Scheduled Chat Message",
-    description: "Send a recurring global chat message to all online players via RCON.",
-  },
-];
+function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
+  return schedules.find((s) => s.schedule_type === "backup_full") ?? null;
+}
 
 // ---------------------------------------------------------------------------
-// UpdateAutomationCard — per-server update automation settings
+// BackupTypeSection — keep-count + toggle rows per tier (hex accent required)
+// ---------------------------------------------------------------------------
+
+function BackupTypeSection({
+  title, scheduleType, serverId, schedules, onRefresh, accentHex,
+}: {
+  title: string;
+  scheduleType: BackupScheduleType;
+  serverId: string;
+  schedules: ScheduleRow[];
+  onRefresh: () => void;
+  accentHex: string;
+}) {
+  const buildState = (): Record<BackupTier, TierState> => {
+    const s = {} as Record<BackupTier, TierState>;
+    for (const tier of TIER_ORDER) {
+      const row = findTierSchedule(schedules, scheduleType, tier);
+      const cfg = row?.config_json ? parseCfg(row.config_json) : {};
+      s[tier] = { keep: (cfg.keep as number) ?? TIER_DEFAULT_KEEP[tier], enabled: row ? row.enabled === 1 : false };
+    }
+    return s;
+  };
+
+  const [tiers, setTiers] = useState<Record<BackupTier, TierState>>(buildState);
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  useEffect(() => { setTiers(buildState()); }, [schedules.length, serverId, scheduleType]);
+
+  const patch = (tier: BackupTier, delta: Partial<TierState>) =>
+    setTiers((s) => ({ ...s, [tier]: { ...s[tier], ...delta } }));
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      for (const tier of TIER_ORDER) {
+        const { keep, enabled } = tiers[tier];
+        const existing  = findTierSchedule(schedules, scheduleType, tier);
+        const configJson = JSON.stringify({ tier, keep });
+        const cron       = TIER_FIXED_CRON[tier];
+        const nextIso    = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+        if (existing) {
+          await updateScheduleConfig(existing.id, cron, configJson, nextIso);
+          if (enabled !== (existing.enabled === 1)) await updateScheduleEnabled(existing.id, enabled);
+        } else if (enabled) {
+          const newId = await tauriCmd.createSchedule({ serverId, scheduleType, cronExpression: cron, configJson });
+          await createSchedule({ id: newId, serverId, scheduleType, cronExpression: cron, enabled: true, configJson });
+          await updateScheduleConfig(newId, cron, configJson, nextIso);
+        }
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onRefresh();
+      syncSchedulesToRust();
+    } catch (e) {
+      toast.error(`Failed to save ${title}: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold pb-0.5" style={{ color: "var(--text-primary)" }}>{title}</p>
+      {TIER_ORDER.map((tier) => (
+        <div
+          key={tier}
+          className="flex items-center gap-3 px-3 py-2 rounded-lg"
+          style={{
+            background: "rgba(255,255,255,0.02)",
+            border: `1px solid ${tiers[tier].enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
+          }}
+        >
+          <Input
+            type="number" min={1} max={999}
+            value={tiers[tier].keep}
+            onChange={(e) => patch(tier, { keep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+            className="w-16 h-8 text-sm text-center shrink-0"
+            style={{
+              background: "rgba(0,0,0,0.4)",
+              border: `1px solid ${tiers[tier].enabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              color: "var(--text-primary)",
+            }}
+          />
+          <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>
+            {TIER_LABEL[tier]} backups to keep
+          </span>
+          <button onClick={() => patch(tier, { enabled: !tiers[tier].enabled })}
+            className="cursor-pointer shrink-0" title={tiers[tier].enabled ? "Disable" : "Enable"}>
+            {tiers[tier].enabled
+              ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+            }
+          </button>
+        </div>
+      ))}
+      <Button size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
+        }}>
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FullBackupScheduleSection
+// ---------------------------------------------------------------------------
+
+function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
+  serverId: string; schedules: ScheduleRow[]; onRefresh: () => void;
+}) {
+  const existing = findFullSchedule(schedules);
+  const cfg = parseCfg(existing?.config_json);
+
+  const [keep,    setKeep]    = useState<number>((cfg.keep as number) ?? 3);
+  const [enabled, setEnabled] = useState(existing ? existing.enabled === 1 : false);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  useEffect(() => {
+    const row = findFullSchedule(schedules);
+    const c = parseCfg(row?.config_json);
+    setKeep((c.keep as number) ?? 3);
+    setEnabled(row ? row.enabled === 1 : false);
+  }, [schedules.length, serverId]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const configJson = JSON.stringify({ keep });
+      const cron = "0 3 1 * *";
+      const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+      if (existing) {
+        await updateScheduleConfig(existing.id, cron, configJson, nextIso);
+        if (enabled !== (existing.enabled === 1)) await updateScheduleEnabled(existing.id, enabled);
+      } else if (enabled) {
+        const newId = await tauriCmd.createSchedule({ serverId, scheduleType: "backup_full", cronExpression: cron, configJson });
+        await createSchedule({ id: newId, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson });
+        await updateScheduleConfig(newId, cron, configJson, nextIso);
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onRefresh();
+      syncSchedulesToRust();
+    } catch (e) {
+      toast.error(`Failed to save full backup schedule: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold pb-0.5" style={{ color: "var(--text-primary)" }}>Full Backups</p>
+      <div className="flex items-center gap-3 px-3 py-2 rounded-lg"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          border: `1px solid ${enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
+        }}>
+        <Input type="number" min={1} max={20} value={keep}
+          onChange={(e) => setKeep(Math.max(1, parseInt(e.target.value, 10) || 1))}
+          className="w-16 h-8 text-sm text-center shrink-0"
+          style={{
+            background: "rgba(0,0,0,0.4)",
+            border: `1px solid ${enabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+            color: "var(--text-primary)",
+          }} />
+        <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>full backups to keep</span>
+        <button onClick={() => setEnabled((v) => !v)} className="cursor-pointer shrink-0">
+          {enabled
+            ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+          }
+        </button>
+      </div>
+      <p className="text-xs px-1" style={{ color: "var(--text-muted)" }}>
+        Zips the entire install folder — runs monthly on the 1st at 3am.
+      </p>
+      <Button size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
+        }}>
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BackupScheduleSection
+// ---------------------------------------------------------------------------
+
+function BackupScheduleSection({ serverId, schedules, onRefresh }: {
+  serverId: string; schedules: ScheduleRow[]; onRefresh: () => void;
+}) {
+  return (
+    <div id="backup-schedules-section"
+      className="glass-card rounded-xl p-4 space-y-5"
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          <HardDrive className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+        </div>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Backup Schedules</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            TimeShift — each tier keeps its own independent set of backups
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.08)" }}>
+        <BackupTypeSection title="Server Backups" scheduleType="backup_server"
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
+          accentHex="#bf00ff" />
+        <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+        <BackupTypeSection title="Player Backups" scheduleType="backup_player"
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
+          accentHex="#00ffff" />
+        <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+        <FullBackupScheduleSection serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// UpdateAutomationCard
 // ---------------------------------------------------------------------------
 
 const DEFAULT_UPDATE_AUTOMATION: UpdateAutomation = {
@@ -439,9 +794,7 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
         if (raw && raw !== "{}") {
           setAutomation({ ...DEFAULT_UPDATE_AUTOMATION, ...JSON.parse(raw) });
         }
-      } catch {
-        // malformed JSON — use defaults
-      }
+      } catch { /* malformed JSON */ }
     })();
   }, [server.id, server.update_automation_json]);
 
@@ -463,35 +816,27 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
   const isActive = automation.mode !== "off";
 
   return (
-    <div
-      className="glass-card rounded-xl p-4 space-y-4"
+    <div className="glass-card rounded-xl p-4 space-y-4"
       style={{
-        border: isActive ? "1px solid rgba(255,165,0,0.25)" : "1px solid rgba(191,0,255,0.1)",
+        border: isActive ? "1px solid rgba(var(--neon-purple-rgb),0.3)" : "1px solid rgba(var(--neon-purple-rgb),0.1)",
         opacity: isActive ? 1 : 0.75,
-      }}
-    >
-      {/* Header */}
+      }}>
       <div className="flex items-start gap-3">
-        <div
-          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-          style={{
-            background: isActive ? "rgba(255,165,0,0.1)" : "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,165,0,0.2)",
-          }}
-        >
-          <ArrowUp className="w-4 h-4" style={{ color: isActive ? "#ffa500" : "var(--text-muted)" }} />
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: isActive ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          <ArrowUp className="w-4 h-4" style={{ color: isActive ? "var(--neon-purple)" : "var(--text-muted)" }} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Update</h3>
             {isActive && (
               <span className="px-1.5 py-0.5 rounded text-xs"
-                style={{ background: "rgba(255,165,0,0.08)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.2)" }}>
+                style={{ background: "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>
                 Active
               </span>
             )}
             {saving && <Loader2 className="w-3 h-3 animate-spin" style={{ color: "var(--text-muted)" }} />}
-            {saved && <CheckCircle2 className="w-3 h-3" style={{ color: "var(--neon-green)" }} />}
+            {saved  && <CheckCircle2 className="w-3 h-3" style={{ color: "var(--neon-green)" }} />}
           </div>
           <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
             Automatically apply cached server updates when available.
@@ -499,7 +844,6 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
         </div>
       </div>
 
-      {/* Auto-check required warning */}
       {!autoCheckEnabled && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "rgba(255,165,0,0.8)" }}>
@@ -508,79 +852,65 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
         </div>
       )}
 
-      {/* Mode selector */}
       <div className="space-y-2">
         <label className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Update Trigger</label>
         <div className="flex gap-2 flex-wrap">
           {([
-            { value: "off",         label: "Disabled",       icon: null },
-            { value: "immediately", label: "When Found",     icon: Zap },
-            { value: "at_time",     label: "Daily at Time",  icon: Clock },
-          ] as const).map(({ value, label, icon: Icon }) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => handleSave({ mode: value })}
+            { value: "off",         label: "Disabled",      icon: null },
+            { value: "immediately", label: "When Found",    icon: Zap },
+            { value: "at_time",     label: "Daily at Time", icon: Clock },
+          ] as const).map(({ value, label, icon: BtnIcon }) => (
+            <button key={value} type="button" onClick={() => handleSave({ mode: value })}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                background: automation.mode === value ? "rgba(255,165,0,0.15)" : "transparent",
-                border: `1px solid ${automation.mode === value ? "rgba(255,165,0,0.5)" : "rgba(191,0,255,0.2)"}`,
-                color: automation.mode === value ? "#ffa500" : "var(--text-muted)",
-              }}
-            >
-              {Icon && <Icon className="w-3 h-3" />}
+                background: automation.mode === value ? "rgba(var(--neon-purple-rgb),0.12)" : "transparent",
+                border: `1px solid ${automation.mode === value ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)"}`,
+                color: automation.mode === value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}>
+              {BtnIcon && <BtnIcon className="w-3 h-3" />}
               {label}
             </button>
           ))}
         </div>
 
-        {/* At-time picker */}
         {automation.mode === "at_time" && (
           <div className="flex items-center gap-3 pl-1">
             <label className="text-xs" style={{ color: "var(--text-muted)" }}>Update time (daily):</label>
-            <input
-              type="time"
-              value={automation.update_time}
+            <input type="time" value={automation.update_time}
               onChange={(e) => handleSave({ update_time: e.target.value })}
               className="h-7 rounded px-2 text-xs font-mono"
-              style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)", outline: "none" }}
-            />
+              style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)", outline: "none" }} />
           </div>
         )}
 
-        {/* Framework note for non-off modes */}
         {automation.mode !== "off" && (
           <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.12)", color: "var(--text-muted)" }}>
+            style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}>
             <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
             <span>
               Automated triggers are coming in a future update once proper RCON shutdown is implemented.
-              Settings are saved now so configuration is ready when the feature ships. Use the <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards for manual updates.
+              Settings are saved now so configuration is ready when the feature ships. Use the{" "}
+              <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards for manual updates.
             </span>
           </div>
         )}
       </div>
 
-      {/* Restart options — only shown when a mode is active */}
       {automation.mode !== "off" && (
-        <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(255,165,0,0.1)" }}>
+        <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
           <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={automation.restart_after_update}
+            <input type="checkbox" checked={automation.restart_after_update}
               onChange={(e) => handleSave({ restart_after_update: e.target.checked })}
-              className="w-3.5 h-3.5 accent-orange-500"
-            />
+              className="w-3.5 h-3.5"
+              style={{ accentColor: "var(--neon-purple)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>Restart server after update</span>
           </label>
           {automation.restart_after_update && (
             <label className="flex items-center gap-2 cursor-pointer select-none pl-5">
-              <input
-                type="checkbox"
-                checked={automation.only_if_running}
+              <input type="checkbox" checked={automation.only_if_running}
                 onChange={(e) => handleSave({ only_if_running: e.target.checked })}
-                className="w-3.5 h-3.5 accent-orange-500"
-              />
+                className="w-3.5 h-3.5"
+                style={{ accentColor: "var(--neon-purple)" }} />
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>Only restart if server was already running</span>
             </label>
           )}
@@ -590,38 +920,42 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// CARD_DEFS
+// ---------------------------------------------------------------------------
+
+const CARD_DEFS: { type: ScheduleType; icon: React.ElementType; title: string; description: string }[] = [
+  { type: "restart",   icon: RotateCcw, title: "Auto-Restart",           description: "Gracefully restart the server on a schedule with optional in-game warnings." },
+  { type: "broadcast", icon: Megaphone, title: "Scheduled Chat Message", description: "Send a recurring global chat message to all online players via RCON." },
+];
+
+// ---------------------------------------------------------------------------
+// AutomationTab
+// ---------------------------------------------------------------------------
+
+interface Props { server: ServerRow }
+
 export function AutomationTab({ server }: Props) {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
-  const [loading, setLoading]     = useState(true);
+  const [loading, setLoading] = useState(true);
 
   const loadSchedules = useCallback(async () => {
     setLoading(true);
-    try {
-      setSchedules(await getServerSchedules(server.id));
-    } catch (e) {
-      toast.error(`Failed to load schedules: ${e}`);
-    } finally {
-      setLoading(false);
-    }
+    try { setSchedules(await getServerSchedules(server.id)); }
+    catch (e) { toast.error(`Failed to load schedules: ${e}`); }
+    finally { setLoading(false); }
   }, [server.id]);
 
   useEffect(() => { loadSchedules(); }, [loadSchedules]);
 
-  function scheduleFor(type: ScheduleType): ScheduleRow | null {
-    return schedules.find((s) => s.schedule_type === type) ?? null;
+  function schedulesFor(type: ScheduleType): ScheduleRow[] {
+    return schedules.filter((s) => s.schedule_type === type);
   }
 
   return (
     <div className="space-y-4">
-      {/* App-running notice */}
-      <div
-        className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-xs"
-        style={{
-          background: "rgba(0,255,255,0.04)",
-          border: "1px solid rgba(0,255,255,0.15)",
-          color: "var(--text-muted)",
-        }}
-      >
+      <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-xs"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", color: "var(--text-muted)" }}>
         <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
         <span>
           Schedules only fire while <strong style={{ color: "var(--text-primary)" }}>LokiASAM is running</strong>.
@@ -629,22 +963,14 @@ export function AutomationTab({ server }: Props) {
         </span>
       </div>
 
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <CalendarClock className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-            Automation
-          </h2>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Automation</h2>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={loadSchedules}
-          disabled={loading}
+        <Button size="sm" variant="outline" onClick={loadSchedules} disabled={loading}
           className="h-8 gap-1.5 cursor-pointer"
-          style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
-        >
+          style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}>
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
       </div>
@@ -653,15 +979,13 @@ export function AutomationTab({ server }: Props) {
         <div className="space-y-3">
           {[1, 2, 3, 4].map((n) => (
             <div key={n} className="glass-card rounded-xl h-28 animate-pulse"
-              style={{ border: "1px solid rgba(191,0,255,0.1)" }} />
+              style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }} />
           ))}
         </div>
       ) : (
         <div className="space-y-3">
-          {/* Update automation — uses new per-server settings instead of schedule rows */}
           <UpdateAutomationCard server={server} />
-
-          {/* Backup, restart, broadcast — cron-based schedule cards */}
+          <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
           {CARD_DEFS.map((def) => (
             <ScheduleCard
               key={def.type}
@@ -670,372 +994,14 @@ export function AutomationTab({ server }: Props) {
               icon={def.icon}
               title={def.title}
               description={def.description}
-              existing={scheduleFor(def.type)}
+              existing={schedulesFor(def.type)}
               onRefresh={loadSchedules}
             />
           ))}
         </div>
       )}
 
-      {/* Notification Config */}
-      <NotificationConfigSection serverId={server.id} />
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// NotificationConfigSection — per-server channel configuration
-// ---------------------------------------------------------------------------
-
-const CHANNEL_DEFS = [
-  {
-    id:    "desktop",
-    label: "Desktop Notifications",
-    icon:  Monitor,
-    desc:  "OS-level toast notifications via the system tray.",
-    fields: [],
-  },
-  {
-    id:    "discord",
-    label: "Discord Webhook",
-    icon:  MessageSquare,
-    desc:  "POST an embed to a Discord channel webhook URL.",
-    fields: [
-      { key: "webhookUrl", label: "Webhook URL", placeholder: "https://discord.com/api/webhooks/…", type: "url" },
-    ],
-  },
-  {
-    id:    "email",
-    label: "Email / SMTP",
-    icon:  Mail,
-    desc:  "Send email alerts via your SMTP server.",
-    fields: [
-      { key: "host",        label: "SMTP Host",    placeholder: "smtp.example.com",    type: "text" },
-      { key: "port",        label: "Port",         placeholder: "587",                 type: "number" },
-      { key: "username",    label: "Username",     placeholder: "user@example.com",    type: "text" },
-      { key: "password",    label: "Password",     placeholder: "••••••••",            type: "password" },
-      { key: "fromAddress", label: "From",         placeholder: "noreply@example.com", type: "email" },
-      { key: "toAddress",   label: "To",           placeholder: "admin@example.com",   type: "email" },
-    ],
-  },
-];
-
-const EVENT_OPTIONS: { value: string; label: string }[] = [
-  { value: NOTIFICATION_EVENTS.SERVER_STARTED,      label: "Server Started" },
-  { value: NOTIFICATION_EVENTS.SERVER_STOPPED,      label: "Server Stopped" },
-  { value: NOTIFICATION_EVENTS.SERVER_CRASHED,      label: "Server Crashed" },
-  { value: NOTIFICATION_EVENTS.SERVER_START_FAILED, label: "Server Failed to Start" },
-  { value: NOTIFICATION_EVENTS.BACKUP_COMPLETED,    label: "Backup Completed" },
-  { value: NOTIFICATION_EVENTS.BACKUP_FAILED,       label: "Backup Failed" },
-  { value: NOTIFICATION_EVENTS.SERVER_UPDATED,      label: "Server Updated" },
-];
-
-interface NotificationConfigSectionProps {
-  serverId: string;
-}
-
-function NotificationConfigSection({ serverId }: NotificationConfigSectionProps) {
-  const [open, setOpen] = useState(false);
-  const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
-  const [saving, setSaving] = useState<string | null>(null);
-
-  const loadConfigs = useCallback(async () => {
-    try {
-      const rows = await getServerNotificationConfigs(serverId);
-      setConfigs(rows);
-    } catch (err) {
-      toast.error("Failed to load notification configs", { description: String(err) });
-    }
-  }, [serverId]);
-
-  useEffect(() => {
-    if (open) loadConfigs();
-  }, [open, loadConfigs]);
-
-  function getConfig(channelId: string): NotificationConfigRow | undefined {
-    return configs.find((c) => c.channel === channelId);
-  }
-
-  async function handleToggle(channelId: string, enabled: boolean) {
-    const existing = getConfig(channelId);
-    const id = existing?.id ?? crypto.randomUUID();
-    await saveNotificationConfig({
-      id,
-      serverId,
-      channel: channelId,
-      enabled,
-      configJson: existing?.config_json ?? "{}",
-      eventsJson: existing?.events_json ?? "[]",
-    });
-    await loadConfigs();
-  }
-
-  async function handleSaveConfig(
-    channelId: string,
-    configJson: string,
-    eventsJson: string
-  ) {
-    setSaving(channelId);
-    try {
-      const existing = getConfig(channelId);
-      const id = existing?.id ?? crypto.randomUUID();
-      await saveNotificationConfig({
-        id,
-        serverId,
-        channel: channelId,
-        enabled: existing?.enabled === 1,
-        configJson,
-        eventsJson,
-      });
-      await loadConfigs();
-      toast.success("Notification config saved.");
-    } catch (e) {
-      toast.error(`Failed to save config: ${e}`);
-    } finally {
-      setSaving(null);
-    }
-  }
-
-  async function handleTest(channelId: string) {
-    const config = getConfig(channelId);
-    const cfg = JSON.parse(config?.config_json ?? "{}") as Record<string, string | boolean | number>;
-    try {
-      if (channelId === "desktop") {
-        await tauriCmd.sendOsNotification("LokiASAM Test", "Desktop notifications are working.");
-      } else if (channelId === "discord") {
-        const url = cfg.webhookUrl as string | undefined;
-        if (!url) { toast.error("Enter a webhook URL first."); return; }
-        await tauriCmd.sendDiscordNotification(url, {
-          title:       "LokiASAM Test",
-          description: "Discord notifications are working.",
-          color:       0x00ff88,
-          serverName:  "Test",
-          eventType:   "test",
-        });
-      } else if (channelId === "email") {
-        const to = cfg.toAddress as string | undefined;
-        if (!to) { toast.error("Enter a To address first."); return; }
-        await tauriCmd.sendEmailNotification(
-          {
-            host:        (cfg.host        as string) ?? "",
-            port:        Number(cfg.port  ?? 587),
-            username:    (cfg.username    as string) ?? "",
-            password:    (cfg.password    as string) ?? "",
-            fromAddress: (cfg.fromAddress as string) ?? "noreply@lokiasam",
-            toAddress:   to,
-            useTls:      Boolean(cfg.useTls ?? false),
-          },
-          { subject: "LokiASAM Test", body: "Email notifications are working." }
-        );
-      }
-      toast.success("Test notification sent.");
-    } catch (e) {
-      toast.error(`Test failed: ${e}`);
-    }
-  }
-
-  return (
-    <div
-      className="rounded-xl overflow-hidden"
-      style={{ border: "1px solid var(--border)" }}
-    >
-      {/* Collapsible header */}
-      <button
-        className="flex items-center justify-between w-full px-4 py-3 transition-colors hover:bg-white/[0.02]"
-        onClick={() => setOpen((v) => !v)}
-        style={{ background: "rgba(191,0,255,0.04)" }}
-      >
-        <div className="flex items-center gap-2">
-          <Bell className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-          <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-            Notification Channels
-          </span>
-        </div>
-        {open
-          ? <ChevronUp className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-          : <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-        }
-      </button>
-
-      {open && (
-        <div className="flex flex-col divide-y" style={{ borderColor: "var(--border)" }}>
-          {CHANNEL_DEFS.map((ch) => {
-            const row = getConfig(ch.id);
-            const enabled = row?.enabled === 1;
-            const cfg = JSON.parse(row?.config_json ?? "{}") as Record<string, string>;
-            const events: string[] = JSON.parse(row?.events_json ?? "[]");
-            const Icon = ch.icon;
-
-            return (
-              <ChannelCard
-                key={ch.id}
-                channelId={ch.id}
-                icon={Icon}
-                label={ch.label}
-                desc={ch.desc}
-                fields={ch.fields}
-                enabled={enabled}
-                cfg={cfg}
-                events={events}
-                saving={saving === ch.id}
-                onToggle={(v) => handleToggle(ch.id, v)}
-                onSave={(cfgJson, evJson) => handleSaveConfig(ch.id, cfgJson, evJson)}
-                onTest={() => handleTest(ch.id)}
-              />
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ChannelCard — individual notification channel config
-// ---------------------------------------------------------------------------
-
-interface ChannelCardProps {
-  channelId: string;
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
-  label: string;
-  desc: string;
-  fields: { key: string; label: string; placeholder: string; type: string }[];
-  enabled: boolean;
-  cfg: Record<string, string>;
-  events: string[];
-  saving: boolean;
-  onToggle: (v: boolean) => void;
-  onSave: (cfgJson: string, evJson: string) => void;
-  onTest: () => void;
-}
-
-function ChannelCard({
-  channelId, icon: Icon, label, desc, fields,
-  enabled, cfg, events, saving,
-  onToggle, onSave, onTest,
-}: ChannelCardProps) {
-  const [localCfg, setLocalCfg] = useState<Record<string, string>>(cfg);
-  const [localEvents, setLocalEvents] = useState<string[]>(events);
-  const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => { setLocalCfg(cfg); }, [JSON.stringify(cfg)]);
-  useEffect(() => { setLocalEvents(events); }, [JSON.stringify(events)]);
-
-  function toggleEvent(ev: string) {
-    setLocalEvents((prev) =>
-      prev.includes(ev) ? prev.filter((e) => e !== ev) : [...prev, ev]
-    );
-  }
-
-  return (
-    <div className="px-4 py-3 flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
-          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{desc}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {enabled && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="w-7 h-7"
-              onClick={onTest}
-              title="Send test notification"
-            >
-              <Send className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
-            </Button>
-          )}
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="text-xs"
-            style={{ color: "var(--neon-purple)" }}
-          >
-            {expanded ? "Hide" : "Configure"}
-          </button>
-          <button
-            type="button"
-            onClick={() => onToggle(!enabled)}
-            className="shrink-0 flex items-center"
-            aria-label={enabled ? "Disable" : "Enable"}
-          >
-            {enabled
-              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-          </button>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="flex flex-col gap-3 pl-7">
-          {/* Config fields */}
-          {fields.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {fields.map((f) => (
-                <div key={f.key} className="flex flex-col gap-1">
-                  <Label className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                    {f.label}
-                  </Label>
-                  <Input
-                    type={f.type}
-                    value={localCfg[f.key] ?? ""}
-                    onChange={(e) =>
-                      setLocalCfg((prev) => ({ ...prev, [f.key]: e.target.value }))
-                    }
-                    placeholder={f.placeholder}
-                    className="h-7 text-xs"
-                    style={{ background: "var(--surface)", borderColor: "var(--border)" }}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Event filters */}
-          <div className="flex flex-col gap-1.5">
-            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-              Trigger on events{" "}
-              <span style={{ color: "var(--text-subtle)" }}>(all if none selected)</span>
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {EVENT_OPTIONS.map((ev) => {
-                const active = localEvents.includes(ev.value);
-                return (
-                  <button
-                    key={ev.value}
-                    onClick={() => toggleEvent(ev.value)}
-                    className="text-[10px] px-2 py-1 rounded transition-all"
-                    style={{
-                      background: active ? "rgba(191,0,255,0.15)" : "transparent",
-                      border: `1px solid ${active ? "var(--neon-purple)" : "var(--border)"}`,
-                      color: active ? "var(--neon-purple)" : "var(--text-muted)",
-                    }}
-                  >
-                    {ev.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <Button
-            size="sm"
-            onClick={() =>
-              onSave(JSON.stringify(localCfg), JSON.stringify(localEvents))
-            }
-            disabled={saving}
-            className="h-7 text-xs self-end"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
-          >
-            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}

@@ -37,7 +37,7 @@ fn emit_download_line(app: &AppHandle, msg: &str) {
     );
 }
 
-/// Scan well-known Steam compatibilitytools.d locations and {base_dir}/proton/
+/// Scan well-known Steam compatibilitytools.d locations and {base_dir}/lokiasam/proton/
 /// for valid GE-Proton installations.
 #[tauri::command]
 pub async fn scan_for_proton(base_dir: String) -> Result<Vec<ProtonEntry>, String> {
@@ -47,7 +47,7 @@ pub async fn scan_for_proton(base_dir: String) -> Result<Vec<ProtonEntry>, Strin
         home.join(".steam/steam/compatibilitytools.d"),
         home.join(".local/share/Steam/compatibilitytools.d"),
         home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d"),
-        PathBuf::from(&base_dir).join("proton"),
+        PathBuf::from(&base_dir).join("lokiasam").join("proton"),
     ];
 
     let mut results = Vec::new();

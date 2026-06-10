@@ -33,6 +33,25 @@ export interface PortConfig {
   rconPort: number;
 }
 
+export interface PortDef {
+  port: number;
+  protocol: "tcp" | "udp";
+}
+
+export interface PortStatus {
+  port: number;
+  protocol: string;
+  covered: boolean;
+}
+
+export interface FirewallStatus {
+  /** "none" | "ufw" | "firewalld" | "iptables" | "nftables" | "windows" */
+  firewallType: string;
+  /** false = no active firewall detected; no action needed */
+  active: boolean;
+  ports: PortStatus[];
+}
+
 export interface ServerStatus {
   serverId: string;
   /** One of: stopped | starting | running | stopping | updating | error | crashed | start-failed */
@@ -50,6 +69,8 @@ export interface ServerStatus {
  */
 export interface StartServerParams {
   serverId: string;
+  /** Human-readable server name — used for log context only. */
+  serverName: string;
   installPath: string;
   /** ASA map identifier, e.g. "TheIsland_WP". */
   mapPath: string;
@@ -104,6 +125,54 @@ export interface RconLogLine {
   kind: "command" | "response" | "chat" | "system" | "error";
 }
 
+export interface ArchivedLogInfo {
+  filename: string;
+  sizeBytes: number;
+  timestamp: string;
+  fullPath: string;
+}
+
+export interface CrashInfo {
+  folderName: string;
+  timestamp: string;
+  hasCallStack: boolean;
+  files: string[];
+  fullPath: string;
+}
+
+export interface CrashFile {
+  name: string;
+  content: string;
+}
+
+export interface CrashReport {
+  folderName: string;
+  files: CrashFile[];
+}
+
+export interface OtherLogInfo {
+  filename: string;
+  sizeBytes: number;
+  timestamp: string;
+  fullPath: string;
+}
+
+export interface ChatLogInfo {
+  filename: string;
+  date: string;
+  sizeBytes: number;
+  fullPath: string;
+}
+
+export interface LogStats {
+  shootergameArchiveCount: number;
+  shootergameTotalBytes: number;
+  chatLogCount: number;
+  chatTotalBytes: number;
+  crashCount: number;
+  storageRoot: string;
+}
+
 /** Emitted on rcon://status/{id} and rcon://status-any when connection state changes. */
 export interface RconStatusPayload {
   serverId: string;
@@ -133,6 +202,19 @@ export interface BackupRecord {
   fileSizeBytes: number;
   mapId: string;
   triggeredBy: string;
+  createdAt: string;
+  /** server | player | full | ini */
+  backupType: string;
+  /** Comma-separated tier flags assigned by frontend: H, D, W, M */
+  tiers: string;
+  playerEosid: string | null;
+  playerName: string | null;
+}
+
+export interface IniBackupRecord {
+  id: string;
+  serverId: string;
+  folderPath: string;
   createdAt: string;
 }
 
@@ -361,6 +443,42 @@ export const tauriCmd = {
     invoke<void>("watch_server_log", { serverId, logPath }),
   stopLogWatch: (serverId: string) => invoke<void>("stop_log_watch", { serverId }),
 
+  // Log archive
+  listArchivedLogs: (serverId: string) =>
+    invoke<ArchivedLogInfo[]>("list_archived_logs", { serverId }),
+  readArchivedLog: (serverId: string, filename: string, offset: number, limit: number) =>
+    invoke<string[]>("read_archived_log", { serverId, filename, offset, limit }),
+  deleteArchivedLog: (serverId: string, filename: string) =>
+    invoke<void>("delete_archived_log", { serverId, filename }),
+
+  // Crash reports (stored in central LokiASAM logs folder)
+  listCrashes: (serverId: string) =>
+    invoke<CrashInfo[]>("list_crashes", { serverId }),
+  readCrashReport: (serverId: string, folderName: string) =>
+    invoke<CrashReport>("read_crash_report", { serverId, folderName }),
+  deleteCrashReport: (serverId: string, folderName: string) =>
+    invoke<void>("delete_crash_report", { serverId, folderName }),
+
+  // Other server logs (secondary engine logs collected at startup)
+  listOtherLogs: (serverId: string) =>
+    invoke<OtherLogInfo[]>("list_other_logs", { serverId }),
+  readOtherLog: (serverId: string, filename: string, offset: number, limit: number) =>
+    invoke<string[]>("read_other_log", { serverId, filename, offset, limit }),
+
+  // Chat logs
+  listChatLogs: (serverId: string) =>
+    invoke<ChatLogInfo[]>("list_chat_logs", { serverId }),
+  readChatLog: (serverId: string, filename: string, offset: number, limit: number) =>
+    invoke<string[]>("read_chat_log", { serverId, filename, offset, limit }),
+
+  // Log maintenance
+  cleanupLogs: (serverId: string, olderThanDays: number) =>
+    invoke<number>("cleanup_logs", { serverId, olderThanDays }),
+  getLogStats: (serverId: string) =>
+    invoke<LogStats>("get_log_stats", { serverId }),
+  getLogStorageRoot: () =>
+    invoke<string>("get_log_storage_root"),
+
   // Config / INI
   /** Read GameUserSettings.ini and Game.ini from the server's install path. */
   readServerConfig: (installPath: string) =>
@@ -373,27 +491,57 @@ export const tauriCmd = {
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
 
   // Backups
-  /**
-   * Zip the server's ShooterGame/Saved directory into backup_dir.
-   * Emits backup://progress/{serverId} events. Returns a BackupRecord to
-   * persist in SQLite via db.insertBackup().
-   */
-  createBackup: (
-    serverId: string,
-    serverName: string,
-    installPath: string,
-    backupDir: string,
-    mapId: string,
-    triggeredBy: string,
-  ) => invoke<BackupRecord>("create_backup", { serverId, serverName, installPath, backupDir, mapId, triggeredBy }),
-  /**
-   * Extract backup zip over ShooterGame/Saved. The frontend must stop the
-   * server before calling this and restart it after.
-   */
-  restoreBackup: (serverId: string, backupFilePath: string, installPath: string) =>
-    invoke<void>("restore_backup", { serverId, backupFilePath, installPath }),
-  /** Delete the zip file from disk. Frontend removes the SQLite record via db.deleteBackupRecord(). */
+  /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
+  createServerBackup: (
+    serverId: string, serverName: string, installPath: string, mapPath: string,
+    mapId: string, backupDir: string, triggeredBy: string,
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+
+  /** Player backup: 7z a single .arkprofile file. */
+  createPlayerBackup: (
+    serverId: string, serverName: string, installPath: string, mapPath: string,
+    mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string,
+  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy }),
+
+  /** INI backup: copy loose INI files into a rotating timestamped folder. */
+  createIniBackup: (serverId: string, installPath: string, backupDir: string, platform: string) =>
+    invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir, platform }),
+
+  /** Full backup: 7z the entire install_path directory. */
+  createFullBackup: (
+    serverId: string, serverName: string, installPath: string, mapId: string,
+    backupDir: string, triggeredBy: string,
+  ) => invoke<BackupRecord>("create_full_backup", { serverId, serverName, installPath, mapId, backupDir, triggeredBy }),
+
+  /** List timestamped INI snapshot folder names for a server, newest first. */
+  listIniBackups: (serverId: string, backupDir: string) =>
+    invoke<string[]>("list_ini_backups", { serverId, backupDir }),
+
+  /** Restore a server backup: extract 7z over SavedArks+SaveGames. */
+  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string) =>
+    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath }),
+
+  /** Restore a player backup: extract 7z into SavedArks/{mapPath}. */
+  restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, mapPath: string) =>
+    invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, mapPath }),
+
+  /** Restore an INI backup: copy loose INI files back to Config/{platform}. */
+  restoreIniBackup: (backupFolderPath: string, installPath: string, platform: string) =>
+    invoke<void>("restore_ini_backup", { backupFolderPath, installPath, platform }),
+
+  /** Restore a full backup: extract 7z over the entire install_path. */
+  restoreFullBackup: (serverId: string, backupFilePath: string, installPath: string) =>
+    invoke<void>("restore_full_backup", { serverId, backupFilePath, installPath }),
+
+  /** Delete a backup archive or INI folder from disk. */
   deleteBackup: (filePath: string) => invoke<void>("delete_backup", { filePath }),
+
+  /** Delete ARK's own timestamped .ark backups and .profilebak files. */
+  cleanupArkOwnBackups: (installPath: string, mapPath: string) =>
+    invoke<number>("cleanup_ark_own_backups", { installPath, mapPath }),
+
+  /** Estimate total uncompressed size of a directory in bytes. */
+  estimateDirSize: (dirPath: string) => invoke<number>("estimate_dir_size", { dirPath }),
 
   // Mods
   /**
@@ -529,4 +677,34 @@ export const tauriCmd = {
    * and migrates the old database from app_data_dir if present.
    */
   writeBootstrap: (baseDir: string) => invoke<void>("write_bootstrap", { baseDir }),
+
+  // CFCore retry
+  /** Emit a standard "start-failed" status event after all CFCore auto-retries are exhausted. */
+  forceServerStartFailed: (serverId: string, error: string) =>
+    invoke<void>("force_server_start_failed", { serverId, error }),
+
+  // Amazon Root CA certificate
+  /** Download Amazon Root CA 1 to tempDir and return the saved file path. */
+  downloadAmazonRootCa: (tempDir: string) =>
+    invoke<string>("download_amazon_root_ca", { tempDir }),
+  /** Install the downloaded cert into the Windows cert store (Windows) or Wine prefix (Linux). */
+  installAmazonRootCa: (certPath: string, protonPath?: string, prefixPath?: string) =>
+    invoke<void>("install_amazon_root_ca", { certPath, protonPath, prefixPath }),
+  /** Check whether Amazon Root CA 1 is already installed. */
+  checkAmazonRootCaInstalled: (protonPath?: string, prefixPath?: string) =>
+    invoke<boolean>("check_amazon_root_ca_installed", { protonPath, prefixPath }),
+
+  // Firewall management
+  /** Check firewall status for the given ports. Non-elevated on all platforms. */
+  checkFirewallPorts: (ports: PortDef[]) =>
+    invoke<FirewallStatus>("check_firewall_ports", { ports }),
+  /** Add firewall rules for the given ports. Triggers UAC / pkexec elevation. */
+  addFirewallRules: (ports: PortDef[], protonPath?: string) =>
+    invoke<void>("add_firewall_rules", { ports, protonPath }),
+  /** Remove firewall rules. Called when user opts in during server deletion. */
+  removeFirewallRules: (ports: PortDef[]) =>
+    invoke<void>("remove_firewall_rules", { ports }),
+  /** Return all ports currently tracked by LokiASAM's firewall state. */
+  getAllFirewallPorts: () =>
+    invoke<PortDef[]>("get_all_firewall_ports"),
 };

@@ -1,9 +1,9 @@
 /**
- * update-utils.ts — shared helpers for per-server update detection.
+ * update-utils.ts — shared helpers for per-server update detection and application.
  *
  * Called after every global update check (both manual and auto) to compare
  * each server's installed build ID against the shared cache. Updates the
- * update_available column in the DB and fires notifications.
+ * update_available column in the DB and optionally fires notifications.
  */
 
 import { getServers, getAppSetting, setServerUpdateAvailable } from "@/lib/db";
@@ -11,23 +11,43 @@ import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface ServerUpdateInfo {
+  id: string;
+  name: string;
+  status: string;
+  installedBuild: string;
+  cachedBuild: string;
+}
+
+export interface UpdateCheckSummary {
+  /** Server IDs that were newly flagged (weren't flagged before this check). */
+  newlyAvailable: string[];
+  /** All servers currently having an update available (newly + previously flagged). */
+  allWithUpdates: ServerUpdateInfo[];
+}
+
+// ── Per-server update check ───────────────────────────────────────────────────
+
 /**
  * Compare every server's installed build ID against the shared cache build ID.
  * Sets update_available = true for any server whose installed build is behind
  * the cache, false for any server that is current or not yet installed.
  *
- * Safe to call on every global check even if the cache itself didn't change —
- * a server that was manually updated since the last check will get its badge
- * cleared here.
+ * When `silent = true` (manual check), suppresses the consolidated toast so the
+ * caller can show a dialog instead. Notification center logging still occurs
+ * for background checks (silent = false).
  *
- * Returns the list of server IDs that newly have an update available.
+ * Returns a summary of which servers have updates available.
  */
-export async function runPerServerUpdateCheck(): Promise<string[]> {
+export async function runPerServerUpdateCheck(silent = false): Promise<UpdateCheckSummary> {
   const cachedBuildId = await getAppSetting("asa_cached_build_id");
-  if (!cachedBuildId) return [];
+  if (!cachedBuildId) return { newlyAvailable: [], allWithUpdates: [] };
 
   const servers = await getServers();
   const newlyAvailable: string[] = [];
+  const allWithUpdates: ServerUpdateInfo[] = [];
 
   await Promise.all(
     servers.map(async (server) => {
@@ -38,41 +58,81 @@ export async function runPerServerUpdateCheck(): Promise<string[]> {
 
         await setServerUpdateAvailable(server.id, isOutdated);
 
-        if (isOutdated && !wasAlreadyFlagged) {
-          newlyAvailable.push(server.id);
-          await dispatchNotification({
-            eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
-            serverId:   server.id,
-            serverName: server.name,
-            title:      "Server Update Available",
-            body:       `${server.name} is behind the cache (installed: ${installed}, cache: ${cachedBuildId}).`,
-            severity:   "info",
+        if (isOutdated) {
+          allWithUpdates.push({
+            id:             server.id,
+            name:           server.name,
+            status:         server.status,
+            installedBuild: installed,
+            cachedBuild:    cachedBuildId,
           });
+          if (!wasAlreadyFlagged) {
+            newlyAvailable.push(server.id);
+          }
         }
       } catch {
-        // If we can't read this server's ACF (not yet installed, permissions,
-        // etc.) leave its update_available flag as-is.
+        // Can't read ACF (not yet installed, permissions, etc.) — leave flag as-is.
+        // If it was already flagged, include it in the summary.
+        if (server.update_available === 1) {
+          allWithUpdates.push({
+            id:             server.id,
+            name:           server.name,
+            status:         server.status,
+            installedBuild: "unknown",
+            cachedBuild:    cachedBuildId,
+          });
+        }
       }
     })
   );
 
-  return newlyAvailable;
+  // Fire a single consolidated notification for background checks.
+  // For manual checks (silent = true) the caller shows a dialog instead.
+  if (!silent && newlyAvailable.length > 0) {
+    const names = allWithUpdates
+      .filter((s) => newlyAvailable.includes(s.id))
+      .map((s) => s.name);
+
+    const title = names.length === 1
+      ? "Server Update Available"
+      : `${names.length} Servers Need Updates`;
+
+    const body = names.length === 1
+      ? `An update is available for ${names[0]}.`
+      : `Updates available for: ${names.join(", ")}.`;
+
+    await dispatchNotification({
+      eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
+      serverId:   null,
+      serverName: "ASA Servers",
+      title,
+      body,
+      severity:   "info",
+    });
+  }
+
+  return { newlyAvailable, allWithUpdates };
 }
+
+// ── Single-server update apply ────────────────────────────────────────────────
 
 /**
  * Apply the cached update to a single server:
- *   1. Stop the server if it is running (records whether it was).
+ *   1. Stop the server if it is running.
  *   2. Apply the shared cache to the server's install directory.
- *   3. Restart the server if it was running before.
+ *   3. Restart the server if it was running AND restartAfterUpdate is true.
  *   4. Clear the update_available flag.
  *
  * Fires UPDATE_STARTED, SERVER_UPDATED (or UPDATE_FAILED) notifications.
+ * Throws `{ restartNeeded: true }` as a signal (not an error) when the caller
+ * should restart the server using its own start flow (which has StartServerParams).
  */
 export async function applyUpdateToServer(
   serverId: string,
   serverName: string,
   installPath: string,
-  isRunning: boolean,
+  wasRunning: boolean,
+  restartAfterUpdate: boolean,
   onStatusChange?: (msg: string) => void,
 ): Promise<void> {
   const [cacheBase, steamcmdPath] = await Promise.all([
@@ -94,19 +154,15 @@ export async function applyUpdateToServer(
   });
 
   try {
-    // Stop if running
-    if (isRunning) {
+    if (wasRunning) {
       onStatusChange?.("Stopping server…");
       await tauriCmd.stopServer(serverId, false);
-      // Brief pause so the process has time to exit
       await new Promise((r) => setTimeout(r, 3000));
     }
 
-    // Apply cache → server
     onStatusChange?.("Applying update…");
     await tauriCmd.applyCacheToServer(serverId, installPath, cacheDir);
 
-    // Clear badge
     await setServerUpdateAvailable(serverId, false);
 
     await dispatchNotification({
@@ -118,17 +174,14 @@ export async function applyUpdateToServer(
       severity:   "success",
     });
 
-    // Restart if it was running
-    if (isRunning) {
+    if (wasRunning && restartAfterUpdate) {
       onStatusChange?.("Restarting server…");
-      // The caller is responsible for restarting via its existing start flow
-      // (it has access to the full StartServerParams). Signal via thrown value.
+      // Caller is responsible for restart (it has StartServerParams).
       throw { restartNeeded: true };
     }
   } catch (err) {
-    if (err && typeof err === "object" && "restartNeeded" in err) {
-      throw err; // propagate restart signal, not an error
-    }
+    if (err && typeof err === "object" && "restartNeeded" in err) throw err;
+
     await dispatchNotification({
       eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
       serverId,

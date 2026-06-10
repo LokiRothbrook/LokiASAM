@@ -38,6 +38,10 @@ interface SetupState {
   protonPath: string;
   protonValidated: boolean;
 
+  // Certificate step (both platforms)
+  certInstalled: boolean;
+  certSkipped: boolean;
+
   // Notifications step — Discord
   discordWebhook: string;
 
@@ -61,8 +65,8 @@ interface SetupState {
   closeToTray: boolean;
 
   // Auto-update step
-  asaAutoUpdateEnabled: boolean;
-  appAutoUpdateEnabled: boolean;
+  asaAutoCheckHours: string;    // "0"|"1"|"6"|"12"|"24"
+  appUpdateCheckMode: string;   // "startup"|"periodic"|"off"
   protonAutoCheckEnabled: boolean;
 
   // Theme step
@@ -90,6 +94,8 @@ interface SetupState {
   setProtonMode: (mode: ProtonMode) => void;
   setProtonPath: (path: string) => void;
   setProtonValidated: (ok: boolean) => void;
+  setCertInstalled: (ok: boolean) => void;
+  setCertSkipped: (ok: boolean) => void;
   setDiscordWebhook: (url: string) => void;
   setSmtpHost: (v: string) => void;
   setSmtpPort: (v: string) => void;
@@ -104,8 +110,8 @@ interface SetupState {
   setNotifyServerStop: (v: boolean) => void;
   setNotifyUpdateAvailable: (v: boolean) => void;
   setCloseToTray: (v: boolean) => void;
-  setAsaAutoUpdateEnabled: (v: boolean) => void;
-  setAppAutoUpdateEnabled: (v: boolean) => void;
+  setAsaAutoCheckHours: (v: string) => void;
+  setAppUpdateCheckMode: (v: string) => void;
   setProtonAutoCheckEnabled: (v: boolean) => void;
   setThemePreset: (v: string) => void;
   setThemeAccent: (v: string) => void;
@@ -128,6 +134,8 @@ const initialState = {
   protonMode: "managed" as ProtonMode,
   protonPath: "",
   protonValidated: false,
+  certInstalled: false,
+  certSkipped: false,
   discordWebhook: "",
   smtpHost: "",
   smtpPort: "587",
@@ -142,11 +150,11 @@ const initialState = {
   notifyServerStop: false,
   notifyUpdateAvailable: true,
   closeToTray: true,
-  asaAutoUpdateEnabled: true,
-  appAutoUpdateEnabled: true,
+  asaAutoCheckHours: "1",
+  appUpdateCheckMode: "startup",
   protonAutoCheckEnabled: true,
-  themePreset: "neon",
-  themeAccent: "purple",
+  themePreset: "storm",
+  themeAccent: "blue",
   isLoading: false,
   loadingMessage: "",
 };
@@ -170,6 +178,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setProtonMode: (protonMode) => set({ protonMode }),
   setProtonPath: (protonPath) => set({ protonPath }),
   setProtonValidated: (protonValidated) => set({ protonValidated }),
+  setCertInstalled: (certInstalled) => set({ certInstalled }),
+  setCertSkipped: (certSkipped) => set({ certSkipped }),
   setDiscordWebhook: (discordWebhook) => set({ discordWebhook }),
   setSmtpHost: (smtpHost) => set({ smtpHost }),
   setSmtpPort: (smtpPort) => set({ smtpPort }),
@@ -184,8 +194,8 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setNotifyServerStop: (notifyServerStop) => set({ notifyServerStop }),
   setNotifyUpdateAvailable: (notifyUpdateAvailable) => set({ notifyUpdateAvailable }),
   setCloseToTray: (closeToTray) => set({ closeToTray }),
-  setAsaAutoUpdateEnabled: (asaAutoUpdateEnabled) => set({ asaAutoUpdateEnabled }),
-  setAppAutoUpdateEnabled: (appAutoUpdateEnabled) => set({ appAutoUpdateEnabled }),
+  setAsaAutoCheckHours: (asaAutoCheckHours) => set({ asaAutoCheckHours }),
+  setAppUpdateCheckMode: (appUpdateCheckMode) => set({ appUpdateCheckMode }),
   setProtonAutoCheckEnabled: (protonAutoCheckEnabled) => set({ protonAutoCheckEnabled }),
   setThemePreset: (themePreset) => set({ themePreset }),
   setThemeAccent: (themeAccent) => set({ themeAccent }),

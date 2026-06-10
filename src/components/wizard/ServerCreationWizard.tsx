@@ -24,6 +24,7 @@ import {
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
+  Shield, Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,7 +46,7 @@ import {
   createSchedule, getClusters, isServerNameTaken, updateServerStatus,
   type ClusterRow,
 } from "@/lib/db";
-import { tauriCmd } from "@/lib/tauri-commands";
+import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -170,6 +171,7 @@ function computeSteps(data: WizardData): StepDef[] {
   }
   steps.push(
     { id: "network",    label: "Network",    icon: Network },
+    { id: "firewall",   label: "Firewall",   icon: Shield },
     { id: "cluster",    label: "Cluster",    icon: GitBranch },
     { id: "automation", label: "Automation", icon: Clock },
     { id: "launch",     label: "Launch Args", icon: Terminal },
@@ -291,16 +293,16 @@ function BasicInfoStep({
     return (
       <button
         onClick={() => handleMapSelect(map)}
-        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all hover:bg-[rgba(191,0,255,0.08)]"
+        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all hover:bg-[rgba(var(--neon-purple-rgb),0.08)]"
         style={{
-          background: active ? "rgba(191,0,255,0.12)" : "transparent",
+          background: active ? "rgba(var(--neon-purple-rgb),0.12)" : "transparent",
         }}
       >
         <div className="flex-1 min-w-0">
           <p className="text-sm truncate" style={{ color: active ? "var(--neon-purple)" : "var(--text-primary)" }}>
             {map.displayName}
             {map.isMod && (
-              <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,255,0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)" }}>
+              <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
                 MOD
               </span>
             )}
@@ -329,7 +331,7 @@ function BasicInfoStep({
           placeholder="My ASA Server"
           style={{
             background: "rgba(10,10,30,0.8)",
-            borderColor: nameError ? "var(--neon-red)" : "rgba(191,0,255,0.3)",
+            borderColor: nameError ? "var(--neon-red)" : "rgba(var(--neon-purple-rgb),0.3)",
             color: "var(--text-primary)",
           }}
         />
@@ -359,17 +361,17 @@ function BasicInfoStep({
             className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left"
             style={{
               background: "rgba(10,10,30,0.8)",
-              border: "1px solid rgba(191,0,255,0.3)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
               color: "var(--text-primary)",
             }}
           >
             <span className="flex items-center gap-2 text-sm">
               {selectedMap?.displayName ?? "Select a map…"}
               {selectedMap?.isMod && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,255,0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)" }}>MOD</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>MOD</span>
               )}
               {selectedMap?.dlcRequired && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(191,0,255,0.1)", color: "var(--neon-purple)", border: "1px solid rgba(191,0,255,0.2)" }}>DLC</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>DLC</span>
               )}
             </span>
             <ChevronDown className="w-4 h-4 shrink-0" style={{ color: "var(--text-muted)" }} />
@@ -380,7 +382,7 @@ function BasicInfoStep({
               className="absolute top-full left-0 right-0 z-50 mt-1 rounded-lg overflow-hidden"
               style={{
                 background: "rgba(8,8,25,0.98)",
-                border: "1px solid rgba(191,0,255,0.3)",
+                border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
                 boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
                 maxHeight: "320px",
                 overflowY: "auto",
@@ -396,7 +398,7 @@ function BasicInfoStep({
                 {/* Mod Maps */}
                 {modMaps.length > 0 && (
                   <>
-                    <div className="my-2 border-t" style={{ borderColor: "rgba(191,0,255,0.12)" }} />
+                    <div className="my-2 border-t" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }} />
                     <p className="text-[10px] font-semibold px-3 pt-1 pb-2 uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
                       Mod Maps
                     </p>
@@ -411,7 +413,7 @@ function BasicInfoStep({
         {selectedMap?.isMod && selectedMap.requiredModId && (
           <div
             className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(0,255,255,0.06)", border: "1px solid rgba(0,255,255,0.2)" }}
+            style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
           >
             <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
             <p style={{ color: "var(--neon-cyan)" }}>
@@ -439,7 +441,7 @@ function BasicInfoStep({
             value={data.serverPassword}
             onChange={(e) => onChange({ serverPassword: e.target.value })}
             placeholder="Leave blank for public"
-            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.3)", color: "var(--text-primary)" }}
+            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
           />
         </div>
         <div className="space-y-1.5">
@@ -451,7 +453,7 @@ function BasicInfoStep({
             placeholder="Required"
             style={{
               background: "rgba(10,10,30,0.8)",
-              borderColor: !data.adminPassword ? "var(--neon-red)" : "rgba(191,0,255,0.3)",
+              borderColor: !data.adminPassword ? "var(--neon-red)" : "rgba(var(--neon-purple-rgb),0.3)",
               color: "var(--text-primary)",
             }}
           />
@@ -480,9 +482,9 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
               onClick={() => onChange({ gameMode: mode.id })}
               className="rounded-xl p-5 text-left transition-all flex flex-col gap-3"
               style={{
-                background: active ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-                border: `1px solid ${active ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.12)"}`,
-                boxShadow: active ? "0 0 24px rgba(191,0,255,0.1)" : "none",
+                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
+                boxShadow: active ? "0 0 24px rgba(var(--neon-purple-rgb),0.1)" : "none",
               }}
             >
               <div className="text-3xl">{mode.icon}</div>
@@ -507,7 +509,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
 
       {/* PvE-specific options shown when PvE is selected */}
       {data.gameMode === "pve" && (
-        <div className="rounded-xl p-4 space-y-2" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.15)" }}>
+        <div className="rounded-xl p-4 space-y-2" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
           <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>PvE Options</p>
           <div className="flex items-center justify-between">
             <div>
@@ -582,9 +584,9 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
               onClick={() => onChange({ presetStyle: style.id as WizardData["presetStyle"] })}
               className="w-full rounded-lg p-4 text-left transition-all"
               style={{
-                background: active ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-                border: `1px solid ${active ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.12)"}`,
-                boxShadow: active ? "0 0 16px rgba(191,0,255,0.1)" : "none",
+                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
+                boxShadow: active ? "0 0 16px rgba(var(--neon-purple-rgb),0.1)" : "none",
               }}
             >
               <div className="flex items-start justify-between gap-3">
@@ -599,9 +601,9 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
                         key={tag}
                         className="text-[10px] px-1.5 py-0.5 rounded"
                         style={{
-                          background: active ? "rgba(191,0,255,0.15)" : "rgba(191,0,255,0.07)",
+                          background: active ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.07)",
                           color: active ? "var(--neon-purple)" : "var(--text-muted)",
-                          border: "1px solid rgba(191,0,255,0.2)",
+                          border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
                         }}
                       >
                         {tag}
@@ -653,7 +655,7 @@ interface RateSliderProps {
 function RateSlider({ label, description, value, min, max, step, onChange, formatValue }: RateSliderProps) {
   const display = formatValue ? formatValue(value) : `${value}×`;
   return (
-    <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(191,0,255,0.12)" }}>
+    <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{label}</p>
@@ -687,7 +689,7 @@ function GuidedRatesStep({ data, onChange }: { data: WizardData; onChange: (patc
         <RateSlider label="Night Speed" description="Higher = nights pass faster." value={r.nightSpeedMultiplier} min={1.0} max={10} step={0.5} onChange={(v) => set("nightSpeedMultiplier", v)} />
         <RateSlider label="Wild Dino Max Level" description="Highest level wild dinos can spawn. 150 is the standard for most community servers." value={r.wildDinoMaxLevel} min={30} max={300} step={30} onChange={(v) => set("wildDinoMaxLevel", v)} formatValue={(v) => `Level ${v}`} />
 
-        <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(191,0,255,0.12)" }}>
+        <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
           <div>
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Enhance Skill Gains</p>
             <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>Boosts per-level stat gains for players (increases health, stamina, and damage points per level).</p>
@@ -761,7 +763,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
 
   return (
     <div className="space-y-3">
-      <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(191,0,255,0.06)", border: "1px solid rgba(191,0,255,0.2)" }}>
+      <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
         <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
         <p style={{ color: "var(--text-muted)" }}>
           Server name, passwords, and ports are configured on the previous pages and are excluded here.
@@ -777,7 +779,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           );
           if (visibleFields.length === 0) return null;
           return (
-            <div key={group.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.15)" }}>
+            <div key={group.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
               <button
                 onClick={() => toggleGroup(group.id)}
                 className="w-full flex items-center justify-between px-4 py-2.5"
@@ -827,7 +829,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                             className="h-7 text-xs font-mono"
                             style={{
                               background: "rgba(10,10,30,0.8)",
-                              borderColor: "rgba(191,0,255,0.2)",
+                              borderColor: "rgba(var(--neon-purple-rgb),0.2)",
                               color: "var(--text-primary)",
                             }}
                           />
@@ -882,7 +884,7 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           className="font-mono"
           style={{
             background: "rgba(10,10,30,0.8)",
-            borderColor: status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(191,0,255,0.3)",
+            borderColor: status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
             color: "var(--text-primary)",
           }}
         />
@@ -904,6 +906,175 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           <Loader2 className="w-3 h-3 animate-spin" /> Checking port availability…
         </p>
       )}
+      {/* Port forwarding info */}
+      <div
+        className="flex gap-2.5 rounded-lg px-3 py-2.5"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          These ports also need to be forwarded on your router or VPN service for players outside
+          your home network to connect. See the{" "}
+          <span style={{ color: "var(--neon-purple)" }}>Quick Start Guide</span>
+          {" "}(? in the sidebar) for details on router forwarding and VPN options.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Firewall Step
+// ---------------------------------------------------------------------------
+
+type FirewallPhase = "checking" | "ready" | "adding" | "done" | "skipped" | "error";
+
+function FirewallStep({ data }: { data: WizardData }) {
+  const [phase, setPhase] = useState<FirewallPhase>("checking");
+  const [status, setStatus] = useState<FirewallStatus | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const ports: PortDef[] = [
+    { port: data.port,          protocol: "udp" },
+    { port: data.port + 1,      protocol: "udp" },
+    { port: data.queryPort,     protocol: "udp" },
+    { port: data.rconPort,      protocol: "tcp" },
+  ];
+
+  useEffect(() => {
+    tauriCmd.checkFirewallPorts(ports).then((result) => {
+      setStatus(result);
+      const allCovered = !result.active || result.ports.every((p) => p.covered);
+      setPhase(allCovered ? "done" : "ready");
+    }).catch(() => setPhase("ready"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleAddRules = async () => {
+    if (!status) return;
+    const missing = status.ports.filter((p) => !p.covered);
+    if (missing.length === 0) { setPhase("done"); return; }
+    setPhase("adding");
+    try {
+      const protonPath = (await getAppSetting("proton_path")) ?? undefined;
+      await tauriCmd.addFirewallRules(missing.map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" })), protonPath);
+      setPhase("done");
+    } catch (e) {
+      setErrorMsg(String(e));
+      setPhase("error");
+    }
+  };
+
+  const firewallLabel: Record<string, string> = {
+    ufw: "UFW", firewalld: "firewalld", iptables: "iptables",
+    nftables: "nftables", windows: "Windows Firewall", none: "None detected",
+  };
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        LokiASAM can open the required ports in your system firewall so players can connect.
+        This requires a one-time administrator prompt.
+      </p>
+
+      {/* Status */}
+      {phase === "checking" && (
+        <div className="flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="text-sm">Checking firewall…</span>
+        </div>
+      )}
+
+      {status && !status.active && (phase === "done" || phase === "ready") && (
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.2)" }}>
+          <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
+          <p className="text-sm" style={{ color: "var(--neon-green)" }}>
+            No active firewall detected — nothing to configure.
+          </p>
+        </div>
+      )}
+
+      {status && status.active && (phase === "ready" || phase === "done") && (
+        <div className="space-y-2">
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Firewall: <span style={{ color: "var(--text-primary)" }}>{firewallLabel[status.firewallType] ?? status.firewallType}</span>
+          </p>
+          {status.ports.map((p) => (
+            <div key={`${p.port}-${p.protocol}`}
+              className="flex items-center justify-between text-xs px-3 py-1.5 rounded-lg"
+              style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+              <span style={{ color: "var(--text-primary)" }}>
+                {p.port}/{p.protocol.toUpperCase()}
+                {p.port === data.port + 1 ? " (Steam P2P)" : ""}
+              </span>
+              {p.covered
+                ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />
+                : <AlertCircle className="w-3.5 h-3.5" style={{ color: "var(--neon-orange, #f97316)" }} />}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {phase === "done" && status?.active && status.ports.every((p) => p.covered) && (
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.2)" }}>
+          <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
+          <p className="text-sm" style={{ color: "var(--neon-green)" }}>All ports are open.</p>
+        </div>
+      )}
+
+      {phase === "adding" && (
+        <div className="flex items-center gap-2" style={{ color: "var(--text-muted)" }}>
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="text-sm">Waiting for administrator approval…</span>
+        </div>
+      )}
+
+      {phase === "error" && (
+        <div className="rounded-lg px-3 py-2.5 space-y-1"
+          style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.25)" }}>
+          <p className="text-sm font-medium" style={{ color: "var(--neon-red)" }}>Failed to add rules</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>{errorMsg}</p>
+        </div>
+      )}
+
+      {phase === "skipped" && (
+        <div className="rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.25)" }}>
+          <p className="text-xs" style={{ color: "var(--neon-orange, #f97316)" }}>
+            Firewall rules will not be managed by LokiASAM. You are responsible for opening the
+            required ports. Players outside your local network may not be able to connect.
+          </p>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex flex-col gap-2">
+        {(phase === "ready" || phase === "error") && status?.active && (
+          <button
+            onClick={handleAddRules}
+            className="w-full py-2.5 rounded-lg text-sm font-medium transition-all"
+            style={{
+              background: "rgba(var(--neon-purple-rgb),0.15)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+              color: "var(--neon-purple)",
+            }}
+          >
+            <Shield className="w-4 h-4 inline mr-2" />
+            Open Ports in Firewall
+          </button>
+        )}
+        {phase !== "done" && phase !== "skipped" && phase !== "adding" && (
+          <button
+            onClick={() => setPhase("skipped")}
+            className="text-xs text-center py-1.5"
+            style={{ color: "var(--text-subtle)" }}
+          >
+            Skip — I'll manage manually
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -942,7 +1113,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
       {joinCluster && (
         <div className="space-y-2">
           {clusters.length === 0 ? (
-            <div className="rounded-lg p-4 text-center" style={{ background: "rgba(191,0,255,0.05)", border: "1px solid rgba(191,0,255,0.15)" }}>
+            <div className="rounded-lg p-4 text-center" style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
               <p className="text-sm" style={{ color: "var(--text-muted)" }}>No clusters yet. Create one from the Clusters page after setup.</p>
             </div>
           ) : (
@@ -952,8 +1123,8 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                 onClick={() => onChange({ clusterId: cluster.id })}
                 className="w-full rounded-lg p-3 text-left transition-all"
                 style={{
-                  background: data.clusterId === cluster.id ? "rgba(191,0,255,0.1)" : "rgba(10,10,30,0.5)",
-                  border: `1px solid ${data.clusterId === cluster.id ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+                  background: data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                  border: `1px solid ${data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 }}
               >
                 <p className="text-sm font-medium" style={{ color: data.clusterId === cluster.id ? "var(--neon-purple)" : "var(--text-primary)" }}>{cluster.name}</p>
@@ -984,7 +1155,7 @@ function CronPicker({ value, onChange }: { value: string; onChange: (v: string) 
       value={CRON_OPTIONS.find((o) => o.value === value) ? value : "custom"}
       onChange={(e) => onChange(e.target.value === "custom" ? value : e.target.value)}
       className="w-full text-xs rounded px-2 py-1.5 font-mono"
-      style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(191,0,255,0.3)", color: "var(--text-primary)", outline: "none" }}
+      style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)", outline: "none" }}
     >
       {CRON_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       <option value="custom">Custom…</option>
@@ -1025,7 +1196,7 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
           const params = LAUNCH_PARAMETERS.filter((p: LaunchParameter) => p.category === cat);
           if (params.length === 0) return null;
           return (
-            <div key={cat} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(191,0,255,0.15)" }}>
+            <div key={cat} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
               <div className="px-3 py-2" style={{ background: "rgba(10,10,30,0.7)" }}>
                 <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>
                   {LAUNCH_PARAM_CATEGORY_LABELS[cat]}
@@ -1066,7 +1237,7 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
                         placeholder={String(p.defaultValue) || "(empty = disabled)"}
                         onChange={(e) => setArg(p.key, e.target.value)}
                         className="h-7 text-xs font-mono"
-                        style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.2)", color: "var(--text-primary)" }}
+                        style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
                       />
                     </div>
                   );
@@ -1095,7 +1266,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
     <div className="space-y-4">
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>Configure automation schedules. All times are in your local timezone.</p>
       {schedules.map(({ key, cronKey, label, desc }) => (
-        <div key={key} className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data[key] ? "rgba(191,0,255,0.3)" : "rgba(191,0,255,0.12)"}` }}>
+        <div key={key} className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data[key] ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
@@ -1199,7 +1370,7 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
           size="sm"
           variant="outline"
           className="gap-1.5 shrink-0"
-          style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
           onClick={handleOpenBrowser}
         >
           <Globe className="w-3.5 h-3.5" />
@@ -1208,7 +1379,7 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
       </div>
 
       {selectedMap?.isMod && selectedMap.requiredModId && (
-        <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(0,255,255,0.06)", border: "1px solid rgba(0,255,255,0.2)" }}>
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
           <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
           <p style={{ color: "var(--neon-cyan)" }}>
             <strong>{selectedMap.displayName}</strong> map mod ({selectedMap.requiredModId}) is locked and will always be loaded.
@@ -1224,21 +1395,21 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
           onKeyDown={(e) => e.key === "Enter" && addMod()}
           placeholder="CurseForge mod ID (e.g. 928793)"
           className="font-mono text-sm"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(191,0,255,0.3)", color: "var(--text-primary)" }}
+          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
         />
         <Button
           onClick={addMod}
           variant="outline"
           size="sm"
           className="gap-1 shrink-0"
-          style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)", background: "rgba(191,0,255,0.05)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
         >
           <Plus className="w-4 h-4" /> Add
         </Button>
       </div>
 
       {data.modIds.length === 0 ? (
-        <div className="rounded-lg p-4 text-center" style={{ background: "rgba(191,0,255,0.04)", border: "1px dashed rgba(191,0,255,0.2)" }}>
+        <div className="rounded-lg p-4 text-center" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
           <Package className="w-8 h-8 mx-auto mb-2" style={{ color: "var(--text-subtle)" }} />
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>No mods added. You can add mods later.</p>
         </div>
@@ -1251,15 +1422,15 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
                 key={id}
                 className="flex items-center justify-between px-3 py-2 rounded-lg"
                 style={{
-                  background: locked ? "rgba(0,255,255,0.05)" : "rgba(10,10,30,0.6)",
-                  border: `1px solid ${locked ? "rgba(0,255,255,0.2)" : "rgba(191,0,255,0.15)"}`,
+                  background: locked ? "rgba(var(--neon-purple-rgb),0.05)" : "rgba(10,10,30,0.6)",
+                  border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 }}
               >
                 <div className="flex items-center gap-2">
                   <span className="text-xs" style={{ color: "var(--text-subtle)" }}>#{i + 1}</span>
                   {locked && <Lock className="w-3 h-3" style={{ color: "var(--neon-cyan)" }} />}
                   <span className="text-sm font-mono" style={{ color: locked ? "var(--neon-cyan)" : "var(--text-primary)" }}>{id}</span>
-                  {locked && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,255,0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)" }}>Map Mod</span>}
+                  {locked && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>Map Mod</span>}
                 </div>
                 {!locked && (
                   <Button
@@ -1558,7 +1729,7 @@ function InstallStep({
         <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Configuration Summary</h3>
         <div className="space-y-1.5 max-h-48 overflow-y-auto">
           {summaryItems.map(({ label, value }) => (
-            <div key={label} className="flex items-center justify-between px-3 py-1.5 rounded" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(191,0,255,0.1)" }}>
+            <div key={label} className="flex items-center justify-between px-3 py-1.5 rounded" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
               <span className="text-xs font-mono" style={{ color: "var(--text-primary)" }}>{value}</span>
             </div>
@@ -1571,7 +1742,7 @@ function InstallStep({
           onClick={startInstall}
           className="w-full gap-2"
           size="lg"
-          style={{ background: "rgba(191,0,255,0.15)", border: "1px solid rgba(191,0,255,0.5)", color: "var(--neon-purple)", boxShadow: "0 0 20px rgba(191,0,255,0.15)" }}
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)", color: "var(--neon-purple)", boxShadow: "0 0 20px rgba(var(--neon-purple-rgb),0.15)" }}
         >
           <Download className="w-4 h-4" /> Install Server
         </Button>
@@ -1596,7 +1767,7 @@ function InstallStep({
             Installation in progress. This may take 15–30 minutes…
           </p>
           <div className="flex items-center gap-2 shrink-0">
-            <Button onClick={() => { backgroundRef.current = true; onGoToDashboard(); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.3)" }}>
+            <Button onClick={() => { backgroundRef.current = true; onGoToDashboard(); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
               <ArrowRight className="w-3 h-3" /> Continue in Background
             </Button>
             <Button onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
@@ -1625,7 +1796,7 @@ function InstallStep({
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {error}
             </p>
           )}
-          <Button onClick={startInstall} variant="outline" size="sm" className="gap-1" style={{ borderColor: "rgba(191,0,255,0.4)", color: "var(--neon-purple)" }}>
+          <Button onClick={startInstall} variant="outline" size="sm" className="gap-1" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
             <RefreshCw className="w-3 h-3" /> Retry Install
           </Button>
         </div>
@@ -1705,6 +1876,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       case "guided":     return <GuidedRatesStep data={data} onChange={onChange} />;
       case "full_ini":   return <FullIniStep data={data} onChange={onChange} />;
       case "network":    return <NetworkStep data={data} onChange={onChange} />;
+      case "firewall":   return <FirewallStep data={data} />;
       case "cluster":    return <ClusterStep data={data} onChange={onChange} />;
       case "automation": return <AutomationStep data={data} onChange={onChange} />;
       case "launch":     return <LaunchParamsStep data={data} onChange={onChange} />;
@@ -1727,10 +1899,10 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--background)" }}>
       {/* Background gradient */}
-      <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(191,0,255,0.08) 0%, transparent 60%)" }} />
+      <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(var(--neon-purple-rgb),0.08) 0%, transparent 60%)" }} />
 
       {/* Top bar */}
-      <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b shrink-0" style={{ borderColor: "rgba(191,0,255,0.15)", background: "rgba(5,5,20,0.8)" }}>
+      <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "rgba(5,5,20,0.8)" }}>
         <div className="flex items-center gap-2">
           <LokiIcon size={16} style={{ filter: "drop-shadow(0 0 4px var(--neon-purple))" }} />
           <span className="text-sm font-semibold text-glow-purple" style={{ color: "var(--neon-purple)" }}>New Server</span>
@@ -1746,7 +1918,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
           {/* Left sidebar */}
           <div
             className="w-52 shrink-0 rounded-xl p-4 flex flex-col gap-1 self-stretch"
-            style={{ background: "rgba(10,10,30,0.7)", border: "1px solid rgba(191,0,255,0.15)", backdropFilter: "blur(12px)" }}
+            style={{ background: "rgba(10,10,30,0.7)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", backdropFilter: "blur(12px)" }}
           >
             <p className="text-xs font-semibold mb-3 px-1" style={{ color: "var(--text-muted)" }}>NEW SERVER</p>
             {steps.map((s, i) => {
@@ -1756,14 +1928,14 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
               return (
                 <div
                   key={s.id}
-                  className={cn("flex items-center gap-3 px-3 py-2 rounded-lg transition-all", active && "bg-[rgba(191,0,255,0.1)]", done && "opacity-70")}
-                  style={{ border: active ? "1px solid rgba(191,0,255,0.4)" : "1px solid transparent" }}
+                  className={cn("flex items-center gap-3 px-3 py-2 rounded-lg transition-all", active && "bg-[rgba(var(--neon-purple-rgb),0.1)]", done && "opacity-70")}
+                  style={{ border: active ? "1px solid rgba(var(--neon-purple-rgb),0.4)" : "1px solid transparent" }}
                 >
                   <div
                     className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
                     style={{
-                      background: done ? "rgba(0,255,136,0.15)" : active ? "rgba(191,0,255,0.2)" : "rgba(191,0,255,0.05)",
-                      border: `1px solid ${done ? "rgba(0,255,136,0.4)" : active ? "rgba(191,0,255,0.5)" : "rgba(191,0,255,0.15)"}`,
+                      background: done ? "rgba(0,255,136,0.15)" : active ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.05)",
+                      border: `1px solid ${done ? "rgba(0,255,136,0.4)" : active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                       color: done ? "var(--neon-green)" : active ? "var(--neon-purple)" : "var(--text-subtle)",
                     }}
                   >
@@ -1791,7 +1963,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
 
             <div
               className="flex-1 rounded-xl p-6 overflow-y-auto"
-              style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(191,0,255,0.15)", backdropFilter: "blur(12px)" }}
+              style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", backdropFilter: "blur(12px)" }}
             >
               <AnimatePresence mode="wait" custom={direction}>
                 <motion.div
@@ -1819,8 +1991,8 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
                   disabled={!canAdvance()}
                   className="gap-2"
                   style={{
-                    background: canAdvance() ? "rgba(191,0,255,0.15)" : "rgba(191,0,255,0.05)",
-                    border: "1px solid rgba(191,0,255,0.4)",
+                    background: canAdvance() ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.05)",
+                    border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
                     color: canAdvance() ? "var(--neon-purple)" : "var(--text-muted)",
                   }}
                 >
@@ -1848,7 +2020,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
               <Button onClick={handleConfirmCancel} className="flex-1 text-sm" style={{ background: "rgba(255,0,85,0.1)", border: "1px solid rgba(255,0,85,0.4)", color: "var(--neon-red)" }}>
                 Yes, Cancel
               </Button>
-              <Button onClick={() => setShowCancelConfirm(false)} className="flex-1 text-sm" style={{ background: "rgba(191,0,255,0.08)", border: "1px solid rgba(191,0,255,0.3)", color: "var(--neon-purple)" }}>
+              <Button onClick={() => setShowCancelConfirm(false)} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
                 Keep Going
               </Button>
             </div>

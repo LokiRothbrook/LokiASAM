@@ -1,17 +1,22 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { useAppStore } from "@/store/useAppStore";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Network,
+  ScrollText,
+  Archive,
   Bell,
   Settings,
+  HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { LokiIcon } from "@/components/shared/LokiIcon";
-import { useServers } from "@/hooks/useServers";
+import { TourModal } from "@/components/shared/TourModal";
 
 interface NavItem {
   href: string;
@@ -20,97 +25,113 @@ interface NavItem {
   exact?: boolean;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { href: "/",              icon: LayoutDashboard, label: "Dashboard",     exact: true },
-  { href: "/clusters",      icon: Network,         label: "Clusters" },
-  { href: "/notifications", icon: Bell,            label: "Notifications" },
-  { href: "/settings",      icon: Settings,        label: "Settings" },
+const TOP_NAV: NavItem[] = [
+  { href: "/",         icon: LayoutDashboard, label: "Dashboard", exact: true },
+  { href: "/clusters", icon: Network,         label: "Clusters" },
+  { href: "/logs",     icon: ScrollText,      label: "Logs" },
+  { href: "/backups",  icon: Archive,         label: "Backups" },
 ];
+
+const BOTTOM_NAV: NavItem[] = [
+  { href: "/notifications", icon: Bell,     label: "Notifications" },
+  { href: "/settings",      icon: Settings, label: "Settings" },
+];
+
+function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
+  const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          href={item.href}
+          className={cn(
+            "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
+            active
+              ? "text-(--neon-purple)"
+              : "text-text-muted hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
+          )}
+          style={
+            active
+              ? {
+                  background: "rgba(var(--neon-purple-rgb),0.12)",
+                }
+              : {}
+          }
+        >
+          <item.icon className="w-5 h-5" />
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="text-xs">
+        {item.label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { data: servers = [] } = useServers();
-  const runningCount = servers.filter((s) => s.status === "running").length;
+  const [tourOpen, setTourOpen] = useState(false);
+  const pendingTour   = useAppStore((s) => s.pendingTour);
+  const setPendingTour = useAppStore((s) => s.setPendingTour);
 
-  function isActive(item: NavItem): boolean {
-    if (item.exact) return pathname === item.href;
-    return pathname.startsWith(item.href);
-  }
+  useEffect(() => {
+    if (pendingTour) {
+      setPendingTour(false);
+      setTourOpen(true);
+    }
+  }, [pendingTour, setPendingTour]);
 
   return (
+    <>
     <aside
       className="flex flex-col items-center w-16 h-full py-4 gap-2 border-r shrink-0"
       style={{
-        background: "rgba(5, 5, 20, 0.95)",
+        background: "var(--glass-bg)",
+        backdropFilter: "blur(var(--glass-blur))",
+        WebkitBackdropFilter: "blur(var(--glass-blur))",
         borderColor: "var(--border)",
       }}
     >
-      {/* Logo */}
-      <div className="mb-4 flex items-center justify-center w-10 h-10">
-        <LokiIcon
-          size={36}
-          style={{ filter: "drop-shadow(0 0 6px var(--neon-purple))" }}
-        />
+      {/* Top nav items */}
+      <div className="flex flex-col gap-1 w-full px-2">
+        {TOP_NAV.map((item) => (
+          <NavLink key={item.href} item={item} pathname={pathname} />
+        ))}
       </div>
 
-      <div className="flex flex-col gap-1 flex-1 w-full px-2">
-        {NAV_ITEMS.map((item) => {
-          const active = isActive(item);
-          return (
-            <Tooltip key={item.href}>
-              <TooltipTrigger asChild>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
-                    active
-                      ? "bg-[rgba(191,0,255,0.1)] text-[var(--neon-purple)]"
-                      : "text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.05)]"
-                  )}
-                  style={
-                    active
-                      ? { boxShadow: "0 0 12px rgba(191,0,255,0.15)", borderLeft: "2px solid var(--neon-purple)" }
-                      : {}
-                  }
-                >
-                  <item.icon className="w-5 h-5" />
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="right" className="text-xs">
-                {item.label}
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </div>
+      {/* Spacer */}
+      <div className="flex-1" />
 
-      {/* Running server count badge */}
-      <div className="px-2 w-full mb-1">
+      {/* Quick Start Guide help button */}
+      <div className="w-full px-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center justify-center w-full h-8 relative">
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{
-                  background: runningCount > 0 ? "var(--neon-green)" : "var(--text-subtle)",
-                  boxShadow: runningCount > 0 ? "var(--glow-green)" : "none",
-                }}
-              />
-              {runningCount > 0 && (
-                <span
-                  className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold"
-                  style={{ background: "var(--neon-green)", color: "#000" }}
-                >
-                  {runningCount > 9 ? "9+" : runningCount}
-                </span>
-              )}
-            </div>
+            <button
+              onClick={() => setTourOpen(true)}
+              className="flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150 text-text-muted hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
+              style={{ color: "var(--text-muted)" }}
+              aria-label="Quick Start Guide"
+            >
+              <HelpCircle className="w-5 h-5" />
+            </button>
           </TooltipTrigger>
-          <TooltipContent side="right" className="text-xs">
-            {runningCount > 0 ? `${runningCount} server${runningCount !== 1 ? "s" : ""} running` : "No servers running"}
-          </TooltipContent>
+          <TooltipContent side="right" className="text-xs">Quick Start Guide</TooltipContent>
         </Tooltip>
       </div>
+
+      {/* Bottom nav items (Notifications + Settings pinned to bottom) */}
+      <div className="flex flex-col gap-1 w-full px-2">
+        {BOTTOM_NAV.map((item) => (
+          <NavLink key={item.href} item={item} pathname={pathname} />
+        ))}
+      </div>
+
     </aside>
+
+    {tourOpen && createPortal(
+      <TourModal onClose={() => setTourOpen(false)} />,
+      document.body
+    )}
+    </>
   );
 }

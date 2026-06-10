@@ -128,7 +128,7 @@ export default function ServerDetailPage() {
     // When the RCON tab is active the root div fills main's content area exactly
     // so the log scrolls internally without creating a page-level scrollbar.
     // Other tabs keep normal flow (gap-6, no height constraint).
-    <div className={`flex flex-col gap-6${activeTab === "rcon" ? " h-full overflow-hidden" : ""}`}>
+    <div className={`flex flex-col gap-6${(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? " h-full overflow-hidden" : ""}`}>
       {/* ── Header ── */}
       <div className="flex items-start gap-3 shrink-0">
         <Button
@@ -164,7 +164,7 @@ export default function ServerDetailPage() {
         className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
         style={{
           background: "rgba(0,0,0,0.4)",
-          border: "1px solid rgba(191,0,255,0.15)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
         }}
       >
         {TABS.map(({ value, label, icon: Icon }) => {
@@ -177,8 +177,8 @@ export default function ServerDetailPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-all cursor-pointer"
               style={{
                 color: active ? "var(--neon-purple)" : "var(--text-muted)",
-                background: active ? "rgba(191,0,255,0.12)" : "transparent",
-                border: active ? "1px solid rgba(191,0,255,0.3)" : "1px solid transparent",
+                background: active ? "rgba(var(--neon-purple-rgb),0.12)" : "transparent",
+                border: active ? "1px solid rgba(var(--neon-purple-rgb),0.3)" : "1px solid transparent",
                 fontWeight: active ? 600 : 400,
                 textShadow: active ? "var(--glow-purple)" : "none",
               }}
@@ -191,19 +191,17 @@ export default function ServerDetailPage() {
       </div>
 
       {/* ── Tab content ── */}
-      {activeTab === "rcon" ? (
-        // flex-1 min-h-0: fills the remaining height in the h-full flex container
-        // without overflowing. The RconConsole scrolls the log internally.
+      {(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? (
         <div className="flex-1 min-h-0">
-          <RconTab server={server} />
+          {activeTab === "rcon" && <RconTab  server={server} />}
+          {activeTab === "logs" && <LogsTab  server={server} />}
+          {activeTab === "mods" && <ModsTab  server={server} />}
         </div>
       ) : (
         <div className="mt-2">
-          {activeTab === "overview"   && <OverviewTab server={server} />}
-          {activeTab === "config"     && <ConfigTab   server={server} />}
-          {activeTab === "logs"       && <LogsTab      server={server} />}
-          {activeTab === "mods"       && <ModsTab      server={server} />}
-          {activeTab === "backups"    && <BackupsTab   server={server} />}
+          {activeTab === "overview"   && <OverviewTab   server={server} />}
+          {activeTab === "config"     && <ConfigTab     server={server} />}
+          {activeTab === "backups"    && <BackupsTab    server={server} />}
           {activeTab === "automation" && <AutomationTab server={server} />}
         </div>
       )}

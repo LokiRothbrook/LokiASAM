@@ -444,7 +444,7 @@ pub fn get_platform() -> String {
 pub async fn open_folder(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if !p.exists() {
-        return Err(format!("Path does not exist: {path}"));
+        std::fs::create_dir_all(p).map_err(|e| format!("Could not create directory: {e}"))?;
     }
 
     #[cfg(target_os = "linux")]

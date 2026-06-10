@@ -103,9 +103,9 @@ export function DisableContextMenu() {
         top: menu.y,
         left: menu.x,
         background: "rgba(8,8,25,0.96)",
-        border: "1px solid rgba(191,0,255,0.35)",
+        border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
         backdropFilter: "blur(16px)",
-        boxShadow: "0 4px 20px rgba(0,0,0,0.6), 0 0 10px rgba(191,0,255,0.08)",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.6), 0 0 10px rgba(var(--neon-purple-rgb),0.08)",
         borderRadius: "8px",
         overflow: "hidden",
         padding: "4px 0",
@@ -120,7 +120,7 @@ export function DisableContextMenu() {
         <div
           style={{
             height: 1,
-            background: "rgba(191,0,255,0.15)",
+            background: "rgba(var(--neon-purple-rgb),0.15)",
             margin: "2px 8px",
           }}
         />
@@ -173,7 +173,7 @@ function ContextMenuItem({
 }) {
   return (
     <button
-      className="w-full flex items-center justify-between px-3 py-1.5 text-xs cursor-default hover:bg-[rgba(191,0,255,0.12)] transition-colors"
+      className="w-full flex items-center justify-between px-3 py-1.5 text-xs cursor-default hover:bg-[rgba(var(--neon-purple-rgb),0.12)] transition-colors"
       style={{ color: "var(--text-primary)" }}
       onClick={onClick}
     >

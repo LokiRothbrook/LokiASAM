@@ -4,9 +4,12 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration, interval, MissedTickBehavior};
 
-use crate::state::rcon_pool::{
-    bin_subdir, CachedPlayer, RconCmd, RconConn, RconLogLine, RconPool,
-    RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND, parse_player_list,
+use crate::state::{
+    log_manager::LogManagerState,
+    rcon_pool::{
+        bin_subdir, CachedPlayer, RconCmd, RconConn, RconLogLine, RconPool,
+        RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND, parse_player_list,
+    },
 };
 
 // Re-export CachedPlayer as ArkPlayer for backwards-compat with existing frontend calls.
@@ -197,6 +200,7 @@ async fn run_rcon_manager(
                                         .insert(server_id.clone(), players.clone());
                                 }
                                 let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
+                                let _ = app.emit("rcon://players-any", serde_json::json!({ "serverId": server_id, "players": players }));
                                 let _ = response_tx.send(Ok(players));
                             }
                             Err(e) => {
@@ -222,6 +226,7 @@ async fn run_rcon_manager(
                                 .insert(server_id.clone(), players.clone());
                         }
                         let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
+                        let _ = app.emit("rcon://players-any", serde_json::json!({ "serverId": server_id, "players": players }));
                     }
                     Err(ExecError::Io(_)) => break, // TCP dead
                     Err(ExecError::Timeout) => {} // server slow; skip this poll cycle
@@ -245,6 +250,7 @@ async fn run_rcon_manager(
                             // Drop SERVER: prefix lines — these are echoes of admin
                             // broadcasts (e.g. ServerChat) that the user already saw.
                             if line.starts_with("SERVER: ") { continue; }
+                            LogManagerState::append_chat_line(&app, &server_id, line).await;
                             emit_log(&app, &server_id, RconLogLine {
                                 timestamp_ms: now_ms(),
                                 text: line.to_string(),

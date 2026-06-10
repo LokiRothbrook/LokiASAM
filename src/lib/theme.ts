@@ -52,9 +52,9 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
   neon: {
     label:        "Neon",
     background:   "#050510",
-    surface:      "rgba(10, 10, 30, 0.75)",
-    surfaceEl:    "rgba(15, 15, 40, 0.9)",
-    glassBg:      "rgba(10, 10, 35, 0.6)",
+    surface:      "rgba(20, 20, 52, 0.85)",
+    surfaceEl:    "rgba(28, 28, 68, 0.92)",
+    glassBg:      "rgba(18, 18, 50, 0.72)",
     textMuted:    "#5858a0",
     textSubtle:   "#3a3a70",
     defaultAccent: "purple",
@@ -87,7 +87,7 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
     glassBg:      "rgba(18, 22, 38, 0.65)",
     textMuted:    "#606880",
     textSubtle:   "#464e64",
-    defaultAccent: "cyan",
+    defaultAccent: "blue",
   },
 };
 

@@ -1,4 +1,4 @@
-pub mod log_watcher;
+pub mod log_manager;
 pub mod rcon_pool;
 pub mod scheduler;
 pub mod stats_recorder;

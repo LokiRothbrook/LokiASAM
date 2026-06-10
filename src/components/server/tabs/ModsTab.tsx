@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Package, Plus, Trash2, ChevronUp, ChevronDown, Globe,
-  AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Info,
+  AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Info, HelpCircle, X,
   Loader2, XCircle, Lock,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -29,12 +29,17 @@ interface Props {
 // ---------------------------------------------------------------------------
 
 export function ModsTab({ server }: Props) {
-  const [mods, setMods]       = useState<ModRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [mods, setMods]             = useState<ModRow[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [showRestartNote, setShowRestartNote] = useState(false);
 
   // Add-by-ID form state
   const [addInput, setAddInput] = useState("");
   const [addError, setAddError] = useState("");
+
+  const markChanged = () => {
+    if (server.status === "running") setShowRestartNote(true);
+  };
 
   const addInputRef = useRef<HTMLInputElement>(null);
   const prevVerifyingRef = useRef(false);
@@ -68,7 +73,7 @@ export function ModsTab({ server }: Props) {
 
   // Real-time update: a mod was added via the browser window
   useEffect(() => {
-    if (modAddedCount > 0) loadMods();
+    if (modAddedCount > 0) { loadMods(); markChanged(); }
   }, [modAddedCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reload when the browser window is closed (safety net for any missed events)
@@ -141,6 +146,7 @@ export function ModsTab({ server }: Props) {
 
     setAddError("");
     startVerifying(toVerify.length);
+    markChanged();
 
     try {
       await tauriCmd.startModVerification(
@@ -167,6 +173,7 @@ export function ModsTab({ server }: Props) {
     try {
       await removeServerMod(server.id, mod.mod_id);
       await loadMods();
+      markChanged();
     } catch (e) {
       toast.error("Failed to remove mod", { description: String(e) });
     }
@@ -176,6 +183,7 @@ export function ModsTab({ server }: Props) {
     try {
       await toggleServerMod(server.id, modId, enabled);
       await loadMods();
+      markChanged();
     } catch (e) {
       toast.error("Failed to toggle mod", { description: String(e) });
     }
@@ -187,6 +195,7 @@ export function ModsTab({ server }: Props) {
     [reordered[index - 1], reordered[index]] = [reordered[index], reordered[index - 1]];
     await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
     await loadMods();
+    markChanged();
   };
 
   const handleMoveDown = async (index: number) => {
@@ -195,37 +204,63 @@ export function ModsTab({ server }: Props) {
     [reordered[index], reordered[index + 1]] = [reordered[index + 1], reordered[index]];
     await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
     await loadMods();
+    markChanged();
   };
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <div className="flex gap-4" style={{ minHeight: 520 }}>
-      {/* ── Left column: mod list ─────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col gap-3 min-w-0">
-
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <h2
-            className="text-base font-semibold"
-            style={{ color: "var(--text-primary)" }}
+    <div className="h-full flex flex-col gap-3">
+      {/* ── Full-width dismissible restart note (only while server running) ── */}
+      {showRestartNote && (
+        <div
+          className="flex items-start gap-2 rounded-xl px-3 py-2.5 shrink-0"
+          style={{
+            background: "rgba(var(--neon-purple-rgb),0.04)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.12)",
+          }}
+        >
+          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
+          <p className="text-xs leading-relaxed flex-1" style={{ color: "var(--text-muted)" }}>
+            Mod changes apply on the next server start or restart — no manual install needed.
+            ARK: Survival Ascended downloads mods automatically.
+          </p>
+          <button
+            onClick={() => setShowRestartNote(false)}
+            className="shrink-0 mt-0.5 rounded p-0.5 transition-colors hover:bg-white/10"
+            style={{ color: "var(--text-muted)" }}
           >
-            Installed Mods
-            <span
-              className="ml-2 text-sm font-normal"
-              style={{ color: "var(--text-muted)" }}
-            >
-              ({mods.length})
-            </span>
-          </h2>
+            <X className="w-3 h-3" />
+          </button>
         </div>
+      )}
+
+      {/* ── Full-width header ─────────────────────────────────────────── */}
+      <div className="flex items-center justify-between shrink-0">
+        <h2
+          className="text-base font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
+          Installed Mods
+          <span
+            className="ml-2 text-sm font-normal"
+            style={{ color: "var(--text-muted)" }}
+          >
+            ({mods.length})
+          </span>
+        </h2>
+      </div>
+
+      {/* ── Two-column body ───────────────────────────────────────────── */}
+      <div className="flex gap-4 flex-1 min-h-0">
+      {/* ── Left column: mod list ─────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
 
         {/* Mod list */}
         <div
-          className="glass-card flex-1 flex flex-col gap-1 rounded-xl p-2 overflow-y-auto"
+          className="glass-card flex-1 flex flex-col gap-1 rounded-xl p-2 overflow-y-auto min-h-0"
           style={{
-            minHeight: 220,
-            maxHeight: 420,
-            borderColor: "rgba(191,0,255,0.15)",
+            minHeight: 80,
+            borderColor: "rgba(var(--neon-purple-rgb),0.15)",
           }}
         >
           {loading ? (
@@ -260,8 +295,8 @@ export function ModsTab({ server }: Props) {
 
         {/* Add-by-ID form */}
         <div
-          className="glass-card flex flex-col gap-2 rounded-xl p-3"
-          style={{ borderColor: "rgba(191,0,255,0.12)" }}
+          className="glass-card flex flex-col gap-2 rounded-xl p-3 shrink-0"
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}
         >
           <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
             Add mods by ID
@@ -274,7 +309,7 @@ export function ModsTab({ server }: Props) {
               onKeyDown={(e) => { if (e.key === "Enter") handleAddFromForm(); }}
               placeholder="e.g. 927090, 123456, 789012"
               className="flex-1 text-sm font-mono"
-              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(191,0,255,0.2)" }}
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
               disabled={verifying}
             />
             <Button
@@ -306,20 +341,6 @@ export function ModsTab({ server }: Props) {
           </p>
         </div>
 
-        {/* Apply note */}
-        <div
-          className="flex items-start gap-2 rounded-xl px-3 py-2.5"
-          style={{
-            background: "rgba(0,255,255,0.04)",
-            border: "1px solid rgba(0,255,255,0.12)",
-          }}
-        >
-          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-cyan)" }} />
-          <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
-            Mod changes apply on the next server start or restart — no manual install needed.
-            ARK: Survival Ascended downloads mods automatically.
-          </p>
-        </div>
       </div>
 
       {/* ── Right column: browser panel ─────────────────────────────── */}
@@ -330,7 +351,7 @@ export function ModsTab({ server }: Props) {
         {/* Open / Close browser card */}
         <div
           className="glass-card flex flex-col gap-3 p-4 rounded-xl"
-          style={{ borderColor: "rgba(191,0,255,0.15)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
         >
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -344,9 +365,9 @@ export function ModsTab({ server }: Props) {
               <span
                 className="ml-auto text-xs px-1.5 py-0.5 rounded-full"
                 style={{
-                  background: "rgba(191,0,255,0.15)",
+                  background: "rgba(var(--neon-purple-rgb),0.15)",
                   color: "var(--neon-purple)",
-                  border: "1px solid rgba(191,0,255,0.3)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
                 }}
               >
                 Open
@@ -390,14 +411,17 @@ export function ModsTab({ server }: Props) {
         {/* Info card */}
         <div
           className="glass-card flex flex-col gap-2 p-4 rounded-xl"
-          style={{ borderColor: "rgba(0,255,255,0.1)" }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}
         >
-          <p
-            className="text-xs font-semibold uppercase tracking-wide"
-            style={{ color: "var(--neon-cyan)" }}
-          >
-            How mods work
-          </p>
+          <div className="flex items-center gap-1.5">
+            <HelpCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <p
+              className="text-xs font-semibold uppercase tracking-wide"
+              style={{ color: "var(--text-primary)" }}
+            >
+              How mods work
+            </p>
+          </div>
           <ul
             className="text-xs leading-relaxed space-y-1.5"
             style={{ color: "var(--text-muted)" }}
@@ -409,6 +433,7 @@ export function ModsTab({ server }: Props) {
             <li>• ASA downloads mods itself — no manual install</li>
           </ul>
         </div>
+      </div>
       </div>
     </div>
   );
@@ -444,8 +469,8 @@ function ModRowItem({
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg group transition-all"
       style={{
-        background: locked ? "rgba(0,255,255,0.04)" : "rgba(10,10,30,0.4)",
-        border: `1px solid ${locked ? "rgba(0,255,255,0.18)" : "rgba(191,0,255,0.08)"}`,
+        background: locked ? "rgba(var(--neon-purple-rgb),0.04)" : "rgba(10,10,30,0.4)",
+        border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.18)" : "rgba(var(--neon-purple-rgb),0.08)"}`,
         opacity: enabled ? 1 : 0.55,
       }}
     >
@@ -476,7 +501,7 @@ function ModRowItem({
             {mod.mod_name}
           </span>
           {locked && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,255,0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.2)" }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
               Map Mod
             </span>
           )}

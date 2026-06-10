@@ -42,8 +42,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # HTTP client (Discord webhooks, update checks)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
-# ZIP compression for backups
-zip = { version = "2" }
+# 7z compression for backups (pure Rust LZMA2, no external binary required)
+sevenz-rust = { version = "0.6", features = ["compress"] }
 
 # Email / SMTP notifications
 lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"], default-features = false }
@@ -54,7 +54,8 @@ sysinfo = { version = "0.32" }
 # INI file parsing
 configparser = { version = "3" }
 
-# Linux .tar.gz extraction for SteamCMD download
+# Archive extraction for SteamCMD download (zip on Windows, tar.gz on Linux)
+zip   = { version = "2" }
 flate2 = { version = "1" }
 tar   = { version = "0.4" }
 
@@ -72,3 +73,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Replaces hand-rolled /proc string parsing with a tested, maintained library.
 [target.'cfg(target_os = "linux")'.dependencies]
 procfs = { version = "0.17", default-features = false }
+
+# Windows elevation: spawn a child process with "runas" verb (UAC prompt).
+# Used for netsh firewall rule management which requires admin rights.
+[target.'cfg(target_os = "windows")'.dependencies]
+runas = { version = "0.2" }

@@ -1,20 +1,20 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
-  Archive, Plus, Trash2, RotateCcw, FolderOpen,
-  AlertCircle, CheckCircle2, Loader2, RefreshCw, HardDrive,
+  Archive, Plus, Trash2, RotateCcw, HardDrive, User, FileText,
+  AlertCircle, Loader2, RefreshCw, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  getServerBackups, insertBackup, deleteBackupRecord,
-  getAppSetting, setAppSetting, getServer,
+  getServerBackupsByType, insertBackup, deleteBackupRecord,
+  getAppSetting, setAppSetting, getKnownPlayers,
   type BackupRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { ARK_MAPS } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 
@@ -29,31 +29,62 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function formatDate(iso: string): string {
+function formatHumanDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    year: "numeric", month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
+  const datePart = d.toLocaleDateString(undefined, {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
+  const timePart = d.toLocaleTimeString(undefined, {
+    hour: "numeric", minute: "2-digit", second: "2-digit",
+  });
+  return `${datePart} ${timePart}`;
 }
 
-function triggerBadge(trigger: string) {
-  const map: Record<string, { label: string; color: string; bg: string }> = {
-    manual:      { label: "Manual",     color: "var(--neon-cyan)",   bg: "rgba(0,255,255,0.08)"   },
-    schedule:    { label: "Scheduled",  color: "var(--neon-purple)", bg: "rgba(191,0,255,0.08)"  },
-    pre_update:  { label: "Pre-Update", color: "var(--neon-green)",  bg: "rgba(0,255,136,0.08)"  },
-    pre_restart: { label: "Pre-Restart",color: "var(--neon-green)",  bg: "rgba(0,255,136,0.08)"  },
-  };
-  const s = map[trigger] ?? { label: trigger, color: "var(--text-muted)", bg: "transparent" };
+function platform(): string {
+  return typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows")
+    ? "LinuxServer"
+    : "WindowsServer";
+}
+
+// ---------------------------------------------------------------------------
+// Tier tags
+// ---------------------------------------------------------------------------
+
+const TIER_COLORS: Record<string, string> = {
+  H: "#00ffff",
+  D: "#bf00ff",
+  W: "#00ff88",
+  M: "#ffa500",
+};
+const TIER_NAMES: Record<string, string> = {
+  H: "Hourly",
+  D: "Daily",
+  W: "Weekly",
+  M: "Monthly",
+};
+
+function TierTag({ tier }: { tier: string }) {
+  const color = TIER_COLORS[tier] ?? "#888";
   return (
     <span
-      className="px-2 py-0.5 rounded text-xs font-medium"
-      style={{ color: s.color, background: s.bg, border: `1px solid ${s.color}30` }}
+      className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+      style={{ background: `${color}18`, color, border: `1px solid ${color}35` }}
     >
-      {s.label}
+      {TIER_NAMES[tier] ?? tier}
     </span>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Progress overlay
+// ---------------------------------------------------------------------------
+
+interface ProgressState {
+  active: boolean;
+  percent: number;
+  currentFile: string;
+  label: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,10 +92,7 @@ function triggerBadge(trigger: string) {
 // ---------------------------------------------------------------------------
 
 function RestoreConfirmDialog({
-  backup,
-  serverRunning,
-  onConfirm,
-  onCancel,
+  backup, serverRunning, onConfirm, onCancel,
 }: {
   backup: BackupRow;
   serverRunning: boolean;
@@ -75,7 +103,7 @@ function RestoreConfirmDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div
         className="glass-card rounded-2xl p-6 max-w-md w-full mx-4 space-y-4"
-        style={{ border: "1px solid rgba(191,0,255,0.3)" }}
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}
       >
         <div className="flex items-center gap-3">
           <div
@@ -88,38 +116,19 @@ function RestoreConfirmDialog({
             Restore Backup
           </h3>
         </div>
-
         <p className="text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
-          This will{serverRunning ? " stop the server, " : " "}replace all save files with the backup from{" "}
-          <span style={{ color: "var(--text-primary)" }}>{formatDate(backup.created_at)}</span>
-          {serverRunning ? ", then restart the server" : ""}.{" "}
+          This will{serverRunning ? " stop the server, " : " "}restore the backup from{" "}
+          <span style={{ color: "var(--text-primary)" }}>{formatHumanDate(backup.created_at)}</span>
+          {serverRunning ? ", then allow you to restart manually" : ""}.{" "}
           <strong style={{ color: "var(--neon-red)" }}>This cannot be undone.</strong>
         </p>
-
-        <p className="text-xs font-mono truncate" style={{ color: "var(--text-muted)" }}>
-          {backup.file_path}
-        </p>
-
         <div className="flex gap-3 pt-1">
-          <Button
-            variant="outline"
-            className="flex-1 cursor-pointer"
+          <Button variant="outline" className="flex-1 cursor-pointer"
             style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
-          <Button
-            className="flex-1 cursor-pointer"
-            style={{
-              background: "rgba(255,0,85,0.15)",
-              border: "1px solid rgba(255,0,85,0.4)",
-              color: "var(--neon-red)",
-            }}
-            onClick={onConfirm}
-          >
-            Restore
-          </Button>
+            onClick={onCancel}>Cancel</Button>
+          <Button className="flex-1 cursor-pointer"
+            style={{ background: "rgba(255,0,85,0.15)", border: "1px solid rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+            onClick={onConfirm}>Restore</Button>
         </div>
       </div>
     </div>
@@ -127,95 +136,523 @@ function RestoreConfirmDialog({
 }
 
 // ---------------------------------------------------------------------------
-// BackupsTab
+// Full backup warning dialog
+// ---------------------------------------------------------------------------
+
+function FullBackupWarningDialog({
+  estimatedSize, onConfirm, onNeverShow, onCancel,
+}: {
+  estimatedSize: number;
+  onConfirm: () => void;
+  onNeverShow: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div
+        className="glass-card rounded-2xl p-6 max-w-lg w-full mx-4 space-y-4"
+        style={{ border: "1px solid rgba(255,165,0,0.4)" }}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+            style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.3)" }}
+          >
+            <HardDrive className="w-5 h-5" style={{ color: "#ffa500" }} />
+          </div>
+          <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+            Full Backup Warning
+          </h3>
+        </div>
+        <p className="text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
+          A full backup copies the entire server installation (~
+          <strong style={{ color: "var(--text-primary)" }}>{formatBytes(estimatedSize)}</strong>
+          ). This can take several minutes and use significant disk space.
+        </p>
+        <div
+          className="rounded-lg p-3 text-xs space-y-1"
+          style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "var(--text-muted)" }}
+        >
+          <p>Recommendations:</p>
+          <ul className="list-disc pl-4 space-y-0.5">
+            <li>Keep 2–3 full backups maximum</li>
+            <li>Run weekly or monthly at most</li>
+            <li>Ensure at least {formatBytes(estimatedSize * 3)} free on backup drive</li>
+          </ul>
+        </div>
+        <div className="flex gap-3 pt-1 flex-wrap items-center">
+          <Button variant="outline" className="cursor-pointer"
+            style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
+            onClick={onCancel}>Cancel</Button>
+          <button className="text-xs cursor-pointer ml-auto" style={{ color: "var(--text-muted)" }} onClick={onNeverShow}>
+            Never show again
+          </button>
+          <Button className="cursor-pointer"
+            style={{ background: "rgba(255,165,0,0.15)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}
+            onClick={onConfirm}>Continue</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BackupRowCard — single backup entry
+// ---------------------------------------------------------------------------
+
+function BackupRowCard({
+  backup, onRestore, onDelete, restoreDisabled,
+}: {
+  backup: BackupRow;
+  onRestore: (b: BackupRow) => void;
+  onDelete: (b: BackupRow) => void;
+  restoreDisabled: boolean;
+}) {
+  const tiers = backup.tiers ? backup.tiers.split(",").filter(Boolean) : [];
+  const fname = backup.file_path.split(/[\\/]/).pop() ?? backup.file_path;
+  const displayName = backup.backup_type === "player" && backup.player_name
+    ? backup.player_name
+    : null;
+
+  return (
+    <div
+      className="glass-card rounded-xl px-4 py-2.5 flex items-center gap-3"
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+    >
+      <div className="flex-1 min-w-0">
+        {/* Tier tags + date */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {tiers.map((t) => <TierTag key={t} tier={t} />)}
+          <span className="text-xs" style={{ color: "var(--text-primary)" }}>
+            {formatHumanDate(backup.created_at)}
+          </span>
+        </div>
+        {/* Size or player name */}
+        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+          {displayName && (
+            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+              {displayName}
+            </span>
+          )}
+          {backup.file_size_bytes > 0 && (
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {formatBytes(backup.file_size_bytes)}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <Button size="sm" variant="ghost" title="Restore" disabled={restoreDisabled}
+          onClick={() => onRestore(backup)}
+          className="h-7 w-7 p-0 cursor-pointer" style={{ color: "var(--neon-cyan)" }}>
+          <RotateCcw className="w-3.5 h-3.5" />
+        </Button>
+        <Button size="sm" variant="ghost" title="Delete"
+          onClick={() => onDelete(backup)}
+          className="h-7 w-7 p-0 cursor-pointer" style={{ color: "var(--neon-red)" }}>
+          <Trash2 className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SectionHeader — title + [Backup X Now] (orange) + [Edit Schedule] (cyan)
+// ---------------------------------------------------------------------------
+
+function SectionHeader({
+  icon: Icon, title, color, count, onEditSchedules, onManualBackup, isBusy, backupLabel,
+}: {
+  icon: React.ElementType;
+  title: string;
+  color: string;
+  count: number;
+  onEditSchedules?: () => void;
+  onManualBackup: () => void;
+  isBusy: boolean;
+  backupLabel: string;
+}) {
+  return (
+    <div
+      className="flex items-center gap-3 px-4 py-3"
+      style={{
+        background: "rgba(var(--neon-purple-rgb),0.02)",
+        borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)",
+      }}
+    >
+      <div
+        className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+        style={{ background: `color-mix(in srgb, ${color} 10%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 20%, transparent)` }}
+      >
+        <Icon className="w-3.5 h-3.5" style={{ color }} />
+      </div>
+      <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        {title}
+      </span>
+      {count > 0 && (
+        <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: `color-mix(in srgb, ${color} 12%, transparent)`, color }}>
+          {count}
+        </span>
+      )}
+      <div className="flex items-center gap-2 ml-auto">
+        <Button size="sm" onClick={onManualBackup} disabled={isBusy}
+          className="h-7 gap-1.5 cursor-pointer"
+          style={{
+            background: "rgba(var(--neon-purple-rgb),0.1)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+            color: "var(--neon-purple)",
+          }}>
+          <Plus className="w-3 h-3" /> {backupLabel}
+        </Button>
+        {onEditSchedules && (
+          <Button size="sm" onClick={onEditSchedules}
+            className="h-7 gap-1.5 cursor-pointer"
+            style={{
+              background: "rgba(var(--neon-purple-rgb),0.1)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+              color: "var(--neon-purple)",
+            }}>
+            <CalendarClock className="w-3 h-3" /> Edit Schedule
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BackupSectionPanel — always-open scrollable panel with 6-entry visible area
+// ---------------------------------------------------------------------------
+
+function BackupSectionPanel({
+  icon: Icon, title, color, backups, loading, onRestore, onDelete, onManualBackup,
+  onEditSchedules, restoreDisabled, backupLabel, children,
+}: {
+  icon: React.ElementType;
+  title: string;
+  color: string;
+  backups: BackupRow[];
+  loading: boolean;
+  onRestore: (b: BackupRow) => void;
+  onDelete: (b: BackupRow) => void;
+  onManualBackup: () => void;
+  onEditSchedules?: () => void;
+  restoreDisabled: boolean;
+  backupLabel: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+      <SectionHeader
+        icon={Icon} title={title} color={color}
+        count={backups.length}
+        onEditSchedules={onEditSchedules}
+        onManualBackup={onManualBackup}
+        isBusy={restoreDisabled}
+        backupLabel={backupLabel}
+      />
+      <div className="overflow-y-auto" style={{ maxHeight: "312px" }}>
+        <div className="p-3 space-y-1.5">
+          {children}
+          {loading ? (
+            <div className="h-10 rounded-lg animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+          ) : backups.length === 0 ? (
+            <p className="text-xs text-center py-4" style={{ color: "var(--text-muted)" }}>
+              No backups yet
+            </p>
+          ) : backups.map((b) => (
+            <BackupRowCard
+              key={b.id} backup={b} onRestore={onRestore}
+              onDelete={onDelete} restoreDisabled={restoreDisabled}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PlayerBackupSection — grouped by player, always open
+// ---------------------------------------------------------------------------
+
+function PlayerBackupSection({
+  serverId, playerBackups, loading, onRestore, onDelete, restoreDisabled,
+  onEditSchedules, onManualBackup,
+}: {
+  serverId: string;
+  playerBackups: BackupRow[];
+  loading: boolean;
+  onRestore: (b: BackupRow) => void;
+  onDelete: (b: BackupRow) => void;
+  restoreDisabled: boolean;
+  onEditSchedules?: () => void;
+  onManualBackup: () => void;
+}) {
+  const [knownPlayers, setKnownPlayers] = useState<{ eosId: string; playerName: string }[]>([]);
+
+  useEffect(() => {
+    getKnownPlayers(serverId).then(setKnownPlayers).catch(() => {});
+  }, [serverId, playerBackups.length]);
+
+  const byPlayer: Record<string, BackupRow[]> = {};
+  for (const b of playerBackups) {
+    const id = b.player_eosid ?? "unknown";
+    (byPlayer[id] ??= []).push(b);
+  }
+
+  const playerIds = Object.keys(byPlayer).filter((id) => (byPlayer[id]?.length ?? 0) > 0);
+
+  const nameFor = (eosId: string): string =>
+    knownPlayers.find((p) => p.eosId === eosId)?.playerName
+    ?? playerBackups.find((b) => b.player_eosid === eosId)?.player_name
+    ?? eosId;
+
+  return (
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+      <SectionHeader
+        icon={User} title="Player Backups" color="var(--neon-cyan)"
+        count={playerIds.length}
+        onEditSchedules={onEditSchedules}
+        onManualBackup={onManualBackup}
+        isBusy={restoreDisabled}
+        backupLabel="Backup Players Now"
+      />
+      <div className="overflow-y-auto" style={{ maxHeight: "312px" }}>
+        <div className="p-3">
+          {loading ? (
+            <div className="h-10 rounded-lg animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+          ) : playerIds.length === 0 ? (
+            <p className="text-xs text-center py-4" style={{ color: "var(--text-muted)" }}>
+              No player backups yet
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {playerIds.map((eosId) => {
+                const pBackups = (byPlayer[eosId] ?? []).sort(
+                  (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+                );
+                return (
+                  <div key={eosId}>
+                    <p className="text-xs font-semibold mb-1.5 px-1" style={{ color: "var(--neon-cyan)" }}>
+                      {nameFor(eosId)}
+                    </p>
+                    <div className="space-y-1.5">
+                      {pBackups.map((b) => (
+                        <BackupRowCard
+                          key={b.id} backup={b} onRestore={onRestore}
+                          onDelete={onDelete} restoreDisabled={restoreDisabled}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IniBackupSection — always open, scrollable INI snapshots
+// ---------------------------------------------------------------------------
+
+function IniBackupSection({
+  serverId, backupDir, installPath, isBusy, onBusyChange, onEditSchedules,
+}: {
+  serverId: string;
+  backupDir: string;
+  installPath: string;
+  isBusy: boolean;
+  onBusyChange: (b: boolean) => void;
+  onEditSchedules?: () => void;
+}) {
+  const [snapshots, setSnapshots] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setSnapshots(await tauriCmd.listIniBackups(serverId, backupDir));
+    } catch { /* ok */ } finally {
+      setLoading(false);
+    }
+  }, [serverId, backupDir]);
+
+  useEffect(() => { if (backupDir) load(); }, [load, backupDir]);
+
+  async function handleRestore(timestamp: string) {
+    onBusyChange(true);
+    try {
+      await tauriCmd.restoreIniBackup(`${backupDir}/${serverId}/ini/${timestamp}`, installPath, platform());
+      toast.success(`Config restored from ${timestamp}.`);
+    } catch (e) {
+      toast.error(`INI restore failed: ${e}`);
+    } finally {
+      onBusyChange(false);
+    }
+  }
+
+  async function handleDelete(timestamp: string) {
+    try {
+      await tauriCmd.deleteBackup(`${backupDir}/${serverId}/ini/${timestamp}`);
+      setSnapshots((s) => s.filter((x) => x !== timestamp));
+      toast.success("Config snapshot deleted.");
+    } catch (e) {
+      toast.error(`Delete failed: ${e}`);
+    }
+  }
+
+  return (
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+      <div
+        className="flex items-center gap-3 px-4 py-3"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.02)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}
+      >
+        <div
+          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.25)" }}
+        >
+          <FileText className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />
+        </div>
+        <div className="flex-1">
+          <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+            Config (INI) Backups
+          </span>
+          <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
+            auto-saved on config change
+          </span>
+        </div>
+        {onEditSchedules && (
+          <Button size="sm" onClick={onEditSchedules}
+            className="h-7 gap-1.5 cursor-pointer ml-auto"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.1)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--neon-purple)" }}>
+            <CalendarClock className="w-3 h-3" /> Edit Schedule
+          </Button>
+        )}
+      </div>
+      <div className="overflow-y-auto" style={{ maxHeight: "312px" }}>
+        <div className="p-3 space-y-1.5">
+          {loading ? (
+            <div className="h-10 rounded-lg animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+          ) : snapshots.length === 0 ? (
+            <p className="text-xs text-center py-4" style={{ color: "var(--text-muted)" }}>
+              No snapshots yet — save the config to create one
+            </p>
+          ) : snapshots.map((snap) => (
+            <div
+              key={snap}
+              className="glass-card rounded-xl px-4 py-2.5 flex items-center gap-3"
+              style={{ border: "1px solid rgba(0,255,136,0.1)" }}
+            >
+              <FileText className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium font-mono" style={{ color: "var(--text-primary)" }}>
+                  {snap}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button size="sm" variant="ghost" title="Restore" disabled={isBusy}
+                  onClick={() => handleRestore(snap)}
+                  className="h-7 w-7 p-0 cursor-pointer" style={{ color: "var(--neon-cyan)" }}>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </Button>
+                <Button size="sm" variant="ghost" title="Delete"
+                  onClick={() => handleDelete(snap)}
+                  className="h-7 w-7 p-0 cursor-pointer" style={{ color: "var(--neon-red)" }}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BackupsTab — main component
 // ---------------------------------------------------------------------------
 
 interface Props {
   server: ServerRow;
+  onNavigateToAutomation?: () => void;
 }
 
-interface ProgressState {
-  active: boolean;
-  percent: number;
-  currentFile: string;
-  label: string;
-}
+export function BackupsTab({ server, onNavigateToAutomation }: Props) {
+  const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
 
-const RETENTION_COUNT_KEY = (id: string) => `backup_retention_count_${id}`;
-const RETENTION_DAYS_KEY  = (id: string) => `backup_retention_days_${id}`;
-
-export function BackupsTab({ server }: Props) {
-  const [backups, setBackups] = useState<BackupRow[] | null>(null);
+  const [serverBackups, setServerBackups] = useState<BackupRow[]>([]);
+  const [playerBackups, setPlayerBackups] = useState<BackupRow[]>([]);
+  const [fullBackups,   setFullBackups]   = useState<BackupRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<ProgressState>({ active: false, percent: 0, currentFile: "", label: "" });
-  const [restoreTarget, setRestoreTarget] = useState<BackupRow | null>(null);
-  const [retentionCount, setRetentionCount] = useState("10");
-  const [retentionDays,  setRetentionDays]  = useState("30");
-  const [retentionSaved, setRetentionSaved] = useState(false);
 
-  // Load backups + retention settings on mount
-  const loadBackups = useCallback(async () => {
+  const [progress, setProgress] = useState<ProgressState>({
+    active: false, percent: 0, currentFile: "", label: "",
+  });
+  const [restoreTarget, setRestoreTarget]   = useState<BackupRow | null>(null);
+  const [showFullWarning, setShowFullWarning] = useState(false);
+  const [fullEstimate,    setFullEstimate]    = useState(0);
+  const [backupDir,       setBackupDir]       = useState("");
+
+  const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, rCount, rDays] = await Promise.all([
-        getServerBackups(server.id),
-        getAppSetting(RETENTION_COUNT_KEY(server.id)),
-        getAppSetting(RETENTION_DAYS_KEY(server.id)),
+      const [srv, plr, ful, bdir] = await Promise.all([
+        getServerBackupsByType(server.id, "server"),
+        getServerBackupsByType(server.id, "player"),
+        getServerBackupsByType(server.id, "full"),
+        getAppSetting("backup_dir"),
       ]);
-      setBackups(rows);
-      if (rCount) setRetentionCount(rCount);
-      if (rDays)  setRetentionDays(rDays);
+      setServerBackups(srv);
+      setPlayerBackups(plr);
+      setFullBackups(ful);
+      setBackupDir(bdir ?? "");
     } catch (e) {
       toast.error(`Failed to load backups: ${e}`);
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server.id]);
 
-  // Kick off initial load
-  useState(() => { loadBackups(); });
+  useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Listen for backup progress events
-  useTauriEvent<{ percent: number; currentFile: string }>(
+  useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,
     (payload) => {
-      setProgress((p) => ({ ...p, percent: payload.percent, currentFile: payload.currentFile }));
+      setProgress((p) => ({
+        ...p,
+        active: payload.percent < 100,
+        percent: payload.percent,
+        currentFile: payload.currentFile,
+        label: payload.label,
+      }));
+      if (payload.percent >= 100) setTimeout(loadAll, 500);
     }
   );
 
-  // ── Create backup ──────────────────────────────────────────────────────────
+  // ── Manual backup helpers ────────────────────────────────────────────────
 
-  async function handleCreateBackup() {
-    const backupDir = await getAppSetting("backup_dir");
-    if (!backupDir) {
-      toast.error("Backup directory not configured. Check Settings → Paths.");
-      return;
-    }
-
-    setProgress({ active: true, percent: 0, currentFile: "", label: "Creating backup…" });
+  async function handleServerBackup() {
+    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    setProgress({ active: true, percent: 0, currentFile: "", label: "Starting server backup…" });
     try {
-      const record: BackupRecord = await tauriCmd.createBackup(
-        server.id,
-        server.name,
-        server.install_path,
-        backupDir,
-        server.map_id,
-        "manual"
+      const rec: BackupRecord = await tauriCmd.createServerBackup(
+        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
       );
       await insertBackup({
-        id:              record.id,
-        server_id:       record.serverId,
-        file_path:       record.filePath,
-        file_size_bytes: record.fileSizeBytes,
-        map_id:          record.mapId,
-        triggered_by:    record.triggeredBy,
-        created_at:      record.createdAt,
+        id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
+        file_size_bytes: rec.fileSizeBytes, map_id: rec.mapId,
+        triggered_by: rec.triggeredBy, created_at: rec.createdAt,
+        backup_type: "server", tiers: "", player_eosid: null, player_name: null,
       });
-      toast.success("Backup created successfully.");
-      await loadBackups();
-      // Auto-prune after manual backup
-      await pruneOldBackups();
+      toast.success("Server backup created.");
+      await loadAll();
     } catch (e) {
       toast.error(`Backup failed: ${e}`);
     } finally {
@@ -223,48 +660,61 @@ export function BackupsTab({ server }: Props) {
     }
   }
 
-  // ── Delete backup ──────────────────────────────────────────────────────────
-
-  async function handleDelete(backup: BackupRow) {
-    try {
-      await tauriCmd.deleteBackup(backup.file_path);
-      await deleteBackupRecord(backup.id);
-      setBackups((prev) => prev?.filter((b) => b.id !== backup.id) ?? null);
-      toast.success("Backup deleted.");
-    } catch (e) {
-      toast.error(`Delete failed: ${e}`);
+  async function handleFullBackupClick() {
+    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    const dismissed = await getAppSetting("full_backup_warning_dismissed");
+    if (dismissed === "true") {
+      await runFullBackup();
+    } else {
+      const size = await tauriCmd.estimateDirSize(server.install_path).catch(() => 0);
+      setFullEstimate(size);
+      setShowFullWarning(true);
     }
   }
 
-  // ── Restore backup ─────────────────────────────────────────────────────────
+  async function runFullBackup() {
+    setShowFullWarning(false);
+    setProgress({ active: true, percent: 0, currentFile: "", label: "Starting full backup…" });
+    try {
+      const rec: BackupRecord = await tauriCmd.createFullBackup(
+        server.id, server.name, server.install_path, server.map_id, backupDir, "manual"
+      );
+      await insertBackup({
+        id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
+        file_size_bytes: rec.fileSizeBytes, map_id: rec.mapId,
+        triggered_by: rec.triggeredBy, created_at: rec.createdAt,
+        backup_type: "full", tiers: "", player_eosid: null, player_name: null,
+      });
+      toast.success("Full backup created.");
+      await loadAll();
+    } catch (e) {
+      toast.error(`Full backup failed: ${e}`);
+    } finally {
+      setProgress((p) => ({ ...p, active: false }));
+    }
+  }
+
+  // ── Restore ────────────────────────────────────────────────────────────────
 
   async function handleRestoreConfirmed() {
     if (!restoreTarget) return;
     const target = restoreTarget;
     setRestoreTarget(null);
-
-    const fresh = await getServer(server.id);
-    const isRunning = fresh?.status === "running";
-
-    setProgress({ active: true, percent: 0, currentFile: "", label: "Restoring backup…" });
+    setProgress({ active: true, percent: 0, currentFile: "", label: "Restoring…" });
     try {
-      if (isRunning) {
-        setProgress((p) => ({ ...p, label: "Stopping server…", currentFile: "" }));
+      if (server.status === "running") {
+        setProgress((p) => ({ ...p, label: "Stopping server…" }));
         await tauriCmd.stopServer(server.id, true);
-        // Brief pause to let process exit
         await new Promise((r) => setTimeout(r, 2000));
       }
-
-      setProgress((p) => ({ ...p, label: "Restoring save files…" }));
-      await tauriCmd.restoreBackup(server.id, target.file_path, server.install_path);
-
-      if (isRunning) {
-        setProgress((p) => ({ ...p, label: "Restarting server…", percent: 100, currentFile: "" }));
-        // Restart needs full params — not available here, so notify user instead.
-        toast.success("Restore complete. Start the server manually to apply the restored save.");
-      } else {
-        toast.success("Backup restored successfully.");
+      if (target.backup_type === "server") {
+        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path);
+      } else if (target.backup_type === "player") {
+        await tauriCmd.restorePlayerBackup(server.id, target.file_path, server.install_path, mapPath);
+      } else if (target.backup_type === "full") {
+        await tauriCmd.restoreFullBackup(server.id, target.file_path, server.install_path);
       }
+      toast.success("Restore complete. Start the server manually to apply.");
     } catch (e) {
       toast.error(`Restore failed: ${e}`);
     } finally {
@@ -272,54 +722,38 @@ export function BackupsTab({ server }: Props) {
     }
   }
 
-  // ── Retention prune ────────────────────────────────────────────────────────
+  // ── Delete ─────────────────────────────────────────────────────────────────
 
-  async function pruneOldBackups() {
-    const allBackups = await getServerBackups(server.id);
-    const maxCount = parseInt(retentionCount, 10) || 10;
-    const maxDays  = parseInt(retentionDays,  10) || 30;
-    const cutoff   = Date.now() - maxDays * 86_400_000;
-
-    let toDelete = [...allBackups];
-    toDelete.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
-    // Remove backups older than maxDays
-    const byAge = toDelete.filter((b) => new Date(b.created_at).getTime() < cutoff);
-    // Also remove oldest beyond maxCount (excluding byAge already)
-    const remaining = toDelete.filter((b) => !byAge.includes(b));
-    const byCount = remaining.length > maxCount ? remaining.slice(0, remaining.length - maxCount) : [];
-
-    const victims = [...new Set([...byAge, ...byCount])];
-    for (const v of victims) {
-      try {
-        await tauriCmd.deleteBackup(v.file_path);
-        await deleteBackupRecord(v.id);
-      } catch {/* best-effort */}
-    }
-    if (victims.length > 0) {
-      toast.info(`Auto-pruned ${victims.length} old backup${victims.length > 1 ? "s" : ""}.`);
-      await loadBackups();
+  async function handleDelete(backup: BackupRow) {
+    try {
+      await tauriCmd.deleteBackup(backup.file_path);
+      await deleteBackupRecord(backup.id);
+      await loadAll();
+      toast.success("Backup deleted.");
+    } catch (e) {
+      toast.error(`Delete failed: ${e}`);
     }
   }
 
-  async function handleSaveRetention() {
-    await setAppSetting(RETENTION_COUNT_KEY(server.id), retentionCount);
-    await setAppSetting(RETENTION_DAYS_KEY(server.id),  retentionDays);
-    setRetentionSaved(true);
-    setTimeout(() => setRetentionSaved(false), 2000);
+  // ── Navigation helper — switch to automation tab then scroll to backup section
+  function handleEditSchedule() {
+    onNavigateToAutomation?.();
+    setTimeout(() => {
+      document.getElementById("backup-schedules-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  const isBusy = progress.active;
+  const editScheduleBtn = onNavigateToAutomation ? handleEditSchedule : undefined;
+
   return (
     <div className="space-y-4">
-
       {/* Progress overlay */}
       {progress.active && (
-        <div
-          className="glass-card rounded-xl p-4 space-y-2"
-          style={{ border: "1px solid rgba(191,0,255,0.3)" }}
-        >
+        <div className="glass-card rounded-xl p-4 space-y-2"
+          style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
           <div className="flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin shrink-0" style={{ color: "var(--neon-purple)" }} />
             <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
@@ -329,7 +763,6 @@ export function BackupsTab({ server }: Props) {
               {progress.percent.toFixed(0)}%
             </span>
           </div>
-          {/* Progress bar */}
           <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
             <div
               className="h-full rounded-full transition-all duration-200"
@@ -348,195 +781,81 @@ export function BackupsTab({ server }: Props) {
         </div>
       )}
 
-      {/* Header row */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Archive className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-            Backups
-          </h2>
-          {backups && (
-            <span
-              className="px-1.5 py-0.5 rounded text-xs"
-              style={{ background: "rgba(191,0,255,0.1)", color: "var(--neon-purple)" }}
-            >
-              {backups.length}
-            </span>
-          )}
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Backups</h2>
         </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={loadBackups}
-            disabled={loading}
-            className="h-8 gap-1.5 cursor-pointer"
-            style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleCreateBackup}
-            disabled={progress.active}
-            className="h-8 gap-1.5 cursor-pointer"
-            style={{
-              background: "rgba(191,0,255,0.15)",
-              border: "1px solid rgba(191,0,255,0.4)",
-              color: "var(--neon-purple)",
-            }}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Create Backup
-          </Button>
-        </div>
+        <Button size="sm" variant="outline" onClick={loadAll} disabled={loading}
+          className="h-8 gap-1.5 cursor-pointer"
+          style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}>
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+        </Button>
       </div>
 
-      {/* Backup list */}
-      {loading ? (
-        <div className="space-y-2">
-          {[1, 2, 3].map((n) => (
-            <div key={n} className="glass-card rounded-xl h-16 animate-pulse" style={{ border: "1px solid rgba(191,0,255,0.1)" }} />
-          ))}
-        </div>
-      ) : !backups || backups.length === 0 ? (
-        <div
-          className="glass-card rounded-xl p-10 flex flex-col items-center gap-3 text-center"
-          style={{ border: "1px solid rgba(191,0,255,0.1)" }}
-        >
-          <HardDrive className="w-8 h-8" style={{ color: "var(--text-muted)" }} />
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>No backups yet</p>
-            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
-              Click &ldquo;Create Backup&rdquo; to make your first save backup.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {backups.map((backup) => (
-            <div
-              key={backup.id}
-              className="glass-card rounded-xl px-4 py-3 flex items-center gap-3"
-              style={{ border: "1px solid rgba(191,0,255,0.1)" }}
-            >
-              <Archive className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate" style={{ color: "var(--text-primary)" }}>
-                  {backup.file_path.split(/[\\/]/).pop() ?? backup.file_path}
-                </p>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    {formatDate(backup.created_at)}
-                  </span>
-                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    {formatBytes(backup.file_size_bytes)}
-                  </span>
-                  {triggerBadge(backup.triggered_by)}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  title="Restore this backup"
-                  disabled={progress.active}
-                  onClick={() => setRestoreTarget(backup)}
-                  className="h-7 w-7 p-0 cursor-pointer"
-                  style={{ color: "var(--neon-cyan)" }}
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  title="Delete this backup"
-                  onClick={() => handleDelete(backup)}
-                  className="h-7 w-7 p-0 cursor-pointer"
-                  style={{ color: "var(--neon-red)" }}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
+      {/* INI backups */}
+      {backupDir && (
+        <IniBackupSection
+          serverId={server.id}
+          backupDir={backupDir}
+          installPath={server.install_path}
+          isBusy={isBusy}
+          onBusyChange={(b) => setProgress((p) => ({ ...p, active: b }))}
+          onEditSchedules={editScheduleBtn}
+        />
       )}
 
-      {/* Retention settings */}
-      <div
-        className="glass-card rounded-xl p-4 space-y-3"
-        style={{ border: "1px solid rgba(191,0,255,0.1)" }}
-      >
-        <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-          Retention Policy
-        </h3>
-        <div className="flex flex-wrap gap-4 items-end">
-          <div className="space-y-1">
-            <label className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Keep last N backups
-            </label>
-            <Input
-              type="number"
-              min={1}
-              max={100}
-              value={retentionCount}
-              onChange={(e) => setRetentionCount(e.target.value)}
-              className="h-8 w-24 text-sm"
-              style={{
-                background: "rgba(0,0,0,0.4)",
-                border: "1px solid rgba(191,0,255,0.2)",
-                color: "var(--text-primary)",
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Delete backups older than (days)
-            </label>
-            <Input
-              type="number"
-              min={1}
-              max={365}
-              value={retentionDays}
-              onChange={(e) => setRetentionDays(e.target.value)}
-              className="h-8 w-24 text-sm"
-              style={{
-                background: "rgba(0,0,0,0.4)",
-                border: "1px solid rgba(191,0,255,0.2)",
-                color: "var(--text-primary)",
-              }}
-            />
-          </div>
-          <Button
-            size="sm"
-            onClick={handleSaveRetention}
-            className="h-8 gap-1.5 cursor-pointer"
-            style={{
-              background: retentionSaved ? "rgba(0,255,136,0.15)" : "rgba(191,0,255,0.15)",
-              border: retentionSaved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(191,0,255,0.4)",
-              color: retentionSaved ? "var(--neon-green)" : "var(--neon-purple)",
-            }}
-          >
-            {retentionSaved ? (
-              <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
-            ) : (
-              "Save"
-            )}
-          </Button>
-        </div>
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Old backups are pruned automatically after each new backup is created.
-        </p>
-      </div>
+      {/* Server backups */}
+      <BackupSectionPanel
+        icon={Archive} title="Server Backups" color="var(--neon-purple)"
+        backups={serverBackups} loading={loading}
+        onRestore={setRestoreTarget} onDelete={handleDelete}
+        onManualBackup={handleServerBackup}
+        onEditSchedules={editScheduleBtn}
+        restoreDisabled={isBusy}
+        backupLabel="Backup Server Now"
+      />
 
-      {/* Restore confirm dialog */}
+      {/* Player backups */}
+      <PlayerBackupSection
+        serverId={server.id}
+        playerBackups={playerBackups} loading={loading}
+        onRestore={setRestoreTarget} onDelete={handleDelete}
+        onManualBackup={() => toast.info("Player backups are triggered automatically by the scheduler.")}
+        onEditSchedules={editScheduleBtn}
+        restoreDisabled={isBusy}
+      />
+
+      {/* Full backups */}
+      <BackupSectionPanel
+        icon={HardDrive} title="Full Backups" color="#ffa500"
+        backups={fullBackups} loading={loading}
+        onRestore={setRestoreTarget} onDelete={handleDelete}
+        onManualBackup={handleFullBackupClick}
+        onEditSchedules={editScheduleBtn}
+        restoreDisabled={isBusy}
+        backupLabel="Backup Full Now"
+      />
+
       {restoreTarget && (
         <RestoreConfirmDialog
           backup={restoreTarget}
           serverRunning={server.status === "running"}
           onConfirm={handleRestoreConfirmed}
           onCancel={() => setRestoreTarget(null)}
+        />
+      )}
+
+      {showFullWarning && (
+        <FullBackupWarningDialog
+          estimatedSize={fullEstimate}
+          onConfirm={runFullBackup}
+          onNeverShow={async () => {
+            await setAppSetting("full_backup_warning_dismissed", "true");
+            await runFullBackup();
+          }}
+          onCancel={() => setShowFullWarning(false)}
         />
       )}
     </div>

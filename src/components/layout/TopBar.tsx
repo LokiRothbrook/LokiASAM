@@ -18,9 +18,11 @@ export function TopBar() {
 
   return (
     <header
-      className="flex items-center justify-between px-6 h-14 shrink-0 border-b"
+      className="flex items-center justify-between px-6 h-14 flex-1 border-b"
       style={{
-        background: "rgba(5, 5, 20, 0.95)",
+        background: "var(--glass-bg)",
+        backdropFilter: "blur(var(--glass-blur))",
+        WebkitBackdropFilter: "blur(var(--glass-blur))",
         borderColor: "var(--border)",
       }}
     >
