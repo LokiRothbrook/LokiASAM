@@ -145,8 +145,8 @@ const initialState = {
   asaAutoUpdateEnabled: true,
   appAutoUpdateEnabled: true,
   protonAutoCheckEnabled: true,
-  themePreset: "neon",
-  themeAccent: "purple",
+  themePreset: "storm",
+  themeAccent: "blue",
   isLoading: false,
   loadingMessage: "",
 };

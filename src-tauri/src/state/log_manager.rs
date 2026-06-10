@@ -62,7 +62,7 @@ impl LogManagerState {
         }
     }
 
-    /// Resolve the central logs root: `{base_dir}/lokiasam/logs/`.
+    /// Resolve the central logs root: `{base_dir}/logs/`.
     /// Returns None if bootstrap.json is missing (setup not complete).
     pub fn logs_root(app: &tauri::AppHandle) -> Option<PathBuf> {
         let config_dir = app.path().app_config_dir().ok()?;
@@ -70,7 +70,7 @@ impl LogManagerState {
         let text = std::fs::read_to_string(&bootstrap_path).ok()?;
         let value: serde_json::Value = serde_json::from_str(&text).ok()?;
         let base_dir = value.get("baseDir")?.as_str()?;
-        Some(PathBuf::from(base_dir).join("lokiasam").join("logs"))
+        Some(PathBuf::from(base_dir).join("logs"))
     }
 
     /// Resolve per-server log directory: `{logs_root}/{server_id}/`.

@@ -258,7 +258,7 @@ function ThemeStep() {
         <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
           Accent Color
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 px-1.5 py-1">
           {ACCENT_OPTIONS.map(({ value, label }) => {
             const selected = themeAccent === value;
             const hexMap: Record<ThemeAccent, string> = {
@@ -318,7 +318,7 @@ function ImportVerifyPanel({
 
   const handleInstallSteamcmd = async () => {
     const sep = importDir.includes("\\") ? "\\" : "/";
-    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "steamcmd";
+    const targetDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "steamcmd";
     setInstallingSteamcmd(true);
     try {
       await tauriCmd.installSteamcmd(targetDir);
@@ -499,7 +499,7 @@ function BaseDirStep() {
       try {
         const home = await homeDir();
         const sep = home.includes("\\") ? "\\" : "/";
-        const defaultDir = home.replace(/[/\\]$/, "") + sep + "LokiASAM";
+        const defaultDir = home.replace(/[/\\]$/, "") + sep + "Ark-Servers";
         setBaseDir(defaultDir);
         setBackupDir(defaultDir + sep + "Backups");
         await validateDir(defaultDir);
@@ -838,8 +838,8 @@ function SteamCmdStep() {
   const [canceled, setCanceled] = useState(false);
 
   const autoSteamcmdTarget = baseDir
-    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/steamcmd"
-    : "/your/base/dir/steamcmd";
+    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/lokiasam/steamcmd"
+    : "/your/base/dir/lokiasam/steamcmd";
 
   const autoExePath = autoSteamcmdTarget +
     (typeof window !== "undefined" && navigator.userAgent.includes("Windows") ? "\\steamcmd.exe" : "/steamcmd.sh");
@@ -1114,7 +1114,7 @@ function ProtonGEStep() {
   };
 
   const handleDownload = async () => {
-    const targetDir = baseDir.replace(/[/\\]$/, "") + "/proton";
+    const targetDir = baseDir.replace(/[/\\]$/, "") + "/lokiasam/proton";
     setError("");
     setCanceled(false);
     setAttempt((a) => a + 1);
@@ -1176,8 +1176,8 @@ function ProtonGEStep() {
   };
 
   const managedTarget = baseDir
-    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/proton"
-    : "/your/base/dir/proton";
+    ? baseDir.replace(/\/$/, "").replace(/\\$/, "") + "/lokiasam/proton"
+    : "/your/base/dir/lokiasam/proton";
 
   return (
     <div className="space-y-5">
@@ -1846,7 +1846,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
   ];
 
   return (
-    <div className="flex flex-col items-center text-center gap-6">
+    <div className="flex flex-col items-center text-center gap-6 pt-6">
       <div
         className="w-20 h-20 rounded-full flex items-center justify-center"
         style={{
@@ -2146,7 +2146,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <div
           className="w-full max-w-2xl flex flex-col"
           style={{
-            background: "rgba(10,10,30,0.8)",
+            background: "var(--glass-bg)",
             border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
             borderRadius: "1rem",
             backdropFilter: "blur(12px)",

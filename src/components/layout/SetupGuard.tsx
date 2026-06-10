@@ -18,7 +18,7 @@ import { LokiIcon } from "@/components/shared/LokiIcon";
 import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
 import { useAppStore } from "@/store/useAppStore";
 import { getAppSetting, setAppSetting, initDb } from "@/lib/db";
-import { applyThemeAccent } from "@/lib/theme";
+import { applyTheme } from "@/lib/theme";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
@@ -50,6 +50,7 @@ export function SetupGuard({ children }: SetupGuardProps) {
         if (!bootstrap) {
           // No bootstrap file → first-ever run, show the setup wizard.
           // DB will be initialised by the wizard once base_dir is known.
+          applyTheme("storm", "blue");
           setSetupComplete(false);
           setSetupChecked(true);
           return;
@@ -63,12 +64,13 @@ export function SetupGuard({ children }: SetupGuardProps) {
         // Open a separate Rust-side connection for the background stats recorder.
         tauriCmd.initStatsRecorder(dbPath).catch(() => null);
 
-        const [value, accent, closeToTraySetting] = await Promise.all([
+        const [value, preset, accent, closeToTraySetting] = await Promise.all([
           getAppSetting("setup_complete"),
+          getAppSetting("theme_preset"),
           getAppSetting("theme_accent"),
           getAppSetting("close_to_tray"),
         ]);
-        if (accent) applyThemeAccent(accent);
+        applyTheme(preset ?? "storm", accent ?? "blue");
         const complete = value === "true";
         setSetupComplete(complete);
         setSetupChecked(true);

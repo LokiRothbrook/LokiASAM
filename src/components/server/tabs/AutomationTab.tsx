@@ -426,7 +426,8 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" checked={c.broadcastWarning ?? true}
               onChange={(e) => patchConfig({ broadcastWarning: e.target.checked })}
-              className="w-3.5 h-3.5 accent-purple-500" />
+              className="w-3.5 h-3.5"
+              style={{ accentColor: "var(--neon-purple)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
               Send in-game warning before restart
             </span>

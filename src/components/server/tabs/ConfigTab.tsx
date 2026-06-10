@@ -472,7 +472,8 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
           type="checkbox"
           checked={warnPlayers}
           onChange={(e) => setWarnPlayers(e.target.checked)}
-          className="w-3.5 h-3.5 accent-purple-500"
+          className="w-3.5 h-3.5"
+          style={{ accentColor: "var(--neon-purple)" }}
         />
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
           Warn online players before shutdown

@@ -87,7 +87,7 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
     glassBg:      "rgba(18, 22, 38, 0.65)",
     textMuted:    "#606880",
     textSubtle:   "#464e64",
-    defaultAccent: "cyan",
+    defaultAccent: "blue",
   },
 };
 
