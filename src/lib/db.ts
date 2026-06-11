@@ -7,6 +7,7 @@
  */
 
 import Database from "@tauri-apps/plugin-sql";
+import { CronExpressionParser } from "cron-parser";
 
 // Singleton DB connection — populated by initDb().
 let _db: Database | null = null;
@@ -1096,28 +1097,45 @@ export async function getLastBackupTime(serverId: string): Promise<string | null
   return rows[0]?.created_at ?? null;
 }
 
+/** If next_run is in the past (stale), recompute the next occurrence from the cron expression. */
+function resolveNextRun(nextRun: string | null, cronExpr: string | null): string | null {
+  if (nextRun) {
+    const ms = new Date(nextRun).getTime();
+    if (!isNaN(ms) && ms > Date.now()) return nextRun;
+  }
+  if (!cronExpr) return nextRun;
+  try {
+    const next = CronExpressionParser.parse(cronExpr).next().toDate();
+    return next.toISOString();
+  } catch {
+    return nextRun;
+  }
+}
+
 /** Return the next_run ISO timestamp for the restart/update schedule, or null. */
 export async function getNextScheduledRestart(serverId: string): Promise<string | null> {
   const db = await getDb();
-  const rows = await db.select<{ next_run: string | null }[]>(
-    `SELECT next_run FROM schedules
+  const rows = await db.select<{ next_run: string | null; cron_expression: string | null }[]>(
+    `SELECT next_run, cron_expression FROM schedules
      WHERE server_id = ? AND schedule_type IN ('restart', 'update') AND enabled = 1
      ORDER BY next_run ASC LIMIT 1`,
     [serverId]
   );
-  return rows[0]?.next_run ?? null;
+  if (!rows[0]) return null;
+  return resolveNextRun(rows[0].next_run, rows[0].cron_expression);
 }
 
 /** Return the soonest next_run timestamp across all enabled backup schedules. */
 export async function getNextScheduledBackup(serverId: string): Promise<string | null> {
   const db = await getDb();
-  const rows = await db.select<{ next_run: string | null }[]>(
-    `SELECT next_run FROM schedules
+  const rows = await db.select<{ next_run: string | null; cron_expression: string | null }[]>(
+    `SELECT next_run, cron_expression FROM schedules
      WHERE server_id = ? AND schedule_type IN ('backup_server', 'backup_player', 'backup_full') AND enabled = 1
      ORDER BY next_run ASC LIMIT 1`,
     [serverId]
   );
-  return rows[0]?.next_run ?? null;
+  if (!rows[0]) return null;
+  return resolveNextRun(rows[0].next_run, rows[0].cron_expression);
 }
 
 // ---------------------------------------------------------------------------

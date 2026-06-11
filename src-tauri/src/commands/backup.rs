@@ -230,7 +230,13 @@ fn compress_to_7z(
         let pct = (idx as f32 / total * 99.0).min(99.0);
         emit_progress(app, server_id, pct, &entry_name, label);
 
-        let file = File::open(file_path).map_err(|e| e.to_string())?;
+        // Skip files that disappeared between enumeration and compression (ARK
+        // may rotate saves during the window between collect_files and here).
+        let file = match File::open(file_path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.to_string()),
+        };
         let metadata = file.metadata().map_err(|e| e.to_string())?;
         let mut entry = SevenZArchiveEntry::new();
         entry.name = entry_name.clone();
