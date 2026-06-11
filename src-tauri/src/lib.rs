@@ -432,8 +432,6 @@ pub fn run() {
             commands::rcon::rcon_get_cached_players,
             commands::rcon::rcon_get_log,
             commands::rcon::rcon_clear_log,
-            commands::rcon::rcon_enable_chat_poll,
-            commands::rcon::rcon_disable_chat_poll,
             commands::rcon::rcon_read_ban_list,
             commands::rcon::rcon_read_whitelist,
             // Log watcher + archive + crash + chat

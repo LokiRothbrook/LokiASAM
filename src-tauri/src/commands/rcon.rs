@@ -121,7 +121,7 @@ async fn exec_cmd(
 /// Owns the TCP connection for one server.  Runs a select! loop that:
 ///   • Processes commands from the mpsc channel (user commands, player refresh)
 ///   • Polls listplayers every 30 s
-///   • Polls GetChat every 5 s (only when chat_poll_active)
+///   • Polls GetChat every 5 s (always — buffered in memory for the RCON page)
 ///
 /// All RCON I/O is serialized — nothing competes for the connection.
 /// On any fatal I/O error the task exits, emits rcon://status disconnected,
@@ -233,14 +233,8 @@ async fn run_rcon_manager(
                 }
             }
 
-            // ── Periodic chat poll (every 5 s, only when tab is open) ─────
+            // ── Periodic chat poll (every 5 s) ───────────────────────────
             _ = chat_tick.tick() => {
-                let active = app.state::<RconPool>()
-                    .chat_poll_active.lock().await
-                    .contains(&server_id);
-
-                if !active { continue; }
-
                 match exec_cmd(&mut conn, "GetChat", 3_000).await {
                     Ok(raw) => {
                         for line in raw.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
@@ -486,6 +480,7 @@ pub async fn rcon_send(
 }
 
 /// Signal the manager task to close the connection and remove it from the pool.
+/// Also clears the log buffer so the next server start gets a fresh console.
 #[tauri::command]
 pub async fn rcon_disconnect(
     server_id: String,
@@ -494,6 +489,7 @@ pub async fn rcon_disconnect(
     if let Some((tx, _)) = pool.cmd_channels.lock().await.remove(&server_id) {
         let _ = tx.send(RconCmd::Disconnect).await;
     }
+    pool.log_buffer.lock().await.remove(&server_id);
     Ok(())
 }
 
@@ -562,26 +558,6 @@ pub async fn rcon_clear_log(
     pool: State<'_, RconPool>,
 ) -> Result<(), String> {
     pool.log_buffer.lock().await.insert(server_id, VecDeque::new());
-    Ok(())
-}
-
-/// Enable GetChat polling for this server (called when RCON tab opens).
-#[tauri::command]
-pub async fn rcon_enable_chat_poll(
-    server_id: String,
-    pool: State<'_, RconPool>,
-) -> Result<(), String> {
-    pool.chat_poll_active.lock().await.insert(server_id);
-    Ok(())
-}
-
-/// Disable GetChat polling for this server (called when RCON tab closes).
-#[tauri::command]
-pub async fn rcon_disable_chat_poll(
-    server_id: String,
-    pool: State<'_, RconPool>,
-) -> Result<(), String> {
-    pool.chat_poll_active.lock().await.remove(&server_id);
     Ok(())
 }
 

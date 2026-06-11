@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -116,8 +116,6 @@ pub struct RconPool {
     pub cmd_channels: Mutex<HashMap<String, (mpsc::Sender<RconCmd>, u64)>>,
     /// Rolling console log buffer per server, capped at 500 lines.
     pub log_buffer: Mutex<HashMap<String, VecDeque<RconLogLine>>>,
-    /// Server IDs that have an active GetChat poll subscriber (RCON tab open).
-    pub chat_poll_active: Mutex<HashSet<String>>,
     /// Last-known player list per server.  A missing key means no data yet
     /// (never connected this session); an empty Vec means 0 players online.
     pub player_cache: Mutex<HashMap<String, Vec<CachedPlayer>>>,
@@ -130,7 +128,6 @@ impl RconPool {
         Self {
             cmd_channels: Mutex::new(HashMap::new()),
             log_buffer: Mutex::new(HashMap::new()),
-            chat_poll_active: Mutex::new(HashSet::new()),
             player_cache: Mutex::new(HashMap::new()),
             next_conn_id: AtomicU64::new(1),
         }

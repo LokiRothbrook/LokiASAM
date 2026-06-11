@@ -1182,7 +1182,7 @@ pub async fn graceful_stop_server(
     state.stopping_servers.lock().unwrap().remove(&server_id);
     state.running_servers.lock().unwrap().remove(&server_id);
     pool.cmd_channels.lock().await.remove(&server_id);
-    pool.chat_poll_active.lock().await.remove(&server_id);
+    pool.log_buffer.lock().await.remove(&server_id);
     pool.player_cache.lock().await.remove(&server_id);
 
     // Rotate logs now that the process is confirmed dead. Covers servers that

@@ -1108,6 +1108,18 @@ export async function getNextScheduledRestart(serverId: string): Promise<string 
   return rows[0]?.next_run ?? null;
 }
 
+/** Return the soonest next_run timestamp across all enabled backup schedules. */
+export async function getNextScheduledBackup(serverId: string): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ next_run: string | null }[]>(
+    `SELECT next_run FROM schedules
+     WHERE server_id = ? AND schedule_type IN ('backup_server', 'backup_player', 'backup_full') AND enabled = 1
+     ORDER BY next_run ASC LIMIT 1`,
+    [serverId]
+  );
+  return rows[0]?.next_run ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Player connections
 // ---------------------------------------------------------------------------

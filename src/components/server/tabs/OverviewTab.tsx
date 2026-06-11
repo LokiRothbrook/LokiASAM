@@ -27,7 +27,7 @@ import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-co
 import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
-  getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup,
+  getLastBackupTime, getNextScheduledRestart, getNextScheduledBackup, getAppSetting, insertBackup,
   setServerAutoStart,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
@@ -306,6 +306,7 @@ function ServerSummaryPanel({
   modCount,
   lastBackup,
   nextRestart,
+  nextBackup,
   onAutoStartChange,
 }: {
   server: ServerRow;
@@ -313,6 +314,7 @@ function ServerSummaryPanel({
   modCount: number | null;
   lastBackup: string | null;
   nextRestart: string | null;
+  nextBackup: string | null;
   onAutoStartChange: (v: boolean) => void;
 }) {
   const isRunning = server.status === "running" || server.status === "starting";
@@ -331,6 +333,7 @@ function ServerSummaryPanel({
     { label: "Map",           value: mapDisplay                                         },
     { label: "Mods",          value: modCount !== null ? String(modCount) : "—"        },
     { label: "Last Backup",   value: formatRelativeTime(lastBackup)                    },
+    { label: "Next Backup",   value: formatFutureTime(nextBackup)                      },
     { label: "Next Restart",  value: formatFutureTime(nextRestart)                     },
   ];
 
@@ -438,8 +441,9 @@ export function OverviewTab({ server }: Props) {
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
 
   const [modCount, setModCount]     = useState<number | null>(null);
-  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [lastBackup,  setLastBackup]  = useState<string | null>(null);
   const [nextRestart, setNextRestart] = useState<string | null>(null);
+  const [nextBackup,  setNextBackup]  = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [players, setPlayers]       = useState<ArkPlayer[] | null>(null);
   const [playersLoading, setPlayersLoading] = useState(false);
@@ -471,16 +475,18 @@ export function OverviewTab({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, autoHours] = await Promise.all([
+      const [mc, lb, nr, nb, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
+        getNextScheduledBackup(server.id),
         getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
+        setNextBackup(nb);
         setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
@@ -659,19 +665,22 @@ export function OverviewTab({ server }: Props) {
       setPlayers(list);
     } catch (err) {
       setPlayers([]);
+      toast.error("Failed to fetch player list via RCON", { description: String(err) });
     } finally {
       setPlayersLoading(false);
     }
   }, [server.id]);
 
-  // Auto-refresh player list on mount and whenever RCON pushes an update.
+  // Fetch player list on mount/server-change if running.
   useEffect(() => {
     if (server.status === "running") refreshPlayers();
-  }, [server.id, server.status, refreshPlayers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server.id]);
 
-  useTauriEvent<{ players: ArkPlayer[] }>(
+  // The per-server event emits the players array directly as payload.
+  useTauriEvent<ArkPlayer[]>(
     `rcon://players/${server.id}`,
-    ({ players: list }) => setPlayers(list)
+    (list) => setPlayers(list)
   );
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -814,6 +823,7 @@ export function OverviewTab({ server }: Props) {
             modCount={modCount}
             lastBackup={lastBackup}
             nextRestart={nextRestart}
+            nextBackup={nextBackup}
             onAutoStartChange={async (v) => {
               await setServerAutoStart(server.id, v);
               queryClient.invalidateQueries({ queryKey: ["servers"] });

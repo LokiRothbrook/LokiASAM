@@ -420,9 +420,6 @@ export const tauriCmd = {
   rconGetPlayers:       (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
   /** null = no RCON connection established yet; [] = connected but 0 players online. */
   rconGetCachedPlayers: (serverId: string) => invoke<ArkPlayer[] | null>("rcon_get_cached_players", { serverId }),
-  // RCON — chat (polling is now internal to the Rust manager task)
-  rconEnableChatPoll:  (serverId: string) => invoke<void>("rcon_enable_chat_poll", { serverId }),
-  rconDisableChatPoll: (serverId: string) => invoke<void>("rcon_disable_chat_poll", { serverId }),
   // RCON — log buffer
   rconGetLog:   (serverId: string) => invoke<RconLogLine[]>("rcon_get_log", { serverId }),
   rconClearLog: (serverId: string) => invoke<void>("rcon_clear_log", { serverId }),
