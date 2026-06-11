@@ -366,11 +366,15 @@ pub async fn create_server_backup(
     let files = all_files.clone();
     let root  = saved_root.clone();
     let dest  = archive_path.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating server backup…")
     })
     .await
-    .map_err(|e| format!("Backup task panicked: {e}"))??;
+    .map_err(|e| format!("Backup task panicked: {e}"))?;
+    if let Err(e) = result {
+        let _ = fs::remove_file(&archive_path); // remove partial archive
+        return Err(e);
+    }
 
     emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
 
@@ -440,11 +444,15 @@ pub async fn create_player_backup(
     let app_c = app.clone();
     let sid   = server_id.clone();
     let dest  = archive_path.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating player backup…")
     })
     .await
-    .map_err(|e| format!("Backup task panicked: {e}"))??;
+    .map_err(|e| format!("Backup task panicked: {e}"))?;
+    if let Err(e) = result {
+        let _ = fs::remove_file(&archive_path); // remove partial archive
+        return Err(e);
+    }
 
     emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
 
@@ -598,11 +606,15 @@ pub async fn create_full_backup(
     let sid   = server_id.clone();
     let dest  = archive_path.clone();
     let root  = install_dir.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         compress_to_7z(&app_c, &sid, &all_files, &root, &dest, "Creating full backup…")
     })
     .await
-    .map_err(|e| format!("Full backup task panicked: {e}"))??;
+    .map_err(|e| format!("Full backup task panicked: {e}"))?;
+    if let Err(e) = result {
+        let _ = fs::remove_file(&archive_path); // remove partial archive
+        return Err(e);
+    }
 
     emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
 
