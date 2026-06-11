@@ -76,6 +76,17 @@ function TierTag({ tier }: { tier: string }) {
   );
 }
 
+function LoginTag() {
+  return (
+    <span
+      className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+      style={{ background: "rgba(255,165,0,0.1)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.3)" }}
+    >
+      Login
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Progress overlay
 // ---------------------------------------------------------------------------
@@ -208,7 +219,8 @@ function BackupRowCard({
   onDelete: (b: BackupRow) => void;
   restoreDisabled: boolean;
 }) {
-  const tiers = backup.tiers ? backup.tiers.split(",").filter(Boolean) : [];
+  const isLogin = backup.triggered_by === "login";
+  const tiers = !isLogin && backup.tiers ? backup.tiers.split(",").filter(Boolean) : [];
   const fname = backup.file_path.split(/[\\/]/).pop() ?? backup.file_path;
   const displayName = backup.backup_type === "player" && backup.player_name
     ? backup.player_name
@@ -222,7 +234,7 @@ function BackupRowCard({
       <div className="flex-1 min-w-0">
         {/* Tier tags + date */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          {tiers.map((t) => <TierTag key={t} tier={t} />)}
+          {isLogin ? <LoginTag /> : tiers.map((t) => <TierTag key={t} tier={t} />)}
           <span className="text-xs" style={{ color: "var(--text-primary)" }}>
             {formatHumanDate(backup.created_at)}
           </span>
@@ -390,7 +402,8 @@ function PlayerBackupSection({
   onEditSchedules?: () => void;
   onManualBackup: () => void;
 }) {
-  const [knownPlayers, setKnownPlayers] = useState<{ eosId: string; playerName: string }[]>([]);
+  const [knownPlayers,   setKnownPlayers]   = useState<{ eosId: string; playerName: string }[]>([]);
+  const [selectedEosId,  setSelectedEosId]  = useState("all");
 
   useEffect(() => {
     getKnownPlayers(serverId).then(setKnownPlayers).catch(() => {});
@@ -402,34 +415,91 @@ function PlayerBackupSection({
     (byPlayer[id] ??= []).push(b);
   }
 
-  const playerIds = Object.keys(byPlayer).filter((id) => (byPlayer[id]?.length ?? 0) > 0);
+  const playersWithBackups = Object.keys(byPlayer).filter((id) => (byPlayer[id]?.length ?? 0) > 0);
 
-  const nameFor = (eosId: string): string =>
-    knownPlayers.find((p) => p.eosId === eosId)?.playerName
-    ?? playerBackups.find((b) => b.player_eosid === eosId)?.player_name
-    ?? eosId;
+  // Union of players with backups + known players (deduped)
+  const allOptions: { eosId: string; name: string }[] = [
+    ...playersWithBackups.map((id) => ({
+      eosId: id,
+      name:  knownPlayers.find((p) => p.eosId === id)?.playerName
+             ?? playerBackups.find((b) => b.player_eosid === id)?.player_name
+             ?? id,
+    })),
+    ...knownPlayers
+      .filter((p) => !playersWithBackups.includes(p.eosId))
+      .map((p) => ({ eosId: p.eosId, name: p.playerName })),
+  ];
+  const uniqueOptions = Array.from(new Map(allOptions.map((p) => [p.eosId, p])).values());
+
+  const nameFor = (eosId: string) =>
+    uniqueOptions.find((p) => p.eosId === eosId)?.name ?? eosId;
+
+  const selectedBackups =
+    selectedEosId === "all"
+      ? null
+      : (byPlayer[selectedEosId] ?? []).sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
 
   return (
     <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
       <SectionHeader
         icon={User} title="Player Backups" color="var(--neon-cyan)"
-        count={playerIds.length}
+        count={playersWithBackups.length}
         onEditSchedules={onEditSchedules}
         onManualBackup={onManualBackup}
         isBusy={restoreDisabled}
         backupLabel="Backup Players Now"
       />
+
+      {/* Player filter dropdown */}
+      {uniqueOptions.length > 0 && (
+        <div className="px-3 py-2" style={{ borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}>
+          <select
+            value={selectedEosId}
+            onChange={(e) => setSelectedEosId(e.target.value)}
+            className="h-7 text-xs px-2 rounded w-full"
+            style={{
+              background: "rgba(0,0,0,0.4)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
+              color: "var(--text-primary)",
+              outline: "none",
+            }}
+          >
+            <option value="all">All Players</option>
+            {uniqueOptions.map((p) => (
+              <option key={p.eosId} value={p.eosId}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="overflow-y-auto" style={{ maxHeight: "312px" }}>
         <div className="p-3">
           {loading ? (
             <div className="h-10 rounded-lg animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
-          ) : playerIds.length === 0 ? (
+          ) : selectedEosId !== "all" ? (
+            // Single-player view
+            (selectedBackups ?? []).length === 0 ? (
+              <p className="text-xs text-center py-4" style={{ color: "var(--text-muted)" }}>
+                No backups yet
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {(selectedBackups ?? []).map((b) => (
+                  <BackupRowCard key={b.id} backup={b} onRestore={onRestore}
+                    onDelete={onDelete} restoreDisabled={restoreDisabled} />
+                ))}
+              </div>
+            )
+          ) : playersWithBackups.length === 0 ? (
             <p className="text-xs text-center py-4" style={{ color: "var(--text-muted)" }}>
               No player backups yet
             </p>
           ) : (
+            // All-players grouped view
             <div className="space-y-3">
-              {playerIds.map((eosId) => {
+              {playersWithBackups.map((eosId) => {
                 const pBackups = (byPlayer[eosId] ?? []).sort(
                   (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
                 );
@@ -440,10 +510,8 @@ function PlayerBackupSection({
                     </p>
                     <div className="space-y-1.5">
                       {pBackups.map((b) => (
-                        <BackupRowCard
-                          key={b.id} backup={b} onRestore={onRestore}
-                          onDelete={onDelete} restoreDisabled={restoreDisabled}
-                        />
+                        <BackupRowCard key={b.id} backup={b} onRestore={onRestore}
+                          onDelete={onDelete} restoreDisabled={restoreDisabled} />
                       ))}
                     </div>
                   </div>
@@ -576,6 +644,54 @@ function IniBackupSection({
 }
 
 // ---------------------------------------------------------------------------
+// SyncConfirmDialog
+// ---------------------------------------------------------------------------
+
+function SyncConfirmDialog({
+  importCount, onConfirm, onCancel,
+}: {
+  importCount: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div
+        className="glass-card rounded-2xl p-6 max-w-sm w-full mx-4 space-y-4"
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.1)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}
+          >
+            <HardDrive className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
+          </div>
+          <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+            Sync from Disk
+          </h3>
+        </div>
+        <p className="text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
+          Found{" "}
+          <span style={{ color: "var(--text-primary)" }}>
+            {importCount} file{importCount !== 1 ? "s" : ""}
+          </span>{" "}
+          to import.
+        </p>
+        <div className="flex gap-3 pt-1">
+          <Button variant="outline" className="flex-1 cursor-pointer"
+            style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
+            onClick={onCancel}>Cancel</Button>
+          <Button className="flex-1 cursor-pointer"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+            onClick={onConfirm}>Import</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BackupsTab — main component
 // ---------------------------------------------------------------------------
 
@@ -599,6 +715,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const [showFullWarning, setShowFullWarning] = useState(false);
   const [fullEstimate,    setFullEstimate]    = useState(0);
   const [backupDir,       setBackupDir]       = useState("");
+  const [syncPending,     setSyncPending]     = useState<{ toImport: BackupRecord[] } | null>(null);
+  const [syncing,         setSyncing]         = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -735,6 +853,77 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     }
   }
 
+  // ── Sync from Disk ──────────────────────────────────────────────────────────
+
+  async function handleSyncFromDisk() {
+    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    setSyncing(true);
+    try {
+      const diskRecords = await tauriCmd.scanBackupDir(server.id, backupDir, server.map_id);
+      const [dbServer, dbPlayer, dbFull] = await Promise.all([
+        getServerBackupsByType(server.id, "server"),
+        getServerBackupsByType(server.id, "player"),
+        getServerBackupsByType(server.id, "full"),
+      ]);
+      const allDb = [...dbServer, ...dbPlayer, ...dbFull];
+
+      const diskPaths = new Set(diskRecords.map((r) => r.filePath));
+      const dbPaths   = new Set(allDb.map((r) => r.file_path));
+
+      // Silently remove stale DB records (files no longer on disk).
+      for (const dbRec of allDb) {
+        if (!diskPaths.has(dbRec.file_path)) {
+          await deleteBackupRecord(dbRec.id).catch(() => {});
+        }
+      }
+
+      // Find disk files not yet in DB.
+      const toImport = diskRecords.filter((r) => !dbPaths.has(r.filePath));
+
+      if (toImport.length === 0) {
+        toast.info("Backups are up to date.");
+        await loadAll();
+        return;
+      }
+
+      setSyncPending({ toImport });
+    } catch (e) {
+      toast.error(`Scan failed: ${e}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSyncConfirmed() {
+    if (!syncPending) return;
+    const { toImport } = syncPending;
+    setSyncPending(null);
+    setSyncing(true);
+    try {
+      for (const rec of toImport) {
+        await insertBackup({
+          id:              rec.id,
+          server_id:       rec.serverId,
+          file_path:       rec.filePath,
+          file_size_bytes: rec.fileSizeBytes,
+          map_id:          rec.mapId,
+          triggered_by:    rec.triggeredBy,
+          created_at:      rec.createdAt,
+          backup_type:     rec.backupType,
+          tiers:           rec.tiers ?? "",
+          player_eosid:    rec.playerEosid ?? null,
+          player_name:     rec.playerName ?? null,
+        }).catch(() => {});
+      }
+      toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}.`);
+      await loadAll();
+    } catch (e) {
+      toast.error(`Import failed: ${e}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   // ── Navigation helper — switch to automation tab then scroll to backup section
   function handleEditSchedule() {
     onNavigateToAutomation?.();
@@ -838,6 +1027,23 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         backupLabel="Backup Full Now"
       />
 
+      {/* Sync from Disk */}
+      {backupDir && (
+        <div className="flex justify-center pt-1">
+          <Button
+            size="sm" variant="outline" onClick={handleSyncFromDisk}
+            disabled={syncing || isBusy}
+            className="h-8 gap-2 cursor-pointer text-xs"
+            style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-muted)" }}
+          >
+            {syncing
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Scanning…</>
+              : <><HardDrive className="w-3.5 h-3.5" /> Sync from Disk</>
+            }
+          </Button>
+        </div>
+      )}
+
       {restoreTarget && (
         <RestoreConfirmDialog
           backup={restoreTarget}
@@ -856,6 +1062,14 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
             await runFullBackup();
           }}
           onCancel={() => setShowFullWarning(false)}
+        />
+      )}
+
+      {syncPending && (
+        <SyncConfirmDialog
+          importCount={syncPending.toImport.length}
+          onConfirm={handleSyncConfirmed}
+          onCancel={() => setSyncPending(null)}
         />
       )}
     </div>

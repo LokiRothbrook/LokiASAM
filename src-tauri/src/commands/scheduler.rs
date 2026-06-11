@@ -31,8 +31,8 @@ pub struct SchedulerFiredPayload {
     pub schedule_type: String,
     pub success: bool,
     pub error: Option<String>,
-    /// Set when schedule_type == "backup" so the frontend can INSERT the record into SQLite.
-    pub backup_record: Option<crate::commands::backup::BackupRecord>,
+    /// All backup records created by this firing (player backups produce one per player).
+    pub backup_records: Vec<crate::commands::backup::BackupRecord>,
 }
 
 // ---------------------------------------------------------------------------
@@ -368,17 +368,25 @@ fn is_server_running(app: &AppHandle, server_id: &str) -> bool {
         .contains_key(server_id)
 }
 
+/// Parse the tier letter ("H", "D", "W", "M") from a schedule's config_json.
+fn tier_from_config(config_json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(config_json)
+        .ok()
+        .and_then(|v| v["tier"].as_str().map(|s| s.to_uppercase()))
+        .unwrap_or_default()
+}
+
 /// Fire a Server backup: cleanup ARK own files → SaveWorld → 7z SavedArks+SaveGames.
 /// Skips silently if the server is stopped (scheduled runs only back up live servers).
 async fn fire_server_backup(
     app: &AppHandle,
     entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
-    // Scheduled server backups only run when the server is live.
+) -> Result<Vec<crate::commands::backup::BackupRecord>, String> {
     if !is_server_running(app, &entry.server_id) {
-        return Ok(None);
+        return Ok(vec![]);
     }
 
+    let tier = tier_from_config(&entry.config_json);
     let pool = app.state::<RconPool>();
     crate::commands::backup::create_server_backup(
         app.clone(),
@@ -389,57 +397,51 @@ async fn fire_server_backup(
         entry.map_id.clone(),
         entry.backup_dir.clone(),
         "schedule".to_string(),
+        tier,
         pool,
     )
     .await
-    .map(Some)
+    .map(|rec| vec![rec])
 }
 
 /// Fire a Player backup for all known .arkprofile files.
-/// Reads the config_json for optional eos_id filter; defaults to all players.
+/// Returns one BackupRecord per player backed up (not just the last one).
 /// Skips silently if the server is stopped.
 async fn fire_player_backup(
     app: &AppHandle,
     entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
+) -> Result<Vec<crate::commands::backup::BackupRecord>, String> {
     if !is_server_running(app, &entry.server_id) {
-        return Ok(None);
+        return Ok(vec![]);
     }
 
-    // Enumerate all .arkprofile files and zip each one.
-    // Returns the record for the last successful player backup (the count is
-    // captured in the frontend via per-player BackupRecord events).
     let saved_dir = std::path::PathBuf::from(&entry.install_path)
         .join("ShooterGame").join("Saved")
         .join("SavedArks").join(&entry.map_path);
 
     if !saved_dir.exists() {
-        return Ok(None);
+        return Ok(vec![]);
     }
 
-    let profiles: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(&saved_dir)
+    let profiles: Vec<String> = std::fs::read_dir(&saved_dir)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().extension().and_then(|x| x.to_str()) == Some("arkprofile")
-        })
-        .map(|e| {
-            let path = e.path();
-            let eos_id = path.file_stem()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("arkprofile"))
+        .filter_map(|e| {
+            e.path().file_stem()
                 .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            (eos_id, path)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
         })
-        .filter(|(id, _)| !id.is_empty())
         .collect();
 
     if profiles.is_empty() {
-        return Ok(None);
+        return Ok(vec![]);
     }
 
-    let mut last_record: Option<crate::commands::backup::BackupRecord> = None;
-    for (eos_id, _) in &profiles {
+    let tier = tier_from_config(&entry.config_json);
+    let mut records: Vec<crate::commands::backup::BackupRecord> = Vec::new();
+    for eos_id in &profiles {
         match crate::commands::backup::create_player_backup(
             app.clone(),
             entry.server_id.clone(),
@@ -449,23 +451,25 @@ async fn fire_player_backup(
             entry.map_id.clone(),
             entry.backup_dir.clone(),
             eos_id.clone(),
-            eos_id.clone(), // frontend resolves to display name; eos_id as fallback
+            eos_id.clone(), // frontend resolves to display name via player_name_map
             "schedule".to_string(),
+            tier.clone(),
         )
         .await
         {
-            Ok(rec) => last_record = Some(rec),
+            Ok(rec) => records.push(rec),
             Err(_)  => {} // best-effort per player
         }
     }
-    Ok(last_record)
+    Ok(records)
 }
 
 /// Fire a Full backup. No server-running check — full backups may run any time.
 async fn fire_full_backup(
     app: &AppHandle,
     entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
+) -> Result<Vec<crate::commands::backup::BackupRecord>, String> {
+    let tier = tier_from_config(&entry.config_json);
     crate::commands::backup::create_full_backup(
         app.clone(),
         entry.server_id.clone(),
@@ -474,9 +478,10 @@ async fn fire_full_backup(
         entry.map_id.clone(),
         entry.backup_dir.clone(),
         "schedule".to_string(),
+        tier,
     )
     .await
-    .map(Some)
+    .map(|rec| vec![rec])
 }
 
 /// Called by the background scheduler loop in lib.rs.
@@ -506,36 +511,36 @@ pub fn tick_scheduler(app: &AppHandle) {
             let server_id = entry.server_id.clone();
             let server_name = entry.server_name.clone();
 
-            let (success, error, backup_record) = match schedule_type.as_str() {
+            let (success, error, backup_records) = match schedule_type.as_str() {
                 "broadcast" => match fire_broadcast(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
                 "backup_server" => match fire_server_backup(&app, &entry).await {
-                    Ok(rec) => (true, None, rec),
-                    Err(e) => (false, Some(e), None),
+                    Ok(recs) => (true, None, recs),
+                    Err(e)   => (false, Some(e), vec![]),
                 },
                 "backup_player" => match fire_player_backup(&app, &entry).await {
-                    Ok(rec) => (true, None, rec),
-                    Err(e) => (false, Some(e), None),
+                    Ok(recs) => (true, None, recs),
+                    Err(e)   => (false, Some(e), vec![]),
                 },
                 "backup_full" => match fire_full_backup(&app, &entry).await {
-                    Ok(rec) => (true, None, rec),
-                    Err(e) => (false, Some(e), None),
+                    Ok(recs) => (true, None, recs),
+                    Err(e)   => (false, Some(e), vec![]),
                 },
                 "restart" => match fire_restart(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
                 "update" => match fire_update(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
                 "global_update_check" => match fire_global_update_check(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
-                _ => (false, Some(format!("Unknown schedule type: {schedule_type}")), None),
+                _ => (false, Some(format!("Unknown schedule type: {schedule_type}")), vec![]),
             };
 
             let _ = app.emit(
@@ -547,7 +552,7 @@ pub fn tick_scheduler(app: &AppHandle) {
                     schedule_type,
                     success,
                     error,
-                    backup_record,
+                    backup_records,
                 },
             );
         });

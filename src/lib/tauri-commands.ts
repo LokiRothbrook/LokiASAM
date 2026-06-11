@@ -314,7 +314,8 @@ export interface SchedulerFiredPayload {
   scheduleType: string;
   success: boolean;
   error?: string;
-  backupRecord?: BackupRecord;
+  /** All backup records created by this firing (player backups produce one per player). */
+  backupRecords: BackupRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -494,14 +495,14 @@ export const tauriCmd = {
   /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
   createServerBackup: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+    mapId: string, backupDir: string, triggeredBy: string, tier = "",
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier }),
 
   /** Player backup: 7z a single .arkprofile file. */
   createPlayerBackup: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string,
-  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy }),
+    mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string, tier = "",
+  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
 
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
   createIniBackup: (serverId: string, installPath: string, backupDir: string, platform: string) =>
@@ -510,8 +511,8 @@ export const tauriCmd = {
   /** Full backup: 7z the entire install_path directory. */
   createFullBackup: (
     serverId: string, serverName: string, installPath: string, mapId: string,
-    backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord>("create_full_backup", { serverId, serverName, installPath, mapId, backupDir, triggeredBy }),
+    backupDir: string, triggeredBy: string, tier = "",
+  ) => invoke<BackupRecord>("create_full_backup", { serverId, serverName, installPath, mapId, backupDir, triggeredBy, tier }),
 
   /** List timestamped INI snapshot folder names for a server, newest first. */
   listIniBackups: (serverId: string, backupDir: string) =>
@@ -542,6 +543,17 @@ export const tauriCmd = {
 
   /** Estimate total uncompressed size of a directory in bytes. */
   estimateDirSize: (dirPath: string) => invoke<number>("estimate_dir_size", { dirPath }),
+
+  /** Rename a backup file on disk (used when tier flags change). */
+  renameBackupFile: (oldPath: string, newPath: string) =>
+    invoke<void>("rename_backup_file", { oldPath, newPath }),
+
+  /** Check whether a backup file still exists on disk. */
+  backupFileExists: (filePath: string) => invoke<boolean>("backup_file_exists", { filePath }),
+
+  /** Scan the server's backup directory tree and return all discovered .7z files. */
+  scanBackupDir: (serverId: string, backupDir: string, mapId: string) =>
+    invoke<BackupRecord[]>("scan_backup_dir", { serverId, backupDir, mapId }),
 
   // Mods
   /**

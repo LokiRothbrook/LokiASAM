@@ -469,6 +469,9 @@ pub fn run() {
             commands::backup::delete_backup,
             commands::backup::cleanup_ark_own_backups,
             commands::backup::estimate_dir_size,
+            commands::backup::rename_backup_file,
+            commands::backup::backup_file_exists,
+            commands::backup::scan_backup_dir,
             // Mods (Phase 5)
             commands::mods::install_mods,
             commands::mods::open_mod_browser,

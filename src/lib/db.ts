@@ -325,6 +325,26 @@ async function runMigrations(db: Database): Promise<void> {
     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (port, protocol)
   )`);
+
+  // ── Migration 010: player connection history ─────────────────────────────
+  await db.execute(`CREATE TABLE IF NOT EXISTS player_connections (
+    id           TEXT PRIMARY KEY,
+    server_id    TEXT NOT NULL,
+    eos_id       TEXT NOT NULL,
+    ip_address   TEXT NOT NULL,
+    connected_at DATETIME NOT NULL
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_player_connections_server_eos ON player_connections(server_id, eos_id)"
+  );
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_player_connections_ip ON player_connections(server_id, ip_address)"
+  );
+
+  // ── Migration 011: fix hourly backup cron (was every 6h, now every 1h) ───
+  await db.execute(
+    "UPDATE schedules SET cron_expression = '0 * * * *' WHERE schedule_type IN ('backup_server','backup_player') AND cron_expression = '0 */6 * * *'"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1106,117 @@ export async function getNextScheduledRestart(serverId: string): Promise<string 
     [serverId]
   );
   return rows[0]?.next_run ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Player connections
+// ---------------------------------------------------------------------------
+
+export interface PlayerConnectionRow {
+  id: string;
+  server_id: string;
+  eos_id: string;
+  ip_address: string;
+  connected_at: string;
+}
+
+export async function insertPlayerConnection(
+  serverId: string,
+  eosId: string,
+  ip: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO player_connections (id, server_id, eos_id, ip_address, connected_at) VALUES (?, ?, ?, ?, datetime('now'))",
+    [crypto.randomUUID(), serverId, eosId, ip]
+  );
+}
+
+/** All unique IPs a player has connected from, most recently seen first. */
+export async function getPlayerKnownIps(
+  serverId: string,
+  eosId: string
+): Promise<{ ip: string; lastSeen: string }[]> {
+  const db = await getDb();
+  return db.select<{ ip: string; lastSeen: string }[]>(
+    `SELECT ip_address AS ip, MAX(connected_at) AS lastSeen
+     FROM player_connections
+     WHERE server_id = ? AND eos_id = ?
+     GROUP BY ip_address
+     ORDER BY lastSeen DESC`,
+    [serverId, eosId]
+  );
+}
+
+/** Full connection history for a player, newest first (capped at 200 for display). */
+export async function getPlayerConnectionHistory(
+  serverId: string,
+  eosId: string,
+  limit = 200
+): Promise<PlayerConnectionRow[]> {
+  const db = await getDb();
+  return db.select<PlayerConnectionRow[]>(
+    "SELECT * FROM player_connections WHERE server_id = ? AND eos_id = ? ORDER BY connected_at DESC LIMIT ?",
+    [serverId, eosId, limit]
+  );
+}
+
+/** Other EOS IDs that have connected from any of the same IPs as this player. */
+export async function getPossibleAlts(
+  serverId: string,
+  eosId: string
+): Promise<{ eosId: string; sharedIps: string[] }[]> {
+  const db = await getDb();
+  const rows = await db.select<{ eos_id: string; ip_address: string }[]>(
+    `SELECT DISTINCT p2.eos_id, p2.ip_address
+     FROM player_connections p1
+     JOIN player_connections p2
+       ON p1.server_id = p2.server_id AND p1.ip_address = p2.ip_address
+     WHERE p1.server_id = ? AND p1.eos_id = ? AND p2.eos_id != ?
+     ORDER BY p2.eos_id`,
+    [serverId, eosId, eosId]
+  );
+  const map = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!map.has(r.eos_id)) map.set(r.eos_id, []);
+    map.get(r.eos_id)!.push(r.ip_address);
+  }
+  return [...map.entries()].map(([id, ips]) => ({ eosId: id, sharedIps: [...new Set(ips)] }));
+}
+
+/** Count of login backups for a specific player (used for prune logic). */
+export async function getLoginBackupCount(
+  serverId: string,
+  eosId: string
+): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<{ n: number }[]>(
+    "SELECT COUNT(*) AS n FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login'",
+    [serverId, eosId]
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/** Oldest login backup for a player — used to prune when over the keep limit. */
+export async function getOldestLoginBackup(
+  serverId: string,
+  eosId: string
+): Promise<import("./db").BackupRow | null> {
+  const db = await getDb();
+  const rows = await db.select<BackupRow[]>(
+    "SELECT * FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login' ORDER BY created_at ASC LIMIT 1",
+    [serverId, eosId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Update the file_path for a backup record (used after tier-rename on disk). */
+export async function updateBackupFilePath(
+  backupId: string,
+  newFilePath: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE backups SET file_path = ? WHERE id = ?", [newFilePath, backupId]);
 }
 
 // ---------------------------------------------------------------------------

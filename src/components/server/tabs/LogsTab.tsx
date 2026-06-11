@@ -13,6 +13,10 @@ import type { ServerRow } from "@/lib/db";
 import type {
   ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo,
 } from "@/lib/tauri-commands";
+import {
+  getKnownPlayers, getPlayerKnownIps, getPlayerConnectionHistory, getPossibleAlts,
+  type PlayerConnectionRow,
+} from "@/lib/db";
 
 interface Props {
   server: ServerRow;
@@ -25,7 +29,7 @@ interface LogLine {
 }
 
 type LevelFilter = "all" | "info" | "warning" | "error";
-type LogView = "live" | "archive" | "crashes" | "chat";
+type LogView = "live" | "archive" | "crashes" | "chat" | "players";
 
 let _id = 0;
 
@@ -757,6 +761,151 @@ function ChatPanel({ server }: { server: ServerRow }) {
 }
 
 // ---------------------------------------------------------------------------
+// PlayersPanel
+// ---------------------------------------------------------------------------
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+}
+
+function PlayersPanel({ server }: { server: ServerRow }) {
+  const [knownPlayers, setKnownPlayers] = useState<{ eosId: string; playerName: string }[]>([]);
+  const [selectedEosId, setSelectedEosId] = useState("");
+  const [knownIps,    setKnownIps]    = useState<{ ip: string; lastSeen: string }[]>([]);
+  const [history,     setHistory]     = useState<PlayerConnectionRow[]>([]);
+  const [alts,        setAlts]        = useState<{ eosId: string; sharedIps: string[] }[]>([]);
+  const [loading,     setLoading]     = useState(false);
+
+  useEffect(() => {
+    getKnownPlayers(server.id).then(setKnownPlayers).catch(() => {});
+  }, [server.id]);
+
+  useEffect(() => {
+    if (!selectedEosId) { setKnownIps([]); setHistory([]); setAlts([]); return; }
+    setLoading(true);
+    Promise.all([
+      getPlayerKnownIps(server.id, selectedEosId),
+      getPlayerConnectionHistory(server.id, selectedEosId, 200),
+      getPossibleAlts(server.id, selectedEosId),
+    ]).then(([ips, hist, altList]) => {
+      setKnownIps(ips);
+      setHistory(hist);
+      setAlts(altList);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, [server.id, selectedEosId]);
+
+  const nameFor = (eosId: string) =>
+    knownPlayers.find((p) => p.eosId === eosId)?.playerName ?? eosId;
+
+  return (
+    <div className="flex flex-col gap-3 h-full overflow-auto">
+      {/* Player selector */}
+      <div>
+        <select
+          value={selectedEosId}
+          onChange={(e) => setSelectedEosId(e.target.value)}
+          className="h-8 text-xs px-2 rounded w-full max-w-xs"
+          style={{
+            background: "rgba(0,0,0,0.4)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
+            color: "var(--text-primary)",
+            outline: "none",
+          }}
+        >
+          <option value="">— Select a player —</option>
+          {knownPlayers.map((p) => (
+            <option key={p.eosId} value={p.eosId}>{p.playerName}</option>
+          ))}
+        </select>
+      </div>
+
+      {!selectedEosId ? (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Select a player above to view their connection history.
+        </p>
+      ) : loading ? (
+        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
+          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+          Loading…
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+
+          {/* Known IPs */}
+          <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+            <div className="px-3 py-2.5" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}>
+              <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Known IPs</p>
+            </div>
+            <div className="p-3 space-y-1.5 overflow-auto" style={{ maxHeight: "300px" }}>
+              {knownIps.length === 0 ? (
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>No IPs recorded.</p>
+              ) : knownIps.map(({ ip, lastSeen }) => (
+                <div key={ip} className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <span className="text-xs font-mono flex-1" style={{ color: "var(--neon-cyan)" }}>{ip}</span>
+                  <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{formatDate(lastSeen)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Connection History */}
+          <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+            <div className="px-3 py-2.5" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}>
+              <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
+                Connection History
+                {history.length >= 200 && (
+                  <span className="ml-1.5 text-[10px] font-normal" style={{ color: "var(--text-muted)" }}>(last 200)</span>
+                )}
+              </p>
+            </div>
+            <div className="p-3 space-y-1.5 overflow-auto" style={{ maxHeight: "300px" }}>
+              {history.length === 0 ? (
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>No connections recorded.</p>
+              ) : history.map((row) => (
+                <div key={row.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <span className="text-xs font-mono flex-1" style={{ color: "var(--text-muted)" }}>{row.ip_address}</span>
+                  <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{formatDate(row.connected_at)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Possible Alts */}
+          <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+            <div className="px-3 py-2.5" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}>
+              <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Possible Alts</p>
+            </div>
+            <div className="p-3 space-y-2 overflow-auto" style={{ maxHeight: "300px" }}>
+              <p className="text-[10px] px-1" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                Accounts that connected from the same IP(s). May include household members or VPN users.
+              </p>
+              {alts.length === 0 ? (
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>No shared IPs detected.</p>
+              ) : alts.map(({ eosId, sharedIps }) => (
+                <div key={eosId} className="px-2 py-1.5 rounded-lg space-y-0.5"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <p className="text-xs font-medium" style={{ color: "var(--neon-purple)" }}>
+                    {nameFor(eosId)}
+                  </p>
+                  <p className="text-[10px] font-mono" style={{ color: "var(--text-muted)" }}>
+                    {sharedIps.join(", ")}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main LogsTab
 // ---------------------------------------------------------------------------
 
@@ -765,6 +914,7 @@ const VIEW_TABS: { value: LogView; label: string; icon: React.ComponentType<{ cl
   { value: "archive", label: "Archive", icon: Archive },
   { value: "crashes", label: "Crashes", icon: AlertTriangle },
   { value: "chat",    label: "Chat",    icon: MessageSquare },
+  { value: "players", label: "Players", icon: Search },
 ];
 
 export function LogsTab({ server }: Props) {
@@ -805,6 +955,7 @@ export function LogsTab({ server }: Props) {
         {view === "archive" && <ArchivePanel server={server} />}
         {view === "crashes" && <CrashesPanel server={server} />}
         {view === "chat"    && <ChatPanel    server={server} />}
+        {view === "players" && <PlayersPanel server={server} />}
       </div>
     </div>
   );

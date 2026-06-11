@@ -16,6 +16,11 @@ pub const LOG_BACKFILL: &str = "log://backfill";
 pub const BACKUP_PROGRESS: &str = "backup://progress";
 /// ASA update check result (or update-applied notification).
 pub const ASA_UPDATE_CHECK: &str = "asa://update-check";
+/// Player login detected from ShooterGame.log — carries { eosId, ip }.
+/// Emitted on the per-server channel `player://login/{server_id}`.
+pub const PLAYER_LOGIN: &str = "player://login";
+/// Same login event broadcast globally — carries { serverId, eosId, ip }.
+pub const PLAYER_LOGIN_ANY: &str = "player://login-any";
 
 /// Build a namespaced event name for a specific server.
 /// e.g. `server_event("server://status", "abc-123")` → `"server://status/abc-123"`

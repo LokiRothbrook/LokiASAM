@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -123,12 +123,27 @@ export function ServerCard({ server }: Props) {
   const [backupProgress, setBackupProgress] = useState<{ active: boolean; percent: number; label: string }>({
     active: false, percent: 0, label: "",
   });
+  const backupProgressUpdatedAt = useRef<number>(0);
   const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
 
   useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,
-    (p) => setBackupProgress({ active: p.percent < 100, percent: p.percent, label: p.label })
+    (p) => {
+      backupProgressUpdatedAt.current = Date.now();
+      setBackupProgress({ active: p.percent < 100, percent: p.percent, label: p.label });
+    }
   );
+
+  // Clear stale progress bar if no update received in 30s.
+  useEffect(() => {
+    if (!backupProgress.active) return;
+    const id = setInterval(() => {
+      if (backupProgressUpdatedAt.current > 0 && Date.now() - backupProgressUpdatedAt.current > 30_000) {
+        setBackupProgress({ active: false, percent: 0, label: "" });
+      }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [backupProgress.active]);
 
   const hasUpdateAvailable  = server.update_available === 1;
   const isUpdateQueued      = server.status === "update_queued";

@@ -90,6 +90,73 @@ fn sanitize_name(name: &str) -> String {
         .collect()
 }
 
+/// Build a filename tier suffix like "-DH" from a tiers string like "D,H" or "H".
+/// Tiers are sorted in canonical priority order (M W D H).
+fn tier_suffix(tiers: &str) -> String {
+    if tiers.is_empty() {
+        return String::new();
+    }
+    const ORDER: &[char] = &['M', 'W', 'D', 'H'];
+    let flags: Vec<char> = tiers.split(',')
+        .filter_map(|t| t.trim().chars().next())
+        .filter(|c| ORDER.contains(c))
+        .collect();
+    if flags.is_empty() {
+        return String::new();
+    }
+    let mut sorted: Vec<char> = ORDER.iter().copied().filter(|c| flags.contains(c)).collect();
+    sorted.dedup();
+    format!("-{}", sorted.iter().collect::<String>())
+}
+
+/// Find and parse a `YYYY-MM-DD_HH-MM-SS` timestamp embedded in a filename stem.
+/// Returns `(ts_iso, tiers_str)` where `tiers_str` may be empty for files without
+/// the tier suffix (e.g. manual backups or pre-tier-feature archives).
+pub fn parse_backup_filename(stem: &str) -> Option<(String, String)> {
+    let bytes = stem.as_bytes();
+    let len   = bytes.len();
+    if len < 19 { return None; }
+
+    for i in 0..=(len - 19) {
+        let candidate = &stem[i..i + 19];
+        if is_timestamp(candidate.as_bytes()) {
+            let after = &stem[i + 19..];
+            // After timestamp: either empty, or "-{MWDH letters}", or something else (no tier)
+            let tiers = if let Some(rest) = after.strip_prefix('-') {
+                if !rest.is_empty() && rest.chars().all(|c| matches!(c, 'M' | 'W' | 'D' | 'H')) {
+                    rest.to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            // Convert YYYY-MM-DD_HH-MM-SS → YYYY-MM-DDTHH:MM:SSZ
+            let ts_iso = format!(
+                "{}T{}:{}:{}Z",
+                &candidate[..10],
+                &candidate[11..13],
+                &candidate[14..16],
+                &candidate[17..19],
+            );
+            return Some((ts_iso, tiers));
+        }
+    }
+    None
+}
+
+fn is_timestamp(b: &[u8]) -> bool {
+    if b.len() != 19 { return false; }
+    b[4]  == b'-' && b[7]  == b'-' && b[10] == b'_' &&
+    b[13] == b'-' && b[16] == b'-' &&
+    b[..4].iter().all(|c| c.is_ascii_digit())   &&
+    b[5..7].iter().all(|c| c.is_ascii_digit())  &&
+    b[8..10].iter().all(|c| c.is_ascii_digit()) &&
+    b[11..13].iter().all(|c| c.is_ascii_digit())&&
+    b[14..16].iter().all(|c| c.is_ascii_digit())&&
+    b[17..19].iter().all(|c| c.is_ascii_digit())
+}
+
 /// Recursively collect all file paths under `dir`.
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
@@ -249,6 +316,7 @@ pub async fn create_server_backup(
     map_id: String,
     backup_dir: String,
     triggered_by: String,
+    tier: String,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
     // SaveWorld (best-effort — server may be stopped)
@@ -279,8 +347,9 @@ pub async fn create_server_backup(
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
 
     let (ts_file, ts_iso) = now_timestamp();
-    let safe_name = sanitize_name(&server_name);
-    let archive_name = format!("{safe_name}-{ts_file}.7z");
+    let safe_name    = sanitize_name(&server_name);
+    let suffix       = tier_suffix(&tier);
+    let archive_name = format!("{safe_name}-{ts_file}{suffix}.7z");
     let archive_path = out_dir.join(&archive_name);
 
     // Root for relative paths inside the archive = ShooterGame/Saved
@@ -336,6 +405,7 @@ pub async fn create_player_backup(
     eos_id: String,
     player_name: String,
     triggered_by: String,
+    tier: String,
 ) -> Result<BackupRecord, String> {
     let profile_file = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved")
@@ -351,9 +421,10 @@ pub async fn create_player_backup(
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
 
     let (ts_file, ts_iso) = now_timestamp();
-    let safe_server = sanitize_name(&server_name);
-    let safe_player = sanitize_name(&player_name);
-    let archive_name = format!("{safe_server}-{safe_player}-{ts_file}.7z");
+    let safe_server  = sanitize_name(&server_name);
+    let safe_player  = sanitize_name(&player_name);
+    let suffix       = tier_suffix(&tier);
+    let archive_name = format!("{safe_server}-{safe_player}-{ts_file}{suffix}.7z");
     let archive_path = out_dir.join(&archive_name);
 
     emit_progress(&app, &server_id, 0.0, "", &format!("Backing up {player_name}…"));
@@ -496,6 +567,7 @@ pub async fn create_full_backup(
     map_id: String,
     backup_dir: String,
     triggered_by: String,
+    tier: String,
 ) -> Result<BackupRecord, String> {
     let install_dir = PathBuf::from(&install_path);
     if !install_dir.exists() {
@@ -507,7 +579,8 @@ pub async fn create_full_backup(
 
     let (ts_file, ts_iso) = now_timestamp();
     let safe_name    = sanitize_name(&server_name);
-    let archive_name = format!("{safe_name}-full-{ts_file}.7z");
+    let suffix       = tier_suffix(&tier);
+    let archive_name = format!("{safe_name}-full-{ts_file}{suffix}.7z");
     let archive_path = out_dir.join(&archive_name);
 
     emit_progress(&app, &server_id, 0.0, "", "Collecting files for full backup…");
@@ -684,4 +757,113 @@ pub async fn estimate_dir_size(dir_path: String) -> Result<u64, String> {
         }
     }
     Ok(total)
+}
+
+// ---------------------------------------------------------------------------
+// Rename file (used when tier flags change)
+// ---------------------------------------------------------------------------
+
+/// Rename a backup file on disk and return the new path.
+/// Used by the frontend when tier flags are promoted/stripped.
+#[tauri::command]
+pub async fn rename_backup_file(old_path: String, new_path: String) -> Result<(), String> {
+    fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// File exists check
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn backup_file_exists(file_path: String) -> bool {
+    PathBuf::from(&file_path).exists()
+}
+
+// ---------------------------------------------------------------------------
+// Scan backup directory (Sync from Disk)
+// ---------------------------------------------------------------------------
+
+/// Scan a server's backup subdirectory tree and return every .7z found as a
+/// BackupRecord.  The caller diffs against the DB and imports what's missing.
+#[tauri::command]
+pub async fn scan_backup_dir(
+    server_id: String,
+    backup_dir: String,
+    map_id: String,
+) -> Result<Vec<BackupRecord>, String> {
+    let base = PathBuf::from(&backup_dir).join(&server_id);
+    let mut records: Vec<BackupRecord> = Vec::new();
+
+    // server/
+    scan_type_dir(&base.join("server"), &server_id, &map_id, "server", None, &mut records);
+    // player/{eos_id}/
+    let player_root = base.join("player");
+    if player_root.exists() {
+        if let Ok(rd) = fs::read_dir(&player_root) {
+            for entry in rd.flatten() {
+                let eos_dir = entry.path();
+                if eos_dir.is_dir() {
+                    let eos_id = eos_dir.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    scan_type_dir(&eos_dir, &server_id, &map_id, "player", Some(&eos_id), &mut records);
+                }
+            }
+        }
+    }
+    // full/
+    scan_type_dir(&base.join("full"), &server_id, &map_id, "full", None, &mut records);
+
+    Ok(records)
+}
+
+fn scan_type_dir(
+    dir: &Path,
+    server_id: &str,
+    map_id: &str,
+    backup_type: &str,
+    eos_id: Option<&str>,
+    out: &mut Vec<BackupRecord>,
+) {
+    if !dir.exists() { return; }
+    let Ok(rd) = fs::read_dir(dir) else { return };
+
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let fname = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) if n.ends_with(".7z") => n.to_string(),
+            _ => continue,
+        };
+
+        let stem = fname.trim_end_matches(".7z");
+        let (ts_iso, tiers) = parse_backup_filename(stem).unwrap_or_else(|| {
+            // Fallback: use file mtime
+            let secs = path.metadata().ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let (y, mo, d, h, min, s) = crate::state::log_manager::epoch_to_ymdhms(secs);
+            (format!("{y:04}-{mo:02}-{d:02}T{h:02}:{min:02}:{s:02}Z"), String::new())
+        });
+
+        let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
+        let eos_str   = eos_id.unwrap_or("").to_string();
+
+        out.push(BackupRecord {
+            id:              Uuid::new_v4().to_string(),
+            server_id:       server_id.to_string(),
+            file_path:       path.to_string_lossy().to_string(),
+            file_size_bytes: file_size,
+            map_id:          map_id.to_string(),
+            triggered_by:    "disk_import".to_string(),
+            created_at:      ts_iso,
+            backup_type:     backup_type.to_string(),
+            tiers,
+            player_eosid:    if eos_str.is_empty() { None } else { Some(eos_str.clone()) },
+            player_name:     if eos_str.is_empty() { None } else { Some(eos_str) },
+        });
+    }
 }

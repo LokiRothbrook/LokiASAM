@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
@@ -38,6 +38,7 @@ import { toast } from "sonner";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 interface Props {
   server: ServerRow;
@@ -651,18 +652,27 @@ export function OverviewTab({ server }: Props) {
     }
   };
 
-  const refreshPlayers = async () => {
+  const refreshPlayers = useCallback(async () => {
     setPlayersLoading(true);
     try {
       const list = await tauriCmd.rconGetPlayers(server.id);
       setPlayers(list);
     } catch (err) {
       setPlayers([]);
-      toast.error("Failed to fetch player list via RCON", { description: String(err) });
     } finally {
       setPlayersLoading(false);
     }
-  };
+  }, [server.id]);
+
+  // Auto-refresh player list on mount and whenever RCON pushes an update.
+  useEffect(() => {
+    if (server.status === "running") refreshPlayers();
+  }, [server.id, server.status, refreshPlayers]);
+
+  useTauriEvent<{ players: ArkPlayer[] }>(
+    `rcon://players/${server.id}`,
+    ({ players: list }) => setPlayers(list)
+  );
 
   // ── Render ──────────────────────────────────────────────────────────────────
 

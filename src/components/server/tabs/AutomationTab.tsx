@@ -19,7 +19,7 @@ import {
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
-import { getAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import type { ServerRow } from "@/lib/db";
@@ -508,7 +508,7 @@ const TIER_FIXED_CRON: Record<BackupTier, string> = {
   M: "0 4 1 * *",
   W: "0 3 * * 0",
   D: "0 2 * * *",
-  H: "0 */6 * * *",
+  H: "0 * * * *",
 };
 
 const TIER_DEFAULT_KEEP: Record<BackupTier, number> = { M: 3, W: 4, D: 7, H: 24 };
@@ -730,6 +730,85 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
 }
 
 // ---------------------------------------------------------------------------
+// LoginBackupRow — per-server login backup keep-N setting (app_setting)
+// ---------------------------------------------------------------------------
+
+function LoginBackupRow({ serverId }: { serverId: string }) {
+  const [keep,    setKeep]    = useState(3);
+  const [enabled, setEnabled] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  useEffect(() => {
+    getAppSetting(`login_backup_keep_${serverId}`).then((v) => {
+      const n = parseInt(v ?? "0", 10);
+      setEnabled(n > 0);
+      setKeep(n > 0 ? n : 3);
+    }).catch(() => {});
+  }, [serverId]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await setAppSetting(`login_backup_keep_${serverId}`, enabled ? String(keep) : "0");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      toast.error(`Failed to save login backup config: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div
+        className="flex items-center gap-3 px-3 py-2 rounded-lg"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          border: `1px solid ${enabled ? "rgba(var(--neon-cyan-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
+        }}
+      >
+        <Input
+          type="number" min={1} max={999}
+          value={keep}
+          onChange={(e) => setKeep(Math.max(1, parseInt(e.target.value, 10) || 1))}
+          className="w-16 h-8 text-sm text-center shrink-0"
+          style={{
+            background: "rgba(0,0,0,0.4)",
+            border: `1px solid ${enabled ? "rgba(0,255,255,0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+            color: "var(--text-primary)",
+          }}
+        />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm" style={{ color: "var(--text-muted)" }}>login backups to keep</span>
+          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+            Triggered when a player connects. No tier flags. Independent rotation.
+          </p>
+        </div>
+        <button onClick={() => setEnabled((v) => !v)} className="cursor-pointer shrink-0">
+          {enabled
+            ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-cyan)" }} />
+            : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+          }
+        </button>
+      </div>
+      <Button size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
+        }}>
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BackupScheduleSection
 // ---------------------------------------------------------------------------
 
@@ -761,6 +840,7 @@ function BackupScheduleSection({ serverId, schedules, onRefresh }: {
         <BackupTypeSection title="Player Backups" scheduleType="backup_player"
           serverId={serverId} schedules={schedules} onRefresh={onRefresh}
           accentHex="#00ffff" />
+        <LoginBackupRow serverId={serverId} />
         <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
         <FullBackupScheduleSection serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
       </div>
