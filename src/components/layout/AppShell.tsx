@@ -12,6 +12,7 @@ import { NotificationManager } from "@/components/layout/NotificationManager";
 import { UpdateManager } from "@/components/layout/UpdateManager";
 import { CloseWarningManager } from "@/components/layout/CloseWarningManager";
 import { RconManager } from "@/components/layout/RconManager";
+import { LogWatcherManager } from "@/components/layout/LogWatcherManager";
 import { StartupReconciliationManager } from "@/components/layout/StartupReconciliationManager";
 import { StartupQueueManager } from "@/components/layout/StartupQueueManager";
 import { StartupRecoveryManager } from "@/components/layout/StartupRecoveryManager";
@@ -39,6 +40,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <CloseWarningManager />
         <CfcoreRetryManager />
         <RconManager />
+        <LogWatcherManager />
         <StartupReconciliationManager />
         <StartupQueueManager />
         <StartupRecoveryManager />

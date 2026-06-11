@@ -185,13 +185,14 @@ function LivePanel({ server }: { server: ServerRow }) {
   });
 
   // Manage watcher vs last-session display based on whether the server is active.
+  // LogWatcherManager owns the watcher lifecycle — we restart it here for the
+  // backfill but do NOT stop it on unmount so background login detection continues.
   useEffect(() => {
     if (isActive) {
       setLastSessionFilename(null);
       setLines([]);
       setReady(false);
       tauriCmd.watchServerLog(server.id, logPath(server.install_path)).catch(() => null);
-      return () => { tauriCmd.stopLogWatch(server.id).catch(() => null); };
     } else {
       tauriCmd.stopLogWatch(server.id).catch(() => null);
       loadLastSession();

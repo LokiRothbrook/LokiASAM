@@ -263,10 +263,14 @@ fn compress_to_7z(
 // Cleanup: delete ARK's own auto-generated backup files
 // ---------------------------------------------------------------------------
 
-/// Delete all `{mapPath}-*.ark` timestamped backup files and `*.profilebak`
-/// files from the SavedArks/{mapPath} directory.  Only removes ARK's own
-/// rolling copies — never touches the live `{mapPath}.ark` save or the
-/// `_AntiCorruptionBackup.bak` ARK integrity file.
+/// Delete ARK's own auto-generated rolling copies from SavedArks/{mapPath}:
+///   - `{mapPath}_*.ark`    — ARK's own timestamped world-save backups
+///   - `{mapPath}_*.arkrbf` — ASA rollback files
+///   - `*.profilebak`       — ARK player-profile backups
+///   - `*.tribebak`         — ARK tribe backups
+///
+/// Never touches the live `{mapPath}.ark`, `_AntiCorruptionBackup.bak`,
+/// `*.arkprofile`, or `*.arktribe` files.
 ///
 /// Returns the number of files deleted.
 #[tauri::command]
@@ -285,7 +289,8 @@ pub async fn cleanup_ark_own_backups(
     }
 
     let mut deleted = 0u32;
-    let prefix = format!("{map_path}-");
+    // ASA uses underscore as separator: Astraeos_WP_11.06.2026_09.37.13.ark
+    let prefix = format!("{map_path}_");
 
     let entries = fs::read_dir(&saved_dir).map_err(|e| e.to_string())?;
     for entry in entries {
@@ -297,10 +302,12 @@ pub async fn cleanup_ark_own_backups(
             .and_then(|n| n.to_str())
             .unwrap_or("");
 
-        let is_ark_timestamped = fname.starts_with(&prefix) && fname.ends_with(".ark");
-        let is_profilebak      = fname.ends_with(".profilebak");
+        let is_ark_rolling = fname.starts_with(&prefix)
+            && (fname.ends_with(".ark") || fname.ends_with(".arkrbf"));
+        let is_profilebak  = fname.ends_with(".profilebak");
+        let is_tribebak    = fname.ends_with(".tribebak");
 
-        if is_ark_timestamped || is_profilebak {
+        if is_ark_rolling || is_profilebak || is_tribebak {
             if fs::remove_file(&path).is_ok() {
                 deleted += 1;
             }
@@ -403,7 +410,7 @@ pub async fn create_server_backup(
                 let is_last = attempt == MAX_ATTEMPTS - 1;
                 if skipped > 0 && !is_last {
                     // Files disappeared mid-compression — retry with fresh snapshot
-                    let _ = fs::remove_file(&archive_path);
+                    let _ = tokio::fs::remove_file(&archive_path).await;
                     continue;
                 }
                 // Clean run, or last attempt — accept the archive
@@ -426,7 +433,7 @@ pub async fn create_server_backup(
                 });
             }
             Err(e) => {
-                let _ = fs::remove_file(&archive_path);
+                let _ = tokio::fs::remove_file(&archive_path).await;
                 last_error = e;
                 // Will retry if attempts remain
             }
