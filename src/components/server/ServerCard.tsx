@@ -48,6 +48,7 @@ import {
   getServerMods,
   getLastBackupTime,
   getNextScheduledRestart,
+  getNextScheduledBackup,
   getAppSetting,
   resetServersFromStatus,
 } from "@/lib/db";
@@ -115,6 +116,7 @@ export function ServerCard({ server }: Props) {
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [nextRestart, setNextRestart] = useState<string | null>(null);
+  const [nextBackup, setNextBackup] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
@@ -174,16 +176,18 @@ export function ServerCard({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, autoHours] = await Promise.all([
+      const [mc, lb, nr, nb, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
+        getNextScheduledBackup(server.id),
         getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
+        setNextBackup(nb);
         setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
@@ -550,14 +554,23 @@ export function ServerCard({ server }: Props) {
         )}
       </div>
 
-      {/* Next restart */}
-      {nextRestart && (
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Next restart:{" "}
-          <span style={{ color: "var(--neon-cyan)" }}>
-            {formatFutureTime(nextRestart)}
-          </span>
-        </p>
+      {/* Next restart / next backup */}
+      {(nextRestart || nextBackup) && (
+        <div className="flex items-center gap-3 flex-wrap text-xs" style={{ color: "var(--text-muted)" }}>
+          {nextRestart && (
+            <span>
+              Next restart:{" "}
+              <span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextRestart)}</span>
+            </span>
+          )}
+          {nextRestart && nextBackup && <span className="opacity-40">·</span>}
+          {nextBackup && (
+            <span>
+              Next backup:{" "}
+              <span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextBackup)}</span>
+            </span>
+          )}
+        </div>
       )}
 
       {/* ── Action buttons ── */}
