@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, sleep, Duration};
 use uuid::Uuid;
 use sevenz_rust::{SevenZWriter, SevenZArchiveEntry};
 
@@ -210,6 +210,9 @@ async fn rcon_save_world(pool: &RconPool, server_id: &str) -> Result<(), String>
 /// Write `files` into a 7z archive at `dest_path`.
 /// `root` is stripped from each file path to produce the archive entry name.
 /// Emits progress events keyed on `server_id`.
+/// Returns Ok(skipped_count) on success.  A non-zero skipped_count means some
+/// files disappeared between enumeration and compression — the caller should
+/// consider retrying with a fresh file list.
 fn compress_to_7z(
     app: &AppHandle,
     server_id: &str,
@@ -217,9 +220,10 @@ fn compress_to_7z(
     root: &Path,
     dest_path: &Path,
     label: &str,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let total = files.len().max(1) as f32;
     let mut writer = SevenZWriter::create(dest_path).map_err(|e| e.to_string())?;
+    let mut skipped = 0usize;
 
     for (idx, file_path) in files.iter().enumerate() {
         let rel = file_path
@@ -230,11 +234,15 @@ fn compress_to_7z(
         let pct = (idx as f32 / total * 99.0).min(99.0);
         emit_progress(app, server_id, pct, &entry_name, label);
 
-        // Skip files that disappeared between enumeration and compression (ARK
-        // may rotate saves during the window between collect_files and here).
+        // Skip files that disappeared between enumeration and compression (ASA
+        // uses delete+rename atomic writes, which creates a brief window where
+        // the file doesn't exist).  Count skips so callers can retry.
         let file = match File::open(file_path) {
             Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                skipped += 1;
+                continue;
+            }
             Err(e) => return Err(e.to_string()),
         };
         let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -248,7 +256,7 @@ fn compress_to_7z(
     }
 
     writer.finish().map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(skipped)
 }
 
 // ---------------------------------------------------------------------------
@@ -306,12 +314,13 @@ pub async fn cleanup_ark_own_backups(
 // Server backup (SavedArks + SaveGames → .7z)
 // ---------------------------------------------------------------------------
 
-/// Create a Server backup: SaveWorld via RCON → cleanup ARK own backups →
-/// 7z SavedArks/{mapPath} + SaveGames into {backup_dir}/{server_id}/server/.
+/// Create a Server backup: SaveWorld via RCON → wait for ASA file I/O →
+/// cleanup ARK own backups → 7z SavedArks/{mapPath} + SaveGames.
 ///
-/// Emits `backup://progress/{server_id}` events during compression.
-/// If the server is stopped (no RCON), SaveWorld is skipped and existing saves
-/// are compressed as-is.
+/// Retries up to MAX_ATTEMPTS times if files disappear mid-compression (ASA's
+/// atomic save writes can cause a brief window where files don't exist).
+/// If any files were skipped on the final attempt, the archive is accepted
+/// as-is rather than failing — a partial backup is better than none.
 #[tauri::command]
 pub async fn create_server_backup(
     app: AppHandle,
@@ -325,76 +334,106 @@ pub async fn create_server_backup(
     tier: String,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
+    const MAX_ATTEMPTS: u32 = 3;
+    const RETRY_DELAY_SECS: u64 = 15;
+    const POST_SAVE_WAIT_SECS: u64 = 5;
+
     // SaveWorld (best-effort — server may be stopped)
     emit_progress(&app, &server_id, 0.0, "", "Saving world…");
     let _ = rcon_save_world(&pool, &server_id).await;
 
-    // Cleanup ARK's own backup files before we zip
-    emit_progress(&app, &server_id, 2.0, "", "Cleaning ARK backups…");
-    let _ = cleanup_ark_own_backups(install_path.clone(), map_path.clone()).await;
+    // ASA acknowledges SaveWorld via RCON before finishing all file I/O.
+    // Wait briefly so atomic save writes (delete → rename patterns) complete
+    // before we enumerate the directory.
+    sleep(Duration::from_secs(POST_SAVE_WAIT_SECS)).await;
 
     let saved_arks = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SavedArks").join(&map_path);
     let save_games = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SaveGames");
-
-    let mut all_files: Vec<PathBuf> = Vec::new();
-    if saved_arks.exists() {
-        collect_files(&saved_arks, &mut all_files).map_err(|e| e.to_string())?;
-    }
-    if save_games.exists() {
-        collect_files(&save_games, &mut all_files).map_err(|e| e.to_string())?;
-    }
-    if all_files.is_empty() {
-        return Err("No save files found to back up".to_string());
-    }
+    let saved_root = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
 
     let out_dir = PathBuf::from(&backup_dir).join(&server_id).join("server");
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
 
-    let (ts_file, ts_iso) = now_timestamp();
-    let safe_name    = sanitize_name(&server_name);
-    let suffix       = tier_suffix(&tier);
-    let archive_name = format!("{safe_name}-{ts_file}{suffix}.7z");
-    let archive_path = out_dir.join(&archive_name);
+    let safe_name = sanitize_name(&server_name);
+    let suffix    = tier_suffix(&tier);
+    let mut last_error = String::new();
 
-    // Root for relative paths inside the archive = ShooterGame/Saved
-    let saved_root = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
+    for attempt in 0..MAX_ATTEMPTS {
+        if attempt > 0 {
+            emit_progress(&app, &server_id, 0.0, "",
+                &format!("Retrying backup (attempt {}/{MAX_ATTEMPTS})…", attempt + 1));
+            sleep(Duration::from_secs(RETRY_DELAY_SECS)).await;
+        }
 
-    let app_c = app.clone();
-    let sid   = server_id.clone();
-    let files = all_files.clone();
-    let root  = saved_root.clone();
-    let dest  = archive_path.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating server backup…")
-    })
-    .await
-    .map_err(|e| format!("Backup task panicked: {e}"))?;
-    if let Err(e) = result {
-        let _ = fs::remove_file(&archive_path); // remove partial archive
-        return Err(e);
+        // Fresh cleanup and enumeration on every attempt so each retry gets a
+        // stable snapshot after ASA has finished writing.
+        emit_progress(&app, &server_id, 2.0, "", "Cleaning ARK backups…");
+        let _ = cleanup_ark_own_backups(install_path.clone(), map_path.clone()).await;
+
+        let mut all_files: Vec<PathBuf> = Vec::new();
+        if saved_arks.exists() {
+            collect_files(&saved_arks, &mut all_files).map_err(|e| e.to_string())?;
+        }
+        if save_games.exists() {
+            collect_files(&save_games, &mut all_files).map_err(|e| e.to_string())?;
+        }
+        if all_files.is_empty() {
+            return Err("No save files found to back up".to_string());
+        }
+
+        let (ts_file, ts_iso) = now_timestamp();
+        let archive_name = format!("{safe_name}-{ts_file}{suffix}.7z");
+        let archive_path = out_dir.join(&archive_name);
+
+        let app_c = app.clone();
+        let sid   = server_id.clone();
+        let files = all_files;
+        let root  = saved_root.clone();
+        let dest  = archive_path.clone();
+        let compress_result = tokio::task::spawn_blocking(move || {
+            compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating server backup…")
+        })
+        .await
+        .map_err(|e| format!("Backup task panicked: {e}"))?;
+
+        match compress_result {
+            Ok(skipped) => {
+                let is_last = attempt == MAX_ATTEMPTS - 1;
+                if skipped > 0 && !is_last {
+                    // Files disappeared mid-compression — retry with fresh snapshot
+                    let _ = fs::remove_file(&archive_path);
+                    continue;
+                }
+                // Clean run, or last attempt — accept the archive
+                emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
+                let file_size = fs::metadata(&archive_path)
+                    .map_err(|e| e.to_string())?
+                    .len();
+                return Ok(BackupRecord {
+                    id: Uuid::new_v4().to_string(),
+                    server_id,
+                    file_path: archive_path.to_string_lossy().to_string(),
+                    file_size_bytes: file_size,
+                    map_id,
+                    triggered_by,
+                    created_at: ts_iso,
+                    backup_type: "server".to_string(),
+                    tiers: String::new(),
+                    player_eosid: None,
+                    player_name: None,
+                });
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&archive_path);
+                last_error = e;
+                // Will retry if attempts remain
+            }
+        }
     }
 
-    emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
-
-    let file_size = fs::metadata(&archive_path)
-        .map_err(|e| e.to_string())?
-        .len();
-
-    Ok(BackupRecord {
-        id: Uuid::new_v4().to_string(),
-        server_id,
-        file_path: archive_path.to_string_lossy().to_string(),
-        file_size_bytes: file_size,
-        map_id,
-        triggered_by,
-        created_at: ts_iso,
-        backup_type: "server".to_string(),
-        tiers: String::new(),
-        player_eosid: None,
-        player_name: None,
-    })
+    Err(last_error)
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +489,7 @@ pub async fn create_player_backup(
     .await
     .map_err(|e| format!("Backup task panicked: {e}"))?;
     if let Err(e) = result {
-        let _ = fs::remove_file(&archive_path); // remove partial archive
+        let _ = fs::remove_file(&archive_path);
         return Err(e);
     }
 
@@ -612,7 +651,7 @@ pub async fn create_full_backup(
     .await
     .map_err(|e| format!("Full backup task panicked: {e}"))?;
     if let Err(e) = result {
-        let _ = fs::remove_file(&archive_path); // remove partial archive
+        let _ = fs::remove_file(&archive_path);
         return Err(e);
     }
 

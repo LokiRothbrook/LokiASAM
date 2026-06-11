@@ -907,7 +907,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
       { section: "gus", iniSection: "ServerSettings", key: "GlobalSpoilingTimeMultiplier", label: "Spoiling Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = food/items spoil slower." },
       { section: "gus", iniSection: "ServerSettings", key: "GlobalItemDecompositionTimeMultiplier", label: "Item Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
       { section: "gus", iniSection: "ServerSettings", key: "GlobalCorpseDecompositionTimeMultiplier", label: "Corpse Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0 },
-      { section: "gus", iniSection: "ServerSettings", key: "AutoSavePeriodMinutes", label: "Auto-Save Interval (min)", type: "number", min: 1, max: 120, defaultValue: 15, description: "How often the server saves to disk." },
+      { section: "gus", iniSection: "ServerSettings", key: "AutoSavePeriodMinutes", label: "Auto-Save Interval (min)", type: "number", min: 0, max: 120, defaultValue: 15, description: "How often the server saves to disk. Set to 0 to disable ARK's auto-save and manage saves manually via RCON." },
     ],
   },
   {
