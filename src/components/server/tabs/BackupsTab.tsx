@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   getServerBackupsByType, insertBackup, deleteBackupRecord,
-  getAppSetting, setAppSetting, getKnownPlayers,
+  pruneManualBackups, getAppSetting, setAppSetting, getKnownPlayers,
   type BackupRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
@@ -766,13 +766,50 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       await insertBackup({
         id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
         file_size_bytes: rec.fileSizeBytes, map_id: rec.mapId,
-        triggered_by: rec.triggeredBy, created_at: rec.createdAt,
+        triggered_by: "manual", created_at: rec.createdAt,
         backup_type: "server", tiers: "", player_eosid: null, player_name: null,
       });
+      const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
+      await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
       toast.success("Server backup created.");
       await loadAll();
     } catch (e) {
       toast.error(`Backup failed: ${e}`);
+    } finally {
+      setProgress((p) => ({ ...p, active: false }));
+    }
+  }
+
+  async function handleAllPlayersBackup() {
+    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    setProgress({ active: true, percent: 0, currentFile: "", label: "Starting player backups…" });
+    try {
+      const records = await tauriCmd.backupAllPlayers(
+        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir
+      );
+      if (records.length === 0) {
+        toast.info("No player profiles found to back up.");
+        return;
+      }
+      const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
+      const keepN = isNaN(keep) ? 5 : keep;
+      for (const rec of records) {
+        await insertBackup({
+          id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
+          file_size_bytes: rec.fileSizeBytes, map_id: rec.mapId,
+          triggered_by: "manual", created_at: rec.createdAt,
+          backup_type: "player", tiers: "",
+          player_eosid: rec.playerEosid ?? null,
+          player_name: rec.playerName ?? null,
+        });
+        if (rec.playerEosid) {
+          await pruneManualBackups(server.id, "player", keepN);
+        }
+      }
+      toast.success(`Backed up ${records.length} player profile${records.length === 1 ? "" : "s"}.`);
+      await loadAll();
+    } catch (e) {
+      toast.error(`Player backup failed: ${e}`);
     } finally {
       setProgress((p) => ({ ...p, active: false }));
     }
@@ -800,9 +837,11 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       await insertBackup({
         id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
         file_size_bytes: rec.fileSizeBytes, map_id: rec.mapId,
-        triggered_by: rec.triggeredBy, created_at: rec.createdAt,
+        triggered_by: "manual", created_at: rec.createdAt,
         backup_type: "full", tiers: "", player_eosid: null, player_name: null,
       });
+      const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
+      await pruneManualBackups(server.id, "full", isNaN(keep) ? 5 : keep);
       toast.success("Full backup created.");
       await loadAll();
     } catch (e) {
@@ -1011,7 +1050,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         serverId={server.id}
         playerBackups={playerBackups} loading={loading}
         onRestore={setRestoreTarget} onDelete={handleDelete}
-        onManualBackup={() => toast.info("Player backups are triggered automatically by the scheduler.")}
+        onManualBackup={handleAllPlayersBackup}
         onEditSchedules={editScheduleBtn}
         restoreDisabled={isBusy}
       />

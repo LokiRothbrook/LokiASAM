@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
@@ -28,7 +28,7 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
   getLastBackupTime, getNextScheduledRestart, getNextScheduledBackup, getAppSetting, insertBackup,
-  setServerAutoStart,
+  pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
@@ -320,6 +320,27 @@ function ServerSummaryPanel({
   const isRunning = server.status === "running" || server.status === "starting";
   const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
 
+  const [backupActive, setBackupActive] = useState(false);
+  const backupUpdatedAt = useRef<number>(0);
+
+  useTauriEvent<{ percent: number; currentFile: string; label: string }>(
+    `backup://progress/${server.id}`,
+    (p) => {
+      backupUpdatedAt.current = Date.now();
+      setBackupActive(p.percent < 100);
+    }
+  );
+
+  useEffect(() => {
+    if (!backupActive) return;
+    const id = setInterval(() => {
+      if (backupUpdatedAt.current > 0 && Date.now() - backupUpdatedAt.current > 30_000) {
+        setBackupActive(false);
+      }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [backupActive]);
+
   const fmtDate = (ms: number) =>
     new Date(ms).toLocaleString([], {
       month: "short", day: "numeric",
@@ -333,7 +354,7 @@ function ServerSummaryPanel({
     { label: "Map",           value: mapDisplay                                         },
     { label: "Mods",          value: modCount !== null ? String(modCount) : "—"        },
     { label: "Last Backup",   value: formatRelativeTime(lastBackup)                    },
-    { label: "Next Backup",   value: formatFutureTime(nextBackup)                      },
+    { label: "Next Backup",   value: backupActive ? "In progress…" : formatFutureTime(nextBackup) },
     { label: "Next Restart",  value: formatFutureTime(nextRestart)                     },
   ];
 
@@ -789,9 +810,11 @@ export function OverviewTab({ server }: Props) {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,
                     file_size_bytes: record.fileSizeBytes, map_id: record.mapId,
-                    triggered_by: record.triggeredBy, created_at: record.createdAt,
+                    triggered_by: "manual", created_at: record.createdAt,
                     backup_type: "server", tiers: "", player_eosid: null, player_name: null,
                   });
+                  const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
+                  await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
                 })
                 .catch(() => null);
             }}

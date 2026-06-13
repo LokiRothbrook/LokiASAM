@@ -34,26 +34,51 @@ import type { SchedulerFiredPayload, BackupRecord } from "@/lib/tauri-commands";
 
 type Tier = "H" | "D" | "W" | "M";
 
-function parseTier(configJson: string): Tier {
-  try {
-    const cfg = JSON.parse(configJson) as { tier?: string };
-    const t = (cfg.tier ?? "H").toUpperCase();
-    if (t === "D" || t === "W" || t === "M") return t as Tier;
-  } catch { /* fall through */ }
-  return "H";
-}
+/** Canonical priority order for tiers (most important first). */
+const TIER_PRIORITY: Tier[] = ["M", "W", "D", "H"];
 
-function parseKeep(configJson: string, defaultKeep = 5): number {
-  try {
-    const cfg = JSON.parse(configJson) as { keep?: number };
-    return typeof cfg.keep === "number" && cfg.keep > 0 ? cfg.keep : defaultKeep;
-  } catch { return defaultKeep; }
-}
+/** Maps tier letter to the unified config_json key. */
+const TIER_TO_KEY: Record<Tier, string> = {
+  H: "hourly", D: "daily", W: "weekly", M: "monthly",
+};
 
-function addTier(existing: string, tier: Tier): string {
-  const flags = existing ? existing.split(",").filter(Boolean) : [];
-  if (!flags.includes(tier)) flags.push(tier);
-  return flags.sort().join(",");
+/** Default keep-counts if not set in config. */
+const TIER_DEFAULT_KEEP: Record<Tier, number> = { H: 24, D: 7, W: 4, M: 3 };
+
+/**
+ * How much time must elapse since the last backup with this tier before a new
+ * one is considered "due". H is always due when the schedule fires (0ms).
+ */
+const TIER_THRESHOLD_MS: Record<Tier, number> = {
+  H: 0,
+  D: 24 * 3600_000,
+  W: 7 * 24 * 3600_000,
+  M: 30 * 24 * 3600_000,
+};
+
+interface TierCfg { enabled: boolean; keep: number; }
+
+/**
+ * Parse a backup schedule's config_json into per-tier settings.
+ * Supports both the new unified format and the legacy single-tier format.
+ */
+function parseTierConfig(configJson: string): Record<string, TierCfg> {
+  try {
+    const cfg = JSON.parse(configJson) as Record<string, unknown>;
+    if (cfg.hourly !== undefined || cfg.daily !== undefined ||
+        cfg.weekly !== undefined || cfg.monthly !== undefined) {
+      return cfg as Record<string, TierCfg>;
+    }
+    // Legacy single-tier format: { tier: "H", keep: 24 }
+    if (typeof cfg.tier === "string") {
+      const t = (cfg.tier as string).toUpperCase() as Tier;
+      const key = TIER_TO_KEY[t];
+      if (key) {
+        return { [key]: { enabled: true, keep: (cfg.keep as number) ?? TIER_DEFAULT_KEEP[t] } };
+      }
+    }
+  } catch { /* ignore */ }
+  return {};
 }
 
 function removeTier(existing: string, tier: Tier): string {
@@ -65,15 +90,14 @@ function removeTier(existing: string, tier: Tier): string {
 /** Canonical tier-sorted suffix for a tiers string: M > W > D > H */
 function tierSuffix(tiers: string): string {
   if (!tiers) return "";
-  const order = ["M", "W", "D", "H"];
   const active = tiers.split(",").filter(Boolean);
-  const sorted = order.filter((t) => active.includes(t));
+  const sorted = TIER_PRIORITY.filter((t) => active.includes(t));
   return sorted.length > 0 ? `-${sorted.join("")}` : "";
 }
 
 /**
  * Compute the new filename for a backup when its tiers string changes.
- * Handles both files with an existing tier suffix and those without.
+ * Strips any existing tier suffix then appends the new one.
  */
 function computeRenamedPath(filePath: string, newTiers: string): string {
   const sep   = filePath.includes("\\") ? "\\" : "/";
@@ -81,17 +105,13 @@ function computeRenamedPath(filePath: string, newTiers: string): string {
   const fname = parts[parts.length - 1];
   if (!fname.endsWith(".7z")) return filePath;
 
-  // Strip old tier suffix pattern: -{MWDH chars}.7z → .7z
   const base = fname.replace(/-[MWDH]+\.7z$/, ".7z").replace(/\.7z$/, "");
   const newSuffix = tierSuffix(newTiers);
   parts[parts.length - 1] = `${base}${newSuffix}.7z`;
   return parts.join(sep);
 }
 
-/**
- * Rename the backup file on disk if the path changes, then update the DB.
- * Returns the final file path.
- */
+/** Rename the backup file on disk if the path changes, then update the DB. */
 async function applyTierRename(backup: BackupRow, newTiers: string): Promise<string> {
   const newPath = computeRenamedPath(backup.file_path, newTiers);
   if (newPath !== backup.file_path) {
@@ -99,21 +119,30 @@ async function applyTierRename(backup: BackupRow, newTiers: string): Promise<str
       await tauriCmd.renameBackupFile(backup.file_path, newPath);
       await updateBackupFilePath(backup.id, newPath);
     } catch {
-      // Non-fatal — DB tiers still updated; filename may be slightly stale.
+      // Non-fatal — DB tiers still updated.
     }
   }
   return newPath;
 }
 
+/**
+ * Prune backups of a given tier, keeping at most `keepCount`.
+ * For player backups, optionally scope to a specific player.
+ */
 async function pruneByTier(
   serverId: string,
   backupType: string,
   tier: Tier,
   keepCount: number,
+  playerEosId?: string,
 ): Promise<void> {
   const backups = await getServerBackupsByType(serverId, backupType);
   const withTier = backups
-    .filter((b) => b.tiers.split(",").includes(tier))
+    .filter((b) => {
+      if (!b.tiers.split(",").includes(tier)) return false;
+      if (playerEosId !== undefined && b.player_eosid !== playerEosId) return false;
+      return true;
+    })
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
   if (withTier.length <= keepCount) return;
@@ -131,69 +160,67 @@ async function pruneByTier(
   }
 }
 
-async function tryPromote(
-  serverId: string,
-  backupType: string,
-  tier: Tier,
-  windowMs: number,
-): Promise<BackupRow | null> {
-  const backups = await getServerBackupsByType(serverId, backupType);
-  const candidate = backups
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .find((b) => Date.now() - new Date(b.created_at).getTime() <= windowMs);
-
-  if (!candidate) return null;
-
-  const newTiers = addTier(candidate.tiers, tier);
-  await applyTierRename(candidate, newTiers);
-  await updateBackupTiers(candidate.id, newTiers);
-  return { ...candidate, tiers: newTiers };
-}
-
-const PROMOTE_WINDOW: Record<Tier, number> = {
-  H: 0,
-  D: 6 * 3600_000,
-  W: 24 * 3600_000,
-  M: 48 * 3600_000,
-};
-
 // ---------------------------------------------------------------------------
 // Handle a single BackupRecord from scheduler://fired
 // ---------------------------------------------------------------------------
 
+/**
+ * Determine which tiers are due for this backup record, label the archive
+ * accordingly, insert it into the DB, and prune each tier's rotation.
+ *
+ * Called once per backup record emitted by `scheduler://fired`.
+ * For player backups, tier eligibility is checked per-player so each
+ * player's rotation is independent.
+ */
 async function handleScheduledBackupRecord(
   rec: BackupRecord,
   serverId: string,
-  serverName: string,
   scheduleId: string,
 ): Promise<void> {
   const row        = await getScheduleById(scheduleId);
   const configJson = row?.config_json ?? "{}";
-  const tier       = parseTier(configJson);
-  const keep       = parseKeep(configJson, 5);
+  const cfg        = parseTierConfig(configJson);
   const bType      = rec.backupType;
+  const eosId      = rec.playerEosid ?? undefined;
 
-  let tiers = tier;
+  const allBackups = await getServerBackupsByType(serverId, bType);
+  // For player backups, only consider backups for this specific player
+  const relevantBackups = eosId
+    ? allBackups.filter((b) => b.player_eosid === eosId)
+    : allBackups;
 
-  if (tier !== "H") {
-    const window   = PROMOTE_WINDOW[tier];
-    const promoted = await tryPromote(serverId, bType, tier, window);
-    if (promoted) {
-      try { await tauriCmd.deleteBackup(rec.filePath); } catch { /* ok */ }
-      await pruneByTier(serverId, bType, tier, keep);
-      const lastRun  = new Date().toISOString();
-      const nextDate = row ? getNextCronDate(row.cron_expression) : null;
-      await updateScheduleRun(scheduleId, lastRun, nextDate?.toISOString() ?? null);
-      syncSchedulesToRust();
-      toast.success(`[${serverName}] ${tier}-tier backup promoted.`);
-      return;
+  const now = Date.now();
+  const dueTiers: Tier[] = [];
+
+  for (const tier of TIER_PRIORITY) {
+    const tierCfg = cfg[TIER_TO_KEY[tier]] as TierCfg | undefined;
+    if (!tierCfg?.enabled) continue;
+
+    if (tier === "H") {
+      // Hourly is always due when the schedule fires
+      dueTiers.push("H");
+      continue;
     }
-    tiers = tier;
+
+    const withTier  = relevantBackups.filter((b) => b.tiers.split(",").filter(Boolean).includes(tier));
+    const lastTime  = withTier.length > 0
+      ? Math.max(...withTier.map((b) => new Date(b.created_at).getTime()))
+      : 0;
+
+    if (now - lastTime >= TIER_THRESHOLD_MS[tier]) {
+      dueTiers.push(tier);
+    }
   }
 
-  // Rename the newly created file to include the tier suffix.
-  const initialTiers = tiers;
-  const renamedPath  = computeRenamedPath(rec.filePath, initialTiers);
+  if (dueTiers.length === 0) {
+    // No tier is due this hour — discard the archive
+    try { await tauriCmd.deleteBackup(rec.filePath); } catch { /* best-effort */ }
+    return;
+  }
+
+  const tiersString = TIER_PRIORITY.filter((t) => dueTiers.includes(t)).join(",");
+
+  const renamedPath = computeRenamedPath(rec.filePath, tiersString);
   if (renamedPath !== rec.filePath) {
     try { await tauriCmd.renameBackupFile(rec.filePath, renamedPath); } catch { /* ok */ }
   }
@@ -208,15 +235,16 @@ async function handleScheduledBackupRecord(
       triggered_by:    rec.triggeredBy,
       created_at:      rec.createdAt,
       backup_type:     bType,
-      tiers:           initialTiers,
-      player_eosid:    rec.playerEosid ?? null,
+      tiers:           tiersString,
+      player_eosid:    eosId ?? null,
       player_name:     rec.playerName ?? null,
     });
-  } catch {
-    // Non-fatal.
-  }
+  } catch { /* non-fatal */ }
 
-  await pruneByTier(serverId, bType, tier, keep);
+  for (const tier of dueTiers) {
+    const keep = (cfg[TIER_TO_KEY[tier]] as TierCfg | undefined)?.keep ?? TIER_DEFAULT_KEEP[tier];
+    await pruneByTier(serverId, bType, tier, keep, eosId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +356,7 @@ export function SchedulerManager() {
 
     if (isBackup && success && backupRecords.length > 0) {
       for (const rec of backupRecords) {
-        await handleScheduledBackupRecord(rec, serverId, serverName, scheduleId);
+        await handleScheduledBackupRecord(rec, serverId, scheduleId);
       }
     }
 

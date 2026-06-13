@@ -530,32 +530,32 @@ export function ServerCard({ server }: Props) {
         {/* Last backup */}
         <div className="flex items-center gap-2">
           <HardDrive className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-green)" }} />
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {backupProgress.active ? backupProgress.label || "Backing up…" : "Backup"}
-          </span>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Backup</span>
           <span className="text-xs font-semibold ml-auto" style={{ color: "var(--text-primary)" }}>
-            {backupProgress.active
-              ? `${backupProgress.percent.toFixed(0)}%`
-              : formatRelativeTime(lastBackup)
-            }
+            {formatRelativeTime(lastBackup)}
           </span>
         </div>
         {backupProgress.active && (
-          <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
-            <div
-              className="h-full rounded-full transition-all duration-300"
-              style={{
-                width: `${backupProgress.percent}%`,
-                background: "linear-gradient(90deg, var(--neon-purple), var(--neon-cyan))",
-                boxShadow: "0 0 6px rgba(var(--neon-purple-rgb),0.5)",
-              }}
-            />
+          <div className="col-span-2 flex items-center gap-2">
+            <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-300"
+                style={{
+                  width: `${backupProgress.percent}%`,
+                  background: "linear-gradient(90deg, var(--neon-purple), var(--neon-cyan))",
+                  boxShadow: "0 0 6px rgba(var(--neon-purple-rgb),0.5)",
+                }}
+              />
+            </div>
+            <span className="text-xs tabular-nums shrink-0" style={{ color: "var(--neon-purple)" }}>
+              {backupProgress.percent.toFixed(0)}%
+            </span>
           </div>
         )}
       </div>
 
       {/* Next restart / next backup */}
-      {(nextRestart || nextBackup) && (
+      {(nextRestart || nextBackup || backupProgress.active) && (
         <div className="flex items-center gap-3 flex-wrap text-xs" style={{ color: "var(--text-muted)" }}>
           {nextRestart && (
             <span>
@@ -563,11 +563,13 @@ export function ServerCard({ server }: Props) {
               <span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextRestart)}</span>
             </span>
           )}
-          {nextRestart && nextBackup && <span className="opacity-40">·</span>}
-          {nextBackup && (
+          {nextRestart && (nextBackup || backupProgress.active) && <span className="opacity-40">·</span>}
+          {(nextBackup || backupProgress.active) && (
             <span>
-              Next backup:{" "}
-              <span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextBackup)}</span>
+              {backupProgress.active
+                ? <span style={{ color: "var(--neon-purple)" }}>Backup in progress</span>
+                : <>Next backup:{" "}<span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextBackup)}</span></>
+              }
             </span>
           )}
         </div>

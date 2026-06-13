@@ -346,6 +346,86 @@ async function runMigrations(db: Database): Promise<void> {
   await db.execute(
     "UPDATE schedules SET cron_expression = '0 * * * *' WHERE schedule_type IN ('backup_server','backup_player') AND cron_expression = '0 */6 * * *'"
   );
+
+  // ── Migration 012: consolidate per-tier schedule rows into single rows ────
+  // Old format: up to 4 rows per (server, type) each with { tier: "H"|"D"|"W"|"M", keep: N }
+  // New format: 1 row per (server, type) with all tiers in config_json:
+  //   { hourly: { enabled, keep }, daily: { enabled, keep }, weekly: { enabled, keep }, monthly: { enabled, keep } }
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_012_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      type OldRow = { id: string; server_id: string; schedule_type: string; config_json: string; enabled: number };
+      const rows = await db.select<OldRow[]>(
+        "SELECT id, server_id, schedule_type, config_json, enabled FROM schedules WHERE schedule_type IN ('backup_server','backup_player') ORDER BY rowid ASC"
+      );
+
+      const groups = new Map<string, OldRow[]>();
+      for (const row of rows) {
+        const key = `${row.server_id}:${row.schedule_type}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(row);
+      }
+
+      const tierMap: Record<string, string> = { H: "hourly", D: "daily", W: "weekly", M: "monthly" };
+      const keepDefaults: Record<string, number> = { hourly: 24, daily: 7, weekly: 4, monthly: 3 };
+
+      for (const [, groupRows] of groups) {
+        const merged: Record<string, { enabled: boolean; keep: number }> = {
+          hourly:  { enabled: false, keep: keepDefaults.hourly },
+          daily:   { enabled: false, keep: keepDefaults.daily },
+          weekly:  { enabled: false, keep: keepDefaults.weekly },
+          monthly: { enabled: false, keep: keepDefaults.monthly },
+        };
+
+        let needsUpdate = false;
+        for (const row of groupRows) {
+          try {
+            const cfg = JSON.parse(row.config_json ?? "{}") as Record<string, unknown>;
+            if (typeof cfg.tier === "string") {
+              // Old single-tier format
+              needsUpdate = true;
+              const key = tierMap[(cfg.tier as string).toUpperCase()];
+              if (key) {
+                merged[key] = {
+                  enabled: row.enabled === 1,
+                  keep: typeof cfg.keep === "number" && cfg.keep > 0 ? cfg.keep : keepDefaults[key],
+                };
+              }
+            } else if (cfg.hourly !== undefined || cfg.daily !== undefined || cfg.weekly !== undefined || cfg.monthly !== undefined) {
+              // Already new format — still merge in case of multiple new-format rows
+              for (const k of ["hourly", "daily", "weekly", "monthly"]) {
+                const tc = cfg[k] as { enabled?: boolean; keep?: number } | undefined;
+                if (tc) merged[k] = { enabled: tc.enabled ?? false, keep: tc.keep ?? keepDefaults[k] };
+              }
+            }
+          } catch { /* skip malformed rows */ }
+        }
+
+        if (!needsUpdate && groupRows.length <= 1) continue;
+
+        const anyEnabled = Object.values(merged).some((v) => v.enabled);
+        const cron = merged.hourly.enabled ? "0 * * * *"
+                   : merged.daily.enabled  ? "0 2 * * *"
+                   : merged.weekly.enabled ? "0 3 * * 0"
+                   : "0 4 1 * *";
+
+        await db.execute(
+          "UPDATE schedules SET config_json = ?, cron_expression = ?, enabled = ? WHERE id = ?",
+          [JSON.stringify(merged), cron, anyEnabled ? 1 : 0, groupRows[0].id]
+        );
+
+        for (const row of groupRows.slice(1)) {
+          await db.execute("DELETE FROM schedules WHERE id = ?", [row.id]);
+        }
+      }
+
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_012_done', 'true')"
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -978,6 +1058,32 @@ export async function updateBackupTiers(backupId: string, tiers: string): Promis
 export async function deleteBackupRecord(backupId: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM backups WHERE id = ?", [backupId]);
+}
+
+/**
+ * Prune manual backups for a server+type down to `keep` most recent.
+ * Called after every manual backup insertion.
+ */
+export async function pruneManualBackups(
+  serverId: string,
+  backupType: string,
+  keep: number,
+): Promise<void> {
+  if (keep <= 0) return;
+  const db = await getDb();
+  const rows = await db.select<{ id: string; file_path: string }[]>(
+    `SELECT id, file_path FROM backups
+     WHERE server_id = ? AND backup_type = ? AND triggered_by = 'manual'
+     ORDER BY created_at DESC`,
+    [serverId, backupType],
+  );
+  const toDelete = rows.slice(keep);
+  for (const row of toDelete) {
+    await import("@/lib/tauri-commands").then(({ tauriCmd }) =>
+      tauriCmd.deleteBackup(row.file_path).catch(() => {})
+    );
+    await db.execute("DELETE FROM backups WHERE id = ?", [row.id]);
+  }
 }
 
 // ---------------------------------------------------------------------------

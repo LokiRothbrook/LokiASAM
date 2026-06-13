@@ -36,6 +36,7 @@ import {
   getAppSetting,
   isServerNameTaken,
   insertBackup,
+  pruneManualBackups,
   getServers,
 } from "@/lib/db";
 import { useQueryClient } from "@tanstack/react-query";
@@ -100,7 +101,7 @@ function DeleteDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
+      <DialogContent onClick={(e) => e.stopPropagation()}>
         <DialogHeader>
           <DialogTitle style={{ color: "var(--neon-red)" }}>
             Delete &ldquo;{server.name}&rdquo;?
@@ -287,7 +288,7 @@ function CloneDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && !cloning && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onClick={(e) => e.stopPropagation()}>
         <DialogHeader>
           <DialogTitle style={{ color: "var(--neon-purple)" }}>
             Clone &ldquo;{server.name}&rdquo;
@@ -388,13 +389,15 @@ export function ServerActionMenu({ server }: Props) {
         file_path:       record.filePath,
         file_size_bytes: record.fileSizeBytes,
         map_id:          record.mapId,
-        triggered_by:    record.triggeredBy,
+        triggered_by:    "manual",
         created_at:      record.createdAt,
         backup_type:     "server",
         tiers:           "",
         player_eosid:    null,
         player_name:     null,
       });
+      const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
+      await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
       toast.success(`Backup of "${server.name}" completed.`);
     } catch (err) {
       toast.error(`Backup failed: ${err}`);

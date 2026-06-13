@@ -501,6 +501,12 @@ export const tauriCmd = {
     mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string, tier = "",
   ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
 
+  /** Back up every .arkprofile in SavedArks/{mapPath}/ in one call (manual trigger). */
+  backupAllPlayers: (
+    serverId: string, serverName: string, installPath: string, mapPath: string,
+    mapId: string, backupDir: string,
+  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir }),
+
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
   createIniBackup: (serverId: string, installPath: string, backupDir: string, platform: string) =>
     invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir, platform }),

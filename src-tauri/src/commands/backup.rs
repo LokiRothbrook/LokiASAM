@@ -444,6 +444,64 @@ pub async fn create_server_backup(
 }
 
 // ---------------------------------------------------------------------------
+// All-players manual backup
+// ---------------------------------------------------------------------------
+
+/// Back up every .arkprofile found in SavedArks/{map_path}/ in one call.
+/// Used by the "Backup Players Now" button — same as what the scheduler does
+/// but callable directly without a schedule entry.
+#[tauri::command]
+pub async fn backup_all_players(
+    app: AppHandle,
+    server_id: String,
+    server_name: String,
+    install_path: String,
+    map_path: String,
+    map_id: String,
+    backup_dir: String,
+) -> Result<Vec<BackupRecord>, String> {
+    let saved_dir = PathBuf::from(&install_path)
+        .join("ShooterGame").join("Saved")
+        .join("SavedArks").join(&map_path);
+
+    if !saved_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let profiles: Vec<String> = fs::read_dir(&saved_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("arkprofile"))
+        .filter_map(|e| {
+            e.path().file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    let mut records = Vec::new();
+    for eos_id in &profiles {
+        if let Ok(rec) = create_player_backup(
+            app.clone(),
+            server_id.clone(),
+            server_name.clone(),
+            install_path.clone(),
+            map_path.clone(),
+            map_id.clone(),
+            backup_dir.clone(),
+            eos_id.clone(),
+            eos_id.clone(),
+            "manual".to_string(),
+            String::new(),
+        ).await {
+            records.push(rec);
+        }
+    }
+    Ok(records)
+}
+
+// ---------------------------------------------------------------------------
 // Player backup (single .arkprofile → .7z)
 // ---------------------------------------------------------------------------
 
