@@ -27,7 +27,7 @@ import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-co
 import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
-  getLastBackupTime, getNextScheduledRestart, getNextScheduledBackup, getAppSetting, insertBackup,
+  getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
   pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
@@ -287,17 +287,11 @@ function StatChart({
 
 // ── ServerSummaryPanel ────────────────────────────────────────────────────────
 
-function formatFutureTime(iso: string | null): string {
+function formatClockTime(iso: string | null): string {
   if (!iso) return "Not scheduled";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
-  const diffMs = d.getTime() - Date.now();
-  if (diffMs < 0) return "Overdue";
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 60) return `in ${diffMins}m`;
-  const h = Math.floor(diffMins / 60);
-  if (h < 24) return `in ${h}h`;
-  return `in ${Math.floor(h / 24)}d`;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function ServerSummaryPanel({
@@ -306,7 +300,7 @@ function ServerSummaryPanel({
   modCount,
   lastBackup,
   nextRestart,
-  nextBackup,
+  backupEnabled,
   onAutoStartChange,
 }: {
   server: ServerRow;
@@ -314,7 +308,7 @@ function ServerSummaryPanel({
   modCount: number | null;
   lastBackup: string | null;
   nextRestart: string | null;
-  nextBackup: string | null;
+  backupEnabled: boolean | null;
   onAutoStartChange: (v: boolean) => void;
 }) {
   const isRunning = server.status === "running" || server.status === "starting";
@@ -354,8 +348,8 @@ function ServerSummaryPanel({
     { label: "Map",           value: mapDisplay                                         },
     { label: "Mods",          value: modCount !== null ? String(modCount) : "—"        },
     { label: "Last Backup",   value: formatRelativeTime(lastBackup)                    },
-    { label: "Next Backup",   value: backupActive ? "In progress…" : formatFutureTime(nextBackup) },
-    { label: "Next Restart",  value: formatFutureTime(nextRestart)                     },
+    { label: "Backup",        value: backupActive ? "In progress…" : backupEnabled === null ? "—" : backupEnabled ? "Enabled" : "Disabled" },
+    { label: "Next Restart",  value: formatClockTime(nextRestart)                      },
   ];
 
   return (
@@ -463,8 +457,8 @@ export function OverviewTab({ server }: Props) {
 
   const [modCount, setModCount]     = useState<number | null>(null);
   const [lastBackup,  setLastBackup]  = useState<string | null>(null);
-  const [nextRestart, setNextRestart] = useState<string | null>(null);
-  const [nextBackup,  setNextBackup]  = useState<string | null>(null);
+  const [nextRestart,   setNextRestart]   = useState<string | null>(null);
+  const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [players, setPlayers]       = useState<ArkPlayer[] | null>(null);
   const [playersLoading, setPlayersLoading] = useState(false);
@@ -496,18 +490,18 @@ export function OverviewTab({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, nb, autoHours] = await Promise.all([
+      const [mc, lb, nr, be, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
-        getNextScheduledBackup(server.id),
+        getHasBackupEnabled(server.id),
         getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
-        setNextBackup(nb);
+        setBackupEnabled(be);
         setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
@@ -846,7 +840,7 @@ export function OverviewTab({ server }: Props) {
             modCount={modCount}
             lastBackup={lastBackup}
             nextRestart={nextRestart}
-            nextBackup={nextBackup}
+            backupEnabled={backupEnabled}
             onAutoStartChange={async (v) => {
               await setServerAutoStart(server.id, v);
               queryClient.invalidateQueries({ queryKey: ["servers"] });

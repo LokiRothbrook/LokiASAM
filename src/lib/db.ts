@@ -426,6 +426,43 @@ async function runMigrations(db: Database): Promise<void> {
       );
     }
   }
+
+  // ── Migration 013: convert ancient {"retention":N} backup config to tier format ──
+  // Pre-tier-system rows had { "retention": N } with no hourly/daily/weekly/monthly keys.
+  // Convert them so the new hourly backup tick can handle them correctly.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_013_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      type Row = { id: string; config_json: string };
+      const rows = await db.select<Row[]>(
+        "SELECT id, config_json FROM schedules WHERE schedule_type IN ('backup_server','backup_player','backup_full')"
+      );
+      for (const row of rows) {
+        try {
+          const cfg = JSON.parse(row.config_json ?? "{}") as Record<string, unknown>;
+          if (cfg.retention !== undefined && cfg.hourly === undefined) {
+            const keep = typeof cfg.retention === "number" && cfg.retention > 0
+              ? cfg.retention : 24;
+            const newCfg = {
+              hourly:  { enabled: true,  keep },
+              daily:   { enabled: false, keep: 7 },
+              weekly:  { enabled: false, keep: 4 },
+              monthly: { enabled: false, keep: 3 },
+            };
+            await db.execute(
+              "UPDATE schedules SET config_json = ?, cron_expression = '0 * * * *' WHERE id = ?",
+              [JSON.stringify(newCfg), row.id]
+            );
+          }
+        } catch { /* skip malformed */ }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_013_done', 'true')"
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,17 +1268,22 @@ export async function getNextScheduledRestart(serverId: string): Promise<string 
   return resolveNextRun(rows[0].next_run, rows[0].cron_expression);
 }
 
-/** Return the soonest next_run timestamp across all enabled backup schedules. */
-export async function getNextScheduledBackup(serverId: string): Promise<string | null> {
+/** Return true if any backup schedule row is enabled and has at least one tier active. */
+export async function getHasBackupEnabled(serverId: string): Promise<boolean> {
   const db = await getDb();
-  const rows = await db.select<{ next_run: string | null; cron_expression: string | null }[]>(
-    `SELECT next_run, cron_expression FROM schedules
-     WHERE server_id = ? AND schedule_type IN ('backup_server', 'backup_player', 'backup_full') AND enabled = 1
-     ORDER BY next_run ASC LIMIT 1`,
+  const rows = await db.select<{ config_json: string }[]>(
+    `SELECT config_json FROM schedules
+     WHERE server_id = ? AND schedule_type IN ('backup_server', 'backup_player', 'backup_full') AND enabled = 1`,
     [serverId]
   );
-  if (!rows[0]) return null;
-  return resolveNextRun(rows[0].next_run, rows[0].cron_expression);
+  return rows.some((row) => {
+    try {
+      const cfg = JSON.parse(row.config_json ?? "{}") as Record<string, unknown>;
+      return Object.values(cfg).some(
+        (v) => typeof v === "object" && v !== null && (v as { enabled?: boolean }).enabled === true
+      );
+    } catch { return false; }
+  });
 }
 
 // ---------------------------------------------------------------------------

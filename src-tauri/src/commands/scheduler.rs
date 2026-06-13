@@ -1,4 +1,4 @@
-use crate::state::{scheduler::SchedulerState, AppState, rcon_pool::RconPool};
+use crate::state::{scheduler::SchedulerState, AppState};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -382,107 +382,6 @@ fn is_server_running(app: &AppHandle, server_id: &str) -> bool {
         .contains_key(server_id)
 }
 
-/// Fire a Server backup: cleanup ARK own files → SaveWorld → 7z SavedArks+SaveGames.
-/// Skips silently if the server is stopped (server saves are only valid while running).
-async fn fire_server_backup(
-    app: &AppHandle,
-    entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Vec<crate::commands::backup::BackupRecord>, String> {
-    if !is_server_running(app, &entry.server_id) {
-        return Ok(vec![]);
-    }
-
-    let pool = app.state::<RconPool>();
-    crate::commands::backup::create_server_backup(
-        app.clone(),
-        entry.server_id.clone(),
-        entry.server_name.clone(),
-        entry.install_path.clone(),
-        entry.map_path.clone(),
-        entry.map_id.clone(),
-        entry.backup_dir.clone(),
-        "schedule".to_string(),
-        String::new(), // tier assigned by frontend TimeShift logic
-        pool,
-    )
-    .await
-    .map(|rec| vec![rec])
-}
-
-/// Fire a Player backup for all known .arkprofile files.
-/// Returns one BackupRecord per player. Does NOT require the server to be running —
-/// player profile files exist on disk regardless of server state.
-async fn fire_player_backup(
-    app: &AppHandle,
-    entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Vec<crate::commands::backup::BackupRecord>, String> {
-    let saved_dir = std::path::PathBuf::from(&entry.install_path)
-        .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(&entry.map_path);
-
-    if !saved_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let profiles: Vec<String> = std::fs::read_dir(&saved_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("arkprofile"))
-        .filter_map(|e| {
-            e.path().file_stem()
-                .and_then(|s| s.to_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-        })
-        .collect();
-
-    if profiles.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut records: Vec<crate::commands::backup::BackupRecord> = Vec::new();
-    for eos_id in &profiles {
-        match crate::commands::backup::create_player_backup(
-            app.clone(),
-            entry.server_id.clone(),
-            entry.server_name.clone(),
-            entry.install_path.clone(),
-            entry.map_path.clone(),
-            entry.map_id.clone(),
-            entry.backup_dir.clone(),
-            eos_id.clone(),
-            eos_id.clone(), // frontend resolves to display name via player_name_map
-            "schedule".to_string(),
-            String::new(), // tier assigned by frontend TimeShift logic
-        )
-        .await
-        {
-            Ok(rec) => records.push(rec),
-            Err(_)  => {} // best-effort per player
-        }
-    }
-    Ok(records)
-}
-
-/// Fire a Full backup. No server-running check — full backups may run any time.
-async fn fire_full_backup(
-    app: &AppHandle,
-    entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Vec<crate::commands::backup::BackupRecord>, String> {
-    crate::commands::backup::create_full_backup(
-        app.clone(),
-        entry.server_id.clone(),
-        entry.server_name.clone(),
-        entry.install_path.clone(),
-        entry.map_id.clone(),
-        entry.backup_dir.clone(),
-        "schedule".to_string(),
-        String::new(), // tier assigned by frontend TimeShift logic
-    )
-    .await
-    .map(|rec| vec![rec])
-}
-
 /// Called by the background scheduler loop in lib.rs.
 /// Checks for due entries, fires them in separate spawned tasks, and marks them
 /// as fired (next_run_ms = u64::MAX) to prevent double-fire until the frontend resyncs.
@@ -514,18 +413,6 @@ pub fn tick_scheduler(app: &AppHandle) {
                 "broadcast" => match fire_broadcast(&app, &entry).await {
                     Ok(_) => (true, None, vec![]),
                     Err(e) => (false, Some(e), vec![]),
-                },
-                "backup_server" => match fire_server_backup(&app, &entry).await {
-                    Ok(recs) => (true, None, recs),
-                    Err(e)   => (false, Some(e), vec![]),
-                },
-                "backup_player" => match fire_player_backup(&app, &entry).await {
-                    Ok(recs) => (true, None, recs),
-                    Err(e)   => (false, Some(e), vec![]),
-                },
-                "backup_full" => match fire_full_backup(&app, &entry).await {
-                    Ok(recs) => (true, None, recs),
-                    Err(e)   => (false, Some(e), vec![]),
                 },
                 "restart" => match fire_restart(&app, &entry).await {
                     Ok(_) => (true, None, vec![]),

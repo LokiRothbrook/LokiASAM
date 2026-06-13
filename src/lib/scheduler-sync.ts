@@ -72,9 +72,12 @@ export async function syncSchedulesToRust(): Promise<void> {
       const map = ARK_MAPS.find((m) => m.id === server.map_id);
       const mapPath = map?.mapPath ?? "TheIsland_WP";
 
-      // Exclude backup schedule types that don't use the standard cron approach.
-      // backup_server / backup_player / backup_full are included normally below.
+      // Backup schedules are handled by the hourly backup://tick task in Rust,
+      // NOT by the cron scheduler. Skip them here so they never double-fire.
+      const BACKUP_TYPES = new Set(["backup_server", "backup_player", "backup_full"]);
+
       for (const schedule of enabled) {
+        if (BACKUP_TYPES.has(schedule.schedule_type)) continue;
         // Compute next_run_ms from either the stored ISO date or fresh from cron.
         // IMPORTANT: never push a past timestamp — that causes Rust to fire immediately,
         // which re-fires backups that are still in progress (erases the u64::MAX guard).

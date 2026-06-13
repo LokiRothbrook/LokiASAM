@@ -48,7 +48,7 @@ import {
   getServerMods,
   getLastBackupTime,
   getNextScheduledRestart,
-  getNextScheduledBackup,
+  getHasBackupEnabled,
   getAppSetting,
   resetServersFromStatus,
 } from "@/lib/db";
@@ -88,17 +88,11 @@ function formatRelativeTime(iso: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function formatFutureTime(iso: string | null): string {
+function formatClockTime(iso: string | null): string {
   if (!iso) return "Not scheduled";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
-  const diffMs = d.getTime() - Date.now();
-  if (diffMs < 0) return "Overdue";
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 60) return `in ${diffMins}m`;
-  const h = Math.floor(diffMins / 60);
-  if (h < 24) return `in ${h}h`;
-  return `in ${Math.floor(h / 24)}d`;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -116,7 +110,7 @@ export function ServerCard({ server }: Props) {
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [nextRestart, setNextRestart] = useState<string | null>(null);
-  const [nextBackup, setNextBackup] = useState<string | null>(null);
+  const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
@@ -176,18 +170,18 @@ export function ServerCard({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, nb, autoHours] = await Promise.all([
+      const [mc, lb, nr, be, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
-        getNextScheduledBackup(server.id),
+        getHasBackupEnabled(server.id),
         getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
-        setNextBackup(nb);
+        setBackupEnabled(be);
         setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
@@ -554,21 +548,25 @@ export function ServerCard({ server }: Props) {
         )}
       </div>
 
-      {/* Next restart / next backup */}
-      {(nextRestart || nextBackup || backupProgress.active) && (
+      {/* Next restart · Backup status */}
+      {(nextRestart || backupEnabled !== null || backupProgress.active) && (
         <div className="flex items-center gap-3 flex-wrap text-xs" style={{ color: "var(--text-muted)" }}>
           {nextRestart && (
             <span>
               Next restart:{" "}
-              <span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextRestart)}</span>
+              <span style={{ color: "var(--neon-purple)" }}>{formatClockTime(nextRestart)}</span>
             </span>
           )}
-          {nextRestart && (nextBackup || backupProgress.active) && <span className="opacity-40">·</span>}
-          {(nextBackup || backupProgress.active) && (
+          {nextRestart && (backupEnabled !== null || backupProgress.active) && (
+            <span className="opacity-40">·</span>
+          )}
+          {(backupEnabled !== null || backupProgress.active) && (
             <span>
               {backupProgress.active
                 ? <span style={{ color: "var(--neon-purple)" }}>Backup in progress</span>
-                : <>Next backup:{" "}<span style={{ color: "var(--neon-purple)" }}>{formatFutureTime(nextBackup)}</span></>
+                : backupEnabled
+                  ? <span style={{ color: "var(--neon-purple)" }}>Backup enabled</span>
+                  : <span className="opacity-50">Backup disabled</span>
               }
             </span>
           )}

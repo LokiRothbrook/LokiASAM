@@ -237,6 +237,35 @@ pub fn run() {
                 }
             });
 
+            // ── Hourly backup tick ─────────────────────────────────────────
+            // Fires at each wall-clock hour boundary (7:00, 8:00, …) so backup
+            // checks are predictable and independent of when the app started.
+            let backup_tick_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                // Sleep until the next :00:00 boundary.
+                let now_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let secs_until_next_hour = 3600 - (now_secs % 3600);
+                tokio::time::sleep(tokio::time::Duration::from_secs(secs_until_next_hour)).await;
+
+                loop {
+                    let running_ids: Vec<String> = {
+                        let state = backup_tick_handle.state::<state::AppState>();
+                        let lock = state.running_servers.lock().unwrap();
+                        lock.keys().cloned().collect()
+                    };
+                    let _ = backup_tick_handle.emit(
+                        "backup://tick",
+                        serde_json::json!({ "runningServerIds": running_ids }),
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                }
+            });
+
             // ── Stats recorder background task ─────────────────────────────
             // Polls all running servers every 5 s.  On every poll:
             //   - Emits "stats://live" so the frontend live buffer stays current.

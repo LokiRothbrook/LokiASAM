@@ -459,6 +459,7 @@ pub async fn backup_all_players(
     map_path: String,
     map_id: String,
     backup_dir: String,
+    triggered_by: String,
 ) -> Result<Vec<BackupRecord>, String> {
     let saved_dir = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved")
@@ -492,7 +493,7 @@ pub async fn backup_all_players(
             backup_dir.clone(),
             eos_id.clone(),
             eos_id.clone(),
-            "manual".to_string(),
+            triggered_by.clone(),
             String::new(),
         ).await {
             records.push(rec);

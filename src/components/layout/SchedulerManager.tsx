@@ -4,8 +4,8 @@
  * SchedulerManager — bridges the Rust scheduler and SQLite.
  *
  * On mount: hydrates the Rust scheduler from SQLite via syncSchedulesToRust().
- * On `scheduler://fired`: persists last_run / next_run to SQLite, inserts
- * backup records (with TimeShift tier logic), runs retention pruning, re-syncs.
+ * On `backup://tick`: runs hourly TimeShift backup logic for all running servers.
+ * On `scheduler://fired`: persists last_run / next_run for non-backup schedules.
  * On `rcon://players-any`: updates the player_name_map.
  * On `player://login-any`: inserts player_connections record and triggers
  * login backups when enabled.
@@ -17,7 +17,7 @@ import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
   insertBackup, updateScheduleRun, getScheduleById, setAppSetting,
   getServerBackupsByType, updateBackupTiers, deleteBackupRecord,
-  upsertPlayerNames, getServer, getAppSetting,
+  upsertPlayerNames, getServer, getAppSetting, getServers, getServerSchedules,
   insertPlayerConnection, getLoginBackupCount, getOldestLoginBackup,
   updateBackupFilePath,
   type BackupRow,
@@ -168,20 +168,18 @@ async function pruneByTier(
  * Determine which tiers are due for this backup record, label the archive
  * accordingly, insert it into the DB, and prune each tier's rotation.
  *
- * Called once per backup record emitted by `scheduler://fired`.
+ * Called once per backup record from the `backup://tick` handler.
  * For player backups, tier eligibility is checked per-player so each
  * player's rotation is independent.
  */
 async function handleScheduledBackupRecord(
   rec: BackupRecord,
   serverId: string,
-  scheduleId: string,
+  cfg: Record<string, TierCfg>,
+  backupType: string,
 ): Promise<void> {
-  const row        = await getScheduleById(scheduleId);
-  const configJson = row?.config_json ?? "{}";
-  const cfg        = parseTierConfig(configJson);
-  const bType      = rec.backupType;
-  const eosId      = rec.playerEosid ?? undefined;
+  const bType = backupType;
+  const eosId = rec.playerEosid ?? undefined;
 
   const allBackups = await getServerBackupsByType(serverId, bType);
   // For player backups, only consider backups for this specific player
@@ -279,7 +277,7 @@ export function SchedulerManager() {
   );
 
   // Login event from log watcher — record connection + trigger login backup.
-  const loginBackupInFlight = useRef<Set<string>>(new Set()); // dedup per "serverId:eosId"
+  const loginBackupInFlight = useRef<Set<string>>(new Set());
 
   useTauriEvent<{ serverId: string; eosId: string; ip: string }>(
     "player://login-any",
@@ -287,10 +285,8 @@ export function SchedulerManager() {
       const key = `${serverId}:${eosId}`;
       if (loginBackupInFlight.current.has(key)) return;
 
-      // Record the connection regardless of backup config.
       insertPlayerConnection(serverId, eosId, ip).catch(() => {});
 
-      // Check if login backups are enabled for this server.
       const keepStr = await getAppSetting(`login_backup_keep_${serverId}`).catch(() => null);
       const keep    = parseInt(keepStr ?? "0", 10);
       if (keep <= 0) return;
@@ -323,7 +319,6 @@ export function SchedulerManager() {
           player_name:     eosId,
         });
 
-        // Prune: keep only the N most recent login backups for this player.
         const count = await getLoginBackupCount(serverId, eosId);
         if (count > keep) {
           const oldest = await getOldestLoginBackup(serverId, eosId);
@@ -340,24 +335,90 @@ export function SchedulerManager() {
     }
   );
 
+  // Hourly wall-clock backup tick — Rust emits this at each :00:00 boundary.
+  // All backup types (server + player) are handled here, not via the cron scheduler.
+  const backupInFlight = useRef<Set<string>>(new Set());
+
+  useTauriEvent<{ runningServerIds: string[] }>(
+    "backup://tick",
+    async ({ runningServerIds }) => {
+      if (runningServerIds.length === 0) return;
+
+      const [servers, backupDir] = await Promise.all([
+        getServers(),
+        getAppSetting("backup_dir"),
+      ]);
+      if (!backupDir) return;
+
+      for (const server of servers) {
+        if (!runningServerIds.includes(server.id)) continue;
+
+        const schedules  = await getServerSchedules(server.id);
+        const map        = ARK_MAPS.find((m) => m.id === server.map_id);
+        const mapPath    = map?.mapPath ?? "TheIsland_WP";
+
+        // ── Server backup ──────────────────────────────────────────────────
+        const serverSched = schedules.find(
+          (s) => s.schedule_type === "backup_server" && s.enabled === 1
+        );
+        if (serverSched) {
+          const cfg        = parseTierConfig(serverSched.config_json ?? "{}");
+          const anyEnabled = Object.values(cfg).some((t) => (t as TierCfg).enabled);
+          const inFlightKey = `${server.id}:server`;
+          if (anyEnabled && !backupInFlight.current.has(inFlightKey)) {
+            backupInFlight.current.add(inFlightKey);
+            try {
+              const rec = await tauriCmd.createServerBackup(
+                server.id, server.name, server.install_path,
+                mapPath, server.map_id, backupDir, "schedule", "",
+              );
+              await handleScheduledBackupRecord(rec, server.id, cfg, "backup_server");
+            } catch (e) {
+              toast.error(`[${server.name}] Server backup failed: ${String(e)}`);
+            } finally {
+              backupInFlight.current.delete(inFlightKey);
+            }
+          }
+        }
+
+        // ── Player backup ──────────────────────────────────────────────────
+        const playerSched = schedules.find(
+          (s) => s.schedule_type === "backup_player" && s.enabled === 1
+        );
+        if (playerSched) {
+          const cfg        = parseTierConfig(playerSched.config_json ?? "{}");
+          const anyEnabled = Object.values(cfg).some((t) => (t as TierCfg).enabled);
+          const inFlightKey = `${server.id}:player`;
+          if (anyEnabled && !backupInFlight.current.has(inFlightKey)) {
+            backupInFlight.current.add(inFlightKey);
+            try {
+              const recs = await tauriCmd.backupAllPlayers(
+                server.id, server.name, server.install_path,
+                mapPath, server.map_id, backupDir, "schedule",
+              );
+              for (const rec of recs) {
+                await handleScheduledBackupRecord(rec, server.id, cfg, "backup_player");
+              }
+            } catch (e) {
+              toast.error(`[${server.name}] Player backup failed: ${String(e)}`);
+            } finally {
+              backupInFlight.current.delete(inFlightKey);
+            }
+          }
+        }
+      }
+    }
+  );
+
+  // Non-backup scheduler events: restart, broadcast, update, global_update_check.
   useTauriEvent<SchedulerFiredPayload>("scheduler://fired", async (payload) => {
-    const { scheduleId, serverId, serverName, scheduleType, success, error, backupRecords } = payload;
+    const { scheduleId, serverId, serverName, scheduleType, success, error } = payload;
 
     if (scheduleType === "global_update_check") {
       await setAppSetting("asa_last_checked", new Date().toISOString());
       if (!success) toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
       syncSchedulesToRust();
       return;
-    }
-
-    const isBackup = scheduleType === "backup_server"
-      || scheduleType === "backup_player"
-      || scheduleType === "backup_full";
-
-    if (isBackup && success && backupRecords.length > 0) {
-      for (const rec of backupRecords) {
-        await handleScheduledBackupRecord(rec, serverId, scheduleId);
-      }
     }
 
     const lastRun = new Date().toISOString();
@@ -368,17 +429,13 @@ export function SchedulerManager() {
     } catch { /* non-fatal */ }
 
     if (success) {
-      const wasSkipped = isBackup && backupRecords.length === 0;
-      if (!wasSkipped) {
-        const labels: Record<string, string> = {
-          backup_server: "Server backup completed",
-          backup_player: "Player backups completed",
-          backup_full:   "Full backup completed",
-          restart:       "Scheduled restart completed",
-          update:        "Scheduled update completed",
-          broadcast:     "Scheduled broadcast sent",
-        };
-        toast.success(`[${serverName}] ${labels[scheduleType] ?? "Schedule fired"}.`);
+      const labels: Record<string, string> = {
+        restart:   "Scheduled restart completed",
+        update:    "Scheduled update completed",
+        broadcast: "Scheduled broadcast sent",
+      };
+      if (labels[scheduleType]) {
+        toast.success(`[${serverName}] ${labels[scheduleType]}.`);
       }
     } else {
       toast.error(`[${serverName}] Scheduled ${scheduleType} failed: ${error ?? "unknown error"}`);
