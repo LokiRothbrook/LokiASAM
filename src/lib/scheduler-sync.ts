@@ -76,13 +76,18 @@ export async function syncSchedulesToRust(): Promise<void> {
       // backup_server / backup_player / backup_full are included normally below.
       for (const schedule of enabled) {
         // Compute next_run_ms from either the stored ISO date or fresh from cron.
+        // IMPORTANT: never push a past timestamp — that causes Rust to fire immediately,
+        // which re-fires backups that are still in progress (erases the u64::MAX guard).
         let nextRunMs: number;
-        if (schedule.next_run) {
-          const stored = new Date(schedule.next_run).getTime();
-          nextRunMs = isNaN(stored) ? Date.now() : stored;
+        const storedTime = schedule.next_run
+          ? new Date(schedule.next_run).getTime()
+          : NaN;
+        if (!isNaN(storedTime) && storedTime > Date.now()) {
+          nextRunMs = storedTime;
         } else {
+          // Stale, missing, or past — compute next strictly-future occurrence.
           const next = getNextCronDate(schedule.cron_expression);
-          nextRunMs = next ? next.getTime() : Date.now();
+          nextRunMs = next ? next.getTime() : Date.now() + 3_600_000;
         }
 
         entries.push({

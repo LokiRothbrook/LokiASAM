@@ -63,13 +63,27 @@ pub async fn toggle_schedule(_schedule_id: String, _enabled: bool) -> Result<(),
 /// Called by the frontend whenever schedules are created, updated, toggled, or deleted,
 /// and once on startup after the DB is ready. Rust fires entries purely based on
 /// `next_run_ms` — cron parsing lives entirely in the frontend (cron-parser).
+///
+/// Preserves `u64::MAX` for any entry that is currently in-flight (still running a
+/// backup). The frontend may push a stale `next_run_ms` for such entries before it
+/// has had a chance to update the DB; overwriting `u64::MAX` would cause an immediate
+/// re-fire on the next tick.
 #[tauri::command]
 pub async fn sync_schedules(
     entries: Vec<crate::state::scheduler::ScheduleEntry>,
     state: tauri::State<'_, SchedulerState>,
 ) -> Result<(), String> {
     let mut store = state.entries.lock().unwrap();
-    *store = entries;
+    let mut updated = entries;
+    for entry in updated.iter_mut() {
+        if let Some(existing) = store.iter().find(|e| e.schedule_id == entry.schedule_id) {
+            if existing.next_run_ms == u64::MAX {
+                // Entry is currently in-flight — don't overwrite the guard.
+                entry.next_run_ms = u64::MAX;
+            }
+        }
+    }
+    *store = updated;
     Ok(())
 }
 
