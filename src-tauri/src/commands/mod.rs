@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod backup_manager;
 pub mod countdown;
 pub mod certs;
 pub mod firewall;

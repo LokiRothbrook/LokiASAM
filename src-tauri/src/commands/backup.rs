@@ -321,13 +321,24 @@ pub async fn cleanup_ark_own_backups(
 // Server backup (SavedArks + SaveGames → .7z)
 // ---------------------------------------------------------------------------
 
-/// Create a Server backup: SaveWorld via RCON → wait for ASA file I/O →
-/// cleanup ARK own backups → 7z SavedArks/{mapPath} + SaveGames.
-///
-/// Retries up to MAX_ATTEMPTS times if files disappear mid-compression (ASA's
-/// atomic save writes can cause a brief window where files don't exist).
-/// If any files were skipped on the final attempt, the archive is accepted
-/// as-is rather than failing — a partial backup is better than none.
+/// Inner implementation for server backup — callable from both the Tauri command
+/// and the Rust backup_manager tick handler (which cannot use State<'_> wrappers).
+pub async fn create_server_backup_inner(
+    app: &AppHandle,
+    server_id: &str,
+    server_name: &str,
+    install_path: &str,
+    map_path: &str,
+    map_id: &str,
+    backup_dir: &str,
+    triggered_by: &str,
+    tier: &str,
+    pool: &RconPool,
+) -> Result<BackupRecord, String> {
+    create_server_backup_impl(app, server_id, server_name, install_path, map_path, map_id, backup_dir, triggered_by, tier, pool).await
+}
+
+/// Tauri command: exposed to the frontend for manual/UI-triggered backups.
 #[tauri::command]
 pub async fn create_server_backup(
     app: AppHandle,
@@ -340,6 +351,21 @@ pub async fn create_server_backup(
     triggered_by: String,
     tier: String,
     pool: State<'_, RconPool>,
+) -> Result<BackupRecord, String> {
+    create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool).await
+}
+
+async fn create_server_backup_impl(
+    app: &AppHandle,
+    server_id: &str,
+    server_name: &str,
+    install_path: &str,
+    map_path: &str,
+    map_id: &str,
+    backup_dir: &str,
+    triggered_by: &str,
+    tier: &str,
+    pool: &RconPool,
 ) -> Result<BackupRecord, String> {
     const MAX_ATTEMPTS: u32 = 3;
     const RETRY_DELAY_SECS: u64 = 15;
@@ -377,7 +403,7 @@ pub async fn create_server_backup(
         // Fresh cleanup and enumeration on every attempt so each retry gets a
         // stable snapshot after ASA has finished writing.
         emit_progress(&app, &server_id, 2.0, "", "Cleaning ARK backups…");
-        let _ = cleanup_ark_own_backups(install_path.clone(), map_path.clone()).await;
+        let _ = cleanup_ark_own_backups(install_path.to_string(), map_path.to_string()).await;
 
         let mut all_files: Vec<PathBuf> = Vec::new();
         if saved_arks.exists() {
@@ -395,7 +421,7 @@ pub async fn create_server_backup(
         let archive_path = out_dir.join(&archive_name);
 
         let app_c = app.clone();
-        let sid   = server_id.clone();
+        let sid   = server_id.to_string();
         let files = all_files;
         let root  = saved_root.clone();
         let dest  = archive_path.clone();
@@ -420,16 +446,16 @@ pub async fn create_server_backup(
                     .len();
                 return Ok(BackupRecord {
                     id: Uuid::new_v4().to_string(),
-                    server_id,
-                    file_path: archive_path.to_string_lossy().to_string(),
+                    server_id:       server_id.to_string(),
+                    file_path:       archive_path.to_string_lossy().to_string(),
                     file_size_bytes: file_size,
-                    map_id,
-                    triggered_by,
-                    created_at: ts_iso,
-                    backup_type: "server".to_string(),
-                    tiers: String::new(),
-                    player_eosid: None,
-                    player_name: None,
+                    map_id:          map_id.to_string(),
+                    triggered_by:    triggered_by.to_string(),
+                    created_at:      ts_iso,
+                    backup_type:     "server".to_string(),
+                    tiers:           String::new(),
+                    player_eosid:    None,
+                    player_name:     None,
                 });
             }
             Err(e) => {
@@ -447,23 +473,21 @@ pub async fn create_server_backup(
 // All-players manual backup
 // ---------------------------------------------------------------------------
 
-/// Back up every .arkprofile found in SavedArks/{map_path}/ in one call.
-/// Used by the "Backup Players Now" button — same as what the scheduler does
-/// but callable directly without a schedule entry.
-#[tauri::command]
-pub async fn backup_all_players(
-    app: AppHandle,
-    server_id: String,
-    server_name: String,
-    install_path: String,
-    map_path: String,
-    map_id: String,
-    backup_dir: String,
-    triggered_by: String,
+/// Inner implementation for all-players backup — callable from both the Tauri
+/// command and the Rust backup_manager tick handler.
+pub async fn backup_all_players_inner(
+    app: &AppHandle,
+    server_id: &str,
+    server_name: &str,
+    install_path: &str,
+    map_path: &str,
+    map_id: &str,
+    backup_dir: &str,
+    triggered_by: &str,
 ) -> Result<Vec<BackupRecord>, String> {
-    let saved_dir = PathBuf::from(&install_path)
+    let saved_dir = PathBuf::from(install_path)
         .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(&map_path);
+        .join("SavedArks").join(map_path);
 
     if !saved_dir.exists() {
         return Ok(vec![]);
@@ -483,18 +507,18 @@ pub async fn backup_all_players(
 
     let mut records = Vec::new();
     for eos_id in &profiles {
-        if let Ok(rec) = create_player_backup(
-            app.clone(),
-            server_id.clone(),
-            server_name.clone(),
-            install_path.clone(),
-            map_path.clone(),
-            map_id.clone(),
-            backup_dir.clone(),
-            eos_id.clone(),
-            eos_id.clone(),
-            triggered_by.clone(),
-            String::new(),
+        if let Ok(rec) = create_player_backup_inner(
+            app,
+            server_id,
+            server_name,
+            install_path,
+            map_path,
+            map_id,
+            backup_dir,
+            eos_id,
+            eos_id,
+            triggered_by,
+            "",
         ).await {
             records.push(rec);
         }
@@ -502,12 +526,98 @@ pub async fn backup_all_players(
     Ok(records)
 }
 
+/// Tauri command: back up every .arkprofile (UI-triggered or scheduled from frontend).
+#[tauri::command]
+pub async fn backup_all_players(
+    app: AppHandle,
+    server_id: String,
+    server_name: String,
+    install_path: String,
+    map_path: String,
+    map_id: String,
+    backup_dir: String,
+    triggered_by: String,
+) -> Result<Vec<BackupRecord>, String> {
+    backup_all_players_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by).await
+}
+
 // ---------------------------------------------------------------------------
 // Player backup (single .arkprofile → .7z)
 // ---------------------------------------------------------------------------
 
-/// Back up a single player's .arkprofile into
-/// {backup_dir}/{server_id}/player/{eos_id}/.
+/// Inner implementation for single-player backup — callable without Tauri State wrappers.
+pub async fn create_player_backup_inner(
+    app: &AppHandle,
+    server_id: &str,
+    server_name: &str,
+    install_path: &str,
+    map_path: &str,
+    map_id: &str,
+    backup_dir: &str,
+    eos_id: &str,
+    player_name: &str,
+    triggered_by: &str,
+    tier: &str,
+) -> Result<BackupRecord, String> {
+    let profile_file = PathBuf::from(install_path)
+        .join("ShooterGame").join("Saved")
+        .join("SavedArks").join(map_path)
+        .join(format!("{eos_id}.arkprofile"));
+
+    if !profile_file.exists() {
+        return Err(format!("Profile not found: {}", profile_file.display()));
+    }
+
+    let out_dir = PathBuf::from(backup_dir)
+        .join(server_id).join("player").join(eos_id);
+    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+
+    let (ts_file, ts_iso) = now_timestamp();
+    let safe_server  = sanitize_name(server_name);
+    let safe_player  = sanitize_name(player_name);
+    let suffix       = tier_suffix(tier);
+    let archive_name = format!("{safe_server}-{safe_player}-{ts_file}{suffix}.7z");
+    let archive_path = out_dir.join(&archive_name);
+
+    emit_progress(app, server_id, 0.0, "", &format!("Backing up {player_name}…"));
+
+    let root  = profile_file.parent().unwrap().to_path_buf();
+    let files = vec![profile_file.clone()];
+    let app_c = app.clone();
+    let sid   = server_id.to_string();
+    let dest  = archive_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating player backup…")
+    })
+    .await
+    .map_err(|e| format!("Backup task panicked: {e}"))?;
+    if let Err(e) = result {
+        let _ = fs::remove_file(&archive_path);
+        return Err(e);
+    }
+
+    emit_progress(app, server_id, 100.0, &archive_name, "Done");
+
+    let file_size = fs::metadata(&archive_path)
+        .map_err(|e| e.to_string())?
+        .len();
+
+    Ok(BackupRecord {
+        id:              Uuid::new_v4().to_string(),
+        server_id:       server_id.to_string(),
+        file_path:       archive_path.to_string_lossy().to_string(),
+        file_size_bytes: file_size,
+        map_id:          map_id.to_string(),
+        triggered_by:    triggered_by.to_string(),
+        created_at:      ts_iso,
+        backup_type:     "player".to_string(),
+        tiers:           String::new(),
+        player_eosid:    Some(eos_id.to_string()),
+        player_name:     Some(player_name.to_string()),
+    })
+}
+
+/// Tauri command: back up a single player's .arkprofile.
 #[tauri::command]
 pub async fn create_player_backup(
     app: AppHandle,
@@ -522,62 +632,10 @@ pub async fn create_player_backup(
     triggered_by: String,
     tier: String,
 ) -> Result<BackupRecord, String> {
-    let profile_file = PathBuf::from(&install_path)
-        .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(&map_path)
-        .join(format!("{eos_id}.arkprofile"));
-
-    if !profile_file.exists() {
-        return Err(format!("Profile not found: {}", profile_file.display()));
-    }
-
-    let out_dir = PathBuf::from(&backup_dir)
-        .join(&server_id).join("player").join(&eos_id);
-    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-
-    let (ts_file, ts_iso) = now_timestamp();
-    let safe_server  = sanitize_name(&server_name);
-    let safe_player  = sanitize_name(&player_name);
-    let suffix       = tier_suffix(&tier);
-    let archive_name = format!("{safe_server}-{safe_player}-{ts_file}{suffix}.7z");
-    let archive_path = out_dir.join(&archive_name);
-
-    emit_progress(&app, &server_id, 0.0, "", &format!("Backing up {player_name}…"));
-
-    let root  = profile_file.parent().unwrap().to_path_buf();
-    let files = vec![profile_file.clone()];
-    let app_c = app.clone();
-    let sid   = server_id.clone();
-    let dest  = archive_path.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating player backup…")
-    })
-    .await
-    .map_err(|e| format!("Backup task panicked: {e}"))?;
-    if let Err(e) = result {
-        let _ = fs::remove_file(&archive_path);
-        return Err(e);
-    }
-
-    emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
-
-    let file_size = fs::metadata(&archive_path)
-        .map_err(|e| e.to_string())?
-        .len();
-
-    Ok(BackupRecord {
-        id: Uuid::new_v4().to_string(),
-        server_id,
-        file_path: archive_path.to_string_lossy().to_string(),
-        file_size_bytes: file_size,
-        map_id,
-        triggered_by,
-        created_at: ts_iso,
-        backup_type: "player".to_string(),
-        tiers: String::new(),
-        player_eosid: Some(eos_id),
-        player_name: Some(player_name),
-    })
+    create_player_backup_inner(
+        &app, &server_id, &server_name, &install_path, &map_path,
+        &map_id, &backup_dir, &eos_id, &player_name, &triggered_by, &tier,
+    ).await
 }
 
 // ---------------------------------------------------------------------------

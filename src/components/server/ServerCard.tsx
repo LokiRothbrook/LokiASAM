@@ -145,17 +145,10 @@ export function ServerCard({ server }: Props) {
     }
   );
 
-  // Clear progress bar when SchedulerManager confirms backup is fully recorded in DB.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ serverId: string }>).detail;
-      if (detail?.serverId === server.id) {
-        setBackupProgress({ active: false, percent: 0, label: "" });
-      }
-    };
-    window.addEventListener("backup:completed", handler);
-    return () => window.removeEventListener("backup:completed", handler);
-  }, [server.id]);
+  // Clear progress bar when Rust confirms the backup is fully recorded in DB.
+  useTauriEvent(`backup://completed/${server.id}`, () => {
+    setBackupProgress({ active: false, percent: 0, label: "" });
+  });
 
   // Fallback: clear stale progress bar if no update received in 30s.
   useEffect(() => {

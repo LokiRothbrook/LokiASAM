@@ -329,6 +329,14 @@ async fn tail_log_with_backfill(
                             crate::events::PLAYER_LOGIN_ANY,
                             serde_json::json!({ "serverId": server_id, "eosId": eos_id, "ip": ip }),
                         );
+                        // Record connection + login backup in Rust (works even in tray).
+                        let app2 = app.clone();
+                        let sid2 = server_id.clone();
+                        tauri::async_runtime::spawn(async move {
+                            crate::commands::backup_manager::handle_player_login(
+                                &app2, &sid2, &eos_id, &ip,
+                            ).await;
+                        });
                     }
                 }
                 line_buf.clear();

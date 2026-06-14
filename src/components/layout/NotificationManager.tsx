@@ -3,78 +3,36 @@
 /**
  * NotificationManager — mounts once in the root layout.
  *
- * Subscribes to `server://any-change` Tauri events and fires
- * `dispatchNotification` for status transitions worth notifying about:
- *   - server started → success
- *   - server stopped → info
- *   - server crashed → error
+ * Server status notifications are now dispatched from Rust (dispatch_notification
+ * in notifications.rs), so they fire even when the WebKit webview is throttled
+ * in the system tray. This component just handles the two frontend-facing events:
  *
- * The dispatch function persists the event to SQLite, bumps the Zustand
- * unread counter (so the bell icon refreshes), and fires any configured
- * external channels (OS toast, Discord, email).
+ *   - `notification://toast`  → show a Sonner toast when the window is visible
+ *   - `notification://logged` → bump the bell badge unread counter
  */
 
-import { useRef } from "react";
+import { toast } from "sonner";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { dispatchNotification } from "@/lib/notifications";
-import { getServer } from "@/lib/db";
-import { NOTIFICATION_EVENTS } from "@/data/game-data";
-import type { ServerStatus } from "@/lib/tauri-commands";
+import { useAppStore } from "@/store/useAppStore";
 
 export function NotificationManager() {
-  // Debounce: track the last status per server so we don't emit duplicate
-  // notifications when the crash-monitor fires after the per-server watcher
-  // already handled the same transition.
-  const lastStatusRef = useRef<Map<string, string>>(new Map());
-
-  useTauriEvent<ServerStatus>("server://any-change", async (status) => {
-    const prev = lastStatusRef.current.get(status.serverId);
-    if (prev === status.status) return;
-    lastStatusRef.current.set(status.serverId, status.status);
-
-    const server = await getServer(status.serverId).catch(() => null);
-    const serverName = server?.name ?? status.serverId.slice(0, 8);
-
-    if (status.status === "running") {
-      await dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.SERVER_STARTED,
-        serverId:   status.serverId,
-        serverName,
-        title:      `${serverName} started`,
-        body:       `Server is online${status.pid ? ` (PID ${status.pid})` : ""}.`,
-        severity:   "success",
-      });
-    } else if (status.status === "stopped") {
-      await dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.SERVER_STOPPED,
-        serverId:   status.serverId,
-        serverName,
-        title:      `${serverName} stopped`,
-        body:       "Server has shut down.",
-        severity:   "info",
-      });
-    } else if (status.status === "crashed") {
-      await dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.SERVER_CRASHED,
-        serverId:   status.serverId,
-        serverName,
-        title:      `${serverName} crashed`,
-        body:       "Server process exited unexpectedly. Check the Logs tab for details.",
-        severity:   "error",
-      });
-    } else if (status.status === "start-failed") {
-      const body = status.error
-        ?? "Server failed to start. Verify that Proton-GE is configured correctly, the server files are intact, and all required ports are available.";
-      await dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
-        serverId:   status.serverId,
-        serverName,
-        title:      `${serverName} failed to start`,
-        body,
-        severity:   "error",
-      });
+  useTauriEvent<{ severity: string; title: string; body: string }>(
+    "notification://toast",
+    ({ severity, title, body }) => {
+      const msg = body ? `${title} — ${body}` : title;
+      if (severity === "success") toast.success(msg);
+      else if (severity === "warning") toast.warning(msg);
+      else if (severity === "error") toast.error(msg);
+      else toast(msg);
     }
-  });
+  );
+
+  useTauriEvent<{ serverId?: string; unread: boolean }>(
+    "notification://logged",
+    ({ unread }) => {
+      if (unread) useAppStore.getState().incrementUnread();
+    }
+  );
 
   return null;
 }

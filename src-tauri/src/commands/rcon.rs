@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration, interval, MissedTickBehavior};
 
 use crate::state::{
+    AppState,
     log_manager::LogManagerState,
     rcon_pool::{
         bin_subdir, CachedPlayer, RconCmd, RconConn, RconLogLine, RconPool,
@@ -199,6 +200,14 @@ async fn run_rcon_manager(
                                     pool.player_cache.lock().await
                                         .insert(server_id.clone(), players.clone());
                                 }
+                                // Upsert player names in SQLite — works even when webview is throttled.
+                                if let Some(db_path) = app.state::<AppState>().get_db_path() {
+                                    if let Ok(db_conn) = crate::db::open(&db_path) {
+                                        for p in &players {
+                                            let _ = crate::db::upsert_player_name(&db_conn, &server_id, &p.player_id, &p.name);
+                                        }
+                                    }
+                                }
                                 let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
                                 let _ = app.emit("rcon://players-any", serde_json::json!({ "serverId": server_id, "players": players }));
                                 let _ = response_tx.send(Ok(players));
@@ -224,6 +233,14 @@ async fn run_rcon_manager(
                             let pool = app.state::<RconPool>();
                             pool.player_cache.lock().await
                                 .insert(server_id.clone(), players.clone());
+                        }
+                        // Upsert player names in SQLite — works even when webview is throttled.
+                        if let Some(db_path) = app.state::<AppState>().get_db_path() {
+                            if let Ok(db_conn) = crate::db::open(&db_path) {
+                                for p in &players {
+                                    let _ = crate::db::upsert_player_name(&db_conn, &server_id, &p.player_id, &p.name);
+                                }
+                            }
                         }
                         let _ = app.emit(&format!("rcon://players/{server_id}"), &players);
                         let _ = app.emit("rcon://players-any", serde_json::json!({ "serverId": server_id, "players": players }));

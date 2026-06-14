@@ -1,4 +1,5 @@
 mod commands;
+mod db;
 mod events;
 mod state;
 
@@ -253,15 +254,7 @@ pub fn run() {
                 tokio::time::sleep(tokio::time::Duration::from_secs(secs_until_next_hour)).await;
 
                 loop {
-                    let running_ids: Vec<String> = {
-                        let state = backup_tick_handle.state::<state::AppState>();
-                        let lock = state.running_servers.lock().unwrap();
-                        lock.keys().cloned().collect()
-                    };
-                    let _ = backup_tick_handle.emit(
-                        "backup://tick",
-                        serde_json::json!({ "runningServerIds": running_ids }),
-                    );
+                    crate::commands::backup_manager::execute_tick(&backup_tick_handle).await;
                     tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
                 }
             });
