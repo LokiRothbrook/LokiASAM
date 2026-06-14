@@ -23,6 +23,8 @@ import {
   Loader2,
   X,
   Ban,
+  ToggleLeft,
+  ToggleRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,8 +36,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { CommandOutputPanel, clearOutputBuffer } from "@/components/shared/CommandOutputPanel";
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
@@ -417,7 +417,7 @@ export function ServerCard({ server }: Props) {
           : undefined,
       }}
       onClick={(e) => {
-        if (!(e.target as HTMLElement).closest('button, a, [role="menuitem"], [data-radix-collection-item]')) {
+        if (!(e.target as HTMLElement).closest('button, a, [role="menuitem"], [data-radix-collection-item], [role="dialog"], [role="alertdialog"]')) {
           router.push(`/servers/detail?id=${server.id}`);
         }
       }}
@@ -738,7 +738,7 @@ export function ServerCard({ server }: Props) {
 
       {/* ── Update confirmation dialog ── */}
       <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onClick={(e) => e.stopPropagation()}>
           <DialogHeader>
             <DialogTitle>Apply Server Update?</DialogTitle>
             <DialogDescription>
@@ -750,17 +750,22 @@ export function ServerCard({ server }: Props) {
 
           {isRunning && (
             <div
-              className="flex items-center gap-3 px-1 py-2 rounded-lg"
+              className="flex items-center justify-between px-1 py-2 rounded-lg"
               style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
             >
-              <Switch
-                id={`sc-restart-toggle-${server.id}`}
-                checked={restartAfterUpdate}
-                onCheckedChange={setRestartAfterUpdate}
-              />
-              <Label htmlFor={`sc-restart-toggle-${server.id}`} className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+              <p className="text-sm" style={{ color: "var(--text-primary)" }}>
                 Restart server after update
-              </Label>
+              </p>
+              <button
+                type="button"
+                onClick={() => setRestartAfterUpdate((v) => !v)}
+                className="shrink-0 flex items-center focus:outline-none"
+                aria-label={restartAfterUpdate ? "Disable restart after update" : "Enable restart after update"}
+              >
+                {restartAfterUpdate
+                  ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+              </button>
             </div>
           )}
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MoreVertical, Trash2, Copy, FolderOpen, HardDrive, Loader2 } from "lucide-react";
+import { MoreVertical, Trash2, Copy, FolderOpen, HardDrive, Loader2, ToggleLeft, ToggleRight } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -112,36 +112,46 @@ function DeleteDialog({
         </DialogHeader>
 
         <div className="space-y-3 mt-1">
-          <label className="flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={deleteFiles}
-              onChange={(e) => setDeleteFiles(e.target.checked)}
-              className="w-4 h-4 accent-red-500"
-            />
-            <span className="text-sm" style={{ color: "var(--text-primary)" }}>
-              Also delete server files on disk
-              <span className="block text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-                {server.install_path}
-              </span>
-            </span>
-          </label>
+          <div
+            className="flex items-center justify-between px-1 py-2 rounded-lg"
+            style={{ background: "rgba(255,0,85,0.05)", border: "1px solid rgba(255,0,85,0.15)" }}
+          >
+            <div>
+              <p className="text-sm" style={{ color: "var(--text-primary)" }}>Also delete server files on disk</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{server.install_path}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDeleteFiles((v) => !v)}
+              className="shrink-0 flex items-center focus:outline-none"
+              aria-label={deleteFiles ? "Disable delete files" : "Enable delete files"}
+            >
+              {deleteFiles
+                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-red)" }} />
+                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+            </button>
+          </div>
 
           {exclusivePorts.length > 0 && (
-            <label className="flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={removeRules}
-                onChange={(e) => setRemoveRules(e.target.checked)}
-                className="w-4 h-4 accent-orange-500"
-              />
-              <span className="text-sm" style={{ color: "var(--text-primary)" }}>
-                Also remove firewall rules for ports {exclusivePortList}
-                <span className="block text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-                  Only ports not used by any other server will be removed
-                </span>
-              </span>
-            </label>
+            <div
+              className="flex items-center justify-between px-1 py-2 rounded-lg"
+              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            >
+              <div>
+                <p className="text-sm" style={{ color: "var(--text-primary)" }}>Also remove firewall rules for ports {exclusivePortList}</p>
+                <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Only ports not used by any other server will be removed</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRemoveRules((v) => !v)}
+                className="shrink-0 flex items-center focus:outline-none"
+                aria-label={removeRules ? "Disable remove rules" : "Enable remove rules"}
+              >
+                {removeRules
+                  ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+              </button>
+            </div>
           )}
         </div>
 
