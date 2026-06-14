@@ -67,6 +67,19 @@ interface Props {
 
 // ── Utility helpers ──────────────────────────────────────────────────────────
 
+function formatCountdown(secs: number): string {
+  if (secs >= 3600) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m > 0 && s > 0) return `${m}m ${s}s`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
 function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
   if (elapsed < 0) return "0m";
@@ -106,6 +119,7 @@ export function ServerCard({ server }: Props) {
   const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
   const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
+  const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
@@ -126,11 +140,24 @@ export function ServerCard({ server }: Props) {
     `backup://progress/${server.id}`,
     (p) => {
       backupProgressUpdatedAt.current = Date.now();
-      setBackupProgress({ active: p.percent < 100, percent: p.percent, label: p.label });
+      // Keep active=true even at 100% — SchedulerManager's backup:completed clears it
+      setBackupProgress({ active: true, percent: p.percent, label: p.label });
     }
   );
 
-  // Clear stale progress bar if no update received in 30s.
+  // Clear progress bar when SchedulerManager confirms backup is fully recorded in DB.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ serverId: string }>).detail;
+      if (detail?.serverId === server.id) {
+        setBackupProgress({ active: false, percent: 0, label: "" });
+      }
+    };
+    window.addEventListener("backup:completed", handler);
+    return () => window.removeEventListener("backup:completed", handler);
+  }, [server.id]);
+
+  // Fallback: clear stale progress bar if no update received in 30s.
   useEffect(() => {
     if (!backupProgress.active) return;
     const id = setInterval(() => {
@@ -305,6 +332,20 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleRestart = async () => {
+    if (server.restart_warn_players) {
+      const startParams = await buildStartParams();
+      tauriCmd.startGracefulRestart({
+        serverId:      server.id,
+        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.restart_message || "Server restarting in {time}.",
+        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
+        startParams,
+      }).catch((err) => toast.error(`Restart failed: ${err}`));
+      return;
+    }
+
     setActionPending(true);
     try {
       await updateServerStatus(server.id, "stopping", server.pid);
@@ -326,6 +367,34 @@ export function ServerCard({ server }: Props) {
 
   const handleApplyUpdate = async () => {
     setShowUpdateConfirm(false);
+
+    if (server.update_warn_players && isRunning) {
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) return;
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+
+      tauriCmd.startGracefulUpdate({
+        serverId:      server.id,
+        serverName:    server.name,
+        warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.update_message || "Server going down for update in {time}.",
+        cancelMessage: server.update_cancel_message || "Update has been canceled.",
+        installPath:   server.install_path,
+        cacheDir,
+        steamcmdPath,
+        restartAfter:  restartAfterUpdate,
+        startParams,
+      }).catch((err) => toast.error(`Update failed: ${err}`));
+      return;
+    }
+
     setActionPending(true);
     try {
       const wasRunning = isRunning;
@@ -337,6 +406,8 @@ export function ServerCard({ server }: Props) {
           wasRunning,
           restartAfterUpdate,
           (msg) => toast.info(msg),
+          server.rcon_port,
+          server.rcon_password,
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -432,7 +503,14 @@ export function ServerCard({ server }: Props) {
             >
               {server.name}
             </h3>
-            <ServerStatusBadge status={isServerScanPending ? "detecting" : server.status} />
+            <ServerStatusBadge
+              status={isServerScanPending ? "detecting" : server.status}
+              countdownLabel={countdown
+                ? countdown.action === "restart"
+                  ? `Restarting in ${formatCountdown(countdown.remainingSecs)}`
+                  : `Updating in ${formatCountdown(countdown.remainingSecs)}`
+                : undefined}
+            />
             {hasUpdateAvailable && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
@@ -580,7 +658,28 @@ export function ServerCard({ server }: Props) {
 
         {/* Left: all status-dependent actions */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          {isActiveInstall ? (
+          {countdown ? (
+            <>
+              <Button
+                size="sm"
+                onClick={() => tauriCmd.proceedNow(server.id).catch(() => {})}
+                className="gap-1.5 flex-1"
+                style={{ background: "rgba(255,140,0,0.12)", borderColor: "rgba(255,140,0,0.4)", color: "#ff8c00" }}
+              >
+                {countdown.action === "restart"
+                  ? <><RotateCcw className="w-3.5 h-3.5" /> Restart Now</>
+                  : <><ArrowUp className="w-3.5 h-3.5" /> Update Now</>}
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={() => tauriCmd.cancelCountdown(server.id).catch(() => {})}
+                className="gap-1.5"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+              >
+                <X className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isActiveInstall ? (
             <>
               <Button
                 size="sm" variant="outline"

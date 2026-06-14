@@ -56,6 +56,19 @@ const METRIC_CONFIG = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function formatCountdown(secs: number): string {
+  if (secs >= 3600) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m > 0 && s > 0) return `${m}m ${s}s`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
 function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
   if (elapsed < 0) return "0m";
@@ -454,6 +467,7 @@ export function OverviewTab({ server }: Props) {
   const stats = useServerStats(server);
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
+  const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
 
   const [modCount, setModCount]     = useState<number | null>(null);
   const [lastBackup,  setLastBackup]  = useState<string | null>(null);
@@ -605,6 +619,20 @@ export function OverviewTab({ server }: Props) {
   };
 
   const handleRestart = async () => {
+    if (server.restart_warn_players) {
+      const startParams = await buildStartParams();
+      tauriCmd.startGracefulRestart({
+        serverId:      server.id,
+        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.restart_message || "Server restarting in {time}.",
+        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
+        startParams,
+      }).catch((err) => toast.error(`Restart failed: ${err}`));
+      return;
+    }
+
     setActionPending(true);
     try {
       await updateServerStatus(server.id, "stopping", null);
@@ -623,6 +651,34 @@ export function OverviewTab({ server }: Props) {
 
   const handleApplyUpdate = async () => {
     setShowUpdateConfirm(false);
+
+    if (server.update_warn_players && isRunning) {
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) return;
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+
+      tauriCmd.startGracefulUpdate({
+        serverId:      server.id,
+        serverName:    server.name,
+        warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.update_message || "Server going down for update in {time}.",
+        cancelMessage: server.update_cancel_message || "Update has been canceled.",
+        installPath:   server.install_path,
+        cacheDir,
+        steamcmdPath,
+        restartAfter:  restartAfterUpdate,
+        startParams,
+      }).catch((err) => toast.error(`Update failed: ${err}`));
+      return;
+    }
+
     setApplyingUpdate(true);
     try {
       const wasRunning = isRunning;
@@ -634,6 +690,8 @@ export function OverviewTab({ server }: Props) {
           wasRunning,
           restartAfterUpdate,
           (msg) => toast.info(msg),
+          server.rcon_port,
+          server.rcon_password,
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -716,7 +774,33 @@ export function OverviewTab({ server }: Props) {
 
         {/* Left group — status-dependent buttons */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          {isServerScanPending ? (
+          {countdown ? (
+            <>
+              <span className="text-xs font-medium" style={{ color: "#ff8c00" }}>
+                {countdown.action === "restart"
+                  ? `Restarting in ${formatCountdown(countdown.remainingSecs)}`
+                  : `Updating in ${formatCountdown(countdown.remainingSecs)}`}
+              </span>
+              <Button
+                size="sm"
+                onClick={() => tauriCmd.proceedNow(server.id).catch(() => {})}
+                className="gap-1.5"
+                style={{ background: "rgba(255,140,0,0.12)", borderColor: "rgba(255,140,0,0.4)", color: "#ff8c00" }}
+              >
+                {countdown.action === "restart"
+                  ? <><RotateCcw className="w-3.5 h-3.5" /> Restart Now</>
+                  : <><ArrowUp className="w-3.5 h-3.5" /> Update Now</>}
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={() => tauriCmd.cancelCountdown(server.id).catch(() => {})}
+                className="gap-1.5"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+              >
+                <X className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isServerScanPending ? (
             <Button size="sm" disabled className="gap-1.5">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               Detecting...
@@ -766,7 +850,7 @@ export function OverviewTab({ server }: Props) {
             </Button>
           )}
 
-          {isRunning && !isServerScanPending && (
+          {isRunning && !isServerScanPending && !countdown && (
             <Button size="sm" variant="outline" className="btn-neon-purple gap-1.5" onClick={handleRestart} disabled={actionPending}>
               <RotateCcw className="w-3.5 h-3.5" /> Restart
             </Button>

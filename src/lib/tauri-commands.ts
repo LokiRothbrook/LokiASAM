@@ -436,6 +436,38 @@ export const tauriCmd = {
     warnMessage: string,
   ) => invoke<void>("graceful_stop_server", { serverId, rconPort, rconPassword, warnPlayers, warnMinutes, warnMessage }),
 
+  // Graceful countdown restart / update
+  startGracefulRestart: (params: {
+    serverId: string;
+    warnSeconds: number;
+    rconPort: number;
+    rconPassword: string;
+    message: string;
+    cancelMessage: string;
+    startParams: StartServerParams;
+  }) => invoke<void>("start_graceful_restart", { params }),
+
+  startGracefulUpdate: (params: {
+    serverId: string;
+    serverName: string;
+    warnSeconds: number;
+    rconPort: number;
+    rconPassword: string;
+    message: string;
+    cancelMessage: string;
+    installPath: string;
+    cacheDir: string;
+    steamcmdPath: string;
+    restartAfter: boolean;
+    startParams: StartServerParams | null;
+  }) => invoke<void>("start_graceful_update", { params }),
+
+  cancelCountdown: (serverId: string) =>
+    invoke<void>("cancel_countdown", { serverId }),
+
+  proceedNow: (serverId: string) =>
+    invoke<void>("proceed_now", { serverId }),
+
   // Log watcher
   watchServerLog: (serverId: string, logPath: string) =>
     invoke<void>("watch_server_log", { serverId, logPath }),

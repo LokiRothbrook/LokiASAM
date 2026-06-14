@@ -250,6 +250,16 @@ async function runMigrations(db: Database): Promise<void> {
     await db.execute("ALTER TABLE servers ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0");
   } catch { /* already exists */ }
 
+  // ── Migration 014: restart / update warning settings ─────────────────────
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_warn_players INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_warn_minutes INTEGER NOT NULL DEFAULT 5"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_message TEXT NOT NULL DEFAULT 'Server restarting in {time}.'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_cancel_message TEXT NOT NULL DEFAULT 'Restart has been canceled.'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_warn_players INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_warn_minutes INTEGER NOT NULL DEFAULT 5"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_message TEXT NOT NULL DEFAULT 'Server going down for update in {time}.'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_cancel_message TEXT NOT NULL DEFAULT 'Update has been canceled.'"); } catch { /* exists */ }
+
   // Reset partial "updating" status — the update did not complete and must be re-triggered.
   // update_available remains 1 so the badge shows.
   // startup_queued and update_queued are intentionally preserved — StartupRecoveryManager
@@ -487,10 +497,18 @@ export interface ServerRow {
   pid: number | null;
   update_available: number;       // 0 | 1 — set by global update check
   update_automation_json: string; // UpdateAutomation JSON blob
-  shutdown_warn_players: number;  // 0 | 1
-  shutdown_warn_minutes: number;  // default 5
-  shutdown_message: string;       // template with {time} placeholder
-  auto_start: number;             // 0 | 1 — always start on app launch
+  shutdown_warn_players: number;     // 0 | 1
+  shutdown_warn_minutes: number;     // default 5
+  shutdown_message: string;          // template with {time} placeholder
+  restart_warn_players: number;      // 0 | 1
+  restart_warn_minutes: number;      // default 5
+  restart_message: string;           // template with {time} placeholder
+  restart_cancel_message: string;
+  update_warn_players: number;       // 0 | 1
+  update_warn_minutes: number;       // default 5
+  update_message: string;            // template with {time} placeholder
+  update_cancel_message: string;
+  auto_start: number;                // 0 | 1 — always start on app launch
   created_at: string;
   updated_at: string;
 }
@@ -842,6 +860,34 @@ export async function updateServerShutdownSettings(
   await db.execute(
     "UPDATE servers SET shutdown_warn_players = ?, shutdown_warn_minutes = ?, shutdown_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [warnPlayers ? 1 : 0, warnMinutes, message, id]
+  );
+}
+
+export async function updateServerRestartSettings(
+  id: string,
+  warnPlayers: boolean,
+  warnMinutes: number,
+  message: string,
+  cancelMessage: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET restart_warn_players = ?, restart_warn_minutes = ?, restart_message = ?, restart_cancel_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [warnPlayers ? 1 : 0, warnMinutes, message, cancelMessage, id]
+  );
+}
+
+export async function updateServerUpdateSettings(
+  id: string,
+  warnPlayers: boolean,
+  warnMinutes: number,
+  message: string,
+  cancelMessage: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET update_warn_players = ?, update_warn_minutes = ?, update_message = ?, update_cancel_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [warnPlayers ? 1 : 0, warnMinutes, message, cancelMessage, id]
   );
 }
 

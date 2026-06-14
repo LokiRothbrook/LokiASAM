@@ -120,7 +120,7 @@ pub struct StartServerParams {
 // ---------------------------------------------------------------------------
 
 /// Emit both the per-server and global status-change events.
-fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
+pub(crate) fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
     let _ = app.emit(
         &events::server_event(events::SERVER_STATUS, &status.server_id),
         status.clone(),

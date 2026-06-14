@@ -113,6 +113,10 @@ interface AppState {
   statsLiveBuffers: Record<string, ChartPoint[]>;
   addLiveSample: (serverId: string, point: ChartPoint) => void;
   clearLiveBuffer: (serverId: string) => void;
+
+  /** Active countdown info keyed by server ID. Null means no countdown running. */
+  countdowns: Record<string, { action: 'restart' | 'update'; remainingSecs: number; totalSecs: number } | null>;
+  setCountdown: (serverId: string, entry: { action: 'restart' | 'update'; remainingSecs: number; totalSecs: number } | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -197,4 +201,8 @@ export const useAppStore = create<AppState>((set) => ({
       delete next[serverId];
       return { statsLiveBuffers: next };
     }),
+
+  countdowns: {},
+  setCountdown: (serverId, entry) =>
+    set((s) => ({ countdowns: { ...s.countdowns, [serverId]: entry } })),
 }));

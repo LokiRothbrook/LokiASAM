@@ -146,48 +146,50 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
 }
 
 async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    let is_running = {
-        let state = app.state::<AppState>();
-        let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-        r
-    };
-
-    if !is_running {
+    if !is_server_running(app, &entry.server_id) {
         return Ok(());
     }
 
-    let cfg: serde_json::Value =
-        serde_json::from_str(&entry.config_json).unwrap_or_default();
-    let broadcast_warning = cfg["broadcastWarning"].as_bool().unwrap_or(false);
-    let warning_minutes = cfg["warningMinutes"].as_u64().unwrap_or(0);
+    let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
+    let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
+    let message       = cfg["message"].as_str().unwrap_or("Server restarting in {time}.").to_string();
+    let cancel_msg    = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
 
-    if broadcast_warning && warning_minutes > 0 {
-        let template = cfg["message"]
-            .as_str()
-            .unwrap_or("Server restarting in {minutes} minutes.")
-            .to_string();
-        let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
-        sleep(Duration::from_secs(warning_minutes * 60)).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
+    {
+        let state = app.state::<AppState>();
+        state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
     }
 
-    // Clean shutdown via RCON: save then exit.
+    let result = super::countdown::run_countdown(
+        app,
+        &entry.server_id,
+        warn_minutes * 60,
+        entry.rcon_port,
+        &entry.rcon_password,
+        &message,
+        &cancel_msg,
+        "restart",
+        &mut rx,
+    ).await;
+
+    {
+        let state = app.state::<AppState>();
+        state.countdowns.lock().unwrap().remove(&entry.server_id);
+    }
+
+    if matches!(result, super::countdown::CountdownResult::Cancel) {
+        return Ok(());
+    }
+
     transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-    sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(3)).await;
     transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
 
-    // Wait up to 30 s for the process to exit gracefully.
     for _ in 0..60 {
         sleep(Duration::from_millis(500)).await;
-        let still_running = {
-            let state = app.state::<AppState>();
-            let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-            r
-        };
-        if !still_running { break; }
+        if !is_server_running(app, &entry.server_id) { break; }
     }
-
-    // Force-kill if still alive.
     let _ = inner_stop_server(app, &entry.server_id, false);
 
     let params = entry_to_start_params(entry);
@@ -237,93 +239,80 @@ async fn fire_global_update_check(
 }
 
 async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    let cfg: serde_json::Value =
-        serde_json::from_str(&entry.config_json).unwrap_or_default();
+    let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
 
     let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
     let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
 
-    // ── Check & Apply mode ────────────────────────────────────────────────────
-    let is_running = {
-        let state = app.state::<AppState>();
-        let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-        r
-    };
+    let is_running    = is_server_running(app, &entry.server_id);
+    let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
+    let skip_if_players = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
+    let restart_after   = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
+    let message         = cfg["message"].as_str().unwrap_or("Server going down for update in {time}.").to_string();
+    let cancel_msg      = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
 
-    let broadcast_warning   = cfg["broadcastWarning"].as_bool().unwrap_or(false);
-    let warning_minutes     = cfg["warningMinutes"].as_u64().unwrap_or(0);
-    let skip_if_players     = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
-    let restart_after       = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
-
-    // Skip if players are online.
+    // Skip entirely if players are online and the schedule says to.
     if is_running && skip_if_players {
-        use crate::state::rcon_pool::{RconConn, RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND};
-        use tokio::net::TcpStream;
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], entry.rcon_port));
-        if let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await {
-            let _ = stream.set_nodelay(true);
-            let mut conn = RconConn { stream, next_id: 1 };
-            if conn.send_packet(1, RCON_AUTH, &entry.rcon_password).await.is_ok() {
-                for _ in 0..3 {
-                    match tokio::time::timeout(Duration::from_secs(3), conn.recv_packet()).await {
-                        Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
-                        Ok(Err(_)) | Err(_) => break,
-                        _ => {}
-                    }
-                }
-                if let Ok(Ok(response)) = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    conn.send_packet(2, RCON_EXECCOMMAND, "ListPlayers"),
-                ).await {
-                    let _ = response;
-                    // Wait briefly for the response then read it
-                    if let Ok(Ok((_, _, body))) = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        conn.recv_packet(),
-                    ).await {
-                        // "No Players Connected" or a list of players
-                        if !body.trim().is_empty() && !body.contains("No Players Connected") {
-                            return Ok(()); // players online — skip update
-                        }
-                    }
-                }
-            }
+        let resp = super::rcon::transient_rcon_command(entry.rcon_port, &entry.rcon_password, "listplayers")
+            .await
+            .unwrap_or_default();
+        let has_players = !resp.trim().is_empty() && !resp.to_lowercase().contains("no players");
+        if has_players {
+            return Ok(());
         }
     }
 
-    // Broadcast warning before stopping the server.
-    if is_running && broadcast_warning && warning_minutes > 0 {
-        let template = cfg["message"]
-            .as_str()
-            .unwrap_or("Server updating in {minutes} minutes.")
-            .to_string();
-        let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
-        sleep(Duration::from_secs(warning_minutes * 60)).await;
-    }
-
     if is_running {
-        // Clean shutdown via RCON: save then exit.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
+        {
+            let state = app.state::<AppState>();
+            state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
+        }
+
+        let result = super::countdown::run_countdown(
+            app,
+            &entry.server_id,
+            warn_minutes * 60,
+            entry.rcon_port,
+            &entry.rcon_password,
+            &message,
+            &cancel_msg,
+            "update",
+            &mut rx,
+        ).await;
+
+        {
+            let state = app.state::<AppState>();
+            state.countdowns.lock().unwrap().remove(&entry.server_id);
+        }
+
+        if matches!(result, super::countdown::CountdownResult::Cancel) {
+            return Ok(());
+        }
+
         transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(3)).await;
         transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
 
         for _ in 0..60 {
             sleep(Duration::from_millis(500)).await;
-            let still_running = {
-                let state = app.state::<AppState>();
-                let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-                r
-            };
-            if !still_running { break; }
+            if !is_server_running(app, &entry.server_id) { break; }
         }
-
-        // Force-kill if still alive.
         let _ = inner_stop_server(app, &entry.server_id, false);
     }
 
+    // Emit "updating" so the server card shows the spinner.
+    use crate::commands::server::{emit_status, ServerStatus};
+    emit_status(app, &ServerStatus {
+        server_id: entry.server_id.clone(),
+        status: "updating".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
+
     // Update shared cache via SteamCMD.
-    let channel = format!("schedule://update/{}", entry.server_id);
+    let channel = format!("steamcmd://output/{}", entry.server_id);
     tokio::fs::create_dir_all(&cache_dir)
         .await
         .map_err(|e| format!("Failed to create cache dir: {e}"))?;
@@ -342,7 +331,6 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     .map_err(|e| format!("Sync task panicked: {e}"))?
     .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
-    // Emit update-applied event so the frontend can refresh the cached build ID.
     let _ = app.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
         "updateApplied": true,
         "serverId": entry.server_id,

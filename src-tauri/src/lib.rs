@@ -427,6 +427,11 @@ pub fn run() {
             commands::server::stop_server,
             commands::server::restart_server,
             commands::server::graceful_stop_server,
+            // Graceful countdown (restart / update with player warning)
+            commands::countdown::start_graceful_restart,
+            commands::countdown::start_graceful_update,
+            commands::countdown::cancel_countdown,
+            commands::countdown::proceed_now,
             commands::server::get_server_status,
             commands::server::scan_running_servers,
             commands::server::clone_server,

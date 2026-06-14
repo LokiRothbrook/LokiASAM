@@ -373,8 +373,10 @@ export function SchedulerManager() {
                 mapPath, server.map_id, backupDir, "schedule", "",
               );
               await handleScheduledBackupRecord(rec, server.id, cfg, "backup_server");
+              window.dispatchEvent(new CustomEvent("backup:completed", { detail: { serverId: server.id } }));
             } catch (e) {
               toast.error(`[${server.name}] Server backup failed: ${String(e)}`);
+              window.dispatchEvent(new CustomEvent("backup:completed", { detail: { serverId: server.id } }));
             } finally {
               backupInFlight.current.delete(inFlightKey);
             }
