@@ -432,9 +432,8 @@ export function SchedulerManager() {
 
     if (success) {
       const labels: Record<string, string> = {
-        restart:   "Scheduled restart completed",
-        update:    "Scheduled update completed",
-        broadcast: "Scheduled broadcast sent",
+        restart: "Scheduled restart completed",
+        update:  "Scheduled update completed",
       };
       if (labels[scheduleType]) {
         toast.success(`[${serverName}] ${labels[scheduleType]}.`);
