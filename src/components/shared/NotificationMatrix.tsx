@@ -49,7 +49,7 @@ const ALL_EVENTS = Object.values(NOTIFICATION_EVENTS) as NotificationEventType[]
 const CHANNEL_DEFAULTS: Record<ChannelId, NotificationEventType[]> = {
   in_app:  ALL_EVENTS,
   bell:    ALL_EVENTS,
-  desktop: ["server_started", "server_crashed", "update_available", "update_started", "update_failed"],
+  desktop: ["server_started", "server_crashed", "update_available", "update_started", "update_failed", "backup_completed", "backup_failed"],
   discord: ALL_EVENTS,
   email:   ALL_EVENTS,
 };

@@ -21,8 +21,19 @@ use crate::state::AppState;
 use crate::state::rcon_pool::RconPool;
 
 use super::backup::{
-    create_server_backup_inner, backup_all_players_inner, create_player_backup_inner, BackupRecord,
+    create_server_backup_inner, backup_all_players_inner, create_player_backup_inner,
+    rcon_save_world, BackupRecord,
 };
+
+fn fmt_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Map ID → ASA map path (matches ARK_MAPS in game-data.ts)
@@ -479,10 +490,31 @@ pub async fn execute_tick(app: &AppHandle) {
         let schedules = db::get_server_schedules(&conn, &server.id);
         let map_path  = map_id_to_path(&server.map_id);
 
+        // Parse both schedule configs up front so we can decide whether a
+        // world save is needed before starting either backup.
+        let server_cfg = schedules.iter()
+            .find(|s| s.schedule_type == "backup_server" && s.enabled == 1)
+            .map(|s| parse_tier_config(&s.config_json));
+        let player_cfg = schedules.iter()
+            .find(|s| s.schedule_type == "backup_player" && s.enabled == 1)
+            .map(|s| parse_tier_config(&s.config_json));
+
+        let server_active = server_cfg.as_ref().map_or(false, tier_config_any_enabled);
+        let player_active = player_cfg.as_ref().map_or(false, tier_config_any_enabled);
+
+        // ── Single world save for the whole tick ───────────────────────────
+        // Issue SaveWorld once if any backup type is going to run, so both
+        // server and player backups read from the same flushed on-disk state.
+        if server_active || player_active {
+            let _ = rcon_save_world(&pool, &server.id).await;
+            // ASA confirms SaveWorld via RCON before all file I/O is done;
+            // wait for atomic writes (delete → rename) to settle.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+
         // ── Server backup ──────────────────────────────────────────────────
-        if let Some(sched) = schedules.iter().find(|s| s.schedule_type == "backup_server" && s.enabled == 1) {
-            let cfg = parse_tier_config(&sched.config_json);
-            if tier_config_any_enabled(&cfg) {
+        if server_active {
+            if let Some(cfg) = server_cfg {
                 match create_server_backup_inner(
                     app,
                     &server.id,
@@ -494,9 +526,15 @@ pub async fn execute_tick(app: &AppHandle) {
                     "schedule",
                     "",      // tier assigned after tier computation
                     &pool,
+                    true,    // world save already done above
                 ).await {
                     Ok(rec) => {
                         handle_backup_record(&conn, &rec, &cfg, "server", None);
+                        let size = fmt_size(rec.file_size_bytes);
+                        crate::commands::notifications::dispatch_notification(
+                            app, "backup_completed", Some(&server.id), &server.name,
+                            "Backup Complete", &format!("Scheduled server backup completed ({size})"), "success",
+                        ).await;
                         let _ = app.emit(
                             &format!("backup://completed/{}", server.id),
                             serde_json::json!({ "serverId": server.id }),
@@ -504,6 +542,10 @@ pub async fn execute_tick(app: &AppHandle) {
                     }
                     Err(e) => {
                         eprintln!("[backup_manager] Server backup failed for {}: {e}", server.name);
+                        crate::commands::notifications::dispatch_notification(
+                            app, "backup_failed", Some(&server.id), &server.name,
+                            "Backup Failed", &format!("Scheduled server backup failed: {e}"), "error",
+                        ).await;
                         let _ = app.emit(
                             &format!("backup://completed/{}", server.id),
                             serde_json::json!({ "serverId": server.id, "error": e }),
@@ -514,9 +556,8 @@ pub async fn execute_tick(app: &AppHandle) {
         }
 
         // ── Player backup ──────────────────────────────────────────────────
-        if let Some(sched) = schedules.iter().find(|s| s.schedule_type == "backup_player" && s.enabled == 1) {
-            let cfg = parse_tier_config(&sched.config_json);
-            if tier_config_any_enabled(&cfg) {
+        if player_active {
+            if let Some(cfg) = player_cfg {
                 match backup_all_players_inner(
                     app,
                     &server.id,
@@ -528,13 +569,24 @@ pub async fn execute_tick(app: &AppHandle) {
                     "schedule",
                 ).await {
                     Ok(recs) => {
+                        let count = recs.len();
                         for rec in &recs {
                             let eos_id = rec.player_eosid.as_deref();
                             handle_backup_record(&conn, rec, &cfg, "player", eos_id);
                         }
+                        if count > 0 {
+                            crate::commands::notifications::dispatch_notification(
+                                app, "backup_completed", Some(&server.id), &server.name,
+                                "Backup Complete", &format!("Scheduled player backups completed ({count} players)"), "success",
+                            ).await;
+                        }
                     }
                     Err(e) => {
                         eprintln!("[backup_manager] Player backup failed for {}: {e}", server.name);
+                        crate::commands::notifications::dispatch_notification(
+                            app, "backup_failed", Some(&server.id), &server.name,
+                            "Backup Failed", &format!("Scheduled player backup failed: {e}"), "error",
+                        ).await;
                     }
                 }
             }

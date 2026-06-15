@@ -84,6 +84,16 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
+fn fmt_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    }
+}
+
 fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
@@ -183,7 +193,7 @@ fn emit_progress(app: &AppHandle, server_id: &str, percent: f32, file: &str, lab
 
 /// Send SaveWorld through the managed RCON connection if one is live.
 /// Falls back silently if RCON is not connected.
-async fn rcon_save_world(pool: &RconPool, server_id: &str) -> Result<(), String> {
+pub async fn rcon_save_world(pool: &RconPool, server_id: &str) -> Result<(), String> {
     let tx = {
         let guard = pool.cmd_channels.lock().await;
         guard.get(server_id).filter(|(tx, _)| !tx.is_closed()).map(|(tx, _)| tx.clone())
@@ -323,6 +333,10 @@ pub async fn cleanup_ark_own_backups(
 
 /// Inner implementation for server backup — callable from both the Tauri command
 /// and the Rust backup_manager tick handler (which cannot use State<'_> wrappers).
+///
+/// `skip_world_save`: pass `true` when the caller has already issued SaveWorld
+/// (e.g. the scheduler tick that consolidates the save across backup types).
+/// Pass `false` for manual/UI-triggered backups so they save on their own.
 pub async fn create_server_backup_inner(
     app: &AppHandle,
     server_id: &str,
@@ -334,8 +348,9 @@ pub async fn create_server_backup_inner(
     triggered_by: &str,
     tier: &str,
     pool: &RconPool,
+    skip_world_save: bool,
 ) -> Result<BackupRecord, String> {
-    create_server_backup_impl(app, server_id, server_name, install_path, map_path, map_id, backup_dir, triggered_by, tier, pool).await
+    create_server_backup_impl(app, server_id, server_name, install_path, map_path, map_id, backup_dir, triggered_by, tier, pool, skip_world_save).await
 }
 
 /// Tauri command: exposed to the frontend for manual/UI-triggered backups.
@@ -352,7 +367,15 @@ pub async fn create_server_backup(
     tier: String,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
-    create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool).await
+    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool, false).await;
+    if let Ok(ref rec) = result {
+        let size = fmt_size(rec.file_size_bytes);
+        crate::commands::notifications::dispatch_notification(
+            &app, "backup_completed", Some(&server_id), &server_name,
+            "Backup Complete", &format!("Server backup completed ({size})"), "success",
+        ).await;
+    }
+    result
 }
 
 async fn create_server_backup_impl(
@@ -366,19 +389,22 @@ async fn create_server_backup_impl(
     triggered_by: &str,
     tier: &str,
     pool: &RconPool,
+    skip_world_save: bool,
 ) -> Result<BackupRecord, String> {
     const MAX_ATTEMPTS: u32 = 3;
     const RETRY_DELAY_SECS: u64 = 15;
     const POST_SAVE_WAIT_SECS: u64 = 5;
 
-    // SaveWorld (best-effort — server may be stopped)
-    emit_progress(&app, &server_id, 0.0, "", "Saving world…");
-    let _ = rcon_save_world(&pool, &server_id).await;
+    if !skip_world_save {
+        // SaveWorld (best-effort — server may be stopped)
+        emit_progress(&app, &server_id, 0.0, "", "Saving world…");
+        let _ = rcon_save_world(&pool, &server_id).await;
 
-    // ASA acknowledges SaveWorld via RCON before finishing all file I/O.
-    // Wait briefly so atomic save writes (delete → rename patterns) complete
-    // before we enumerate the directory.
-    sleep(Duration::from_secs(POST_SAVE_WAIT_SECS)).await;
+        // ASA acknowledges SaveWorld via RCON before finishing all file I/O.
+        // Wait briefly so atomic save writes (delete → rename patterns) complete
+        // before we enumerate the directory.
+        sleep(Duration::from_secs(POST_SAVE_WAIT_SECS)).await;
+    }
 
     let saved_arks = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SavedArks").join(&map_path);
@@ -538,7 +564,17 @@ pub async fn backup_all_players(
     backup_dir: String,
     triggered_by: String,
 ) -> Result<Vec<BackupRecord>, String> {
-    backup_all_players_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by).await
+    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by).await;
+    if let Ok(ref recs) = result {
+        let count = recs.len();
+        if count > 0 {
+            crate::commands::notifications::dispatch_notification(
+                &app, "backup_completed", Some(&server_id), &server_name,
+                "Backup Complete", &format!("Player backups completed ({count} players)"), "success",
+            ).await;
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -632,10 +668,19 @@ pub async fn create_player_backup(
     triggered_by: String,
     tier: String,
 ) -> Result<BackupRecord, String> {
-    create_player_backup_inner(
+    let result = create_player_backup_inner(
         &app, &server_id, &server_name, &install_path, &map_path,
         &map_id, &backup_dir, &eos_id, &player_name, &triggered_by, &tier,
-    ).await
+    ).await;
+    if let Ok(ref rec) = result {
+        let size = fmt_size(rec.file_size_bytes);
+        let display_name = rec.player_name.as_deref().unwrap_or(&eos_id);
+        crate::commands::notifications::dispatch_notification(
+            &app, "backup_completed", Some(&server_id), &server_name,
+            "Backup Complete", &format!("Player backup for {display_name} completed ({size})"), "success",
+        ).await;
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -785,7 +830,7 @@ pub async fn create_full_backup(
         .map_err(|e| e.to_string())?
         .len();
 
-    Ok(BackupRecord {
+    let rec = BackupRecord {
         id: Uuid::new_v4().to_string(),
         server_id,
         file_path: archive_path.to_string_lossy().to_string(),
@@ -797,7 +842,13 @@ pub async fn create_full_backup(
         tiers: String::new(),
         player_eosid: None,
         player_name: None,
-    })
+    };
+    let size = fmt_size(rec.file_size_bytes);
+    crate::commands::notifications::dispatch_notification(
+        &app, "backup_completed", Some(&rec.server_id), &server_name,
+        "Backup Complete", &format!("Full backup completed ({size})"), "success",
+    ).await;
+    Ok(rec)
 }
 
 // ---------------------------------------------------------------------------
