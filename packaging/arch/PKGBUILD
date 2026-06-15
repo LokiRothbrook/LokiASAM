@@ -13,32 +13,28 @@ depends=(
     "librsvg"
     "xdg-utils"
 )
-makedepends=(
-    "rust"
-    "cargo"
-    "nodejs"
-    "pnpm"
-    "git"
-)
+makedepends=()
 install=lokiasam.install
-source=("$pkgname-$pkgver::git+$url.git#tag=v$pkgver")
-sha256sums=("SKIP")
+
+source=()
+sha256sums=()
+
+_repodir="$(realpath "$startdir/../..")"
 
 build() {
-    cd "$srcdir/$pkgname-$pkgver"
-    pnpm install --frozen-lockfile
-    pnpm tauri build --bundles none
+    # The binary is built by install.sh before makepkg runs.
+    # Nothing to do here.
+    :
 }
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
-
     # Binary
-    install -Dm755 "src-tauri/target/release/lokiasam" "$pkgdir/usr/bin/lokiasam"
+    install -Dm755 "$_repodir/src-tauri/target/release/lokiasam" \
+        "$pkgdir/usr/bin/lokiasam"
 
     # Icons
     for size in 32x32 128x128 256x256 512x512; do
-        local src="src-tauri/icons/${size}.png"
+        local src="$_repodir/src-tauri/icons/${size}.png"
         if [[ -f "$src" ]]; then
             install -Dm644 "$src" \
                 "$pkgdir/usr/share/icons/hicolor/${size}/apps/xyz.lokisoft.lokiasam.png"

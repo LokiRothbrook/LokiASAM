@@ -55,26 +55,30 @@ sudo dnf install ./LokiASAM_*_x86_64.rpm
 AppImage and pre-built binaries do not work reliably on rolling-release distros due to bundled library conflicts. Build from source instead:
 
 ```bash
+# Install build dependencies
+sudo pacman -S --needed rust nodejs pnpm
+
+# Clone and install
 git clone https://github.com/LokiRothbrook/LokiASAM.git
-cd LokiASAM/packaging/arch
-makepkg -si
+cd LokiASAM
+chmod +x install.sh
+./install.sh
 ```
 
-`makepkg -si` builds the app using your system's native libraries and installs it via pacman — icons, the `.desktop` entry, and shell integration all work correctly out of the box.
+`install.sh` builds the app and installs it via pacman — icons, the `.desktop` entry, and shell integration all work correctly out of the box.
 
 To uninstall:
 
 ```bash
-sudo pacman -R lokiasam
+./uninstall.sh
 ```
 
-To update, pull the latest source and rebuild:
+To update, pull the latest source and reinstall:
 
 ```bash
 cd LokiASAM
 git pull
-cd packaging/arch
-makepkg -si
+./install.sh
 ```
 
 ### Generic Linux (AppImage)
