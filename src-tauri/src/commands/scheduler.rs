@@ -1,4 +1,4 @@
-use crate::state::{scheduler::SchedulerState, AppState, rcon_pool::RconPool};
+use crate::state::{scheduler::SchedulerState, AppState};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -31,8 +31,8 @@ pub struct SchedulerFiredPayload {
     pub schedule_type: String,
     pub success: bool,
     pub error: Option<String>,
-    /// Set when schedule_type == "backup" so the frontend can INSERT the record into SQLite.
-    pub backup_record: Option<crate::commands::backup::BackupRecord>,
+    /// All backup records created by this firing (player backups produce one per player).
+    pub backup_records: Vec<crate::commands::backup::BackupRecord>,
 }
 
 // ---------------------------------------------------------------------------
@@ -63,13 +63,27 @@ pub async fn toggle_schedule(_schedule_id: String, _enabled: bool) -> Result<(),
 /// Called by the frontend whenever schedules are created, updated, toggled, or deleted,
 /// and once on startup after the DB is ready. Rust fires entries purely based on
 /// `next_run_ms` — cron parsing lives entirely in the frontend (cron-parser).
+///
+/// Preserves `u64::MAX` for any entry that is currently in-flight (still running a
+/// backup). The frontend may push a stale `next_run_ms` for such entries before it
+/// has had a chance to update the DB; overwriting `u64::MAX` would cause an immediate
+/// re-fire on the next tick.
 #[tauri::command]
 pub async fn sync_schedules(
     entries: Vec<crate::state::scheduler::ScheduleEntry>,
     state: tauri::State<'_, SchedulerState>,
 ) -> Result<(), String> {
     let mut store = state.entries.lock().unwrap();
-    *store = entries;
+    let mut updated = entries;
+    for entry in updated.iter_mut() {
+        if let Some(existing) = store.iter().find(|e| e.schedule_id == entry.schedule_id) {
+            if existing.next_run_ms == u64::MAX {
+                // Entry is currently in-flight — don't overwrite the guard.
+                entry.next_run_ms = u64::MAX;
+            }
+        }
+    }
+    *store = updated;
     Ok(())
 }
 
@@ -132,48 +146,50 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
 }
 
 async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    let is_running = {
-        let state = app.state::<AppState>();
-        let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-        r
-    };
-
-    if !is_running {
+    if !is_server_running(app, &entry.server_id) {
         return Ok(());
     }
 
-    let cfg: serde_json::Value =
-        serde_json::from_str(&entry.config_json).unwrap_or_default();
-    let broadcast_warning = cfg["broadcastWarning"].as_bool().unwrap_or(false);
-    let warning_minutes = cfg["warningMinutes"].as_u64().unwrap_or(0);
+    let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
+    let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
+    let message       = cfg["message"].as_str().unwrap_or("Server restarting in {time}.").to_string();
+    let cancel_msg    = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
 
-    if broadcast_warning && warning_minutes > 0 {
-        let template = cfg["message"]
-            .as_str()
-            .unwrap_or("Server restarting in {minutes} minutes.")
-            .to_string();
-        let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
-        sleep(Duration::from_secs(warning_minutes * 60)).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
+    {
+        let state = app.state::<AppState>();
+        state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
     }
 
-    // Clean shutdown via RCON: save then exit.
+    let result = super::countdown::run_countdown(
+        app,
+        &entry.server_id,
+        warn_minutes * 60,
+        entry.rcon_port,
+        &entry.rcon_password,
+        &message,
+        &cancel_msg,
+        "restart",
+        &mut rx,
+    ).await;
+
+    {
+        let state = app.state::<AppState>();
+        state.countdowns.lock().unwrap().remove(&entry.server_id);
+    }
+
+    if matches!(result, super::countdown::CountdownResult::Cancel) {
+        return Ok(());
+    }
+
     transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-    sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(3)).await;
     transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
 
-    // Wait up to 30 s for the process to exit gracefully.
     for _ in 0..60 {
         sleep(Duration::from_millis(500)).await;
-        let still_running = {
-            let state = app.state::<AppState>();
-            let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-            r
-        };
-        if !still_running { break; }
+        if !is_server_running(app, &entry.server_id) { break; }
     }
-
-    // Force-kill if still alive.
     let _ = inner_stop_server(app, &entry.server_id, false);
 
     let params = entry_to_start_params(entry);
@@ -223,93 +239,80 @@ async fn fire_global_update_check(
 }
 
 async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    let cfg: serde_json::Value =
-        serde_json::from_str(&entry.config_json).unwrap_or_default();
+    let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
 
     let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
     let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
 
-    // ── Check & Apply mode ────────────────────────────────────────────────────
-    let is_running = {
-        let state = app.state::<AppState>();
-        let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-        r
-    };
+    let is_running    = is_server_running(app, &entry.server_id);
+    let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
+    let skip_if_players = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
+    let restart_after   = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
+    let message         = cfg["message"].as_str().unwrap_or("Server going down for update in {time}.").to_string();
+    let cancel_msg      = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
 
-    let broadcast_warning   = cfg["broadcastWarning"].as_bool().unwrap_or(false);
-    let warning_minutes     = cfg["warningMinutes"].as_u64().unwrap_or(0);
-    let skip_if_players     = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
-    let restart_after       = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
-
-    // Skip if players are online.
+    // Skip entirely if players are online and the schedule says to.
     if is_running && skip_if_players {
-        use crate::state::rcon_pool::{RconConn, RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND};
-        use tokio::net::TcpStream;
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], entry.rcon_port));
-        if let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await {
-            let _ = stream.set_nodelay(true);
-            let mut conn = RconConn { stream, next_id: 1 };
-            if conn.send_packet(1, RCON_AUTH, &entry.rcon_password).await.is_ok() {
-                for _ in 0..3 {
-                    match tokio::time::timeout(Duration::from_secs(3), conn.recv_packet()).await {
-                        Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
-                        Ok(Err(_)) | Err(_) => break,
-                        _ => {}
-                    }
-                }
-                if let Ok(Ok(response)) = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    conn.send_packet(2, RCON_EXECCOMMAND, "ListPlayers"),
-                ).await {
-                    let _ = response;
-                    // Wait briefly for the response then read it
-                    if let Ok(Ok((_, _, body))) = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        conn.recv_packet(),
-                    ).await {
-                        // "No Players Connected" or a list of players
-                        if !body.trim().is_empty() && !body.contains("No Players Connected") {
-                            return Ok(()); // players online — skip update
-                        }
-                    }
-                }
-            }
+        let resp = super::rcon::transient_rcon_command(entry.rcon_port, &entry.rcon_password, "listplayers")
+            .await
+            .unwrap_or_default();
+        let has_players = !resp.trim().is_empty() && !resp.to_lowercase().contains("no players");
+        if has_players {
+            return Ok(());
         }
     }
 
-    // Broadcast warning before stopping the server.
-    if is_running && broadcast_warning && warning_minutes > 0 {
-        let template = cfg["message"]
-            .as_str()
-            .unwrap_or("Server updating in {minutes} minutes.")
-            .to_string();
-        let msg = template.replace("{minutes}", &warning_minutes.to_string());
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {msg}")).await;
-        sleep(Duration::from_secs(warning_minutes * 60)).await;
-    }
-
     if is_running {
-        // Clean shutdown via RCON: save then exit.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
+        {
+            let state = app.state::<AppState>();
+            state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
+        }
+
+        let result = super::countdown::run_countdown(
+            app,
+            &entry.server_id,
+            warn_minutes * 60,
+            entry.rcon_port,
+            &entry.rcon_password,
+            &message,
+            &cancel_msg,
+            "update",
+            &mut rx,
+        ).await;
+
+        {
+            let state = app.state::<AppState>();
+            state.countdowns.lock().unwrap().remove(&entry.server_id);
+        }
+
+        if matches!(result, super::countdown::CountdownResult::Cancel) {
+            return Ok(());
+        }
+
         transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(3)).await;
         transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
 
         for _ in 0..60 {
             sleep(Duration::from_millis(500)).await;
-            let still_running = {
-                let state = app.state::<AppState>();
-                let r = state.running_servers.lock().unwrap().contains_key(&entry.server_id);
-                r
-            };
-            if !still_running { break; }
+            if !is_server_running(app, &entry.server_id) { break; }
         }
-
-        // Force-kill if still alive.
         let _ = inner_stop_server(app, &entry.server_id, false);
     }
 
+    // Emit "updating" so the server card shows the spinner.
+    use crate::commands::server::{emit_status, ServerStatus};
+    emit_status(app, &ServerStatus {
+        server_id: entry.server_id.clone(),
+        status: "updating".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
+
     // Update shared cache via SteamCMD.
-    let channel = format!("schedule://update/{}", entry.server_id);
+    let channel = format!("steamcmd://output/{}", entry.server_id);
     tokio::fs::create_dir_all(&cache_dir)
         .await
         .map_err(|e| format!("Failed to create cache dir: {e}"))?;
@@ -328,7 +331,6 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     .map_err(|e| format!("Sync task panicked: {e}"))?
     .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
-    // Emit update-applied event so the frontend can refresh the cached build ID.
     let _ = app.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
         "updateApplied": true,
         "serverId": entry.server_id,
@@ -368,117 +370,6 @@ fn is_server_running(app: &AppHandle, server_id: &str) -> bool {
         .contains_key(server_id)
 }
 
-/// Fire a Server backup: cleanup ARK own files → SaveWorld → 7z SavedArks+SaveGames.
-/// Skips silently if the server is stopped (scheduled runs only back up live servers).
-async fn fire_server_backup(
-    app: &AppHandle,
-    entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
-    // Scheduled server backups only run when the server is live.
-    if !is_server_running(app, &entry.server_id) {
-        return Ok(None);
-    }
-
-    let pool = app.state::<RconPool>();
-    crate::commands::backup::create_server_backup(
-        app.clone(),
-        entry.server_id.clone(),
-        entry.server_name.clone(),
-        entry.install_path.clone(),
-        entry.map_path.clone(),
-        entry.map_id.clone(),
-        entry.backup_dir.clone(),
-        "schedule".to_string(),
-        pool,
-    )
-    .await
-    .map(Some)
-}
-
-/// Fire a Player backup for all known .arkprofile files.
-/// Reads the config_json for optional eos_id filter; defaults to all players.
-/// Skips silently if the server is stopped.
-async fn fire_player_backup(
-    app: &AppHandle,
-    entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
-    if !is_server_running(app, &entry.server_id) {
-        return Ok(None);
-    }
-
-    // Enumerate all .arkprofile files and zip each one.
-    // Returns the record for the last successful player backup (the count is
-    // captured in the frontend via per-player BackupRecord events).
-    let saved_dir = std::path::PathBuf::from(&entry.install_path)
-        .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(&entry.map_path);
-
-    if !saved_dir.exists() {
-        return Ok(None);
-    }
-
-    let profiles: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(&saved_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().extension().and_then(|x| x.to_str()) == Some("arkprofile")
-        })
-        .map(|e| {
-            let path = e.path();
-            let eos_id = path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            (eos_id, path)
-        })
-        .filter(|(id, _)| !id.is_empty())
-        .collect();
-
-    if profiles.is_empty() {
-        return Ok(None);
-    }
-
-    let mut last_record: Option<crate::commands::backup::BackupRecord> = None;
-    for (eos_id, _) in &profiles {
-        match crate::commands::backup::create_player_backup(
-            app.clone(),
-            entry.server_id.clone(),
-            entry.server_name.clone(),
-            entry.install_path.clone(),
-            entry.map_path.clone(),
-            entry.map_id.clone(),
-            entry.backup_dir.clone(),
-            eos_id.clone(),
-            eos_id.clone(), // frontend resolves to display name; eos_id as fallback
-            "schedule".to_string(),
-        )
-        .await
-        {
-            Ok(rec) => last_record = Some(rec),
-            Err(_)  => {} // best-effort per player
-        }
-    }
-    Ok(last_record)
-}
-
-/// Fire a Full backup. No server-running check — full backups may run any time.
-async fn fire_full_backup(
-    app: &AppHandle,
-    entry: &crate::state::scheduler::ScheduleEntry,
-) -> Result<Option<crate::commands::backup::BackupRecord>, String> {
-    crate::commands::backup::create_full_backup(
-        app.clone(),
-        entry.server_id.clone(),
-        entry.server_name.clone(),
-        entry.install_path.clone(),
-        entry.map_id.clone(),
-        entry.backup_dir.clone(),
-        "schedule".to_string(),
-    )
-    .await
-    .map(Some)
-}
-
 /// Called by the background scheduler loop in lib.rs.
 /// Checks for due entries, fires them in separate spawned tasks, and marks them
 /// as fired (next_run_ms = u64::MAX) to prevent double-fire until the frontend resyncs.
@@ -506,36 +397,24 @@ pub fn tick_scheduler(app: &AppHandle) {
             let server_id = entry.server_id.clone();
             let server_name = entry.server_name.clone();
 
-            let (success, error, backup_record) = match schedule_type.as_str() {
+            let (success, error, backup_records) = match schedule_type.as_str() {
                 "broadcast" => match fire_broadcast(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
-                },
-                "backup_server" => match fire_server_backup(&app, &entry).await {
-                    Ok(rec) => (true, None, rec),
-                    Err(e) => (false, Some(e), None),
-                },
-                "backup_player" => match fire_player_backup(&app, &entry).await {
-                    Ok(rec) => (true, None, rec),
-                    Err(e) => (false, Some(e), None),
-                },
-                "backup_full" => match fire_full_backup(&app, &entry).await {
-                    Ok(rec) => (true, None, rec),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
                 "restart" => match fire_restart(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
                 "update" => match fire_update(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
                 "global_update_check" => match fire_global_update_check(&app, &entry).await {
-                    Ok(_) => (true, None, None),
-                    Err(e) => (false, Some(e), None),
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
                 },
-                _ => (false, Some(format!("Unknown schedule type: {schedule_type}")), None),
+                _ => (false, Some(format!("Unknown schedule type: {schedule_type}")), vec![]),
             };
 
             let _ = app.emit(
@@ -547,7 +426,7 @@ pub fn tick_scheduler(app: &AppHandle) {
                     schedule_type,
                     success,
                     error,
-                    backup_record,
+                    backup_records,
                 },
             );
         });

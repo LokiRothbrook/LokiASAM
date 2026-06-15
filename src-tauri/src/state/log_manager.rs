@@ -305,7 +305,8 @@ async fn tail_log_with_backfill(
     let _ = file.seek(SeekFrom::End(0)).await;
 
     // ── Tail: stream new lines as they arrive ────────────────────────────────
-    let line_event = format!("{}/{server_id}", events::LOG_LINE);
+    let line_event  = format!("{}/{server_id}", events::LOG_LINE);
+    let login_event = format!("{}/{server_id}", events::PLAYER_LOGIN);
     let mut reader = BufReader::new(file);
     let mut line_buf = String::new();
 
@@ -321,12 +322,44 @@ async fn tail_log_with_backfill(
                 let trimmed = line_buf.trim_end_matches(['\n', '\r']).to_string();
                 if !trimmed.is_empty() {
                     let level = classify_level(&trimmed).to_string();
-                    let _ = app.emit(&line_event, LogLine { line: trimmed, level });
+                    let _ = app.emit(&line_event, LogLine { line: trimmed.clone(), level });
+                    if let Some((eos_id, ip)) = parse_player_login(&trimmed) {
+                        let _ = app.emit(&login_event, serde_json::json!({ "eosId": eos_id, "ip": ip }));
+                        let _ = app.emit(
+                            crate::events::PLAYER_LOGIN_ANY,
+                            serde_json::json!({ "serverId": server_id, "eosId": eos_id, "ip": ip }),
+                        );
+                        // Record connection + login backup in Rust (works even in tray).
+                        let app2 = app.clone();
+                        let sid2 = server_id.clone();
+                        tauri::async_runtime::spawn(async move {
+                            crate::commands::backup_manager::handle_player_login(
+                                &app2, &sid2, &eos_id, &ip,
+                            ).await;
+                        });
+                    }
                 }
                 line_buf.clear();
             }
             Err(_) => break,
         }
+    }
+}
+
+/// Parse "IP for incoming account {EOS_ID} - IP {IP}" from a log line.
+/// Returns (eos_id, ip) if matched.
+fn parse_player_login(line: &str) -> Option<(String, String)> {
+    let prefix = "IP for incoming account ";
+    let sep    = " - IP ";
+    let start  = line.find(prefix)?;
+    let after  = &line[start + prefix.len()..];
+    let mid    = after.find(sep)?;
+    let eos_id = after[..mid].trim().to_string();
+    let ip     = after[mid + sep.len()..].trim().to_string();
+    if eos_id.chars().all(|c| c.is_ascii_hexdigit()) && !eos_id.is_empty() && !ip.is_empty() {
+        Some((eos_id, ip))
+    } else {
+        None
     }
 }
 

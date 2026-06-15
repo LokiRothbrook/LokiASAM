@@ -138,12 +138,6 @@ export function RconConsole({ server }: Props) {
     }).catch(() => null);
   }, [server.id]);
 
-  // ── Enable chat poll on mount, disable on unmount ─────────────────────────
-  useEffect(() => {
-    tauriCmd.rconEnableChatPoll(server.id).catch(() => null);
-    return () => { tauriCmd.rconDisableChatPoll(server.id).catch(() => null); };
-  }, [server.id]);
-
   // ── Load players, ban list, whitelist ────────────────────────────────────
   const refreshPlayers = useCallback(async () => {
     if (!connected) return;

@@ -12,10 +12,12 @@ import { NotificationManager } from "@/components/layout/NotificationManager";
 import { UpdateManager } from "@/components/layout/UpdateManager";
 import { CloseWarningManager } from "@/components/layout/CloseWarningManager";
 import { RconManager } from "@/components/layout/RconManager";
+import { LogWatcherManager } from "@/components/layout/LogWatcherManager";
 import { StartupReconciliationManager } from "@/components/layout/StartupReconciliationManager";
 import { StartupQueueManager } from "@/components/layout/StartupQueueManager";
 import { StartupRecoveryManager } from "@/components/layout/StartupRecoveryManager";
 import { CfcoreRetryManager } from "@/components/layout/CfcoreRetryManager";
+import CountdownManager from "@/components/layout/CountdownManager";
 import { ServerStatsRecorderProvider } from "@/providers/ServerStatsRecorderProvider";
 import { Toaster } from "sonner";
 
@@ -39,9 +41,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <CloseWarningManager />
         <CfcoreRetryManager />
         <RconManager />
+        <LogWatcherManager />
         <StartupReconciliationManager />
         <StartupQueueManager />
         <StartupRecoveryManager />
+        <CountdownManager />
         <ServerStatsRecorderProvider />
         <Toaster position="bottom-right" toastOptions={toasterOptions} />
         <div className="flex flex-col h-full">

@@ -7,6 +7,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Instant;
 
+/// Signal sent to an in-progress countdown task.
+pub enum CountdownSignal {
+    Cancel,
+    ProceedNow,
+}
+
 /// A server process currently tracked by this app session.
 pub struct RunningServer {
     /// OS process ID.
@@ -43,6 +49,14 @@ pub struct AppState {
     /// Per-operation abort flags. Key examples: "steamcmd_install", "proton_download",
     /// "server_{id}". Set to true to request cancellation; commands clear their key on exit.
     pub abort_flags: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Active countdown tasks keyed by server_id. Sending a signal cancels or
+    /// short-circuits the running countdown.
+    pub countdowns: Mutex<HashMap<String, tokio::sync::mpsc::Sender<CountdownSignal>>>,
+    /// Absolute filesystem path to the SQLite database file.
+    /// Set by `init_stats_recorder` (the first Rust-side DB init call from the frontend).
+    /// Used by Rust-side business logic (backup manager, notification dispatch) to open
+    /// their own rusqlite connections without blocking the Tauri plugin-sql connection.
+    pub db_path: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -58,7 +72,19 @@ impl AppState {
                 .build()
                 .expect("Failed to build shared HTTP client"),
             abort_flags: Mutex::new(HashMap::new()),
+            countdowns: Mutex::new(HashMap::new()),
+            db_path: Mutex::new(None),
         }
+    }
+
+    /// Store the database file path (called from init_stats_recorder).
+    pub fn set_db_path(&self, path: &str) {
+        *self.db_path.lock().unwrap() = Some(path.to_string());
+    }
+
+    /// Retrieve the database file path, if set.
+    pub fn get_db_path(&self) -> Option<String> {
+        self.db_path.lock().unwrap().clone()
     }
 
     /// Register a new abort flag for `op_id` and return a clone of it.

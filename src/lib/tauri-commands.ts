@@ -314,7 +314,8 @@ export interface SchedulerFiredPayload {
   scheduleType: string;
   success: boolean;
   error?: string;
-  backupRecord?: BackupRecord;
+  /** All backup records created by this firing (player backups produce one per player). */
+  backupRecords: BackupRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -419,9 +420,6 @@ export const tauriCmd = {
   rconGetPlayers:       (serverId: string) => invoke<ArkPlayer[]>("rcon_get_players", { serverId }),
   /** null = no RCON connection established yet; [] = connected but 0 players online. */
   rconGetCachedPlayers: (serverId: string) => invoke<ArkPlayer[] | null>("rcon_get_cached_players", { serverId }),
-  // RCON — chat (polling is now internal to the Rust manager task)
-  rconEnableChatPoll:  (serverId: string) => invoke<void>("rcon_enable_chat_poll", { serverId }),
-  rconDisableChatPoll: (serverId: string) => invoke<void>("rcon_disable_chat_poll", { serverId }),
   // RCON — log buffer
   rconGetLog:   (serverId: string) => invoke<RconLogLine[]>("rcon_get_log", { serverId }),
   rconClearLog: (serverId: string) => invoke<void>("rcon_clear_log", { serverId }),
@@ -437,6 +435,38 @@ export const tauriCmd = {
     warnMinutes: number,
     warnMessage: string,
   ) => invoke<void>("graceful_stop_server", { serverId, rconPort, rconPassword, warnPlayers, warnMinutes, warnMessage }),
+
+  // Graceful countdown restart / update
+  startGracefulRestart: (params: {
+    serverId: string;
+    warnSeconds: number;
+    rconPort: number;
+    rconPassword: string;
+    message: string;
+    cancelMessage: string;
+    startParams: StartServerParams;
+  }) => invoke<void>("start_graceful_restart", { params }),
+
+  startGracefulUpdate: (params: {
+    serverId: string;
+    serverName: string;
+    warnSeconds: number;
+    rconPort: number;
+    rconPassword: string;
+    message: string;
+    cancelMessage: string;
+    installPath: string;
+    cacheDir: string;
+    steamcmdPath: string;
+    restartAfter: boolean;
+    startParams: StartServerParams | null;
+  }) => invoke<void>("start_graceful_update", { params }),
+
+  cancelCountdown: (serverId: string) =>
+    invoke<void>("cancel_countdown", { serverId }),
+
+  proceedNow: (serverId: string) =>
+    invoke<void>("proceed_now", { serverId }),
 
   // Log watcher
   watchServerLog: (serverId: string, logPath: string) =>
@@ -494,14 +524,20 @@ export const tauriCmd = {
   /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
   createServerBackup: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+    mapId: string, backupDir: string, triggeredBy: string, tier = "",
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier }),
 
   /** Player backup: 7z a single .arkprofile file. */
   createPlayerBackup: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string,
-  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy }),
+    mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string, tier = "",
+  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
+
+  /** Back up every .arkprofile in SavedArks/{mapPath}/ in one call. */
+  backupAllPlayers: (
+    serverId: string, serverName: string, installPath: string, mapPath: string,
+    mapId: string, backupDir: string, triggeredBy: string,
+  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
 
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
   createIniBackup: (serverId: string, installPath: string, backupDir: string, platform: string) =>
@@ -510,8 +546,8 @@ export const tauriCmd = {
   /** Full backup: 7z the entire install_path directory. */
   createFullBackup: (
     serverId: string, serverName: string, installPath: string, mapId: string,
-    backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord>("create_full_backup", { serverId, serverName, installPath, mapId, backupDir, triggeredBy }),
+    backupDir: string, triggeredBy: string, tier = "",
+  ) => invoke<BackupRecord>("create_full_backup", { serverId, serverName, installPath, mapId, backupDir, triggeredBy, tier }),
 
   /** List timestamped INI snapshot folder names for a server, newest first. */
   listIniBackups: (serverId: string, backupDir: string) =>
@@ -542,6 +578,17 @@ export const tauriCmd = {
 
   /** Estimate total uncompressed size of a directory in bytes. */
   estimateDirSize: (dirPath: string) => invoke<number>("estimate_dir_size", { dirPath }),
+
+  /** Rename a backup file on disk (used when tier flags change). */
+  renameBackupFile: (oldPath: string, newPath: string) =>
+    invoke<void>("rename_backup_file", { oldPath, newPath }),
+
+  /** Check whether a backup file still exists on disk. */
+  backupFileExists: (filePath: string) => invoke<boolean>("backup_file_exists", { filePath }),
+
+  /** Scan the server's backup directory tree and return all discovered .7z files. */
+  scanBackupDir: (serverId: string, backupDir: string, mapId: string) =>
+    invoke<BackupRecord[]>("scan_backup_dir", { serverId, backupDir, mapId }),
 
   // Mods
   /**

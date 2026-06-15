@@ -134,6 +134,8 @@ export async function applyUpdateToServer(
   wasRunning: boolean,
   restartAfterUpdate: boolean,
   onStatusChange?: (msg: string) => void,
+  rconPort?: number,
+  rconPassword?: string,
 ): Promise<void> {
   const [cacheBase, steamcmdPath] = await Promise.all([
     getAppSetting("base_dir"),
@@ -156,8 +158,12 @@ export async function applyUpdateToServer(
   try {
     if (wasRunning) {
       onStatusChange?.("Stopping server…");
-      await tauriCmd.stopServer(serverId, false);
-      await new Promise((r) => setTimeout(r, 3000));
+      if (rconPort !== undefined && rconPassword !== undefined) {
+        await tauriCmd.gracefulStopServer(serverId, rconPort, rconPassword, false, 0, "");
+      } else {
+        await tauriCmd.stopServer(serverId, false);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
     }
 
     onStatusChange?.("Applying update…");

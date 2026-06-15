@@ -120,7 +120,7 @@ pub struct StartServerParams {
 // ---------------------------------------------------------------------------
 
 /// Emit both the per-server and global status-change events.
-fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
+pub(crate) fn emit_status(app: &tauri::AppHandle, status: &ServerStatus) {
     let _ = app.emit(
         &events::server_event(events::SERVER_STATUS, &status.server_id),
         status.clone(),
@@ -384,6 +384,7 @@ async fn inner_start_server_with_state(
     let handle_clone         = app_handle.clone();
     let confirmed_clone      = Arc::clone(&confirmed_running);
     let cfcore_clone         = Arc::clone(&cfcore_unreachable);
+    let server_name_notif    = params.server_name.clone();
     tauri::async_runtime::spawn(async move {
         let (_, raw_stderr) = tokio::join!(
             child.wait(),
@@ -411,6 +412,10 @@ async fn inner_start_server_with_state(
         if was_intentional {
             app_state.running_servers.lock().unwrap().remove(&sid);
             LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
+            crate::commands::notifications::dispatch_notification(
+                &handle_clone, "server_stopped", Some(&sid), &server_name_notif,
+                &format!("{} stopped", server_name_notif), "Server has shut down.", "info",
+            ).await;
             emit_status(&handle_clone, &ServerStatus {
                 server_id: sid, status: "stopped".into(),
                 pid: None, uptime_seconds: None, error: None,
@@ -422,6 +427,11 @@ async fn inner_start_server_with_state(
         if confirmed_clone.load(Ordering::Relaxed) {
             app_state.running_servers.lock().unwrap().remove(&sid);
             LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
+            crate::commands::notifications::dispatch_notification(
+                &handle_clone, "server_crashed", Some(&sid), &server_name_notif,
+                &format!("{} crashed", server_name_notif),
+                "The server process crashed unexpectedly.", "error",
+            ).await;
             emit_status(&handle_clone, &ServerStatus {
                 server_id: sid, status: "crashed".into(),
                 pid: None, uptime_seconds: None, error: None,
@@ -478,6 +488,15 @@ async fn inner_start_server_with_state(
         } else {
             filtered
         };
+        let err_body = if trimmed.is_empty() {
+            "Server failed to start.".to_string()
+        } else {
+            trimmed.clone()
+        };
+        crate::commands::notifications::dispatch_notification(
+            &handle_clone, "server_start_failed", Some(&sid), &server_name_notif,
+            &format!("{} failed to start", server_name_notif), &err_body, "error",
+        ).await;
         emit_status(&handle_clone, &ServerStatus {
             server_id: sid,
             status: "start-failed".into(),
@@ -563,10 +582,11 @@ async fn inner_start_server_with_state(
     // Falls back to emitting "running" after 15 minutes if the message is
     // never seen (e.g. log location changed, log disabled) so the server
     // doesn't stay in "starting" forever.
-    let sid2        = params.server_id.clone();
-    let handle2     = app_handle.clone();
-    let query_port2 = params.query_port;
-    let log_path2   = format!(
+    let sid2              = params.server_id.clone();
+    let handle2           = app_handle.clone();
+    let query_port2       = params.query_port;
+    let server_name_ready = params.server_name.clone();
+    let log_path2         = format!(
         "{}/ShooterGame/Saved/Logs/ShooterGame.log",
         params.install_path
     );
@@ -611,6 +631,15 @@ async fn inner_start_server_with_state(
                     error: None,
                 },
             );
+            let handle_n = handle.clone();
+            let sid_n    = sid.to_string();
+            let name_n   = server_name_ready.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::commands::notifications::dispatch_notification(
+                    &handle_n, "server_started", Some(&sid_n), &name_n,
+                    &format!("{name_n} is online"), "Players can now connect.", "success",
+                ).await;
+            });
             true
         };
 
@@ -1182,7 +1211,7 @@ pub async fn graceful_stop_server(
     state.stopping_servers.lock().unwrap().remove(&server_id);
     state.running_servers.lock().unwrap().remove(&server_id);
     pool.cmd_channels.lock().await.remove(&server_id);
-    pool.chat_poll_active.lock().await.remove(&server_id);
+    pool.log_buffer.lock().await.remove(&server_id);
     pool.player_cache.lock().await.remove(&server_id);
 
     // Rotate logs now that the process is confirmed dead. Covers servers that

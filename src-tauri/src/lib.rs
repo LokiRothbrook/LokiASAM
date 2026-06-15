@@ -1,4 +1,5 @@
 mod commands;
+mod db;
 mod events;
 mod state;
 
@@ -237,6 +238,27 @@ pub fn run() {
                 }
             });
 
+            // ── Hourly backup tick ─────────────────────────────────────────
+            // Fires at each wall-clock hour boundary (7:00, 8:00, …) so backup
+            // checks are predictable and independent of when the app started.
+            let backup_tick_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                // Sleep until the next :00:00 boundary.
+                let now_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let secs_until_next_hour = 3600 - (now_secs % 3600);
+                tokio::time::sleep(tokio::time::Duration::from_secs(secs_until_next_hour)).await;
+
+                loop {
+                    crate::commands::backup_manager::execute_tick(&backup_tick_handle).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                }
+            });
+
             // ── Stats recorder background task ─────────────────────────────
             // Polls all running servers every 5 s.  On every poll:
             //   - Emits "stats://live" so the frontend live buffer stays current.
@@ -398,6 +420,11 @@ pub fn run() {
             commands::server::stop_server,
             commands::server::restart_server,
             commands::server::graceful_stop_server,
+            // Graceful countdown (restart / update with player warning)
+            commands::countdown::start_graceful_restart,
+            commands::countdown::start_graceful_update,
+            commands::countdown::cancel_countdown,
+            commands::countdown::proceed_now,
             commands::server::get_server_status,
             commands::server::scan_running_servers,
             commands::server::clone_server,
@@ -432,8 +459,6 @@ pub fn run() {
             commands::rcon::rcon_get_cached_players,
             commands::rcon::rcon_get_log,
             commands::rcon::rcon_clear_log,
-            commands::rcon::rcon_enable_chat_poll,
-            commands::rcon::rcon_disable_chat_poll,
             commands::rcon::rcon_read_ban_list,
             commands::rcon::rcon_read_whitelist,
             // Log watcher + archive + crash + chat
@@ -459,6 +484,7 @@ pub fn run() {
             // Backups
             commands::backup::create_server_backup,
             commands::backup::create_player_backup,
+            commands::backup::backup_all_players,
             commands::backup::create_ini_backup,
             commands::backup::create_full_backup,
             commands::backup::list_ini_backups,
@@ -469,6 +495,9 @@ pub fn run() {
             commands::backup::delete_backup,
             commands::backup::cleanup_ark_own_backups,
             commands::backup::estimate_dir_size,
+            commands::backup::rename_backup_file,
+            commands::backup::backup_file_exists,
+            commands::backup::scan_backup_dir,
             // Mods (Phase 5)
             commands::mods::install_mods,
             commands::mods::open_mod_browser,
@@ -481,6 +510,7 @@ pub fn run() {
             commands::system::check_appimage_integration,
             commands::system::install_appimage_integration,
             commands::system::uninstall_appimage_integration,
+            commands::system::get_install_method,
             commands::system::check_dir,
             commands::system::check_file_exists,
             commands::system::delete_directory,

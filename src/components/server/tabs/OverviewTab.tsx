@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
@@ -27,8 +27,8 @@ import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-co
 import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount, getServerMods,
-  getLastBackupTime, getNextScheduledRestart, getAppSetting, insertBackup,
-  setServerAutoStart,
+  getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
+  pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
@@ -38,6 +38,7 @@ import { toast } from "sonner";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 interface Props {
   server: ServerRow;
@@ -54,6 +55,19 @@ const METRIC_CONFIG = {
 } as const;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatCountdown(secs: number): string {
+  if (secs >= 3600) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m > 0 && s > 0) return `${m}m ${s}s`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
 
 function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
@@ -286,17 +300,11 @@ function StatChart({
 
 // ── ServerSummaryPanel ────────────────────────────────────────────────────────
 
-function formatFutureTime(iso: string | null): string {
+function formatClockTime(iso: string | null): string {
   if (!iso) return "Not scheduled";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
-  const diffMs = d.getTime() - Date.now();
-  if (diffMs < 0) return "Overdue";
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 60) return `in ${diffMins}m`;
-  const h = Math.floor(diffMins / 60);
-  if (h < 24) return `in ${h}h`;
-  return `in ${Math.floor(h / 24)}d`;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function ServerSummaryPanel({
@@ -305,6 +313,7 @@ function ServerSummaryPanel({
   modCount,
   lastBackup,
   nextRestart,
+  backupEnabled,
   onAutoStartChange,
 }: {
   server: ServerRow;
@@ -312,10 +321,32 @@ function ServerSummaryPanel({
   modCount: number | null;
   lastBackup: string | null;
   nextRestart: string | null;
+  backupEnabled: boolean | null;
   onAutoStartChange: (v: boolean) => void;
 }) {
   const isRunning = server.status === "running" || server.status === "starting";
   const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
+
+  const [backupActive, setBackupActive] = useState(false);
+  const backupUpdatedAt = useRef<number>(0);
+
+  useTauriEvent<{ percent: number; currentFile: string; label: string }>(
+    `backup://progress/${server.id}`,
+    (p) => {
+      backupUpdatedAt.current = Date.now();
+      setBackupActive(p.percent < 100);
+    }
+  );
+
+  useEffect(() => {
+    if (!backupActive) return;
+    const id = setInterval(() => {
+      if (backupUpdatedAt.current > 0 && Date.now() - backupUpdatedAt.current > 30_000) {
+        setBackupActive(false);
+      }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [backupActive]);
 
   const fmtDate = (ms: number) =>
     new Date(ms).toLocaleString([], {
@@ -330,7 +361,8 @@ function ServerSummaryPanel({
     { label: "Map",           value: mapDisplay                                         },
     { label: "Mods",          value: modCount !== null ? String(modCount) : "—"        },
     { label: "Last Backup",   value: formatRelativeTime(lastBackup)                    },
-    { label: "Next Restart",  value: formatFutureTime(nextRestart)                     },
+    { label: "Backup",        value: backupActive ? "In progress…" : backupEnabled === null ? "—" : backupEnabled ? "Enabled" : "Disabled" },
+    { label: "Next Restart",  value: formatClockTime(nextRestart)                      },
   ];
 
   return (
@@ -435,10 +467,12 @@ export function OverviewTab({ server }: Props) {
   const stats = useServerStats(server);
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
+  const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
 
   const [modCount, setModCount]     = useState<number | null>(null);
-  const [lastBackup, setLastBackup] = useState<string | null>(null);
-  const [nextRestart, setNextRestart] = useState<string | null>(null);
+  const [lastBackup,  setLastBackup]  = useState<string | null>(null);
+  const [nextRestart,   setNextRestart]   = useState<string | null>(null);
+  const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [players, setPlayers]       = useState<ArkPlayer[] | null>(null);
   const [playersLoading, setPlayersLoading] = useState(false);
@@ -470,16 +504,18 @@ export function OverviewTab({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, autoHours] = await Promise.all([
+      const [mc, lb, nr, be, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
+        getHasBackupEnabled(server.id),
         getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
+        setBackupEnabled(be);
         setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
@@ -583,6 +619,20 @@ export function OverviewTab({ server }: Props) {
   };
 
   const handleRestart = async () => {
+    if (server.restart_warn_players) {
+      const startParams = await buildStartParams();
+      tauriCmd.startGracefulRestart({
+        serverId:      server.id,
+        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.restart_message || "Server restarting in {time}.",
+        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
+        startParams,
+      }).catch((err) => toast.error(`Restart failed: ${err}`));
+      return;
+    }
+
     setActionPending(true);
     try {
       await updateServerStatus(server.id, "stopping", null);
@@ -601,6 +651,34 @@ export function OverviewTab({ server }: Props) {
 
   const handleApplyUpdate = async () => {
     setShowUpdateConfirm(false);
+
+    if (server.update_warn_players && isRunning) {
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) return;
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+
+      tauriCmd.startGracefulUpdate({
+        serverId:      server.id,
+        serverName:    server.name,
+        warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.update_message || "Server going down for update in {time}.",
+        cancelMessage: server.update_cancel_message || "Update has been canceled.",
+        installPath:   server.install_path,
+        cacheDir,
+        steamcmdPath,
+        restartAfter:  restartAfterUpdate,
+        startParams,
+      }).catch((err) => toast.error(`Update failed: ${err}`));
+      return;
+    }
+
     setApplyingUpdate(true);
     try {
       const wasRunning = isRunning;
@@ -612,6 +690,8 @@ export function OverviewTab({ server }: Props) {
           wasRunning,
           restartAfterUpdate,
           (msg) => toast.info(msg),
+          server.rcon_port,
+          server.rcon_password,
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -651,7 +731,7 @@ export function OverviewTab({ server }: Props) {
     }
   };
 
-  const refreshPlayers = async () => {
+  const refreshPlayers = useCallback(async () => {
     setPlayersLoading(true);
     try {
       const list = await tauriCmd.rconGetPlayers(server.id);
@@ -662,7 +742,19 @@ export function OverviewTab({ server }: Props) {
     } finally {
       setPlayersLoading(false);
     }
-  };
+  }, [server.id]);
+
+  // Fetch player list on mount/server-change if running.
+  useEffect(() => {
+    if (server.status === "running") refreshPlayers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server.id]);
+
+  // The per-server event emits the players array directly as payload.
+  useTauriEvent<ArkPlayer[]>(
+    `rcon://players/${server.id}`,
+    (list) => setPlayers(list)
+  );
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -682,7 +774,33 @@ export function OverviewTab({ server }: Props) {
 
         {/* Left group — status-dependent buttons */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          {isServerScanPending ? (
+          {countdown ? (
+            <>
+              <span className="text-xs font-medium" style={{ color: "#ff8c00" }}>
+                {countdown.action === "restart"
+                  ? `Restarting in ${formatCountdown(countdown.remainingSecs)}`
+                  : `Updating in ${formatCountdown(countdown.remainingSecs)}`}
+              </span>
+              <Button
+                size="sm"
+                onClick={() => tauriCmd.proceedNow(server.id).catch(() => {})}
+                className="gap-1.5"
+                style={{ background: "rgba(255,140,0,0.12)", borderColor: "rgba(255,140,0,0.4)", color: "#ff8c00" }}
+              >
+                {countdown.action === "restart"
+                  ? <><RotateCcw className="w-3.5 h-3.5" /> Restart Now</>
+                  : <><ArrowUp className="w-3.5 h-3.5" /> Update Now</>}
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={() => tauriCmd.cancelCountdown(server.id).catch(() => {})}
+                className="gap-1.5"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+              >
+                <X className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isServerScanPending ? (
             <Button size="sm" disabled className="gap-1.5">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               Detecting...
@@ -732,7 +850,7 @@ export function OverviewTab({ server }: Props) {
             </Button>
           )}
 
-          {isRunning && !isServerScanPending && (
+          {isRunning && !isServerScanPending && !countdown && (
             <Button size="sm" variant="outline" className="btn-neon-purple gap-1.5" onClick={handleRestart} disabled={actionPending}>
               <RotateCcw className="w-3.5 h-3.5" /> Restart
             </Button>
@@ -770,9 +888,11 @@ export function OverviewTab({ server }: Props) {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,
                     file_size_bytes: record.fileSizeBytes, map_id: record.mapId,
-                    triggered_by: record.triggeredBy, created_at: record.createdAt,
+                    triggered_by: "manual", created_at: record.createdAt,
                     backup_type: "server", tiers: "", player_eosid: null, player_name: null,
                   });
+                  const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
+                  await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
                 })
                 .catch(() => null);
             }}
@@ -804,6 +924,7 @@ export function OverviewTab({ server }: Props) {
             modCount={modCount}
             lastBackup={lastBackup}
             nextRestart={nextRestart}
+            backupEnabled={backupEnabled}
             onAutoStartChange={async (v) => {
               await setServerAutoStart(server.id, v);
               queryClient.invalidateQueries({ queryKey: ["servers"] });

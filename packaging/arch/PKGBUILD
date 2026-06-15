@@ -1,0 +1,67 @@
+# Maintainer: Arron Ohnemus <lokiaj2017@gmail.com>
+pkgname=lokiasam
+pkgver=0.13.0
+pkgrel=1
+pkgdesc="Loki ARK Survival Ascended Server Manager — a desktop app for managing dedicated ASA servers"
+arch=("x86_64")
+url="https://github.com/LokiRothbrook/LokiASAM"
+license=("GPL3")
+depends=(
+    "webkit2gtk-4.1"
+    "gtk3"
+    "libappindicator-gtk3"
+    "librsvg"
+    "xdg-utils"
+)
+makedepends=(
+    "rust"
+    "cargo"
+    "nodejs"
+    "pnpm"
+    "git"
+)
+install=lokiasam.install
+source=("$pkgname-$pkgver::git+$url.git#tag=v$pkgver")
+sha256sums=("SKIP")
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver"
+    pnpm install --frozen-lockfile
+    pnpm tauri build --bundles none
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+
+    # Binary
+    install -Dm755 "src-tauri/target/release/lokiasam" "$pkgdir/usr/bin/lokiasam"
+
+    # Icons
+    for size in 32x32 128x128 256x256 512x512; do
+        local src="src-tauri/icons/${size}.png"
+        if [[ -f "$src" ]]; then
+            install -Dm644 "$src" \
+                "$pkgdir/usr/share/icons/hicolor/${size}/apps/xyz.lokisoft.lokiasam.png"
+        fi
+    done
+
+    # .desktop file
+    install -Dm644 /dev/stdin \
+        "$pkgdir/usr/share/applications/xyz.lokisoft.lokiasam.desktop" <<EOF
+[Desktop Entry]
+Name=LokiASAM
+Comment=ARK Survival Ascended Dedicated Server Manager
+Exec=/usr/bin/lokiasam %U
+Icon=xyz.lokisoft.lokiasam
+Type=Application
+Categories=Game;Utility;
+StartupWMClass=xyz.lokisoft.lokiasam
+Terminal=false
+EOF
+
+    # Install-method marker — read by the app to show correct update instructions
+    install -Dm644 /dev/stdin \
+        "$pkgdir/usr/lib/lokiasam/install-method" <<EOF
+pkgbuild
+EOF
+}

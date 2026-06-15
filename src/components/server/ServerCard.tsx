@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -23,6 +23,8 @@ import {
   Loader2,
   X,
   Ban,
+  ToggleLeft,
+  ToggleRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,8 +36,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { CommandOutputPanel, clearOutputBuffer } from "@/components/shared/CommandOutputPanel";
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
@@ -48,6 +48,7 @@ import {
   getServerMods,
   getLastBackupTime,
   getNextScheduledRestart,
+  getHasBackupEnabled,
   getAppSetting,
   resetServersFromStatus,
 } from "@/lib/db";
@@ -65,6 +66,19 @@ interface Props {
 }
 
 // ── Utility helpers ──────────────────────────────────────────────────────────
+
+function formatCountdown(secs: number): string {
+  if (secs >= 3600) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m > 0 && s > 0) return `${m}m ${s}s`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
 
 function formatUptime(startMs: number): string {
   const elapsed = Date.now() - startMs;
@@ -87,17 +101,11 @@ function formatRelativeTime(iso: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function formatFutureTime(iso: string | null): string {
+function formatClockTime(iso: string | null): string {
   if (!iso) return "Not scheduled";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
-  const diffMs = d.getTime() - Date.now();
-  if (diffMs < 0) return "Overdue";
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 60) return `in ${diffMins}m`;
-  const h = Math.floor(diffMins / 60);
-  if (h < 24) return `in ${h}h`;
-  return `in ${Math.floor(h / 24)}d`;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -111,10 +119,12 @@ export function ServerCard({ server }: Props) {
   const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
   const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
+  const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
 
   const [modCount, setModCount] = useState<number | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [nextRestart, setNextRestart] = useState<string | null>(null);
+  const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
@@ -123,12 +133,33 @@ export function ServerCard({ server }: Props) {
   const [backupProgress, setBackupProgress] = useState<{ active: boolean; percent: number; label: string }>({
     active: false, percent: 0, label: "",
   });
+  const backupProgressUpdatedAt = useRef<number>(0);
   const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
 
   useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,
-    (p) => setBackupProgress({ active: p.percent < 100, percent: p.percent, label: p.label })
+    (p) => {
+      backupProgressUpdatedAt.current = Date.now();
+      // Keep active=true even at 100% — SchedulerManager's backup:completed clears it
+      setBackupProgress({ active: true, percent: p.percent, label: p.label });
+    }
   );
+
+  // Clear progress bar when Rust confirms the backup is fully recorded in DB.
+  useTauriEvent(`backup://completed/${server.id}`, () => {
+    setBackupProgress({ active: false, percent: 0, label: "" });
+  });
+
+  // Fallback: clear stale progress bar if no update received in 30s.
+  useEffect(() => {
+    if (!backupProgress.active) return;
+    const id = setInterval(() => {
+      if (backupProgressUpdatedAt.current > 0 && Date.now() - backupProgressUpdatedAt.current > 30_000) {
+        setBackupProgress({ active: false, percent: 0, label: "" });
+      }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [backupProgress.active]);
 
   const hasUpdateAvailable  = server.update_available === 1;
   const isUpdateQueued      = server.status === "update_queued";
@@ -159,16 +190,18 @@ export function ServerCard({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, autoHours] = await Promise.all([
+      const [mc, lb, nr, be, autoHours] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
+        getHasBackupEnabled(server.id),
         getAppSetting("asa_auto_check_hours"),
       ]);
       if (!cancelled) {
         setModCount(mc);
         setLastBackup(lb);
         setNextRestart(nr);
+        setBackupEnabled(be);
         setAutoCheckEnabled((autoHours ?? "0") !== "0");
       }
     })();
@@ -292,6 +325,20 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleRestart = async () => {
+    if (server.restart_warn_players) {
+      const startParams = await buildStartParams();
+      tauriCmd.startGracefulRestart({
+        serverId:      server.id,
+        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.restart_message || "Server restarting in {time}.",
+        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
+        startParams,
+      }).catch((err) => toast.error(`Restart failed: ${err}`));
+      return;
+    }
+
     setActionPending(true);
     try {
       await updateServerStatus(server.id, "stopping", server.pid);
@@ -313,6 +360,34 @@ export function ServerCard({ server }: Props) {
 
   const handleApplyUpdate = async () => {
     setShowUpdateConfirm(false);
+
+    if (server.update_warn_players && isRunning) {
+      const [baseDir, steamcmdPath] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("steamcmd_path"),
+      ]);
+      if (!baseDir || !steamcmdPath) return;
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+
+      tauriCmd.startGracefulUpdate({
+        serverId:      server.id,
+        serverName:    server.name,
+        warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
+        rconPort:      server.rcon_port,
+        rconPassword:  server.rcon_password,
+        message:       server.update_message || "Server going down for update in {time}.",
+        cancelMessage: server.update_cancel_message || "Update has been canceled.",
+        installPath:   server.install_path,
+        cacheDir,
+        steamcmdPath,
+        restartAfter:  restartAfterUpdate,
+        startParams,
+      }).catch((err) => toast.error(`Update failed: ${err}`));
+      return;
+    }
+
     setActionPending(true);
     try {
       const wasRunning = isRunning;
@@ -324,6 +399,8 @@ export function ServerCard({ server }: Props) {
           wasRunning,
           restartAfterUpdate,
           (msg) => toast.info(msg),
+          server.rcon_port,
+          server.rcon_password,
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -404,7 +481,7 @@ export function ServerCard({ server }: Props) {
           : undefined,
       }}
       onClick={(e) => {
-        if (!(e.target as HTMLElement).closest('button, a, [role="menuitem"], [data-radix-collection-item]')) {
+        if (!(e.target as HTMLElement).closest('button, a, [role="menuitem"], [data-radix-collection-item], [role="dialog"], [role="alertdialog"]')) {
           router.push(`/servers/detail?id=${server.id}`);
         }
       }}
@@ -419,7 +496,14 @@ export function ServerCard({ server }: Props) {
             >
               {server.name}
             </h3>
-            <ServerStatusBadge status={isServerScanPending ? "detecting" : server.status} />
+            <ServerStatusBadge
+              status={isServerScanPending ? "detecting" : server.status}
+              countdownLabel={countdown
+                ? countdown.action === "restart"
+                  ? `Restarting in ${formatCountdown(countdown.remainingSecs)}`
+                  : `Updating in ${formatCountdown(countdown.remainingSecs)}`
+                : undefined}
+            />
             {hasUpdateAvailable && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
@@ -511,38 +595,53 @@ export function ServerCard({ server }: Props) {
         {/* Last backup */}
         <div className="flex items-center gap-2">
           <HardDrive className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-green)" }} />
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {backupProgress.active ? backupProgress.label || "Backing up…" : "Backup"}
-          </span>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Backup</span>
           <span className="text-xs font-semibold ml-auto" style={{ color: "var(--text-primary)" }}>
-            {backupProgress.active
-              ? `${backupProgress.percent.toFixed(0)}%`
-              : formatRelativeTime(lastBackup)
-            }
+            {formatRelativeTime(lastBackup)}
           </span>
         </div>
         {backupProgress.active && (
-          <div className="h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
-            <div
-              className="h-full rounded-full transition-all duration-300"
-              style={{
-                width: `${backupProgress.percent}%`,
-                background: "linear-gradient(90deg, var(--neon-purple), var(--neon-cyan))",
-                boxShadow: "0 0 6px rgba(var(--neon-purple-rgb),0.5)",
-              }}
-            />
+          <div className="col-span-2 flex items-center gap-2">
+            <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-300"
+                style={{
+                  width: `${backupProgress.percent}%`,
+                  background: "linear-gradient(90deg, var(--neon-purple), var(--neon-cyan))",
+                  boxShadow: "0 0 6px rgba(var(--neon-purple-rgb),0.5)",
+                }}
+              />
+            </div>
+            <span className="text-xs tabular-nums shrink-0" style={{ color: "var(--neon-purple)" }}>
+              {backupProgress.percent.toFixed(0)}%
+            </span>
           </div>
         )}
       </div>
 
-      {/* Next restart */}
-      {nextRestart && (
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Next restart:{" "}
-          <span style={{ color: "var(--neon-cyan)" }}>
-            {formatFutureTime(nextRestart)}
-          </span>
-        </p>
+      {/* Next restart · Backup status */}
+      {(nextRestart || backupEnabled !== null || backupProgress.active) && (
+        <div className="flex items-center gap-3 flex-wrap text-xs" style={{ color: "var(--text-muted)" }}>
+          {nextRestart && (
+            <span>
+              Next restart:{" "}
+              <span style={{ color: "var(--neon-purple)" }}>{formatClockTime(nextRestart)}</span>
+            </span>
+          )}
+          {nextRestart && (backupEnabled !== null || backupProgress.active) && (
+            <span className="opacity-40">·</span>
+          )}
+          {(backupEnabled !== null || backupProgress.active) && (
+            <span>
+              {backupProgress.active
+                ? <span style={{ color: "var(--neon-purple)" }}>Backup in progress</span>
+                : backupEnabled
+                  ? <span style={{ color: "var(--neon-purple)" }}>Backup enabled</span>
+                  : <span className="opacity-50">Backup disabled</span>
+              }
+            </span>
+          )}
+        </div>
       )}
 
       {/* ── Action buttons ── */}
@@ -552,7 +651,28 @@ export function ServerCard({ server }: Props) {
 
         {/* Left: all status-dependent actions */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          {isActiveInstall ? (
+          {countdown ? (
+            <>
+              <Button
+                size="sm"
+                onClick={() => tauriCmd.proceedNow(server.id).catch(() => {})}
+                className="gap-1.5 flex-1"
+                style={{ background: "rgba(255,140,0,0.12)", borderColor: "rgba(255,140,0,0.4)", color: "#ff8c00" }}
+              >
+                {countdown.action === "restart"
+                  ? <><RotateCcw className="w-3.5 h-3.5" /> Restart Now</>
+                  : <><ArrowUp className="w-3.5 h-3.5" /> Update Now</>}
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={() => tauriCmd.cancelCountdown(server.id).catch(() => {})}
+                className="gap-1.5"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+              >
+                <X className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isActiveInstall ? (
             <>
               <Button
                 size="sm" variant="outline"
@@ -710,7 +830,7 @@ export function ServerCard({ server }: Props) {
 
       {/* ── Update confirmation dialog ── */}
       <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onClick={(e) => e.stopPropagation()}>
           <DialogHeader>
             <DialogTitle>Apply Server Update?</DialogTitle>
             <DialogDescription>
@@ -722,17 +842,22 @@ export function ServerCard({ server }: Props) {
 
           {isRunning && (
             <div
-              className="flex items-center gap-3 px-1 py-2 rounded-lg"
+              className="flex items-center justify-between px-1 py-2 rounded-lg"
               style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
             >
-              <Switch
-                id={`sc-restart-toggle-${server.id}`}
-                checked={restartAfterUpdate}
-                onCheckedChange={setRestartAfterUpdate}
-              />
-              <Label htmlFor={`sc-restart-toggle-${server.id}`} className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+              <p className="text-sm" style={{ color: "var(--text-primary)" }}>
                 Restart server after update
-              </Label>
+              </p>
+              <button
+                type="button"
+                onClick={() => setRestartAfterUpdate((v) => !v)}
+                className="shrink-0 flex items-center focus:outline-none"
+                aria-label={restartAfterUpdate ? "Disable restart after update" : "Enable restart after update"}
+              >
+                {restartAfterUpdate
+                  ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+              </button>
             </div>
           )}
 

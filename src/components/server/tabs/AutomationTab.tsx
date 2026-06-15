@@ -19,7 +19,7 @@ import {
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
-import { getAppSetting } from "@/lib/db";
+import { getAppSetting, setAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import type { ServerRow } from "@/lib/db";
@@ -504,11 +504,12 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 type BackupTier = "H" | "D" | "W" | "M";
 type BackupScheduleType = "backup_server" | "backup_player" | "backup_full";
 
-const TIER_FIXED_CRON: Record<BackupTier, string> = {
-  M: "0 4 1 * *",
-  W: "0 3 * * 0",
-  D: "0 2 * * *",
-  H: "0 */6 * * *",
+// Maps tier letter to the key used in the unified config_json
+const TIER_TO_CONFIG_KEY: Record<BackupTier, string> = {
+  H: "hourly",
+  D: "daily",
+  W: "weekly",
+  M: "monthly",
 };
 
 const TIER_DEFAULT_KEEP: Record<BackupTier, number> = { M: 3, W: 4, D: 7, H: 24 };
@@ -516,12 +517,18 @@ const TIER_LABEL: Record<BackupTier, string> = { M: "monthly", W: "weekly", D: "
 const TIER_ORDER: BackupTier[] = ["M", "W", "D", "H"];
 type TierState = { keep: number; enabled: boolean };
 
-function findTierSchedule(schedules: ScheduleRow[], type: BackupScheduleType, tier: BackupTier): ScheduleRow | null {
-  return schedules.find((s) => {
-    if (s.schedule_type !== type) return false;
-    try { return (JSON.parse(s.config_json ?? "{}").tier ?? "H") === tier; }
-    catch { return false; }
-  }) ?? null;
+/** Compute the cron that should run — hourly if H enabled, otherwise the lowest-frequency tier. */
+function effectiveCron(tiers: Record<BackupTier, TierState>): string {
+  if (tiers.H.enabled) return "0 * * * *";
+  if (tiers.D.enabled) return "0 2 * * *";
+  if (tiers.W.enabled) return "0 3 * * 0";
+  if (tiers.M.enabled) return "0 4 1 * *";
+  return "0 * * * *";
+}
+
+/** Find the single consolidated backup schedule row for a given type. */
+function findBackupSchedule(schedules: ScheduleRow[], type: BackupScheduleType): ScheduleRow | null {
+  return schedules.find((s) => s.schedule_type === type) ?? null;
 }
 
 function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
@@ -545,9 +552,34 @@ function BackupTypeSection({
   const buildState = (): Record<BackupTier, TierState> => {
     const s = {} as Record<BackupTier, TierState>;
     for (const tier of TIER_ORDER) {
-      const row = findTierSchedule(schedules, scheduleType, tier);
-      const cfg = row?.config_json ? parseCfg(row.config_json) : {};
-      s[tier] = { keep: (cfg.keep as number) ?? TIER_DEFAULT_KEEP[tier], enabled: row ? row.enabled === 1 : false };
+      s[tier] = { keep: TIER_DEFAULT_KEEP[tier], enabled: false };
+    }
+    // Merge all rows for this type (handles legacy multi-row and new single-row formats)
+    const rows = schedules.filter((r) => r.schedule_type === scheduleType);
+    for (const row of rows) {
+      const cfg = parseCfg(row.config_json);
+      if (cfg.hourly !== undefined || cfg.daily !== undefined || cfg.weekly !== undefined || cfg.monthly !== undefined) {
+        // New unified format
+        for (const tier of TIER_ORDER) {
+          const key = TIER_TO_CONFIG_KEY[tier];
+          const tc = cfg[key] as { enabled?: boolean; keep?: number } | undefined;
+          if (tc) {
+            s[tier] = {
+              keep: typeof tc.keep === "number" && tc.keep > 0 ? tc.keep : TIER_DEFAULT_KEEP[tier],
+              enabled: tc.enabled === true && row.enabled === 1,
+            };
+          }
+        }
+      } else if (typeof cfg.tier === "string") {
+        // Legacy single-tier format: { tier: "H", keep: N }
+        const t = (cfg.tier as string).toUpperCase() as BackupTier;
+        if (TIER_ORDER.includes(t)) {
+          s[t] = {
+            keep: typeof cfg.keep === "number" && cfg.keep > 0 ? cfg.keep : TIER_DEFAULT_KEEP[t],
+            enabled: row.enabled === 1,
+          };
+        }
+      }
     }
     return s;
   };
@@ -564,21 +596,38 @@ function BackupTypeSection({
   async function handleSave() {
     setSaving(true);
     try {
-      for (const tier of TIER_ORDER) {
-        const { keep, enabled } = tiers[tier];
-        const existing  = findTierSchedule(schedules, scheduleType, tier);
-        const configJson = JSON.stringify({ tier, keep });
-        const cron       = TIER_FIXED_CRON[tier];
-        const nextIso    = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
-        if (existing) {
-          await updateScheduleConfig(existing.id, cron, configJson, nextIso);
-          if (enabled !== (existing.enabled === 1)) await updateScheduleEnabled(existing.id, enabled);
-        } else if (enabled) {
-          const newId = await tauriCmd.createSchedule({ serverId, scheduleType, cronExpression: cron, configJson });
-          await createSchedule({ id: newId, serverId, scheduleType, cronExpression: cron, enabled: true, configJson });
-          await updateScheduleConfig(newId, cron, configJson, nextIso);
-        }
+      const anyEnabled = TIER_ORDER.some((t) => tiers[t].enabled);
+      const configJson = JSON.stringify(
+        Object.fromEntries(TIER_ORDER.map((t) => [
+          TIER_TO_CONFIG_KEY[t],
+          { enabled: tiers[t].enabled, keep: tiers[t].keep },
+        ]))
+      );
+      const cron    = effectiveCron(tiers);
+      const nextIso = anyEnabled
+        ? (getNextCronDate(cron)?.toISOString() ?? new Date().toISOString())
+        : new Date().toISOString();
+
+      // Collect all existing rows for this type; migration 012 should have consolidated
+      // them already, but handle the legacy multi-row case gracefully.
+      const allExisting = schedules.filter((r) => r.schedule_type === scheduleType);
+      const primary = allExisting[0] ?? null;
+
+      // Delete any extra rows left over from the old per-tier format
+      for (const row of allExisting.slice(1)) {
+        await tauriCmd.deleteSchedule(row.id);
+        await deleteScheduleRecord(row.id);
       }
+
+      if (primary) {
+        await updateScheduleConfig(primary.id, cron, configJson, nextIso);
+        if (anyEnabled !== (primary.enabled === 1)) await updateScheduleEnabled(primary.id, anyEnabled);
+      } else if (anyEnabled) {
+        const newId = await tauriCmd.createSchedule({ serverId, scheduleType, cronExpression: cron, configJson });
+        await createSchedule({ id: newId, serverId, scheduleType, cronExpression: cron, enabled: true, configJson });
+        await updateScheduleConfig(newId, cron, configJson, nextIso);
+      }
+
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       onRefresh();
@@ -730,6 +779,156 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
 }
 
 // ---------------------------------------------------------------------------
+// LoginBackupRow — per-server login backup keep-N setting (app_setting)
+// ---------------------------------------------------------------------------
+
+function LoginBackupRow({ serverId }: { serverId: string }) {
+  const [keep,    setKeep]    = useState(3);
+  const [enabled, setEnabled] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  useEffect(() => {
+    getAppSetting(`login_backup_keep_${serverId}`).then((v) => {
+      const n = parseInt(v ?? "0", 10);
+      setEnabled(n > 0);
+      setKeep(n > 0 ? n : 3);
+    }).catch(() => {});
+  }, [serverId]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await setAppSetting(`login_backup_keep_${serverId}`, enabled ? String(keep) : "0");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      toast.error(`Failed to save login backup config: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div
+        className="flex items-center gap-3 px-3 py-2 rounded-lg"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          border: `1px solid ${enabled ? "rgba(var(--neon-cyan-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
+        }}
+      >
+        <Input
+          type="number" min={1} max={999}
+          value={keep}
+          onChange={(e) => setKeep(Math.max(1, parseInt(e.target.value, 10) || 1))}
+          className="w-16 h-8 text-sm text-center shrink-0"
+          style={{
+            background: "rgba(0,0,0,0.4)",
+            border: `1px solid ${enabled ? "rgba(0,255,255,0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+            color: "var(--text-primary)",
+          }}
+        />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm" style={{ color: "var(--text-muted)" }}>login backups to keep</span>
+          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+            Triggered when a player connects. No tier flags. Independent rotation.
+          </p>
+        </div>
+        <button onClick={() => setEnabled((v) => !v)} className="cursor-pointer shrink-0">
+          {enabled
+            ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-cyan)" }} />
+            : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+          }
+        </button>
+      </div>
+      <Button size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
+        }}>
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ManualBackupRow — keep-N setting for manual (on-demand) backups
+// ---------------------------------------------------------------------------
+
+function ManualBackupRow({ serverId }: { serverId: string }) {
+  const [keep,   setKeep]   = useState(5);
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  useEffect(() => {
+    getAppSetting(`manual_backup_keep_${serverId}`).then((v) => {
+      const n = parseInt(v ?? "5", 10);
+      setKeep(isNaN(n) || n < 1 ? 5 : n);
+    }).catch(() => {});
+  }, [serverId]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await setAppSetting(`manual_backup_keep_${serverId}`, String(Math.max(1, keep)));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      toast.error(`Failed to save manual backup config: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div
+        className="flex items-center gap-3 px-3 py-2 rounded-lg"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
+        }}
+      >
+        <Input
+          type="number" min={1} max={999}
+          value={keep}
+          onChange={(e) => setKeep(Math.max(1, parseInt(e.target.value, 10) || 1))}
+          className="w-16 h-8 text-sm text-center shrink-0"
+          style={{
+            background: "rgba(0,0,0,0.4)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+            color: "var(--text-primary)",
+          }}
+        />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm" style={{ color: "var(--text-muted)" }}>manual backups to keep</span>
+          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+            Applies to on-demand backups triggered by the Backup Now buttons.
+          </p>
+        </div>
+      </div>
+      <Button size="sm" onClick={handleSave} disabled={saving}
+        className="gap-1.5 cursor-pointer"
+        style={{
+          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
+        }}>
+        {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+        : saved  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+        : "Save Changes"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BackupScheduleSection
 // ---------------------------------------------------------------------------
 
@@ -761,6 +960,8 @@ function BackupScheduleSection({ serverId, schedules, onRefresh }: {
         <BackupTypeSection title="Player Backups" scheduleType="backup_player"
           serverId={serverId} schedules={schedules} onRefresh={onRefresh}
           accentHex="#00ffff" />
+        <LoginBackupRow serverId={serverId} />
+        <ManualBackupRow serverId={serverId} />
         <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
         <FullBackupScheduleSection serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
       </div>

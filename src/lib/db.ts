@@ -7,6 +7,7 @@
  */
 
 import Database from "@tauri-apps/plugin-sql";
+import { CronExpressionParser } from "cron-parser";
 
 // Singleton DB connection — populated by initDb().
 let _db: Database | null = null;
@@ -249,6 +250,16 @@ async function runMigrations(db: Database): Promise<void> {
     await db.execute("ALTER TABLE servers ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0");
   } catch { /* already exists */ }
 
+  // ── Migration 014: restart / update warning settings ─────────────────────
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_warn_players INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_warn_minutes INTEGER NOT NULL DEFAULT 5"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_message TEXT NOT NULL DEFAULT 'Server restarting in {time}.'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN restart_cancel_message TEXT NOT NULL DEFAULT 'Restart has been canceled.'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_warn_players INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_warn_minutes INTEGER NOT NULL DEFAULT 5"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_message TEXT NOT NULL DEFAULT 'Server going down for update in {time}.'"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN update_cancel_message TEXT NOT NULL DEFAULT 'Update has been canceled.'"); } catch { /* exists */ }
+
   // Reset partial "updating" status — the update did not complete and must be re-triggered.
   // update_available remains 1 so the badge shows.
   // startup_queued and update_queued are intentionally preserved — StartupRecoveryManager
@@ -325,6 +336,143 @@ async function runMigrations(db: Database): Promise<void> {
     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (port, protocol)
   )`);
+
+  // ── Migration 010: player connection history ─────────────────────────────
+  await db.execute(`CREATE TABLE IF NOT EXISTS player_connections (
+    id           TEXT PRIMARY KEY,
+    server_id    TEXT NOT NULL,
+    eos_id       TEXT NOT NULL,
+    ip_address   TEXT NOT NULL,
+    connected_at DATETIME NOT NULL
+  )`);
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_player_connections_server_eos ON player_connections(server_id, eos_id)"
+  );
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_player_connections_ip ON player_connections(server_id, ip_address)"
+  );
+
+  // ── Migration 011: fix hourly backup cron (was every 6h, now every 1h) ───
+  await db.execute(
+    "UPDATE schedules SET cron_expression = '0 * * * *' WHERE schedule_type IN ('backup_server','backup_player') AND cron_expression = '0 */6 * * *'"
+  );
+
+  // ── Migration 012: consolidate per-tier schedule rows into single rows ────
+  // Old format: up to 4 rows per (server, type) each with { tier: "H"|"D"|"W"|"M", keep: N }
+  // New format: 1 row per (server, type) with all tiers in config_json:
+  //   { hourly: { enabled, keep }, daily: { enabled, keep }, weekly: { enabled, keep }, monthly: { enabled, keep } }
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_012_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      type OldRow = { id: string; server_id: string; schedule_type: string; config_json: string; enabled: number };
+      const rows = await db.select<OldRow[]>(
+        "SELECT id, server_id, schedule_type, config_json, enabled FROM schedules WHERE schedule_type IN ('backup_server','backup_player') ORDER BY rowid ASC"
+      );
+
+      const groups = new Map<string, OldRow[]>();
+      for (const row of rows) {
+        const key = `${row.server_id}:${row.schedule_type}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(row);
+      }
+
+      const tierMap: Record<string, string> = { H: "hourly", D: "daily", W: "weekly", M: "monthly" };
+      const keepDefaults: Record<string, number> = { hourly: 24, daily: 7, weekly: 4, monthly: 3 };
+
+      for (const [, groupRows] of groups) {
+        const merged: Record<string, { enabled: boolean; keep: number }> = {
+          hourly:  { enabled: false, keep: keepDefaults.hourly },
+          daily:   { enabled: false, keep: keepDefaults.daily },
+          weekly:  { enabled: false, keep: keepDefaults.weekly },
+          monthly: { enabled: false, keep: keepDefaults.monthly },
+        };
+
+        let needsUpdate = false;
+        for (const row of groupRows) {
+          try {
+            const cfg = JSON.parse(row.config_json ?? "{}") as Record<string, unknown>;
+            if (typeof cfg.tier === "string") {
+              // Old single-tier format
+              needsUpdate = true;
+              const key = tierMap[(cfg.tier as string).toUpperCase()];
+              if (key) {
+                merged[key] = {
+                  enabled: row.enabled === 1,
+                  keep: typeof cfg.keep === "number" && cfg.keep > 0 ? cfg.keep : keepDefaults[key],
+                };
+              }
+            } else if (cfg.hourly !== undefined || cfg.daily !== undefined || cfg.weekly !== undefined || cfg.monthly !== undefined) {
+              // Already new format — still merge in case of multiple new-format rows
+              for (const k of ["hourly", "daily", "weekly", "monthly"]) {
+                const tc = cfg[k] as { enabled?: boolean; keep?: number } | undefined;
+                if (tc) merged[k] = { enabled: tc.enabled ?? false, keep: tc.keep ?? keepDefaults[k] };
+              }
+            }
+          } catch { /* skip malformed rows */ }
+        }
+
+        if (!needsUpdate && groupRows.length <= 1) continue;
+
+        const anyEnabled = Object.values(merged).some((v) => v.enabled);
+        const cron = merged.hourly.enabled ? "0 * * * *"
+                   : merged.daily.enabled  ? "0 2 * * *"
+                   : merged.weekly.enabled ? "0 3 * * 0"
+                   : "0 4 1 * *";
+
+        await db.execute(
+          "UPDATE schedules SET config_json = ?, cron_expression = ?, enabled = ? WHERE id = ?",
+          [JSON.stringify(merged), cron, anyEnabled ? 1 : 0, groupRows[0].id]
+        );
+
+        for (const row of groupRows.slice(1)) {
+          await db.execute("DELETE FROM schedules WHERE id = ?", [row.id]);
+        }
+      }
+
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_012_done', 'true')"
+      );
+    }
+  }
+
+  // ── Migration 013: convert ancient {"retention":N} backup config to tier format ──
+  // Pre-tier-system rows had { "retention": N } with no hourly/daily/weekly/monthly keys.
+  // Convert them so the new hourly backup tick can handle them correctly.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_013_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      type Row = { id: string; config_json: string };
+      const rows = await db.select<Row[]>(
+        "SELECT id, config_json FROM schedules WHERE schedule_type IN ('backup_server','backup_player','backup_full')"
+      );
+      for (const row of rows) {
+        try {
+          const cfg = JSON.parse(row.config_json ?? "{}") as Record<string, unknown>;
+          if (cfg.retention !== undefined && cfg.hourly === undefined) {
+            const keep = typeof cfg.retention === "number" && cfg.retention > 0
+              ? cfg.retention : 24;
+            const newCfg = {
+              hourly:  { enabled: true,  keep },
+              daily:   { enabled: false, keep: 7 },
+              weekly:  { enabled: false, keep: 4 },
+              monthly: { enabled: false, keep: 3 },
+            };
+            await db.execute(
+              "UPDATE schedules SET config_json = ?, cron_expression = '0 * * * *' WHERE id = ?",
+              [JSON.stringify(newCfg), row.id]
+            );
+          }
+        } catch { /* skip malformed */ }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_013_done', 'true')"
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -349,10 +497,18 @@ export interface ServerRow {
   pid: number | null;
   update_available: number;       // 0 | 1 — set by global update check
   update_automation_json: string; // UpdateAutomation JSON blob
-  shutdown_warn_players: number;  // 0 | 1
-  shutdown_warn_minutes: number;  // default 5
-  shutdown_message: string;       // template with {time} placeholder
-  auto_start: number;             // 0 | 1 — always start on app launch
+  shutdown_warn_players: number;     // 0 | 1
+  shutdown_warn_minutes: number;     // default 5
+  shutdown_message: string;          // template with {time} placeholder
+  restart_warn_players: number;      // 0 | 1
+  restart_warn_minutes: number;      // default 5
+  restart_message: string;           // template with {time} placeholder
+  restart_cancel_message: string;
+  update_warn_players: number;       // 0 | 1
+  update_warn_minutes: number;       // default 5
+  update_message: string;            // template with {time} placeholder
+  update_cancel_message: string;
+  auto_start: number;                // 0 | 1 — always start on app launch
   created_at: string;
   updated_at: string;
 }
@@ -707,6 +863,34 @@ export async function updateServerShutdownSettings(
   );
 }
 
+export async function updateServerRestartSettings(
+  id: string,
+  warnPlayers: boolean,
+  warnMinutes: number,
+  message: string,
+  cancelMessage: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET restart_warn_players = ?, restart_warn_minutes = ?, restart_message = ?, restart_cancel_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [warnPlayers ? 1 : 0, warnMinutes, message, cancelMessage, id]
+  );
+}
+
+export async function updateServerUpdateSettings(
+  id: string,
+  warnPlayers: boolean,
+  warnMinutes: number,
+  message: string,
+  cancelMessage: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET update_warn_players = ?, update_warn_minutes = ?, update_message = ?, update_cancel_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [warnPlayers ? 1 : 0, warnMinutes, message, cancelMessage, id]
+  );
+}
+
 /** Set the auto_start flag for a server. */
 export async function setServerAutoStart(id: string, autoStart: boolean): Promise<void> {
   const db = await getDb();
@@ -959,6 +1143,32 @@ export async function deleteBackupRecord(backupId: string): Promise<void> {
   await db.execute("DELETE FROM backups WHERE id = ?", [backupId]);
 }
 
+/**
+ * Prune manual backups for a server+type down to `keep` most recent.
+ * Called after every manual backup insertion.
+ */
+export async function pruneManualBackups(
+  serverId: string,
+  backupType: string,
+  keep: number,
+): Promise<void> {
+  if (keep <= 0) return;
+  const db = await getDb();
+  const rows = await db.select<{ id: string; file_path: string }[]>(
+    `SELECT id, file_path FROM backups
+     WHERE server_id = ? AND backup_type = ? AND triggered_by = 'manual'
+     ORDER BY created_at DESC`,
+    [serverId, backupType],
+  );
+  const toDelete = rows.slice(keep);
+  for (const row of toDelete) {
+    await import("@/lib/tauri-commands").then(({ tauriCmd }) =>
+      tauriCmd.deleteBackup(row.file_path).catch(() => {})
+    );
+    await db.execute("DELETE FROM backups WHERE id = ?", [row.id]);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Player name map
 // ---------------------------------------------------------------------------
@@ -1076,16 +1286,161 @@ export async function getLastBackupTime(serverId: string): Promise<string | null
   return rows[0]?.created_at ?? null;
 }
 
+/** If next_run is in the past (stale), recompute the next occurrence from the cron expression. */
+function resolveNextRun(nextRun: string | null, cronExpr: string | null): string | null {
+  if (nextRun) {
+    const ms = new Date(nextRun).getTime();
+    if (!isNaN(ms) && ms > Date.now()) return nextRun;
+  }
+  if (!cronExpr) return nextRun;
+  try {
+    const next = CronExpressionParser.parse(cronExpr).next().toDate();
+    return next.toISOString();
+  } catch {
+    return nextRun;
+  }
+}
+
 /** Return the next_run ISO timestamp for the restart/update schedule, or null. */
 export async function getNextScheduledRestart(serverId: string): Promise<string | null> {
   const db = await getDb();
-  const rows = await db.select<{ next_run: string | null }[]>(
-    `SELECT next_run FROM schedules
+  const rows = await db.select<{ next_run: string | null; cron_expression: string | null }[]>(
+    `SELECT next_run, cron_expression FROM schedules
      WHERE server_id = ? AND schedule_type IN ('restart', 'update') AND enabled = 1
      ORDER BY next_run ASC LIMIT 1`,
     [serverId]
   );
-  return rows[0]?.next_run ?? null;
+  if (!rows[0]) return null;
+  return resolveNextRun(rows[0].next_run, rows[0].cron_expression);
+}
+
+/** Return true if any backup schedule row is enabled and has at least one tier active. */
+export async function getHasBackupEnabled(serverId: string): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ config_json: string }[]>(
+    `SELECT config_json FROM schedules
+     WHERE server_id = ? AND schedule_type IN ('backup_server', 'backup_player', 'backup_full') AND enabled = 1`,
+    [serverId]
+  );
+  return rows.some((row) => {
+    try {
+      const cfg = JSON.parse(row.config_json ?? "{}") as Record<string, unknown>;
+      return Object.values(cfg).some(
+        (v) => typeof v === "object" && v !== null && (v as { enabled?: boolean }).enabled === true
+      );
+    } catch { return false; }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Player connections
+// ---------------------------------------------------------------------------
+
+export interface PlayerConnectionRow {
+  id: string;
+  server_id: string;
+  eos_id: string;
+  ip_address: string;
+  connected_at: string;
+}
+
+export async function insertPlayerConnection(
+  serverId: string,
+  eosId: string,
+  ip: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO player_connections (id, server_id, eos_id, ip_address, connected_at) VALUES (?, ?, ?, ?, datetime('now'))",
+    [crypto.randomUUID(), serverId, eosId, ip]
+  );
+}
+
+/** All unique IPs a player has connected from, most recently seen first. */
+export async function getPlayerKnownIps(
+  serverId: string,
+  eosId: string
+): Promise<{ ip: string; lastSeen: string }[]> {
+  const db = await getDb();
+  return db.select<{ ip: string; lastSeen: string }[]>(
+    `SELECT ip_address AS ip, MAX(connected_at) AS lastSeen
+     FROM player_connections
+     WHERE server_id = ? AND eos_id = ?
+     GROUP BY ip_address
+     ORDER BY lastSeen DESC`,
+    [serverId, eosId]
+  );
+}
+
+/** Full connection history for a player, newest first (capped at 200 for display). */
+export async function getPlayerConnectionHistory(
+  serverId: string,
+  eosId: string,
+  limit = 200
+): Promise<PlayerConnectionRow[]> {
+  const db = await getDb();
+  return db.select<PlayerConnectionRow[]>(
+    "SELECT * FROM player_connections WHERE server_id = ? AND eos_id = ? ORDER BY connected_at DESC LIMIT ?",
+    [serverId, eosId, limit]
+  );
+}
+
+/** Other EOS IDs that have connected from any of the same IPs as this player. */
+export async function getPossibleAlts(
+  serverId: string,
+  eosId: string
+): Promise<{ eosId: string; sharedIps: string[] }[]> {
+  const db = await getDb();
+  const rows = await db.select<{ eos_id: string; ip_address: string }[]>(
+    `SELECT DISTINCT p2.eos_id, p2.ip_address
+     FROM player_connections p1
+     JOIN player_connections p2
+       ON p1.server_id = p2.server_id AND p1.ip_address = p2.ip_address
+     WHERE p1.server_id = ? AND p1.eos_id = ? AND p2.eos_id != ?
+     ORDER BY p2.eos_id`,
+    [serverId, eosId, eosId]
+  );
+  const map = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!map.has(r.eos_id)) map.set(r.eos_id, []);
+    map.get(r.eos_id)!.push(r.ip_address);
+  }
+  return [...map.entries()].map(([id, ips]) => ({ eosId: id, sharedIps: [...new Set(ips)] }));
+}
+
+/** Count of login backups for a specific player (used for prune logic). */
+export async function getLoginBackupCount(
+  serverId: string,
+  eosId: string
+): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<{ n: number }[]>(
+    "SELECT COUNT(*) AS n FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login'",
+    [serverId, eosId]
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/** Oldest login backup for a player — used to prune when over the keep limit. */
+export async function getOldestLoginBackup(
+  serverId: string,
+  eosId: string
+): Promise<import("./db").BackupRow | null> {
+  const db = await getDb();
+  const rows = await db.select<BackupRow[]>(
+    "SELECT * FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login' ORDER BY created_at ASC LIMIT 1",
+    [serverId, eosId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Update the file_path for a backup record (used after tier-rename on disk). */
+export async function updateBackupFilePath(
+  backupId: string,
+  newFilePath: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE backups SET file_path = ? WHERE id = ?", [newFilePath, backupId]);
 }
 
 // ---------------------------------------------------------------------------

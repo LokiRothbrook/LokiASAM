@@ -41,28 +41,34 @@ interface Props {
   status: string;
   /** Render a slightly larger badge. Defaults to false. */
   large?: boolean;
+  /** When set, overrides the label with a live countdown string and uses an orange pulsing style. */
+  countdownLabel?: string;
 }
 
-export function ServerStatusBadge({ status, large = false }: Props) {
+export function ServerStatusBadge({ status, large = false, countdownLabel }: Props) {
   const cfg = STATUS_MAP[status as ServerStatusValue] ?? STATUS_MAP.stopped;
   const size = large ? "text-sm px-3 py-1" : "text-xs px-2 py-0.5";
+
+  const color = countdownLabel ? "#ff8c00" : cfg.color;
+  const pulse = countdownLabel ? true : cfg.pulse;
+  const label = countdownLabel ?? cfg.label;
 
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full font-semibold tracking-wide ${size}`}
       style={{
-        color: cfg.color,
-        background: `color-mix(in srgb, ${cfg.color} 12%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${cfg.color} 35%, transparent)`,
-        boxShadow: `0 0 8px color-mix(in srgb, ${cfg.color} 25%, transparent)`,
+        color,
+        background: `color-mix(in srgb, ${color} 12%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
+        boxShadow: `0 0 8px color-mix(in srgb, ${color} 25%, transparent)`,
       }}
     >
       {/* Pulsing dot for active states */}
       <span
-        className={`inline-block w-1.5 h-1.5 rounded-full ${cfg.pulse ? "animate-pulse" : ""}`}
-        style={{ background: cfg.color }}
+        className={`inline-block w-1.5 h-1.5 rounded-full ${pulse ? "animate-pulse" : ""}`}
+        style={{ background: color }}
       />
-      {cfg.label}
+      {label}
     </span>
   );
 }
