@@ -5,11 +5,35 @@ import { check } from "@tauri-apps/plugin-updater";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { getAppSetting } from "@/lib/db";
+import { tauriCmd } from "@/lib/tauri-commands";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 export function UpdateManager() {
-  const checkingRef = useRef(false);
+  const checkingRef      = useRef(false);
+  const protonCheckRef   = useRef(false);
+  const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
+
+  async function checkForProtonUpdate() {
+    if (protonCheckRef.current) return;
+    protonCheckRef.current = true;
+    try {
+      const protonPath = await getAppSetting("proton_path");
+      if (!protonPath) return;
+      const info = await tauriCmd.checkProtonGeUpdate(protonPath);
+      if (!info.updateAvailable) return;
+      toast.info(`Proton-GE ${info.latestVersion} is available`, {
+        id: `proton-update-${info.latestVersion}`,
+        description: `Current: ${info.currentVersion || "unknown"}. Update in Settings → Updates → Proton-GE.`,
+        duration: Infinity,
+        cancel: { label: "Dismiss", onClick: () => {} },
+      });
+    } catch {
+      // Silently ignore — background check should never surface errors
+    } finally {
+      protonCheckRef.current = false;
+    }
+  }
 
   async function checkForUpdate() {
     if (checkingRef.current) return;
@@ -71,22 +95,35 @@ export function UpdateManager() {
   }
 
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let appIntervalId:    ReturnType<typeof setInterval> | null = null;
+    let protonIntervalId: ReturnType<typeof setInterval> | null = null;
 
     (async () => {
-      const mode = await getAppSetting("app_update_check_mode");
-      // Default to 'startup' if the key has never been set
-      if (mode === "off") return;
+      const [mode, protonMode] = await Promise.all([
+        getAppSetting("app_update_check_mode"),
+        isLinux ? getAppSetting("proton_ge_check_mode") : Promise.resolve(null),
+      ]);
 
-      checkForUpdate();
+      // LokiASAM app updates
+      if (mode !== "off") {
+        checkForUpdate();
+        if (mode === "periodic") {
+          appIntervalId = setInterval(checkForUpdate, ONE_HOUR_MS);
+        }
+      }
 
-      if (mode === "periodic") {
-        intervalId = setInterval(checkForUpdate, ONE_HOUR_MS);
+      // Proton-GE updates (Linux only)
+      if (isLinux && protonMode && protonMode !== "disabled") {
+        checkForProtonUpdate();
+        if (protonMode === "startup_hourly") {
+          protonIntervalId = setInterval(checkForProtonUpdate, ONE_HOUR_MS);
+        }
       }
     })();
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (appIntervalId)    clearInterval(appIntervalId);
+      if (protonIntervalId) clearInterval(protonIntervalId);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

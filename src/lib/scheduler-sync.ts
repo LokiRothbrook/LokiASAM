@@ -120,23 +120,42 @@ export async function syncSchedulesToRust(): Promise<void> {
     }
 
     // ── Global auto-update-check entry ─────────────────────────────────────
-    // This is a synthetic entry (not in the schedules table) that fires the
-    // shared cache update on the interval configured in Settings.
-    const [autoCheckHours, lastChecked] = await Promise.all([
+    // Fires the shared cache update on startup and/or hourly, depending on
+    // the asa_auto_check_hours setting:
+    //   "startup"        — fire once ~30 s after launch
+    //   "startup_hourly" — fire ~30 s after launch, then repeat every hour
+    //   "disabled" / "0" — no scheduled check
+    const [autoCheckMode, lastChecked] = await Promise.all([
       getAppSetting("asa_auto_check_hours"),
       getAppSetting("asa_last_checked"),
     ]);
-    const hours = parseInt(autoCheckHours ?? "0");
-    if (hours > 0 && steamcmdPath && baseDir) {
-      const intervalMs = hours * 3_600_000;
+    const mode = autoCheckMode ?? "disabled";
+    const isStartupHourly = mode === "startup_hourly";
+    const isStartup       = mode === "startup" || isStartupHourly;
+    // Legacy numeric values ("1","6","12","24") treated as startup_hourly.
+    const legacyHours     = parseInt(mode);
+    const isLegacy        = !isNaN(legacyHours) && legacyHours > 0;
+
+    if ((isStartup || isLegacy) && steamcmdPath && baseDir && servers.length > 0) {
+      const intervalMs = isStartupHourly || isLegacy ? 3_600_000 : 0;
       let nextRunMs: number;
       if (!lastChecked) {
-        // Never checked — wait 5 minutes after startup to let things settle.
-        nextRunMs = Date.now() + 5 * 60_000;
-      } else {
+        // Never checked — fire 30 s after startup.
+        nextRunMs = Date.now() + 30_000;
+      } else if (isStartupHourly || isLegacy) {
         const scheduled = new Date(lastChecked).getTime() + intervalMs;
         // If overdue, give a 30-second startup buffer before firing.
         nextRunMs = scheduled < Date.now() ? Date.now() + 30_000 : scheduled;
+      } else {
+        // "startup" mode — only fire if we've never checked (handled above).
+        // If already checked today, skip.
+        const sinceLastCheck = Date.now() - new Date(lastChecked).getTime();
+        if (sinceLastCheck < 24 * 3_600_000) {
+          // Checked within the last 24 h; don't fire again on this session.
+          await tauriCmd.syncSchedules(entries);
+          return;
+        }
+        nextRunMs = Date.now() + 30_000;
       }
 
       entries.push({
@@ -159,7 +178,7 @@ export async function syncSchedulesToRust(): Promise<void> {
         backupDir:    "",
         scheduleType: "global_update_check",
         enabled:      true,
-        configJson:   "{}",
+        configJson:   JSON.stringify({ intervalMs }),
         nextRunMs,
       });
     }

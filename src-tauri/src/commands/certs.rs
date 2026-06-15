@@ -103,33 +103,48 @@ async fn install_windows(cert_path: &str) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) -> Result<(), String> {
-    let wine_bin  = format!("{proton_path}/files/bin/wine64");
-    let wine_pfx  = format!("{prefix_path}/pfx");
-    let marker    = PathBuf::from(prefix_path).join(CERT_MARKER_FILENAME);
+    let proton_script = format!("{proton_path}/proton");
+    let wine_bin      = format!("{proton_path}/files/bin/wine64");
+    let wine_pfx      = format!("{prefix_path}/pfx");
+    let marker        = PathBuf::from(prefix_path).join(CERT_MARKER_FILENAME);
 
-    // Initialise the Wine prefix if it has not been set up yet. wineboot -u
-    // creates the fake C: drive, registry hives, etc. without blocking on
-    // Mono/Gecko downloads. This can take up to ~30 s on first run.
+    // Initialise the Wine prefix if it has not been set up yet.
+    // Use the Proton run script (same mechanism as server start) rather than
+    // wine64 directly — Proton-GE's wine64 is compiled for the Steam Linux
+    // Runtime and may fail outside it. `proton run` handles environment setup.
+    // Setting STEAM_COMPAT_CLIENT_INSTALL_PATH to a dummy value prevents
+    // Proton from trying to use the Steam Runtime daemon when Steam is installed.
     let system_reg = format!("{wine_pfx}/system.reg");
     if !tokio::fs::try_exists(&system_reg).await.unwrap_or(false) {
-        let status = Command::new(&wine_bin)
-            .args(["wineboot", "-u"])
-            .env("WINEPREFIX", &wine_pfx)
+        // Create parent directories so Proton can create the pfx inside.
+        tokio::fs::create_dir_all(&wine_pfx)
+            .await
+            .map_err(|e| format!("Failed to create prefix directory: {e}"))?;
+
+        let status = Command::new(&proton_script)
+            .arg("run")
+            .arg("C:\\windows\\system32\\wineboot.exe")
+            .env("STEAM_COMPAT_DATA_PATH", prefix_path)
+            .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", "/")
             .env("WINEDLLOVERRIDES", "mscoree,mshtml=")
             .env("WINEDEBUG", "-all")
+            .env("PROTON_LOG", "0")
             .status()
             .await
-            .map_err(|e| format!("Failed to run wineboot: {e}"))?;
+            .map_err(|e| format!("Failed to run proton wineboot: {e}"))?;
 
-        if !status.success() {
+        // Proton may exit non-zero even on success (wineboot is a short-lived
+        // process). Check that the prefix was actually created instead.
+        if !tokio::fs::try_exists(&system_reg).await.unwrap_or(false) {
             return Err(format!(
-                "wineboot exited with code {}",
+                "Wine prefix initialisation failed (proton exited {}); try starting a server once first.",
                 status.code().unwrap_or(-1)
             ));
         }
     }
 
     // Install the certificate into Wine's CurrentUser\Root store.
+    // At this point the prefix exists, so wine64 can run standalone.
     let status = Command::new(&wine_bin)
         .args(["certutil", "-addstore", "Root", cert_path])
         .env("WINEPREFIX", &wine_pfx)

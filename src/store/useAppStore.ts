@@ -117,6 +117,10 @@ interface AppState {
   /** Active countdown info keyed by server ID. Null means no countdown running. */
   countdowns: Record<string, { action: 'restart' | 'update'; remainingSecs: number; totalSecs: number } | null>;
   setCountdown: (serverId: string, entry: { action: 'restart' | 'update'; remainingSecs: number; totalSecs: number } | null) => void;
+
+  /** True while an ASA cache update/check is running (shows spinner in TopBar). */
+  asaCacheUpdateInProgress: boolean;
+  setAsaCacheUpdateInProgress: (v: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -205,4 +209,7 @@ export const useAppStore = create<AppState>((set) => ({
   countdowns: {},
   setCountdown: (serverId, entry) =>
     set((s) => ({ countdowns: { ...s.countdowns, [serverId]: entry } })),
+
+  asaCacheUpdateInProgress: false,
+  setAsaCacheUpdateInProgress: (v) => set({ asaCacheUpdateInProgress: v }),
 }));

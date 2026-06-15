@@ -27,7 +27,7 @@ import {
   getServers,
   type NotificationConfigRow,
 } from "@/lib/db";
-import { runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { tempDir } from "@tauri-apps/api/path";
@@ -658,18 +658,16 @@ function AboutSection() {
 // ---------------------------------------------------------------------------
 
 const AUTO_CHECK_OPTIONS = [
-  { value: "0",  label: "Disabled" },
-  { value: "1",  label: "Every hour" },
-  { value: "6",  label: "Every 6 hours" },
-  { value: "12", label: "Every 12 hours" },
-  { value: "24", label: "Daily" },
+  { value: "disabled",       label: "Disabled" },
+  { value: "startup",        label: "On startup" },
+  { value: "startup_hourly", label: "On startup + hourly" },
 ];
 
 function ServerUpdatesSection() {
   const [checking, setChecking]       = useState(false);
   const [cachedBuild, setCached]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
-  const [autoCheckHours, setAutoCheck] = useState("0");
+  const [autoCheckHours, setAutoCheck] = useState("disabled");
   const [hasCacheInstalled, setHasCacheInstalled] = useState<boolean | null>(null);
   const [showApplyAll, setShowApplyAll] = useState(false);
   const [applyAllInfo, setApplyAllInfo] = useState<{ total: number; running: number }>({ total: 0, running: 0 });
@@ -682,7 +680,7 @@ function ServerUpdatesSection() {
       getAppSetting("asa_auto_check_hours"),
       getAppSetting("base_dir"),
     ]);
-    setCached(cached ?? ""); setLastChecked(checked ?? ""); setAutoCheck(hours ?? "0");
+    setCached(cached ?? ""); setLastChecked(checked ?? ""); setAutoCheck(hours ?? "disabled");
     if (baseDir) {
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
@@ -698,30 +696,11 @@ function ServerUpdatesSection() {
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir) { toast.error("Base directory not configured."); return; }
-      if (!steamcmdPath) { toast.error("SteamCMD path not configured. Set it up in Settings."); return; }
-
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-
-      // Read build ID before update so we can detect whether something changed.
       const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
+      const newBuild = await runAsaCacheUpdate();
+      if (!newBuild) { toast.error("Base directory or SteamCMD not configured."); return; }
 
-      // Run SteamCMD. If already current this is fast; if an update exists it downloads.
-      const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
-
-      const now = new Date().toISOString();
-      const cacheUpdated = !!newBuild && newBuild !== oldBuild;
-
-      await Promise.all([
-        setAppSetting("asa_cached_build_id", newBuild),
-        setAppSetting("asa_latest_build_id", newBuild),
-        setAppSetting("asa_last_checked",    now),
-      ]);
+      const cacheUpdated = newBuild !== oldBuild;
 
       // Run per-server check now that the cache build ID is current.
       await runPerServerUpdateCheck();
@@ -901,8 +880,8 @@ function ServerUpdatesSection() {
 // ---------------------------------------------------------------------------
 
 const APP_UPDATE_MODE_OPTIONS = [
-  { value: "startup",  label: "On startup only" },
-  { value: "periodic", label: "Every hour" },
+  { value: "startup",  label: "On startup" },
+  { value: "periodic", label: "On startup + hourly" },
   { value: "off",      label: "Disabled" },
 ];
 
@@ -1265,17 +1244,17 @@ function ProtonGeUpdateSection() {
   const [updateInfo, setUpdateInfo]       = useState<ProtonUpdateInfo | null>(null);
   const [downloading, setDownloading]     = useState(false);
   const [downloadDone, setDownloadDone]   = useState(false);
-  const [autoCheck, setAutoCheck]         = useState(false);
+  const [checkMode, setCheckMode]         = useState("startup_hourly");
 
   useEffect(() => {
     Promise.all([
       getAppSetting("proton_path"),
       getAppSetting("proton_ge_managed"),
-      getAppSetting("proton_ge_auto_check"),
-    ]).then(([p, managed, auto]) => {
+      getAppSetting("proton_ge_check_mode"),
+    ]).then(([p, managed, mode]) => {
       setProtonPath(p ?? "");
       setIsManaged(managed === "true");
-      setAutoCheck(auto === "true");
+      setCheckMode(mode ?? "startup_hourly");
     });
   }, []);
 
@@ -1314,9 +1293,9 @@ function ProtonGeUpdateSection() {
     toast.success("LokiASAM will now manage Proton-GE updates.");
   };
 
-  const handleAutoCheckToggle = async (checked: boolean) => {
-    setAutoCheck(checked);
-    await setAppSetting("proton_ge_auto_check", checked ? "true" : "false");
+  const handleCheckModeChange = async (value: string) => {
+    setCheckMode(value);
+    await setAppSetting("proton_ge_check_mode", value);
   };
 
   // Determine if the current path is inside the managed location
@@ -1414,15 +1393,28 @@ function ProtonGeUpdateSection() {
         )}
       </div>
 
-      {/* Auto-check toggle */}
-      <div className="flex items-start justify-between gap-4 py-2">
-        <div>
-          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Daily Auto-Check</p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-            Automatically check GitHub for new GE-Proton releases once per day.
-          </p>
+      {/* Auto-check mode */}
+      <div className="space-y-2">
+        <Label style={{ color: "var(--text-primary)" }}>Auto-Check Frequency</Label>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Automatically check GitHub for new GE-Proton releases.
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { value: "disabled",       label: "Disabled" },
+            { value: "startup",        label: "On startup" },
+            { value: "startup_hourly", label: "On startup + hourly" },
+          ].map((opt) => (
+            <button key={opt.value} onClick={() => handleCheckModeChange(opt.value)} className="text-xs px-3 py-1.5 rounded-lg transition-all"
+              style={{
+                background: checkMode === opt.value ? "rgba(var(--neon-purple-rgb),0.15)" : "transparent",
+                border: `1px solid ${checkMode === opt.value ? "var(--neon-purple)" : "var(--border)"}`,
+                color: checkMode === opt.value ? "var(--neon-purple)" : "var(--text-muted)",
+              }}>
+              {opt.label}
+            </button>
+          ))}
         </div>
-        <SettingsToggle checked={autoCheck} onChange={handleAutoCheckToggle} />
       </div>
 
       {/* Download output */}

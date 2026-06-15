@@ -19,7 +19,7 @@ import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
 import { getAppSetting, setAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
-import { runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
 import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -80,24 +80,12 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) {
+      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
+      const newBuild = await runAsaCacheUpdate();
+      if (!newBuild) {
         toast.error("Base directory or SteamCMD not configured.");
         return;
       }
-      const sep      = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
-      const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
-      const now      = new Date().toISOString();
-      await Promise.all([
-        setAppSetting("asa_cached_build_id", newBuild),
-        setAppSetting("asa_latest_build_id", newBuild),
-        setAppSetting("asa_last_checked",    now),
-      ]);
       // Manual check: silent mode suppresses per-server toasts; we show dialog.
       const summary = await runPerServerUpdateCheck(true);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -514,14 +502,16 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <UpdateStatusChip
-            servers={servers}
-            onUpdateAllClick={() => setShowUpdateAllDialog(true)}
-            onUpdatesFound={(updates) => {
-              setPendingUpdates(updates);
-              setShowUpdatesFoundDialog(true);
-            }}
-          />
+          {servers.length > 0 && (
+            <UpdateStatusChip
+              servers={servers}
+              onUpdateAllClick={() => setShowUpdateAllDialog(true)}
+              onUpdatesFound={(updates) => {
+                setPendingUpdates(updates);
+                setShowUpdatesFoundDialog(true);
+              }}
+            />
+          )}
           <Button
             variant="outline"
             onClick={() => setShowImport(true)}

@@ -12,7 +12,7 @@
  * Discord and SMTP columns are disabled if credentials are not yet configured.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { toast } from "sonner";
 import { Loader2, Bell, Monitor, MessageSquare, Mail } from "lucide-react";
 import {
@@ -58,11 +58,16 @@ const CHANNEL_DEFAULTS: Record<ChannelId, NotificationEventType[]> = {
 // Component
 // ---------------------------------------------------------------------------
 
+export interface NotificationMatrixHandle {
+  getChannelEvents: () => Record<string, string[]>;
+}
+
 interface NotificationMatrixProps {
   onSaved?: () => void;
 }
 
-export function NotificationMatrix({ onSaved }: NotificationMatrixProps) {
+export const NotificationMatrix = forwardRef<NotificationMatrixHandle, NotificationMatrixProps>(
+function NotificationMatrix({ onSaved }, ref) {
   const [channelEvents, setChannelEvents] = useState<Record<ChannelId, Set<NotificationEventType>>>({
     in_app:  new Set(CHANNEL_DEFAULTS.in_app),
     bell:    new Set(CHANNEL_DEFAULTS.bell),
@@ -121,6 +126,13 @@ export function NotificationMatrix({ onSaved }: NotificationMatrixProps) {
   }, []);
 
   useEffect(() => { loadState(); }, [loadState]);
+
+  useImperativeHandle(ref, () => ({
+    getChannelEvents: () =>
+      Object.fromEntries(
+        Object.entries(channelEvents).map(([ch, set]) => [ch, [...set]])
+      ),
+  }), [channelEvents]);
 
   const handleToggle = useCallback(async (channel: ChannelId, event: NotificationEventType) => {
     const next = new Set(channelEvents[channel]);
@@ -225,4 +237,5 @@ export function NotificationMatrix({ onSaved }: NotificationMatrixProps) {
       </table>
     </div>
   );
-}
+});
+NotificationMatrix.displayName = "NotificationMatrix";

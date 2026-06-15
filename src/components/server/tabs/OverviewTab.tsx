@@ -516,7 +516,7 @@ export function OverviewTab({ server }: Props) {
         setLastBackup(lb);
         setNextRestart(nr);
         setBackupEnabled(be);
-        setAutoCheckEnabled((autoHours ?? "0") !== "0");
+        setAutoCheckEnabled((autoHours ?? "disabled") !== "disabled");
       }
     })();
     return () => { cancelled = true; };

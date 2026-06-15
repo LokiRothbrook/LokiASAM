@@ -1,11 +1,13 @@
 "use client";
 
 import { NotificationBell } from "@/components/layout/NotificationBell";
-import { Server, Activity, Users } from "lucide-react";
+import { Server, Activity, Users, RefreshCw } from "lucide-react";
 import { useServers } from "@/hooks/useServers";
+import { useAppStore } from "@/store/useAppStore";
 
 export function TopBar() {
   const { data: servers = [] } = useServers();
+  const asaCacheUpdateInProgress = useAppStore((s) => s.asaCacheUpdateInProgress);
 
   const total   = servers.length;
   const running = servers.filter((s) => s.status === "running").length;
@@ -38,6 +40,15 @@ export function TopBar() {
             </span>
           </div>
         ))}
+
+        {asaCacheUpdateInProgress && (
+          <div className="flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--neon-purple)" }} />
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Checking ASA updates…
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

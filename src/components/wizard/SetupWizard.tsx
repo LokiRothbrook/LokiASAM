@@ -37,8 +37,8 @@ import { useSetupStore } from "@/store/useSetupStore";
 import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
-import { setAppSetting, initDb } from "@/lib/db";
-import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
+import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
+import { NotificationMatrix, type NotificationMatrixHandle } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
@@ -162,8 +162,8 @@ function WelcomeStep() {
 
       <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
         {[
-          { label: "Server Management", desc: "Start, stop & monitor" },
-          { label: "Auto Scheduling",   desc: "Backups & restarts" },
+          { label: "Server Management", desc: "Start, Stop & Monitor" },
+          { label: "Auto Scheduling",   desc: "Backups & Restarts" },
           { label: "Mod Browser",       desc: "CurseForge integration" },
         ].map((feat) => (
           <div
@@ -617,7 +617,7 @@ function BaseDirStep() {
               Where would you like to install LokiASAM?
             </h2>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              This is where your ASA server files will be installed. Choose a drive with at least 20 GB of free space.
+              This is where your ASA server files will be installed. Choose a drive with at least 40 GB of free space.
             </p>
           </div>
 
@@ -1602,7 +1602,7 @@ function CertStep() {
   );
 }
 
-function NotificationsStep() {
+function NotificationsStep({ matrixRef }: { matrixRef: React.RefObject<NotificationMatrixHandle | null> }) {
   const {
     discordWebhook, setDiscordWebhook,
     smtpHost, setSmtpHost,
@@ -1792,7 +1792,7 @@ function NotificationsStep() {
             Choose which events trigger each channel. Configure credentials above to unlock Discord and SMTP columns.
           </p>
         </div>
-        <NotificationMatrix />
+        <NotificationMatrix ref={matrixRef} />
       </div>
     </div>
   );
@@ -1876,7 +1876,7 @@ function TrayStep() {
         >
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             <span className="font-semibold" style={{ color: "#ffa500" }}>Desktop notifications: </span>
-            OS desktop notifications (the pop-up alerts from your system) only appear when LokiASAM is minimized to the system tray. While the window is open or the app is fully closed, notifications are shown as in-app toasts instead.
+            OS desktop notifications (the pop-up alerts from your system) may only appear when LokiASAM is minimized to the system tray. This is dependent on your desktop environment and its notification settings, not LokiASAM itself.
           </p>
         </div>
       </div>
@@ -1892,21 +1892,25 @@ function AutoUpdateStep() {
   const {
     asaAutoCheckHours, setAsaAutoCheckHours,
     appUpdateCheckMode, setAppUpdateCheckMode,
-    protonAutoCheckEnabled, setProtonAutoCheckEnabled,
+    protonCheckMode, setProtonCheckMode,
   } = useSetupStore();
 
   const asaIntervals = [
-    { value: "0",  label: "Disabled" },
-    { value: "1",  label: "Hourly" },
-    { value: "6",  label: "Every 6h" },
-    { value: "12", label: "Every 12h" },
-    { value: "24", label: "Daily" },
+    { value: "disabled",       label: "Disabled" },
+    { value: "startup",        label: "On Startup" },
+    { value: "startup_hourly", label: "On Startup + Hourly" },
   ];
 
   const appModes = [
-    { value: "startup",  label: "On Startup" },
-    { value: "periodic", label: "Every Hour" },
     { value: "off",      label: "Disabled" },
+    { value: "startup",  label: "On Startup" },
+    { value: "periodic", label: "On Startup + Hourly" },
+  ];
+
+  const protonModes = [
+    { value: "disabled",       label: "Disabled" },
+    { value: "startup",        label: "On Startup" },
+    { value: "startup_hourly", label: "On Startup + Hourly" },
   ];
 
   return (
@@ -1929,12 +1933,12 @@ function AutoUpdateStep() {
             Checks Steam for new ARK server builds and flags any servers that need updating. Updates are never applied automatically — you stay in control.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex gap-2">
           {asaIntervals.map(({ value, label }) => (
             <button
               key={value}
               onClick={() => setAsaAutoCheckHours(value)}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+              className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
               style={{
                 background: asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
                 border: `1px solid ${asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
@@ -1979,14 +1983,30 @@ function AutoUpdateStep() {
 
       {/* Proton-GE (Linux only) */}
       {IS_LINUX && (
-        <div className="rounded-xl px-4 py-3"
+        <div className="rounded-xl p-4 space-y-3"
           style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-          <ToggleRow
-            label="Proton-GE Daily Auto-Check"
-            description="Check GitHub once per day for new GE-Proton releases. A notification appears when a new version is available."
-            value={protonAutoCheckEnabled}
-            onChange={setProtonAutoCheckEnabled}
-          />
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Proton-GE Updates</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Check GitHub for new GE-Proton releases. A notification appears when a new version is available.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            {protonModes.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setProtonCheckMode(value)}
+                className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{
+                  background: protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                  border: `1px solid ${protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                  color: protonCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -2214,7 +2234,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     discordWebhook,
     smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTls, smtpFrom, smtpTo,
     closeToTray,
-    asaAutoCheckHours, appUpdateCheckMode, protonAutoCheckEnabled,
+    asaAutoCheckHours, appUpdateCheckMode, protonCheckMode,
     isLoading,
     importMode, importValid, importDir,
   } = useSetupStore();
@@ -2223,6 +2243,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [saveError, setSaveError] = useState("");
   const [appVersion, setAppVersion] = useState("...");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const matrixRef = useRef<NotificationMatrixHandle | null>(null);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
@@ -2326,26 +2347,46 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           const prefix = baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix";
           await setAppSetting("proton_prefix_path", prefix);
         }
-        if (discordWebhook) await setAppSetting("discord_webhook", discordWebhook);
+        // Save Discord webhook as a notification_configs entry if provided
+        if (discordWebhook) {
+          await saveNotificationConfig({
+            id: crypto.randomUUID(), serverId: null, channel: "discord",
+            enabled: true,
+            configJson: JSON.stringify({ webhookUrl: discordWebhook }),
+            eventsJson: "[]",
+          });
+        }
 
-        // SMTP (only if host is set)
+        // Save SMTP config as a notification_configs entry if host is set
         if (smtpHost) {
-          await setAppSetting("smtp_host",     smtpHost);
-          await setAppSetting("smtp_port",     smtpPort);
-          await setAppSetting("smtp_username", smtpUsername);
-          await setAppSetting("smtp_password", smtpPassword);
-          await setAppSetting("smtp_use_tls",  String(smtpUseTls));
-          await setAppSetting("smtp_from",     smtpFrom);
-          await setAppSetting("smtp_to",       smtpTo);
+          await saveNotificationConfig({
+            id: crypto.randomUUID(), serverId: null, channel: "email",
+            enabled: true,
+            configJson: JSON.stringify({
+              host: smtpHost, port: smtpPort,
+              username: smtpUsername, password: smtpPassword,
+              fromAddress: smtpFrom, toAddress: smtpTo,
+              useTls: smtpUseTls,
+            }),
+            eventsJson: "[]",
+          });
+        }
+
+        // Save notification matrix channel event preferences
+        const channelEvents = matrixRef.current?.getChannelEvents();
+        if (channelEvents) {
+          for (const [channel, events] of Object.entries(channelEvents)) {
+            await saveGlobalChannelEvents(channel, events);
+          }
         }
 
         // Tray preference
         await setAppSetting("close_to_tray", String(closeToTray));
 
         // Auto-update preferences
-        await setAppSetting("asa_auto_check_hours",   asaAutoCheckHours);
-        await setAppSetting("app_update_check_mode",  appUpdateCheckMode);
-        if (IS_LINUX) await setAppSetting("proton_ge_auto_check", String(protonAutoCheckEnabled));
+        await setAppSetting("asa_auto_check_hours",  asaAutoCheckHours);
+        await setAppSetting("app_update_check_mode", appUpdateCheckMode);
+        if (IS_LINUX) await setAppSetting("proton_ge_check_mode", protonCheckMode);
 
         // Theme
         await setAppSetting("theme_preset", themePreset);
@@ -2383,7 +2424,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
         <CertStep key="cert" />,
-        <NotificationsStep key="notifications" />,
+        <NotificationsStep key="notifications" matrixRef={matrixRef} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,
@@ -2395,7 +2436,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <CertStep key="cert" />,
-        <NotificationsStep key="notifications" />,
+        <NotificationsStep key="notifications" matrixRef={matrixRef} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,

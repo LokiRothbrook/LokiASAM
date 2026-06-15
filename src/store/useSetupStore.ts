@@ -54,20 +54,13 @@ interface SetupState {
   smtpFrom: string;
   smtpTo: string;
 
-  // Notifications step — toggles
-  desktopNotificationsEnabled: boolean;
-  notifyServerStart: boolean;
-  notifyServerCrash: boolean;
-  notifyServerStop: boolean;
-  notifyUpdateAvailable: boolean;
-
   // Tray step
   closeToTray: boolean;
 
   // Auto-update step
-  asaAutoCheckHours: string;    // "0"|"1"|"6"|"12"|"24"
+  asaAutoCheckHours: string;    // "disabled"|"startup"|"startup_hourly"
   appUpdateCheckMode: string;   // "startup"|"periodic"|"off"
-  protonAutoCheckEnabled: boolean;
+  protonCheckMode: string;      // "disabled"|"startup"|"startup_hourly"
 
   // Theme step
   themePreset: string;
@@ -104,15 +97,10 @@ interface SetupState {
   setSmtpUseTls: (v: boolean) => void;
   setSmtpFrom: (v: string) => void;
   setSmtpTo: (v: string) => void;
-  setDesktopNotificationsEnabled: (v: boolean) => void;
-  setNotifyServerStart: (v: boolean) => void;
-  setNotifyServerCrash: (v: boolean) => void;
-  setNotifyServerStop: (v: boolean) => void;
-  setNotifyUpdateAvailable: (v: boolean) => void;
   setCloseToTray: (v: boolean) => void;
   setAsaAutoCheckHours: (v: string) => void;
   setAppUpdateCheckMode: (v: string) => void;
-  setProtonAutoCheckEnabled: (v: boolean) => void;
+  setProtonCheckMode: (v: string) => void;
   setThemePreset: (v: string) => void;
   setThemeAccent: (v: string) => void;
   setLoading: (loading: boolean, message?: string) => void;
@@ -144,15 +132,10 @@ const initialState = {
   smtpUseTls: true,
   smtpFrom: "",
   smtpTo: "",
-  desktopNotificationsEnabled: true,
-  notifyServerStart: true,
-  notifyServerCrash: true,
-  notifyServerStop: false,
-  notifyUpdateAvailable: true,
   closeToTray: true,
-  asaAutoCheckHours: "1",
+  asaAutoCheckHours: "startup",
   appUpdateCheckMode: "startup",
-  protonAutoCheckEnabled: true,
+  protonCheckMode: "startup_hourly",
   themePreset: "storm",
   themeAccent: "blue",
   isLoading: false,
@@ -188,15 +171,10 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setSmtpUseTls: (smtpUseTls) => set({ smtpUseTls }),
   setSmtpFrom: (smtpFrom) => set({ smtpFrom }),
   setSmtpTo: (smtpTo) => set({ smtpTo }),
-  setDesktopNotificationsEnabled: (desktopNotificationsEnabled) => set({ desktopNotificationsEnabled }),
-  setNotifyServerStart: (notifyServerStart) => set({ notifyServerStart }),
-  setNotifyServerCrash: (notifyServerCrash) => set({ notifyServerCrash }),
-  setNotifyServerStop: (notifyServerStop) => set({ notifyServerStop }),
-  setNotifyUpdateAvailable: (notifyUpdateAvailable) => set({ notifyUpdateAvailable }),
   setCloseToTray: (closeToTray) => set({ closeToTray }),
   setAsaAutoCheckHours: (asaAutoCheckHours) => set({ asaAutoCheckHours }),
   setAppUpdateCheckMode: (appUpdateCheckMode) => set({ appUpdateCheckMode }),
-  setProtonAutoCheckEnabled: (protonAutoCheckEnabled) => set({ protonAutoCheckEnabled }),
+  setProtonCheckMode: (protonCheckMode) => set({ protonCheckMode }),
   setThemePreset: (themePreset) => set({ themePreset }),
   setThemeAccent: (themeAccent) => set({ themeAccent }),
   setLoading: (isLoading, message = "") =>
