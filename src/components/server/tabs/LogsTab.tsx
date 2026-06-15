@@ -8,7 +8,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { tauriCmd } from "@/lib/tauri-commands";
-import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { ServerRow } from "@/lib/db";
 import type {
   ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo,
@@ -156,7 +155,7 @@ function LivePanel({ server }: { server: ServerRow }) {
         setLines([]);
         return;
       }
-      const latest = archives[archives.length - 1];
+      const latest = archives[0]; // sorted newest-first by Rust
       setLastSessionFilename(latest.filename);
       const content = await tauriCmd.readArchivedLog(server.id, latest.filename, 0, 0);
       setLines(content.map((line) => ({ id: ++_id, line, level: classifyLine(line) })));
@@ -166,33 +165,60 @@ function LivePanel({ server }: { server: ServerRow }) {
     }
   }, [server.id]);
 
-  useTauriEvent<{ line: string; level: string }[]>(`log://backfill/${server.id}`, (payload) => {
-    const newLines = payload.map((item) => ({
-      id: ++_id,
-      line: item.line,
-      level: (item.level as LogLine["level"]) ?? "info",
-    }));
-    setLines(newLines.slice(-4000));
-    setReady(true);
-  });
-
-  useTauriEvent<{ line: string; level: string }>(`log://line/${server.id}`, (payload) => {
-    setReady(true);
-    setLines((prev) => [
-      ...prev.slice(-3999),
-      { id: ++_id, line: payload.line, level: (payload.level as LogLine["level"]) ?? "info" },
-    ]);
-  });
-
-  // Manage watcher vs last-session display based on whether the server is active.
-  // LogWatcherManager owns the watcher lifecycle — we restart it here for the
-  // backfill but do NOT stop it on unmount so background login detection continues.
+  // Single effect that registers both event listeners BEFORE starting the watcher.
+  // This eliminates a race where the Rust watcher emits the backfill event before
+  // the frontend listeners are ready (the Tauri listen() IPC is async/microtask,
+  // so a synchronous watchServerLog call would arrive at Rust first, causing the
+  // backfill to be emitted with no registered listeners and silently dropped).
   useEffect(() => {
     if (isActive) {
       setLastSessionFilename(null);
       setLines([]);
       setReady(false);
-      tauriCmd.watchServerLog(server.id, logPath(server.install_path)).catch(() => null);
+
+      let cancelled = false;
+      let unlistenBackfill: (() => void) | undefined;
+      let unlistenLine: (() => void) | undefined;
+
+      import("@tauri-apps/api/event").then(async ({ listen }) => {
+        if (cancelled) return;
+        try {
+          [unlistenBackfill, unlistenLine] = await Promise.all([
+            listen<{ line: string; level: string }[]>(`log://backfill/${server.id}`, (e) => {
+              const newLines = (e.payload ?? []).map((item) => ({
+                id: ++_id,
+                line: item.line,
+                level: (item.level as LogLine["level"]) ?? "info",
+              }));
+              setLines(newLines.slice(-4000));
+              setReady(true);
+            }),
+            listen<{ line: string; level: string }>(`log://line/${server.id}`, (e) => {
+              setReady(true);
+              setLines((prev) => [
+                ...prev.slice(-3999),
+                { id: ++_id, line: e.payload.line, level: (e.payload.level as LogLine["level"]) ?? "info" },
+              ]);
+            }),
+          ]);
+        } catch {
+          return;
+        }
+        if (cancelled) {
+          unlistenBackfill?.();
+          unlistenLine?.();
+          return;
+        }
+        // Both listeners are now registered in Rust — safe to start the watcher.
+        // Backfill will be emitted only after this point, so nothing is dropped.
+        tauriCmd.watchServerLog(server.id, logPath(server.install_path)).catch(() => null);
+      });
+
+      return () => {
+        cancelled = true;
+        unlistenBackfill?.();
+        unlistenLine?.();
+      };
     } else {
       tauriCmd.stopLogWatch(server.id).catch(() => null);
       loadLastSession();
@@ -588,9 +614,14 @@ function CrashesPanel({ server }: { server: ServerRow }) {
             <ChevronRight className="w-4 h-4 rotate-180" />
           </Button>
           <span className="text-sm font-medium truncate" style={{ color: "#ff6688" }}>{selected.folderName}</span>
-          <Button size="sm" variant="ghost" className="ml-auto shrink-0" onClick={() => deleteCrash(selected)} title="Delete crash report" style={{ color: "var(--text-muted)" }}>
-            <Trash2 className="w-3.5 h-3.5" />
-          </Button>
+          <div className="ml-auto flex items-center gap-1 shrink-0">
+            <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(fileContent).catch(() => null)} title="Copy file content" style={{ color: "var(--text-muted)" }}>
+              <Copy className="w-3.5 h-3.5" />
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => deleteCrash(selected)} title="Delete crash report" style={{ color: "var(--text-muted)" }}>
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          </div>
         </div>
         {loadingReport ? (
           <div className="flex items-center justify-center h-40 flex-1">
@@ -722,9 +753,16 @@ function ChatPanel({ server }: { server: ServerRow }) {
             </button>
           ))
         )}
-        <Button size="sm" variant="ghost" onClick={load} title="Refresh" style={{ color: "var(--text-muted)", marginLeft: "auto" }}>
-          <RefreshCw className="w-3.5 h-3.5" />
-        </Button>
+        <div className="flex items-center gap-1 ml-auto">
+          {selected && (
+            <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(visibleLines.join("\n")).catch(() => null)} title="Copy visible lines" style={{ color: "var(--text-muted)" }}>
+              <Copy className="w-3.5 h-3.5" />
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={load} title="Refresh" style={{ color: "var(--text-muted)" }}>
+            <RefreshCw className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       </div>
 
       {selected && (
