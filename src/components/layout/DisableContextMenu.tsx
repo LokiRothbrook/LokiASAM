@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 
 interface MenuState {
@@ -16,12 +16,19 @@ interface MenuState {
 
 export function DisableContextMenu() {
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // Saved on right-click mousedown so contextmenu can read it even if WebkitGTK
+  // clears the DOM selection before the contextmenu event fires.
+  const pendingSelectionRef = useRef<string>("");
+  // Ref to the overlay div — used in handleMouseDown to skip close() for inside-overlay
+  // clicks without stopPropagation (which breaks the pointer event chain in WebkitGTK).
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
     e.preventDefault();
 
-    // Capture selection NOW — a subsequent mousedown/click will clear it.
-    const selectedText = window.getSelection()?.toString() ?? "";
+    // Use selection captured at mousedown time (WebkitGTK may clear it before contextmenu fires).
+    const selectedText = pendingSelectionRef.current || (window.getSelection()?.toString() ?? "");
+    pendingSelectionRef.current = "";
     const canCopy = selectedText.length > 0;
 
     const target = e.target as HTMLElement;
@@ -30,7 +37,10 @@ export function DisableContextMenu() {
       target instanceof HTMLTextAreaElement ||
       target.isContentEditable;
 
-    if (!canCopy && !canPaste) return;
+    if (!canCopy && !canPaste) {
+      setMenu(null);
+      return;
+    }
 
     // Capture cursor position so paste inserts at the right spot.
     let selStart = 0;
@@ -55,6 +65,19 @@ export function DisableContextMenu() {
 
   const close = useCallback(() => setMenu(null), []);
 
+  const handleMouseDown = useCallback((e: MouseEvent) => {
+    // Never close the menu when clicking inside the overlay — use contains() instead of
+    // stopPropagation so the full event chain reaches WebkitGTK and pointer events work.
+    if (overlayRef.current?.contains(e.target as Node)) return;
+
+    if (e.button === 2) {
+      pendingSelectionRef.current = window.getSelection()?.toString() ?? "";
+    } else {
+      pendingSelectionRef.current = "";
+    }
+    setMenu(null);
+  }, []);
+
   const handleCopy = useCallback(() => {
     const text = menu?.selectedText ?? "";
     setMenu(null);
@@ -71,34 +94,36 @@ export function DisableContextMenu() {
     setMenu(null);
     if (!target) return;
 
-    // rAF: let the menu overlay disappear so the target can regain focus first.
-    requestAnimationFrame(() => {
-      target.focus();
-      // Use the Tauri clipboard plugin — reads from the real OS clipboard.
-      readText()
-        .then((text) => {
-          if (text) insertAt(target, text, selStart, selEnd);
-        })
-        .catch(() => {});
-    });
+    // Use the Tauri plugin — navigator.clipboard.readText() requires a user-gesture
+    // context that WebkitGTK considers expired by the time our async handler runs.
+    // The Tauri plugin makes a direct Rust call that bypasses this restriction.
+    readText()
+      .then((text) => {
+        if (text) {
+          target.focus();
+          insertAt(target, text, selStart, selEnd);
+        }
+      })
+      .catch(() => {});
   }, [menu]);
 
   useEffect(() => {
     document.addEventListener("contextmenu", handleContextMenu);
-    document.addEventListener("mousedown", close);
+    document.addEventListener("mousedown", handleMouseDown);
     document.addEventListener("keydown", close);
     return () => {
       document.removeEventListener("contextmenu", handleContextMenu);
-      document.removeEventListener("mousedown", close);
+      document.removeEventListener("mousedown", handleMouseDown);
       document.removeEventListener("keydown", close);
     };
-  }, [handleContextMenu, close]);
+  }, [handleContextMenu, handleMouseDown, close]);
 
   if (!menu) return null;
 
   return (
     <div
-      className="fixed z-[9999] select-none"
+      ref={overlayRef}
+      className="fixed z-9999 select-none"
       style={{
         top: menu.y,
         left: menu.x,
@@ -111,7 +136,6 @@ export function DisableContextMenu() {
         padding: "4px 0",
         minWidth: "150px",
       }}
-      onMouseDown={(e) => e.stopPropagation()}
     >
       {menu.canCopy && (
         <ContextMenuItem label="Copy" shortcut="Ctrl+C" onClick={handleCopy} />
@@ -175,7 +199,9 @@ function ContextMenuItem({
     <button
       className="w-full flex items-center justify-between px-3 py-1.5 text-xs cursor-default hover:bg-[rgba(var(--neon-purple-rgb),0.12)] transition-colors"
       style={{ color: "var(--text-primary)" }}
-      onClick={onClick}
+      onPointerUp={(e) => {
+        if (e.button === 0) onClick();
+      }}
     >
       <span>{label}</span>
       <span
