@@ -754,6 +754,9 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     }
   );
 
+  // Rust scheduler emits this after inserting the DB record — reload the list.
+  useTauriEvent(`backup://completed/${server.id}`, () => { loadAll(); });
+
   // ── Manual backup helpers ────────────────────────────────────────────────
 
   async function handleServerBackup() {
@@ -939,7 +942,40 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setSyncPending(null);
     setSyncing(true);
     try {
-      for (const rec of toImport) {
+      // Load existing records so we know which higher tiers are already covered.
+      const [dbSrv, dbPlr, dbFul] = await Promise.all([
+        getServerBackupsByType(server.id, "server"),
+        getServerBackupsByType(server.id, "player"),
+        getServerBackupsByType(server.id, "full"),
+      ]);
+      // Track which tiers each type already has (across existing DB + this import batch).
+      const seenByType: Record<string, Set<string>> = {
+        server: new Set(dbSrv.flatMap((b) => b.tiers.split(",").filter(Boolean))),
+        player: new Set(dbPlr.flatMap((b) => b.tiers.split(",").filter(Boolean))),
+        full:   new Set(dbFul.flatMap((b) => b.tiers.split(",").filter(Boolean))),
+      };
+
+      // Process oldest-first: the earliest backup inherits the highest-tier slots.
+      const TIER_ORDER = ["M", "W", "D", "H"] as const;
+      const sorted = [...toImport].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+
+      for (const rec of sorted) {
+        const seen = seenByType[rec.backupType] ?? new Set<string>();
+        let tiersStr = rec.tiers ?? "";
+
+        // For files that already carry a tier suffix (scheduled backups), promote
+        // them to cover any D/W/M slots not yet held by an existing backup.
+        // Files without a suffix (manual backups) keep tiers = "" as normal.
+        if (tiersStr && rec.triggeredBy !== "login") {
+          const tiers = new Set(tiersStr.split(",").filter(Boolean));
+          for (const t of ["M", "W", "D"] as const) {
+            if (!seen.has(t)) tiers.add(t);
+          }
+          tiersStr = TIER_ORDER.filter((t) => tiers.has(t)).join(",");
+        }
+
         await insertBackup({
           id:              rec.id,
           server_id:       rec.serverId,
@@ -949,11 +985,16 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
           triggered_by:    rec.triggeredBy,
           created_at:      rec.createdAt,
           backup_type:     rec.backupType,
-          tiers:           rec.tiers ?? "",
+          tiers:           tiersStr,
           player_eosid:    rec.playerEosid ?? null,
           player_name:     rec.playerName ?? null,
         }).catch(() => {});
+
+        // Update seen so later backups in this batch don't also inherit these tiers.
+        for (const t of tiersStr.split(",").filter(Boolean)) seen.add(t);
+        seenByType[rec.backupType] = seen;
       }
+
       toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}.`);
       await loadAll();
     } catch (e) {

@@ -496,7 +496,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     &pool,
                 ).await {
                     Ok(rec) => {
-                        handle_backup_record(&conn, &rec, &cfg, "backup_server", None);
+                        handle_backup_record(&conn, &rec, &cfg, "server", None);
                         let _ = app.emit(
                             &format!("backup://completed/{}", server.id),
                             serde_json::json!({ "serverId": server.id }),
@@ -530,7 +530,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     Ok(recs) => {
                         for rec in &recs {
                             let eos_id = rec.player_eosid.as_deref();
-                            handle_backup_record(&conn, rec, &cfg, "backup_player", eos_id);
+                            handle_backup_record(&conn, rec, &cfg, "player", eos_id);
                         }
                     }
                     Err(e) => {
