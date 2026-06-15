@@ -790,6 +790,23 @@ fn read_cstring(data: &[u8], cursor: &mut usize) -> Result<String, String> {
 const APP_INTEGRATION_ID: &str = "xyz.lokisoft.lokiasam";
 const APP_ICON_PNG: &[u8] = include_bytes!("../../icons/icon.png");
 
+/// Detect how the application was installed.
+/// Returns one of: "appimage" | "pkgbuild" | "binary"
+///
+/// - "appimage"  — $APPIMAGE env var is set (running inside an AppImage)
+/// - "pkgbuild"  — marker file written by the PKGBUILD .install hook exists
+/// - "binary"    — raw executable, deb, or rpm (auto-updater works normally)
+#[tauri::command]
+pub fn get_install_method() -> &'static str {
+    if std::env::var_os("APPIMAGE").is_some() {
+        return "appimage";
+    }
+    if std::path::Path::new("/usr/lib/lokiasam/install-method").exists() {
+        return "pkgbuild";
+    }
+    "binary"
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppImageIntegrationStatus {

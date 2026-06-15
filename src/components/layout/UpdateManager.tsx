@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { check } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { getAppSetting } from "@/lib/db";
 
@@ -14,15 +15,28 @@ export function UpdateManager() {
     if (checkingRef.current) return;
     checkingRef.current = true;
     try {
+      const installMethod = await invoke<string>("get_install_method").catch(() => "binary");
       const update = await check();
       if (!update) return;
 
       const toastId = `app-update-${update.version}`;
-      // Trim release notes to the first line so the toast stays readable.
       const firstLine = (update.body ?? "").split("\n").find((l) => l.trim()) ?? "";
       const description = firstLine.length > 120
         ? firstLine.slice(0, 120) + "…"
         : firstLine || "A new version is ready to install.";
+
+      if (installMethod === "pkgbuild") {
+        // pkgbuild installs are not managed by the Tauri updater — pacman owns the binary.
+        // Show the version notice but direct the user to rebuild manually.
+        toast.info(`LokiASAM ${update.version} is available`, {
+          id: toastId,
+          description: "To update: git pull in your LokiASAM folder, then re-run makepkg -si",
+          duration: Infinity,
+          cancel: { label: "Dismiss", onClick: () => {} },
+        });
+        return;
+      }
+
       toast.info(`LokiASAM ${update.version} is available`, {
         id: toastId,
         description,
