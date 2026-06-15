@@ -52,29 +52,29 @@ sudo dnf install ./LokiASAM_*_x86_64.rpm
 
 ### Arch Linux / CachyOS / Manjaro
 
-AppImage and pre-built binaries do not work reliably on rolling-release distros due to bundled library conflicts. Build from source instead:
+AppImage and pre-built binaries do not work reliably on rolling-release distros due to bundled library conflicts. Build from source instead using the universal install script:
 
 ```bash
+# Install build dependencies
+sudo pacman -S --needed rust nodejs pnpm
+
 git clone https://github.com/LokiRothbrook/LokiASAM.git
-cd LokiASAM/packaging/arch
-makepkg -si
+cd LokiASAM
+./install.sh
 ```
 
-`makepkg -si` builds the app using your system's native libraries and installs it via pacman — icons, the `.desktop` entry, and shell integration all work correctly out of the box.
+The script builds the app and installs it via pacman — icons, the `.desktop` entry, and shell integration all work correctly out of the box.
 
 To uninstall:
 
 ```bash
-sudo pacman -R lokiasam
+./uninstall.sh
 ```
 
-To update, pull the latest source and rebuild:
+To update, pull the latest source and run the script again:
 
 ```bash
-cd LokiASAM
-git pull
-cd packaging/arch
-makepkg -si
+cd LokiASAM && git pull && ./install.sh
 ```
 
 ### Generic Linux (AppImage)
@@ -104,7 +104,24 @@ Run the `LokiASAM_*_x64-setup.exe` installer.
 - Linux: `webkit2gtk-4.1`, `libappindicator-gtk3`, `librsvg`, `patchelf`
 - Windows: WebView2 (ships with Windows 11; installer available for Windows 10)
 
-**Steps**
+**Universal install script (Linux)**
+
+`install.sh` detects your distro and builds + installs the native package automatically:
+
+| Distro family | Build output | Installer |
+|---|---|---|
+| Arch / CachyOS / Manjaro | binary | `makepkg` → `pacman` |
+| Debian / Ubuntu / Mint | `.deb` | `dpkg` + `apt` |
+| Fedora / openSUSE / RHEL | `.rpm` | `dnf` / `zypper` / `rpm` |
+
+```bash
+git clone https://github.com/LokiRothbrook/LokiASAM.git
+cd LokiASAM
+./install.sh      # build and install
+./uninstall.sh    # remove
+```
+
+**Manual steps (dev / Windows)**
 
 ```bash
 git clone https://github.com/LokiRothbrook/LokiASAM.git

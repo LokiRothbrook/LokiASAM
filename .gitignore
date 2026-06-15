@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# makepkg build artifacts
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/lokiasam-*/
+packaging/arch/*.pkg.tar.*
+packaging/arch/*.tar.gz
