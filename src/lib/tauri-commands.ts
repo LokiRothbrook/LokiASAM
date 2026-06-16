@@ -78,6 +78,8 @@ export interface StartServerParams {
   queryPort: number;
   /** NOT passed on CLI — used internally by Rust for RCON readiness polling. */
   rconPort: number;
+  /** NOT passed on CLI — used internally by Rust for graceful shutdown (saveworld/doexit). */
+  rconPassword: string;
   /** Additional CLI-only flags like ["-NoBattlEye", "-ForceRespawnDinos"]. */
   extraArgs: string[];
   /** CurseForge mod IDs to pass as -mods=id1,id2,... on startup. */

@@ -35,15 +35,16 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
   const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
   const params: StartServerParams = {
-    serverId:   server.id,
-    serverName: server.name,
-    installPath: server.install_path,
-    mapPath:    map?.mapPath ?? "TheIsland_WP",
-    port:       server.port,
-    queryPort:  server.query_port,
-    rconPort:   server.rcon_port,
+    serverId:     server.id,
+    serverName:   server.name,
+    installPath:  server.install_path,
+    mapPath:      map?.mapPath ?? "TheIsland_WP",
+    port:         server.port,
+    queryPort:    server.query_port,
+    rconPort:     server.rcon_port,
+    rconPassword: server.rcon_password,
     extraArgs,
-    modIds:     enabledModIds,
+    modIds:       enabledModIds,
   };
 
   if (isLinux) {

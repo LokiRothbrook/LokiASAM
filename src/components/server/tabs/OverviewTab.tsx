@@ -547,6 +547,7 @@ export function OverviewTab({ server }: Props) {
       port: server.port,
       queryPort: server.query_port,
       rconPort: server.rcon_port,
+      rconPassword: server.rcon_password,
       extraArgs,
       modIds: enabledModIds,
     };

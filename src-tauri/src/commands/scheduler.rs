@@ -354,6 +354,7 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
         port: entry.port,
         query_port: entry.query_port,
         rcon_port: entry.rcon_port,
+        rcon_password: entry.rcon_password.clone(),
         extra_args: entry.extra_args.clone(),
         mod_ids: entry.mod_ids.clone(),
         proton_path: entry.proton_path.clone(),

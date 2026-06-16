@@ -105,6 +105,9 @@ pub struct StartServerParams {
     /// RCON TCP port — NOT passed on CLI; used internally for readiness polling.
     /// The actual value is read by the server from GameUserSettings.ini [ServerSettings].
     pub rcon_port: u16,
+    /// RCON password — NOT passed on CLI; used internally for graceful shutdown
+    /// (saveworld/doexit) and readiness polling.
+    pub rcon_password: String,
     /// Additional CLI-only flags, e.g. ["-NoBattlEye", "-ForceRespawnDinos"].
     pub extra_args: Vec<String>,
     /// CurseForge mod IDs to load. Passed as `-mods=id1,id2,...`.
@@ -811,17 +814,25 @@ pub async fn inner_restart_server(
             state.stopping_servers.lock().unwrap().insert(params.server_id.clone());
         }
 
-        kill_process_tree(pid, graceful, &install_path);
+        if graceful {
+            // Graceful path: ask the server to save and exit via RCON so it
+            // flushes world data cleanly (same as the Stop button does).
+            use crate::commands::rcon::transient_rcon_command;
+            let _ = transient_rcon_command(params.rcon_port, &params.rcon_password, "saveworld").await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            let _ = transient_rcon_command(params.rcon_port, &params.rcon_password, "doexit").await;
 
-        // Wait up to 15 s for the process to exit.
-        for _ in 0..30 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            if !pid_alive(pid) {
-                break;
+            // Wait up to 30 s for the server to exit cleanly.
+            for _ in 0..60 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                if !pid_alive(pid) { break; }
             }
+        } else {
+            kill_process_tree(pid, false, &install_path);
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
 
-        // Ensure it's gone regardless.
+        // Force-kill anything still alive after the graceful window.
         if pid_alive(pid) {
             kill_process_tree(pid, false, &install_path);
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
