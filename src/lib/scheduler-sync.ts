@@ -48,7 +48,7 @@ export async function syncSchedulesToRust(): Promise<void> {
 
     for (const server of servers) {
       const schedules = await getServerSchedules(server.id);
-      const enabled = schedules.filter((s) => s.enabled === 1 && s.next_run);
+      const enabled = schedules.filter((s) => s.enabled === 1);
       if (enabled.length === 0) continue;
 
       const [config, mods] = await Promise.all([
