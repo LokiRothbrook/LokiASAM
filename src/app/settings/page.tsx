@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  Folder, Terminal, Info, Archive,
+  Folder, Terminal, Info, Archive, Copy,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
   Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck,
@@ -611,18 +611,54 @@ function ThemesSection() {
 // About section
 // ---------------------------------------------------------------------------
 
+function AboutRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-3 text-xs">
+      <span className="shrink-0 w-36" style={{ color: "var(--text-muted)" }}>{label}:</span>
+      <span className="font-mono break-all" style={{ color: "var(--text-primary)" }}>{value}</span>
+    </div>
+  );
+}
+
 function AboutSection() {
-  const [paths, setPaths] = useState({ baseDir: "", dbPath: "", cachePath: "" });
-  const [appVersion, setAppVersion] = useState("…");
+  const [appVersion, setAppVersion]   = useState("…");
+  const [asaBuild, setAsaBuild]       = useState("—");
+  const [protonVersion, setProtonVer] = useState("—");
+  const [paths, setPaths] = useState({
+    baseDir: "—", backupDir: "—", steamcmd: "—",
+    dbPath: "—", cachePath: "—", logRoot: "—",
+  });
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("0.10.0"));
     (async () => {
-      const baseDir = (await getAppSetting("base_dir")) ?? "";
-      if (!baseDir) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const base = baseDir.replace(/[/\\]$/, "");
-      setPaths({ baseDir, dbPath: `${base}${sep}lokiasam${sep}lokiasam.db`, cachePath: `${base}${sep}lokiasam${sep}cache${sep}asa-server` });
+      const [baseDir, backupDir, steamcmd, asaCached, protonPath, logRoot] = await Promise.all([
+        getAppSetting("base_dir"),
+        getAppSetting("backup_dir"),
+        getAppSetting("steamcmd_path"),
+        getAppSetting("asa_cached_build_id"),
+        IS_LINUX ? getAppSetting("proton_path") : Promise.resolve(null),
+        tauriCmd.getLogStorageRoot().catch(() => ""),
+      ]);
+
+      setAsaBuild(asaCached || "—");
+
+      if (protonPath) {
+        const ver = protonPath.replace(/[/\\]$/, "").split(/[/\\]/).pop() ?? "";
+        setProtonVer(ver || "—");
+      }
+
+      const sep  = (baseDir ?? "").includes("\\") ? "\\" : "/";
+      const base = (baseDir ?? "").replace(/[/\\]$/, "");
+      setPaths({
+        baseDir:   baseDir   || "—",
+        backupDir: backupDir || "—",
+        steamcmd:  steamcmd  || "—",
+        dbPath:    base ? `${base}${sep}lokiasam${sep}lokiasam.db`           : "—",
+        cachePath: base ? `${base}${sep}lokiasam${sep}cache${sep}asa-server` : "—",
+        logRoot:   logRoot   || "—",
+      });
     })();
   }, []);
 
@@ -630,25 +666,67 @@ function AboutSection() {
     ? "~/.config/xyz.lokisoft.lokiasam/bootstrap.json"
     : "%APPDATA%\\xyz.lokisoft.lokiasam\\bootstrap.json";
 
-  const rows = [
-    { label: "Version",        value: appVersion },
-    { label: "Base Directory", value: paths.baseDir   || "—" },
-    { label: "Database",       value: paths.dbPath    || "—" },
-    { label: "Server Cache",   value: paths.cachePath || "—" },
-    { label: "Bootstrap",      value: bootstrapHint },
+  const appRows = [
+    { label: "Version",         value: appVersion },
+    { label: "ASA Cache Build", value: asaBuild },
+    ...(IS_LINUX ? [{ label: "Proton-GE", value: protonVersion }] : []),
   ];
 
+  const pathRows = [
+    { label: "Base Directory",   value: paths.baseDir },
+    { label: "Backup Directory", value: paths.backupDir },
+    { label: "SteamCMD",         value: paths.steamcmd },
+    { label: "Database",         value: paths.dbPath },
+    { label: "Server Cache",     value: paths.cachePath },
+    { label: "Log Storage",      value: paths.logRoot },
+    { label: "Bootstrap",        value: bootstrapHint },
+  ];
+
+  const handleCopy = () => {
+    const text = [
+      ...appRows.map((r) => `${r.label}: ${r.value}`),
+      "",
+      ...pathRows.map((r) => `${r.label}: ${r.value}`),
+    ].join("\n");
+    navigator.clipboard.writeText(text).catch(() => null);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <div className="space-y-3">
-      {rows.map(({ label, value }, i) => (
-        <div key={label}>
-          {i > 0 && <Separator className="mb-3" style={{ background: "var(--border)" }} />}
-          <div className="flex items-start justify-between gap-4 text-xs">
-            <span className="shrink-0 w-32" style={{ color: "var(--text-muted)" }}>{label}</span>
-            <span className="font-mono text-right break-all" style={{ color: "var(--text-primary)" }}>{value}</span>
-          </div>
+    <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
+      {/* Header */}
+      <div className="px-6 py-4 flex items-center gap-3 border-b" style={{ borderColor: "var(--border)" }}>
+        <Info className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>About</h2>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Application version and data paths.</p>
         </div>
-      ))}
+        <button
+          onClick={handleCopy}
+          title="Copy to clipboard"
+          className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer"
+          style={{
+            color:      copied ? "var(--neon-green)" : "var(--text-muted)",
+            background: copied ? "rgba(0,255,136,0.08)" : "transparent",
+            border:     `1px solid ${copied ? "rgba(0,255,136,0.3)" : "rgba(255,255,255,0.08)"}`,
+          }}
+        >
+          {copied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="p-6 space-y-4">
+        <div className="space-y-2.5">
+          {appRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
+        </div>
+        <Separator style={{ background: "var(--border)" }} />
+        <div className="space-y-2.5">
+          {pathRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
+        </div>
+      </div>
     </div>
   );
 }
@@ -880,9 +958,9 @@ function ServerUpdatesSection() {
 // ---------------------------------------------------------------------------
 
 const APP_UPDATE_MODE_OPTIONS = [
+  { value: "off",      label: "Disabled" },
   { value: "startup",  label: "On startup" },
   { value: "periodic", label: "On startup + hourly" },
-  { value: "off",      label: "Disabled" },
 ];
 
 function AppUpdateSection() {
@@ -934,6 +1012,12 @@ function AppUpdateSection() {
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
         Automatic update checks for LokiASAM itself. When an update is found, a notification appears with a Download &amp; Install button.
       </p>
+      <Button onClick={handleCheckNow} disabled={checking} size="sm" className="gap-1.5"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
+        {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+        Check for LokiASAM Update
+      </Button>
+      <Separator style={{ background: "var(--border)" }} />
       <div className="space-y-2">
         <Label style={{ color: "var(--text-primary)" }}>Check Frequency</Label>
         <div className="flex gap-2 flex-wrap">
@@ -949,12 +1033,6 @@ function AppUpdateSection() {
           ))}
         </div>
       </div>
-      <Separator style={{ background: "var(--border)" }} />
-      <Button onClick={handleCheckNow} disabled={checking} size="sm" className="gap-1.5"
-        style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
-        {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        Check for LokiASAM Update
-      </Button>
     </div>
   );
 }
@@ -1368,7 +1446,7 @@ function ProtonGeUpdateSection() {
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
         <Button onClick={handleCheckUpdate} disabled={checking || downloading} size="sm" className="gap-1.5"
-          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-cyan)" }}>
+          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Check for Update
         </Button>
@@ -1829,27 +1907,40 @@ export default function SettingsPage() {
   const [matrixRefreshKey, setMatrixRefreshKey] = useState(0);
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl">
-      <div>
+    <div className="h-full overflow-hidden flex flex-col gap-6">
+      <div className="shrink-0">
         <h1 className="text-2xl font-bold" style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}>Settings</h1>
         <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>Global application configuration.</p>
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-0 border-b" style={{ borderColor: "var(--border)" }}>
-        {TABS.map((tab) => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-            className="px-4 py-2.5 text-sm font-medium transition-colors relative"
-            style={{
-              color: activeTab === tab.id ? "var(--neon-purple)" : "var(--text-muted)",
-              borderBottom: activeTab === tab.id ? "2px solid var(--neon-purple)" : "2px solid transparent",
-              marginBottom: "-1px",
-            }}>
-            {tab.label}
-          </button>
-        ))}
+      <div
+        className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
+        style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        {TABS.map((tab) => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className="px-3 py-1.5 text-sm rounded-lg transition-all cursor-pointer"
+              style={{
+                color: active ? "var(--neon-purple)" : "var(--text-muted)",
+                background: active ? "rgba(var(--neon-purple-rgb),0.12)" : "transparent",
+                border: active ? "1px solid rgba(var(--neon-purple-rgb),0.3)" : "1px solid transparent",
+                fontWeight: active ? 600 : 400,
+                textShadow: active ? "var(--glow-purple)" : "none",
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
       {/* General tab */}
       {activeTab === "general" && (
         <div className="flex flex-col gap-6">
@@ -1943,12 +2034,13 @@ export default function SettingsPage() {
 
       {/* About tab */}
       {activeTab === "about" && (
-        <div className="flex flex-col gap-6">
-          <Section icon={Info} title="About" description="Application version and data paths.">
+        <div className="flex justify-center py-4">
+          <div className="w-full max-w-xl">
             <AboutSection />
-          </Section>
+          </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

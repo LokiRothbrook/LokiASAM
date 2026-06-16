@@ -313,9 +313,9 @@ export default function ClustersPage() {
   }, [queryClient]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <Network className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -343,6 +343,7 @@ export default function ClustersPage() {
         </Button>
       </div>
 
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
       {/* Cluster Grid */}
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -396,6 +397,7 @@ export default function ClustersPage() {
         onClose={() => setDeleteTarget(null)}
         onDeleted={refresh}
       />
+      </div>
     </div>
   );
 }

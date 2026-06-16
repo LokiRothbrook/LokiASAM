@@ -220,9 +220,9 @@ function NotificationsContent() {
   }, [refetch, severityFilter, eventTypeFilter]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-3 shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <Bell className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -244,7 +244,7 @@ function NotificationsContent() {
               variant="ghost"
               size="sm"
               className="text-xs gap-1.5"
-              style={{ color: "var(--text-muted)", border: "1px solid var(--border)" }}
+              style={{ color: "var(--neon-red, #f87171)", border: "1px solid rgba(255,0,85,0.3)" }}
             >
               <Trash2 className="w-3.5 h-3.5" />
               Delete…
@@ -285,7 +285,7 @@ function NotificationsContent() {
 
       {/* Filters */}
       <div
-        className="glass-card flex flex-wrap items-center gap-3 p-4 rounded-xl"
+        className="glass-card flex flex-wrap items-center gap-3 p-4 rounded-xl shrink-0"
         style={{ border: "1px solid var(--border)" }}
       >
         <Filter className="w-4 h-4 shrink-0" style={{ color: "var(--text-subtle)" }} />
@@ -329,6 +329,7 @@ function NotificationsContent() {
       </div>
 
       {/* List */}
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
       {filtered.length === 0 ? (
         <div
           className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-xl"
@@ -366,6 +367,7 @@ function NotificationsContent() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

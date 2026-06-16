@@ -482,9 +482,9 @@ export default function DashboardPage() {
   }, [servers, updatingAll, queryClient, enqueueStartup]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* ── Page header ── */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
+      <div className="flex items-start justify-between flex-wrap gap-3 shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <LayoutDashboard className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -531,6 +531,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
       {/* ── Needs Attention warning — only shown when servers are in a bad state ── */}
       {total > 0 && servers.some((s) => s.status === "crashed" || s.status === "error") && (
         <div className="flex flex-wrap gap-3">
@@ -623,6 +624,7 @@ export default function DashboardPage() {
         updates={pendingUpdates}
         onUpdateAll={runUpdateAll}
       />
+      </div>
     </div>
   );
 }
