@@ -64,10 +64,17 @@ export interface NotificationMatrixHandle {
 
 interface NotificationMatrixProps {
   onSaved?: () => void;
+  /** Called on every toggle with the full current channel→events map. When
+   *  provided the component skips the direct DB write (useful in the wizard
+   *  where the DB may not be initialised yet). */
+  onChange?: (events: Record<string, string[]>) => void;
+  /** Increment to force the component to re-query credential status from the
+   *  DB (e.g. after credentials are saved on the same page). */
+  refreshKey?: number;
 }
 
 export const NotificationMatrix = forwardRef<NotificationMatrixHandle, NotificationMatrixProps>(
-function NotificationMatrix({ onSaved }, ref) {
+function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
   const [channelEvents, setChannelEvents] = useState<Record<ChannelId, Set<NotificationEventType>>>({
     in_app:  new Set(CHANNEL_DEFAULTS.in_app),
     bell:    new Set(CHANNEL_DEFAULTS.bell),
@@ -96,16 +103,20 @@ function NotificationMatrix({ onSaved }, ref) {
       }
       const byChannel = Object.fromEntries(globalConfigs.map((c) => [c.channel, c]));
 
-      const next = { ...channelEvents };
-      for (const ch of ["bell", "desktop", "discord", "email"] as ChannelId[]) {
+      const next: Record<ChannelId, Set<NotificationEventType>> = {
+        in_app:  new Set(CHANNEL_DEFAULTS.in_app),
+        bell:    new Set(CHANNEL_DEFAULTS.bell),
+        desktop: new Set(CHANNEL_DEFAULTS.desktop),
+        discord: new Set(CHANNEL_DEFAULTS.discord),
+        email:   new Set(CHANNEL_DEFAULTS.email),
+      };
+      for (const ch of ["in_app", "bell", "desktop", "discord", "email"] as ChannelId[]) {
         const row = byChannel[ch];
         if (row) {
           const events: string[] = JSON.parse(row.events_json || "[]");
-          next[ch] = events.length === 0
-            ? new Set(ALL_EVENTS)
-            : new Set(events as NotificationEventType[]);
+          next[ch] = new Set(events as NotificationEventType[]);
         }
-        // No row → keep the default already in state
+        // No row → keep the default already in next (CHANNEL_DEFAULTS)
       }
       setChannelEvents(next);
 
@@ -122,10 +133,15 @@ function NotificationMatrix({ onSaved }, ref) {
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { loadState(); }, [loadState]);
+
+  // Re-query credential status whenever the parent signals a credential change.
+  useEffect(() => {
+    if (refreshKey !== undefined && refreshKey > 0) loadState();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   useImperativeHandle(ref, () => ({
     getChannelEvents: () =>
@@ -141,11 +157,20 @@ function NotificationMatrix({ onSaved }, ref) {
     } else {
       next.add(event);
     }
-    setChannelEvents((prev) => ({ ...prev, [channel]: next }));
-    saveGlobalChannelEvents(channel, [...next])
-      .then(() => onSaved?.())
-      .catch((err) => toast.error("Failed to save notification settings", { description: String(err) }));
-  }, [channelEvents, onSaved]);
+    const nextEvents = { ...channelEvents, [channel]: next };
+    setChannelEvents(nextEvents);
+
+    if (onChange) {
+      // Wizard mode: lift state up; caller handles persistence.
+      onChange(Object.fromEntries(
+        Object.entries(nextEvents).map(([ch, set]) => [ch, [...set]])
+      ));
+    } else {
+      saveGlobalChannelEvents(channel, [...next])
+        .then(() => onSaved?.())
+        .catch((err) => toast.error("Failed to save notification settings", { description: String(err) }));
+    }
+  }, [channelEvents, onChange, onSaved]);
 
   if (loading) {
     return (

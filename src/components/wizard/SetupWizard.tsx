@@ -38,7 +38,8 @@ import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
-import { NotificationMatrix, type NotificationMatrixHandle } from "@/components/shared/NotificationMatrix";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
@@ -1602,7 +1603,7 @@ function CertStep() {
   );
 }
 
-function NotificationsStep({ matrixRef }: { matrixRef: React.RefObject<NotificationMatrixHandle | null> }) {
+function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record<string, string[]>) => void }) {
   const {
     discordWebhook, setDiscordWebhook,
     smtpHost, setSmtpHost,
@@ -1792,7 +1793,7 @@ function NotificationsStep({ matrixRef }: { matrixRef: React.RefObject<Notificat
             Choose which events trigger each channel. Configure credentials above to unlock Discord and SMTP columns.
           </p>
         </div>
-        <NotificationMatrix ref={matrixRef} />
+        <NotificationMatrix onChange={onMatrixChange} />
       </div>
     </div>
   );
@@ -2243,7 +2244,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [saveError, setSaveError] = useState("");
   const [appVersion, setAppVersion] = useState("...");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const matrixRef = useRef<NotificationMatrixHandle | null>(null);
+  // Stores the wizard's notification matrix state as the user toggles checkboxes.
+  // Kept in a ref (not state) so navigating away from the notifications step
+  // doesn't lose the values when the step component unmounts and clears its ref.
+  const matrixEventsRef = useRef<Record<string, string[]> | null>(null);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
@@ -2353,7 +2357,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             id: crypto.randomUUID(), serverId: null, channel: "discord",
             enabled: true,
             configJson: JSON.stringify({ webhookUrl: discordWebhook }),
-            eventsJson: "[]",
+            eventsJson: JSON.stringify(Object.values(NOTIFICATION_EVENTS)),
           });
         }
 
@@ -2368,14 +2372,16 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               fromAddress: smtpFrom, toAddress: smtpTo,
               useTls: smtpUseTls,
             }),
-            eventsJson: "[]",
+            eventsJson: JSON.stringify(Object.values(NOTIFICATION_EVENTS)),
           });
         }
 
-        // Save notification matrix channel event preferences
-        const channelEvents = matrixRef.current?.getChannelEvents();
-        if (channelEvents) {
-          for (const [channel, events] of Object.entries(channelEvents)) {
+        // Save notification matrix channel event preferences.
+        // matrixEventsRef is populated by the onChange callback in NotificationsStep;
+        // if the user never touched the matrix it stays null and we skip
+        // (channels will fall back to their default all-events-on behaviour).
+        if (matrixEventsRef.current) {
+          for (const [channel, events] of Object.entries(matrixEventsRef.current)) {
             await saveGlobalChannelEvents(channel, events);
           }
         }
@@ -2424,7 +2430,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
         <CertStep key="cert" />,
-        <NotificationsStep key="notifications" matrixRef={matrixRef} />,
+        <NotificationsStep key="notifications" onMatrixChange={(e) => { matrixEventsRef.current = e; }} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,
@@ -2436,7 +2442,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <CertStep key="cert" />,
-        <NotificationsStep key="notifications" matrixRef={matrixRef} />,
+        <NotificationsStep key="notifications" onMatrixChange={(e) => { matrixEventsRef.current = e; }} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,

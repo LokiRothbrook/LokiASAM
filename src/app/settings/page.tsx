@@ -1449,7 +1449,7 @@ const GLOBAL_CHANNEL_DEFS = [
   },
 ];
 
-function GlobalNotificationsSection() {
+function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?: () => void }) {
   const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
   const [saving, setSaving]   = useState<string | null>(null);
 
@@ -1480,6 +1480,7 @@ function GlobalNotificationsSection() {
       });
       await loadConfigs();
       toast.success("Notification config saved.");
+      onCredentialSaved?.();
     } catch (e) { toast.error(`Failed to save: ${e}`); }
     finally { setSaving(null); }
   }
@@ -1825,6 +1826,7 @@ type TabId = typeof TABS[number]["id"];
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("general");
+  const [matrixRefreshKey, setMatrixRefreshKey] = useState(0);
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
@@ -1931,10 +1933,10 @@ export default function SettingsPage() {
       {activeTab === "notifications" && (
         <div className="flex flex-col gap-6">
           <Section icon={Bell} title="Notification Channels" description="Configure Discord webhook and SMTP email credentials. Configuring a channel unlocks it in the event matrix below.">
-            <GlobalNotificationsSection />
+            <GlobalNotificationsSection onCredentialSaved={() => setMatrixRefreshKey((k) => k + 1)} />
           </Section>
           <Section icon={Bell} title="Notification Events" description="Choose which events trigger each channel. Configure Discord and SMTP credentials above to unlock those columns.">
-            <NotificationMatrix />
+            <NotificationMatrix refreshKey={matrixRefreshKey} />
           </Section>
         </div>
       )}
