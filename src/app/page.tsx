@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  Plus, Server, Activity, PowerOff, Power, RefreshCw, Upload,
+  Plus, Server, Activity, RefreshCw, Upload,
   ArrowUp, Loader2, CheckCircle2, AlertTriangle, LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -403,9 +403,7 @@ export default function DashboardPage() {
   const [updatingAll, setUpdatingAll]              = useState(false);
   const queryClient = useQueryClient();
 
-  const total   = servers.length;
-  const running = servers.filter((s) => s.status === "running").length;
-  const stopped = total - running;
+  const total = servers.length;
 
   // Build the ServerUpdateInfo list from the live servers data.
   const serversWithUpdates: ServerUpdateInfo[] = servers
@@ -533,22 +531,15 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Global stats bar ── */}
-      {total > 0 && (
+      {/* ── Needs Attention warning — only shown when servers are in a bad state ── */}
+      {total > 0 && servers.some((s) => s.status === "crashed" || s.status === "error") && (
         <div className="flex flex-wrap gap-3">
-          <StatCard label="Total Servers" value={total} icon={Server}   color="var(--neon-purple)" />
-          <StatCard label="Running"       value={running} icon={Power}  color="var(--neon-green)"
-            sub={running === total ? "all online" : undefined} />
-          <StatCard label="Stopped"       value={stopped} icon={PowerOff}
-            color={stopped > 0 ? "var(--text-muted)" : "var(--neon-green)"} />
-          {servers.some((s) => s.status === "crashed" || s.status === "error") && (
-            <StatCard
-              label="Needs Attention"
-              value={servers.filter((s) => s.status === "crashed" || s.status === "error").length}
-              icon={Activity}
-              color="var(--neon-red)"
-            />
-          )}
+          <StatCard
+            label="Needs Attention"
+            value={servers.filter((s) => s.status === "crashed" || s.status === "error").length}
+            icon={Activity}
+            color="var(--neon-red)"
+          />
         </div>
       )}
 

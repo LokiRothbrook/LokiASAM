@@ -505,15 +505,6 @@ export function ServerCard({ server }: Props) {
                   : `Updating in ${formatCountdown(countdown.remainingSecs)}`
                 : undefined}
             />
-            {hasUpdateAvailable && (
-              <span
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
-                style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}
-              >
-                <ArrowUp className="w-2.5 h-2.5" />
-                Update
-              </span>
-            )}
           </div>
           <div
             className="flex items-center gap-1 mt-1 text-xs"
