@@ -2450,7 +2450,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col"
+      className="fixed inset-0 z-50 flex flex-col overflow-y-auto"
       style={{ background: "var(--background)" }}
     >
       {/* Background texture */}
@@ -2492,17 +2492,15 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       </div>
 
       {/* Main content card */}
-      <div className="relative z-10 flex-1 flex items-center justify-center p-6">
+      <div className="relative z-10 flex-1 flex items-stretch justify-center p-6">
         <div
-          className="w-full max-w-2xl flex flex-col"
+          className="w-full max-w-2xl flex flex-col min-h-0"
           style={{
             background: "var(--glass-bg)",
             border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
             borderRadius: "1rem",
             backdropFilter: "blur(12px)",
             boxShadow: "0 0 60px rgba(var(--neon-purple-rgb),0.1)",
-            maxHeight: "calc(100vh - 160px)",
-            minHeight: "420px",
           }}
         >
           <div className="p-8 flex-1 flex flex-col min-h-0 overflow-hidden">
