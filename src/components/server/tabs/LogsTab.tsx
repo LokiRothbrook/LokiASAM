@@ -10,8 +10,9 @@ import { Input } from "@/components/ui/input";
 import { tauriCmd } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 import type {
-  ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo,
+  ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo, RconLogLine,
 } from "@/lib/tauri-commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
   getKnownPlayers, getPlayerKnownIps, getPlayerConnectionHistory, getPossibleAlts,
   type PlayerConnectionRow,
@@ -733,6 +734,19 @@ function ChatPanel({ server }: { server: ServerRow }) {
     if (chatLogs.length > 0 && !selected) openFile(chatLogs[0]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatLogs]);
+
+  // Live-append incoming chat lines so the panel updates without manual refresh.
+  const todayFilename = `chat_${new Date().toISOString().slice(0, 10)}.log`;
+  useTauriEvent<RconLogLine>(`rcon://log/${server.id}`, (line) => {
+    if (line.kind !== "chat") return;
+    if (selected?.filename === todayFilename) {
+      // Append to the currently-visible file content.
+      setLines((prev) => [...prev, line.text]);
+    } else if (!chatLogs.some((cl) => cl.filename === todayFilename)) {
+      // Today's file just appeared for the first time — refresh the list so it shows.
+      load();
+    }
+  });
 
   const visibleLines = search
     ? lines.filter((l) => l.toLowerCase().includes(search.toLowerCase()))
