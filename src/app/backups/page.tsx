@@ -35,7 +35,7 @@ export default function BackupsPage() {
   };
 
   return (
-    <div className="h-full overflow-auto flex flex-col gap-4">
+    <div className="h-full overflow-hidden flex flex-col gap-4">
       {/* Page header */}
       <div className="flex items-center gap-3 shrink-0">
         <Archive
@@ -102,7 +102,7 @@ export default function BackupsPage() {
 
       {/* Backup content */}
       {selectedServer ? (
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <BackupsTab server={selectedServer} />
         </div>
       ) : !isLoading && servers.length === 0 ? (

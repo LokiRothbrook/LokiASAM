@@ -1018,7 +1018,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const editScheduleBtn = onNavigateToAutomation ? handleEditSchedule : undefined;
 
   return (
-    <div className="space-y-4 pr-2">
+    <div className="space-y-4 pr-6">
       {/* Progress overlay */}
       {progress.active && (
         <div className="glass-card rounded-xl p-4 space-y-2"

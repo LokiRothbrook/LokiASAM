@@ -859,7 +859,7 @@ export function ConfigTab({ server }: Props) {
   const quickGroups = INI_FIELD_GROUPS.filter((g) => QUICK_EDIT_GROUP_IDS.includes(g.id));
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 pr-6">
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">

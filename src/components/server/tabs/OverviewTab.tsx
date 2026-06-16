@@ -760,7 +760,7 @@ export function OverviewTab({ server }: Props) {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 pr-6">
 
       {/* ── Quick actions ── */}
       {/* Structured as two non-wrapping groups so the right-side buttons

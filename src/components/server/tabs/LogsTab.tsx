@@ -507,7 +507,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-6">
         {loading ? (
           <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
         ) : totalFiles === 0 ? (
@@ -662,7 +662,7 @@ function CrashesPanel({ server }: { server: ServerRow }) {
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
         {loading ? (
           <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
         ) : crashes.length === 0 ? (

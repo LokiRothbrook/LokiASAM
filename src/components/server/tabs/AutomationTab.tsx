@@ -1150,7 +1150,7 @@ export function AutomationTab({ server }: Props) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pr-6">
       <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-xs"
         style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", color: "var(--text-muted)" }}>
         <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
