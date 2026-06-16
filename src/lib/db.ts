@@ -163,15 +163,6 @@ async function runMigrations(db: Database): Promise<void> {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Reserved for future file-integrity tracking — not yet used by any query.
-  await db.execute(`CREATE TABLE IF NOT EXISTS file_cache (
-    cache_key    TEXT PRIMARY KEY,
-    file_path    TEXT NOT NULL,
-    size_bytes   INTEGER NOT NULL DEFAULT 0,
-    sha256_hash  TEXT,
-    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-
   // Indexes
   await db.execute("CREATE INDEX IF NOT EXISTS idx_server_mods_server_id ON server_mods(server_id)");
   await db.execute("CREATE INDEX IF NOT EXISTS idx_schedules_server_id ON schedules(server_id)");
@@ -186,8 +177,6 @@ async function runMigrations(db: Database): Promise<void> {
     ('base_dir', ''),
     ('backup_dir', ''),
     ('steamcmd_path', ''),
-    ('steamcmd_mode', 'auto'),
-    ('app_version', '0.1.0'),
     ('theme_preset', 'storm'),
     ('theme_accent', 'blue'),
     ('asa_update_available', 'false'),

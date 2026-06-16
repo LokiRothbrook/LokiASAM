@@ -1,24 +1,14 @@
 use crate::state::{scheduler::SchedulerState, AppState};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{sleep, Duration};
-use uuid::Uuid;
 
 use super::server::{inner_start_server, inner_stop_server, StartServerParams};
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ScheduleConfig {
-    pub server_id: String,
-    pub schedule_type: String,
-    pub cron_expression: String,
-    pub config_json: String,
-}
 
 /// Emitted as the payload of `scheduler://fired` so the frontend can update
 /// SQLite (last_run / next_run) and requeue the entry via sync_schedules.
@@ -38,25 +28,6 @@ pub struct SchedulerFiredPayload {
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
-
-/// Generate and return a UUID for a new schedule.
-/// All schedule persistence is handled by the frontend via SQLite (db.ts).
-#[tauri::command]
-pub async fn create_schedule(_config: ScheduleConfig) -> Result<String, String> {
-    Ok(Uuid::new_v4().to_string())
-}
-
-/// No-op — the frontend removes the schedule record from SQLite, then calls sync_schedules.
-#[tauri::command]
-pub async fn delete_schedule(_schedule_id: String) -> Result<(), String> {
-    Ok(())
-}
-
-/// No-op — the frontend updates the enabled flag in SQLite, then calls sync_schedules.
-#[tauri::command]
-pub async fn toggle_schedule(_schedule_id: String, _enabled: bool) -> Result<(), String> {
-    Ok(())
-}
 
 /// Atomically replace all active schedule entries.
 ///

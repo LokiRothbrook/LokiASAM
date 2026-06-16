@@ -482,7 +482,6 @@ pub fn run() {
             commands::logs::list_chat_logs,
             commands::logs::read_chat_log,
             commands::logs::cleanup_logs,
-            commands::logs::get_log_stats,
             commands::logs::get_log_storage_root,
             // Config / INI
             commands::config::read_server_config,
@@ -548,9 +547,6 @@ pub fn run() {
             commands::cluster::add_server_to_cluster,
             commands::cluster::remove_server_from_cluster,
             // Scheduler
-            commands::scheduler::create_schedule,
-            commands::scheduler::delete_schedule,
-            commands::scheduler::toggle_schedule,
             commands::scheduler::sync_schedules,
         ])
         .run(tauri::generate_context!())

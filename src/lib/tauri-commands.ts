@@ -166,15 +166,6 @@ export interface ChatLogInfo {
   fullPath: string;
 }
 
-export interface LogStats {
-  shootergameArchiveCount: number;
-  shootergameTotalBytes: number;
-  chatLogCount: number;
-  chatTotalBytes: number;
-  crashCount: number;
-  storageRoot: string;
-}
-
 /** Emitted on rcon://status/{id} and rcon://status-any when connection state changes. */
 export interface RconStatusPayload {
   serverId: string;
@@ -273,13 +264,6 @@ export interface MigrateProgress {
   phase: string;
   message: string;
   percent: number;
-}
-
-export interface ScheduleConfig {
-  serverId: string;
-  scheduleType: string;
-  cronExpression: string;
-  configJson: string;
 }
 
 /** One fully-hydrated schedule entry sent to Rust via sync_schedules. */
@@ -506,8 +490,6 @@ export const tauriCmd = {
   // Log maintenance
   cleanupLogs: (serverId: string, olderThanDays: number) =>
     invoke<number>("cleanup_logs", { serverId, olderThanDays }),
-  getLogStats: (serverId: string) =>
-    invoke<LogStats>("get_log_stats", { serverId }),
   getLogStorageRoot: () =>
     invoke<string>("get_log_storage_root"),
 
@@ -698,10 +680,6 @@ export const tauriCmd = {
     invoke<void>("remove_server_from_cluster", { serverId }),
 
   // Scheduler
-  createSchedule: (config: ScheduleConfig) => invoke<string>("create_schedule", { config }),
-  deleteSchedule: (scheduleId: string) => invoke<void>("delete_schedule", { scheduleId }),
-  toggleSchedule: (scheduleId: string, enabled: boolean) =>
-    invoke<void>("toggle_schedule", { scheduleId, enabled }),
   /** Atomically replace all active schedule entries in the Rust scheduler. */
   syncSchedules: (entries: ScheduleEntry[]) =>
     invoke<void>("sync_schedules", { entries }),
