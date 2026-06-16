@@ -462,6 +462,23 @@ async function runMigrations(db: Database): Promise<void> {
       );
     }
   }
+
+  // ── Migration 015: build version cache + per-server installed_build_id ─────
+  // build_version_cache: maps Steam build IDs to human-readable version strings
+  //   (e.g. "49.23"). Populated lazily: "internet" source comes from the Steam
+  //   News API right after a cache update; "server" source from A2S_INFO when
+  //   the server actually starts. "server" always wins over "internet".
+  // installed_build_id: the build ID currently installed at this server's path,
+  //   populated by Rust on install/update.
+  await db.execute(`CREATE TABLE IF NOT EXISTS build_version_cache (
+    build_id     TEXT PRIMARY KEY,
+    game_version TEXT,
+    source       TEXT NOT NULL DEFAULT 'internet',
+    fetched_at   INTEGER NOT NULL DEFAULT 0
+  )`);
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN installed_build_id TEXT");
+  } catch { /* already exists */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -498,8 +515,15 @@ export interface ServerRow {
   update_message: string;            // template with {time} placeholder
   update_cancel_message: string;
   auto_start: number;                // 0 | 1 — always start on app launch
+  installed_build_id: string | null; // populated by Rust on install/update
   created_at: string;
   updated_at: string;
+}
+
+export interface BuildVersionRow {
+  build_id: string;
+  game_version: string | null;
+  source: string; // "internet" | "server"
 }
 
 export interface UpdateAutomation {
@@ -824,6 +848,14 @@ export async function setServerUpdateAvailable(
   await db.execute(
     "UPDATE servers SET update_available = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [available ? 1 : 0, id]
+  );
+}
+
+export async function setServerInstalledBuild(id: string, buildId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET installed_build_id = ? WHERE id = ?",
+    [buildId, id]
   );
 }
 
@@ -1939,4 +1971,40 @@ export async function removeFirewallRule(port: number, protocol: string): Promis
     "DELETE FROM firewall_rules WHERE port = ? AND protocol = ?",
     [port, protocol]
   );
+}
+
+// ---------------------------------------------------------------------------
+// build_version_cache
+// ---------------------------------------------------------------------------
+
+export async function getBuildVersionCache(): Promise<Map<string, BuildVersionRow>> {
+  const db = await getDb();
+  const rows = await db.select<BuildVersionRow[]>(
+    "SELECT build_id, game_version, source FROM build_version_cache"
+  );
+  return new Map(rows.map((r) => [r.build_id, r]));
+}
+
+export async function getBuildVersion(buildId: string): Promise<BuildVersionRow | null> {
+  const db = await getDb();
+  const rows = await db.select<BuildVersionRow[]>(
+    "SELECT build_id, game_version, source FROM build_version_cache WHERE build_id = ?",
+    [buildId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Format a build ID + optional version into a display string.
+ *  Known version:  "V49.23 (23691984)"
+ *  Unknown:        "Build 23691984"
+ *  No build ID:    "—"
+ */
+export function formatServerVersion(
+  installedBuildId: string | null | undefined,
+  versionCache: Map<string, BuildVersionRow>
+): string {
+  if (!installedBuildId) return "—";
+  const entry = versionCache.get(installedBuildId);
+  if (entry?.game_version) return `V${entry.game_version} (${installedBuildId})`;
+  return `Build ${installedBuildId}`;
 }

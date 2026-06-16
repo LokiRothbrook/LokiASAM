@@ -17,13 +17,14 @@ import { LogsTab } from "@/components/server/tabs/LogsTab";
 import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
-import { getServer } from "@/lib/db";
+import { getServer, formatServerVersion } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useQueryClient } from "@tanstack/react-query";
 import { updateServerStatus } from "@/lib/db";
 import type { ServerRow } from "@/lib/db";
 import type { ServerStatus } from "@/lib/tauri-commands";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 const TABS = [
   { value: "overview",   label: "Overview",   icon: LayoutDashboard },
@@ -55,6 +56,7 @@ export default function ServerDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [activeTab, setActiveTab] = useState<TabValue>(tabParam);
+  const versionCache = useBuildVersionCache();
 
   // ── Load server row ──────────────────────────────────────────────────────
   const reload = async () => {
@@ -150,8 +152,14 @@ export default function ServerDetailPage() {
             <ServerStatusBadge status={server.status} large />
           </div>
           <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
-            {mapDisplay} · Port {server.port} · RCON {server.rcon_port} · ID{" "}
-            <span className="font-mono">{server.id.slice(0, 8)}</span>
+            {mapDisplay} · Port {server.port} · RCON {server.rcon_port}
+            {server.installed_build_id && (
+              <>
+                {" "}·{" "}
+                <span className="font-mono">{formatServerVersion(server.installed_build_id, versionCache)}</span>
+              </>
+            )}
+            {" "}· ID <span className="font-mono">{server.id.slice(0, 8)}</span>
           </p>
         </div>
       </div>

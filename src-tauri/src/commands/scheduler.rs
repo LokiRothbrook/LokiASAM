@@ -197,6 +197,11 @@ async fn fire_global_update_check(
     let new_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
         .unwrap_or_else(|| old_build.clone());
 
+    // Trigger internet version fetch for a newly-downloaded build
+    if new_build != "0" {
+        crate::commands::build_version::maybe_fetch_internet(app, &new_build);
+    }
+
     let _ = app.emit(
         crate::events::ASA_UPDATE_CHECK,
         serde_json::json!({
@@ -301,6 +306,13 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     .await
     .map_err(|e| format!("Sync task panicked: {e}"))?
     .map_err(|e| format!("Failed to sync server files: {e}"))?;
+
+    // Record updated build ID and trigger internet version fetch
+    let acf = std::path::Path::new(&entry.install_path)
+        .join(crate::commands::steamcmd::ACF_REL_PATH);
+    if let Some(build_id) = crate::commands::steamcmd::read_acf_build_id(&acf) {
+        crate::commands::build_version::record_install(app, &entry.server_id, &build_id);
+    }
 
     let _ = app.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
         "updateApplied": true,

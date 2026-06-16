@@ -6,7 +6,7 @@
  * update_available column in the DB and optionally fires notifications.
  */
 
-import { getServers, getAppSetting, setServerUpdateAvailable, setAppSetting } from "@/lib/db";
+import { getServers, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -88,6 +88,12 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
         const installed = await tauriCmd.getInstalledBuildId(server.install_path);
         const isOutdated = !!installed && installed !== cachedBuildId;
         const wasAlreadyFlagged = server.update_available === 1;
+
+        // Persist installed_build_id to DB for display (handles existing servers
+        // that pre-date the build version cache feature)
+        if (installed && server.installed_build_id !== installed) {
+          await setServerInstalledBuild(server.id, installed).catch(() => null);
+        }
 
         await setServerUpdateAvailable(server.id, isOutdated);
 

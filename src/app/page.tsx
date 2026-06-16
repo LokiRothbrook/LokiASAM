@@ -27,6 +27,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { toast } from "sonner";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
+import { formatServerVersion } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
 // UpdateStatusChip — Check for Updates button + post-check dialogs
@@ -173,6 +175,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const anyRunning = updates.some((s) => s.status === "running");
   const anyStarting = updates.some((s) => s.status === "starting");
+  const versionCache = useBuildVersionCache();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -198,8 +201,8 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
               <div>
                 <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
                 {s.installedBuild !== "unknown" && (
-                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
-                    {s.installedBuild} → {s.cachedBuild}
+                  <span className="text-xs ml-2 font-mono" style={{ color: "var(--text-muted)" }}>
+                    {formatServerVersion(s.installedBuild, versionCache)} → {formatServerVersion(s.cachedBuild, versionCache)}
                   </span>
                 )}
               </div>
@@ -290,6 +293,7 @@ interface UpdateAllDialogProps {
 function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }: UpdateAllDialogProps) {
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const anyRunning = updates.some((s) => s.status === "running");
+  const versionCache = useBuildVersionCache();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -314,8 +318,8 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
               <div>
                 <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
                 {s.installedBuild !== "unknown" && (
-                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
-                    {s.installedBuild} → {s.cachedBuild}
+                  <span className="text-xs ml-2 font-mono" style={{ color: "var(--text-muted)" }}>
+                    {formatServerVersion(s.installedBuild, versionCache)} → {formatServerVersion(s.cachedBuild, versionCache)}
                   </span>
                 )}
               </div>

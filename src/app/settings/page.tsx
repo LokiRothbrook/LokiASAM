@@ -24,9 +24,10 @@ import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import {
   getAppSetting, setAppSetting,
   saveNotificationConfig, getNotificationConfigs,
-  getServers,
+  getServers, formatServerVersion,
   type NotificationConfigRow,
 } from "@/lib/db";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
@@ -620,6 +621,17 @@ function AboutRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function AboutSectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <span className="text-xs font-semibold tracking-wide uppercase" style={{ color: "var(--neon-purple)" }}>
+        {children}
+      </span>
+      <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+    </div>
+  );
+}
+
 function AboutSection() {
   const [appVersion, setAppVersion]   = useState("…");
   const [asaBuild, setAsaBuild]       = useState("—");
@@ -629,6 +641,7 @@ function AboutSection() {
     dbPath: "—", cachePath: "—", logRoot: "—",
   });
   const [copied, setCopied] = useState(false);
+  const versionCache = useBuildVersionCache();
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("0.10.0"));
@@ -666,9 +679,14 @@ function AboutSection() {
     ? "~/.config/xyz.lokisoft.lokiasam/bootstrap.json"
     : "%APPDATA%\\xyz.lokisoft.lokiasam\\bootstrap.json";
 
-  const appRows = [
-    { label: "Version",         value: appVersion },
-    { label: "ASA Cache Build", value: asaBuild },
+  // Resolve the human-readable ASA version from the cache build ID
+  const asaVersionDisplay = asaBuild !== "—"
+    ? formatServerVersion(asaBuild, versionCache)
+    : "—";
+
+  const versionRows = [
+    { label: "LokiASAM",         value: `v${appVersion}` },
+    { label: "ASA Server Cache", value: asaVersionDisplay },
     ...(IS_LINUX ? [{ label: "Proton-GE", value: protonVersion }] : []),
   ];
 
@@ -684,9 +702,11 @@ function AboutSection() {
 
   const handleCopy = () => {
     const text = [
-      ...appRows.map((r) => `${r.label}: ${r.value}`),
+      "Versions:",
+      ...versionRows.map((r) => `  ${r.label}: ${r.value}`),
       "",
-      ...pathRows.map((r) => `${r.label}: ${r.value}`),
+      "Directories:",
+      ...pathRows.map((r) => `  ${r.label}: ${r.value}`),
     ].join("\n");
     navigator.clipboard.writeText(text).catch(() => null);
     setCopied(true);
@@ -718,11 +738,13 @@ function AboutSection() {
       </div>
 
       {/* Content */}
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-3">
+        <AboutSectionLabel>Versions</AboutSectionLabel>
         <div className="space-y-2.5">
-          {appRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
+          {versionRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
         </div>
-        <Separator style={{ background: "var(--border)" }} />
+
+        <AboutSectionLabel>Directories</AboutSectionLabel>
         <div className="space-y-2.5">
           {pathRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
         </div>

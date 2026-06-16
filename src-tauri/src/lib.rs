@@ -457,6 +457,8 @@ pub fn run() {
             commands::steamcmd::update_cache,
             commands::steamcmd::apply_cache_to_server,
             commands::steamcmd::detect_server_install,
+            // Build version cache
+            commands::build_version::fetch_build_version,
             // RCON
             commands::rcon::rcon_connect,
             commands::rcon::rcon_send,

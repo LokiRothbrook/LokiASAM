@@ -398,3 +398,60 @@ pub fn log_notification(conn: &Connection, n: &NotifInsert) -> Result<(), String
     .map_err(|e| format!("log_notification failed: {e}"))?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// build_version_cache
+// ---------------------------------------------------------------------------
+
+/// Returns the cached (game_version, source) for a build_id, if present.
+pub fn get_build_game_version(conn: &Connection, build_id: &str) -> Option<(Option<String>, String)> {
+    conn.query_row(
+        "SELECT game_version, source FROM build_version_cache WHERE build_id = ?1",
+        [build_id],
+        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+    )
+    .ok()
+}
+
+/// Upsert a (build_id → game_version) entry. "server" source always wins;
+/// never downgrades an existing "server" entry to "internet".
+pub fn upsert_build_game_version(
+    conn: &Connection,
+    build_id: &str,
+    version: Option<&str>,
+    source: &str,
+) -> Result<(), String> {
+    // Don't overwrite a server-confirmed entry with an internet one.
+    if source != "server" {
+        let existing: Option<String> = conn.query_row(
+            "SELECT source FROM build_version_cache WHERE build_id = ?1",
+            [build_id],
+            |row| row.get(0),
+        ).ok();
+        if existing.as_deref() == Some("server") {
+            return Ok(());
+        }
+    }
+
+    conn.execute(
+        "INSERT INTO build_version_cache (build_id, game_version, source, fetched_at) \
+         VALUES (?1, ?2, ?3, strftime('%s','now')) \
+         ON CONFLICT(build_id) DO UPDATE SET \
+           game_version = excluded.game_version, \
+           source = excluded.source, \
+           fetched_at = excluded.fetched_at",
+        rusqlite::params![build_id, version, source],
+    )
+    .map_err(|e| format!("upsert_build_game_version failed: {e}"))?;
+    Ok(())
+}
+
+/// Update the installed_build_id column for a specific server.
+pub fn set_server_installed_build(conn: &Connection, server_id: &str, build_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE servers SET installed_build_id = ?1 WHERE id = ?2",
+        [build_id, server_id],
+    )
+    .map_err(|e| format!("set_server_installed_build failed: {e}"))?;
+    Ok(())
+}

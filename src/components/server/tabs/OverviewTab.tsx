@@ -34,6 +34,8 @@ import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
+import { formatServerVersion } from "@/lib/db";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
 import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
@@ -465,6 +467,7 @@ export function OverviewTab({ server }: Props) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
+  const versionCache = useBuildVersionCache();
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
   const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
@@ -988,6 +991,14 @@ export function OverviewTab({ server }: Props) {
         </div>
 
         <div className="mt-4 pt-3 flex items-center gap-6 flex-wrap" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          {server.installed_build_id && (
+            <div className="min-w-0">
+              <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>Installed Version</div>
+              <div className="font-mono text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
+                {formatServerVersion(server.installed_build_id, versionCache)}
+              </div>
+            </div>
+          )}
           <div className="min-w-0">
             <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>Server UUID</div>
             <div className="font-mono text-xs" style={{ color: "var(--text-primary)", opacity: 0.7 }}>{server.id}</div>

@@ -689,6 +689,9 @@ async fn inner_start_server_with_state(
                     if buf.contains(READY_MSG) {
                         confirmed2.store(true, Ordering::Relaxed);
                         confirm_running(&handle2, &sid2);
+                        crate::commands::build_version::maybe_capture_server_version(
+                            &handle2, &sid2, query_port2,
+                        );
                         return;
                     }
                     if buf.contains("Error querying server mods: ApiError: Failed (serverUnreachable)") {
@@ -737,6 +740,9 @@ async fn inner_start_server_with_state(
         if log_confirmed {
             confirmed2.store(true, Ordering::Relaxed);
             confirm_running(&handle2, &sid2);
+            crate::commands::build_version::maybe_capture_server_version(
+                &handle2, &sid2, query_port2,
+            );
             return;
         }
 
@@ -745,6 +751,9 @@ async fn inner_start_server_with_state(
             if try_source_query_local(query_port2).await {
                 confirmed2.store(true, Ordering::Relaxed);
                 confirm_running(&handle2, &sid2);
+                crate::commands::build_version::maybe_capture_server_version(
+                    &handle2, &sid2, query_port2,
+                );
                 return;
             }
             sleep(Duration::from_secs(5)).await;
@@ -753,6 +762,9 @@ async fn inner_start_server_with_state(
         // 3. Last resort — promote regardless.
         confirmed2.store(true, Ordering::Relaxed);
         confirm_running(&handle2, &sid2);
+        crate::commands::build_version::maybe_capture_server_version(
+            &handle2, &sid2, query_port2,
+        );
     });
 
     Ok(pid)

@@ -395,6 +395,10 @@ export const tauriCmd = {
   /** Inspect an existing folder: checks for the server exe and parses INI files. */
   detectServerInstall: (installPath: string) =>
     invoke<DetectedServerConfig>("detect_server_install", { installPath }),
+  /** Fetch game version for a build ID from the Steam News API and store it.
+   *  Returns the version string (e.g. "49.23") or null if unavailable. */
+  fetchBuildVersion: (buildId: string) =>
+    invoke<string | null>("fetch_build_version", { buildId }),
 
   // RCON — connection
   rconConnect: (serverId: string, host: string, port: number, password: string) =>

@@ -60,6 +60,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { toast } from "sonner";
 import type { ServerRow } from "@/lib/db";
+import { formatServerVersion } from "@/lib/db";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 interface Props {
   server: ServerRow;
@@ -114,6 +116,7 @@ export function ServerCard({ server }: Props) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
+  const versionCache = useBuildVersionCache();
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const noRetry = useAppStore((s) => !!s.noRetryServerIds[server.id]);
   const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
@@ -514,6 +517,12 @@ export function ServerCard({ server }: Props) {
             <span>{mapDisplay}</span>
             <span className="mx-1 opacity-40">·</span>
             <span>:{server.port}</span>
+            {server.installed_build_id && (
+              <>
+                <span className="mx-1 opacity-40">·</span>
+                <span className="font-mono">{formatServerVersion(server.installed_build_id, versionCache)}</span>
+              </>
+            )}
           </div>
         </div>
         <ServerActionMenu server={server} />
