@@ -255,7 +255,14 @@ pub fn run() {
 
                 loop {
                     crate::commands::backup_manager::execute_tick(&backup_tick_handle).await;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                    // Re-anchor to the next wall-clock hour boundary after each
+                    // tick so backup execution time does not cause cumulative drift.
+                    let now_secs = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let secs_until_next_hour = 3600 - (now_secs % 3600);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(secs_until_next_hour)).await;
                 }
             });
 
