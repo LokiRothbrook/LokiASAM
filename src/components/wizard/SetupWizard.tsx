@@ -25,13 +25,16 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
-  X, BookOpen, ShieldCheck,
+  X, BookOpen, ShieldCheck, Trash2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
 import { useAppStore } from "@/store/useAppStore";
@@ -125,6 +128,155 @@ function DirValidationRow({ result }: { result: DirCheckResult }) {
         </p>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WipeLokiAsamDialog
+// ---------------------------------------------------------------------------
+
+interface WipeLokiAsamDialogProps {
+  open: boolean;
+  path: string;
+  onClose: () => void;
+  onWiped: () => void;
+}
+
+function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialogProps) {
+  const [fullWipe, setFullWipe] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [wiping, setWiping] = useState(false);
+
+  // When the outer dialog closes, reset state.
+  useEffect(() => {
+    if (!open) { setFullWipe(false); setConfirmOpen(false); setWiping(false); }
+  }, [open]);
+
+  const handleFullWipeToggle = () => {
+    if (!fullWipe) {
+      // Require the secondary confirmation before checking the box.
+      setConfirmOpen(true);
+    } else {
+      setFullWipe(false);
+    }
+  };
+
+  const handleConfirmFullWipe = () => {
+    setConfirmOpen(false);
+    setFullWipe(true);
+  };
+
+  const handleWipe = async () => {
+    setWiping(true);
+    try {
+      await tauriCmd.wipeLokiAsamDir(path, fullWipe);
+      toast.success(fullWipe ? "Directory wiped — ready for a clean install." : "LokiASAM data removed — ready for a clean install.");
+      onWiped();
+      onClose();
+    } catch (e) {
+      toast.error("Failed to delete files", { description: String(e) });
+    } finally {
+      setWiping(false);
+    }
+  };
+
+  return (
+    <>
+      {/* Main delete dialog */}
+      <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+        <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "rgba(14,16,24,0.98)", border: "1px solid rgba(255,60,60,0.3)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
+              <Trash2 className="w-4 h-4" /> Delete LokiASAM Data
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm" style={{ color: "var(--text-muted)" }}>
+            <p>
+              This will remove the existing LokiASAM installation from <span className="font-mono text-xs break-all" style={{ color: "var(--text-primary)" }}>{path}</span>.
+            </p>
+
+            {/* Base case — always deleted */}
+            <div className="rounded-lg p-3 space-y-1" style={{ background: "rgba(255,60,60,0.08)", border: "1px solid rgba(255,60,60,0.2)" }}>
+              <p className="font-semibold text-xs uppercase tracking-wide" style={{ color: "#ff3c3c" }}>Will be deleted</p>
+              <p className="text-xs">The <span className="font-mono">lokiasam/</span> subfolder — database, config, and logs. Server game files are kept.</p>
+            </div>
+
+            {/* Full wipe toggle */}
+            <label
+              className="flex items-start gap-3 rounded-lg p-3 cursor-pointer transition-colors"
+              style={{
+                background: fullWipe ? "rgba(255,60,60,0.12)" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${fullWipe ? "rgba(255,60,60,0.4)" : "rgba(255,255,255,0.08)"}`,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={fullWipe}
+                onChange={handleFullWipeToggle}
+                className="mt-0.5 shrink-0 accent-red-500"
+              />
+              <div className="space-y-0.5">
+                <p className="font-semibold text-xs" style={{ color: fullWipe ? "#ff3c3c" : "var(--text-primary)" }}>
+                  Also delete server files, backups, and all other content
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Permanently removes everything inside this folder — including downloaded game files which may total hundreds of GB. Cannot be undone.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={onClose} disabled={wiping}
+              style={{ borderColor: "rgba(255,255,255,0.15)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button onClick={handleWipe} disabled={wiping}
+              style={{ background: "rgba(255,60,60,0.15)", borderColor: "rgba(255,60,60,0.5)", color: "#ff3c3c" }}>
+              {wiping
+                ? <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Deleting…</>
+                : fullWipe ? <><Trash2 className="w-3 h-3 mr-1.5" /> Delete Everything</> : <><Trash2 className="w-3 h-3 mr-1.5" /> Delete LokiASAM Data</>
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Nested confirmation for full wipe */}
+      <Dialog open={confirmOpen} onOpenChange={(v) => { if (!v) setConfirmOpen(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-sm" style={{ background: "rgba(14,16,24,0.98)", border: "1px solid rgba(255,60,60,0.5)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
+              <TriangleAlert className="w-4 h-4" /> Complete Data Loss Warning
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3 text-sm">
+            <p style={{ color: "var(--text-muted)" }}>
+              This will permanently delete <strong style={{ color: "var(--text-primary)" }}>everything</strong> inside:
+            </p>
+            <p className="font-mono text-xs break-all rounded px-2 py-1.5" style={{ background: "rgba(255,60,60,0.1)", color: "#ff3c3c" }}>
+              {path}
+            </p>
+            <p style={{ color: "var(--text-muted)" }}>
+              All old LokiASAM data, server configurations, downloaded game files, and backups will be gone permanently. This cannot be undone.
+            </p>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}
+              style={{ borderColor: "rgba(255,255,255,0.15)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmFullWipe}
+              style={{ background: "rgba(255,60,60,0.2)", borderColor: "rgba(255,60,60,0.6)", color: "#ff3c3c" }}>
+              <TriangleAlert className="w-3 h-3 mr-1.5" /> Yes, Delete Everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -241,7 +393,7 @@ function ThemeStep() {
                 }}
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "00ffff"}` }} />
+                  <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "4080ff"}` }} />
                   <span className="text-sm font-semibold" style={{ color: selected ? "var(--neon-purple)" : "#fff" }}>
                     {preset.label}
                     {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)" }}>Active</span>}
@@ -474,6 +626,7 @@ function BaseDirStep() {
   } = useSetupStore();
   const [dirResult, setDirResult] = useState<DirCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
+  const [wipeOpen, setWipeOpen] = useState(false);
   const [importChecking, setImportChecking] = useState(false);
   const [importError, setImportError] = useState("");
   const [importInfo, setImportInfo] = useState<{
@@ -490,7 +643,7 @@ function BaseDirStep() {
       setDirResult(result);
       setBaseDirWritable(result.writable);
     } catch {
-      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory." };
+      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
       setDirResult(fallback);
       setBaseDirWritable(false);
     } finally {
@@ -651,8 +804,60 @@ function BaseDirStep() {
             )}
             {dirResult && <DirValidationRow result={dirResult} />}
           </div>
+
+          {/* ── LokiASAM already installed here ── */}
+          {dirResult?.hasLokiasam && (
+            <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.35)" }}>
+              <div className="flex items-start gap-2">
+                <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffaa00" }} />
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold" style={{ color: "#ffaa00" }}>LokiASAM is already installed here</p>
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Continuing will overwrite your database — all server configurations, schedules, and settings will be permanently lost.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => { setImportMode(true); setImportError(""); }}
+                  className="gap-1.5 h-7 text-xs"
+                  style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+                >
+                  <MonitorDown className="w-3 h-3" /> Switch to Import
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setWipeOpen(true)}
+                  className="gap-1.5 h-7 text-xs"
+                  style={{ color: "#ff3c3c", border: "1px solid rgba(255,60,60,0.3)" }}
+                >
+                  <Trash2 className="w-3 h-3" /> Delete LokiASAM Data
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Directory has other content (not LokiASAM) ── */}
+          {dirResult?.writable && !dirResult.hasLokiasam && !dirResult.isNew && !dirResult.isEmpty && (
+            <div className="rounded-lg p-3 flex items-start gap-2" style={{ background: "rgba(255,136,0,0.06)", border: "1px solid rgba(255,136,0,0.25)" }}>
+              <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffaa00" }} />
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                This directory is not empty. Server files will be installed alongside existing content.
+              </p>
+            </div>
+          )}
         </>
       )}
+
+      {/* Wipe dialog */}
+      <WipeLokiAsamDialog
+        open={wipeOpen}
+        path={baseDir}
+        onClose={() => setWipeOpen(false)}
+        onWiped={() => validateDir(baseDir)}
+      />
 
       {/* ── Import Previous Install ── */}
       {importMode && (
@@ -742,7 +947,7 @@ function BackupDirStep() {
       setDirResult(result);
       setBackupDirWritable(result.writable);
     } catch {
-      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory." };
+      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
       setDirResult(fallback);
       setBackupDirWritable(false);
     } finally {
@@ -1840,7 +2045,7 @@ function TrayStep() {
           >
             <div className="flex items-center gap-2 mb-1">
               <div
-                className="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 flex items-center justify-center"
+                className="w-3.5 h-3.5 rounded-full border-2 shrink-0 flex items-center justify-center"
                 style={{ borderColor: closeToTray === value ? "var(--neon-purple)" : "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 {closeToTray === value && (

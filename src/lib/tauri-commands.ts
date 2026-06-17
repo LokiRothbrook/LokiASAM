@@ -258,6 +258,12 @@ export interface DirCheckResult {
   writable: boolean;
   freeBytes: number;
   error: string | null;
+  /** Target path does not exist yet and will be created on install. */
+  isNew: boolean;
+  /** A LokiASAM database was found inside the target path (existing install). */
+  hasLokiasam: boolean;
+  /** Target path exists but contains no files or subdirectories. */
+  isEmpty: boolean;
 }
 
 export interface MigrateProgress {
@@ -620,6 +626,7 @@ export const tauriCmd = {
    */
   checkDir: (path: string) => invoke<DirCheckResult>("check_dir", { path }),
   checkFileExists: (path: string) => invoke<boolean>("check_file_exists", { path }),
+  wipeLokiAsamDir: (path: string, fullWipe: boolean) => invoke<void>("wipe_lokiasam_dir", { path, fullWipe }),
   /** Recursively delete a directory. Idempotent — returns Ok if path doesn't exist. */
   deleteDirectory: (path: string) => invoke<void>("delete_directory", { path }),
   /**

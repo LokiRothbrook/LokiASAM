@@ -359,7 +359,7 @@ function PathField({
     if (!path.trim() || !validateDir) return;
     setChecking(true); setDirResult(null);
     try { setDirResult(await tauriCmd.checkDir(path)); }
-    catch { setDirResult({ writable: false, freeBytes: 0, error: "Could not check directory." }); }
+    catch { setDirResult({ writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false }); }
     finally { setChecking(false); }
   }, [validateDir]);
 

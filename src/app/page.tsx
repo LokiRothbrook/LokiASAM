@@ -29,6 +29,7 @@ import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { toast } from "sonner";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { formatServerVersion } from "@/lib/db";
+import { getVersion } from "@tauri-apps/api/app";
 
 // ---------------------------------------------------------------------------
 // UpdateStatusChip — Check for Updates button + post-check dialogs
@@ -401,6 +402,11 @@ export default function DashboardPage() {
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard, enqueueStartup } = useAppStore();
   const [showImport, setShowImport]               = useState(false);
+  const [appVersion, setAppVersion]               = useState("");
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
   const [showUpdateAllDialog, setShowUpdateAllDialog] = useState(false);
   const [showUpdatesFoundDialog, setShowUpdatesFoundDialog] = useState(false);
   const [pendingUpdates, setPendingUpdates]        = useState<ServerUpdateInfo[]>([]);
@@ -628,6 +634,13 @@ export default function DashboardPage() {
         updates={pendingUpdates}
         onUpdateAll={runUpdateAll}
       />
+      </div>
+
+      {/* Branding footer */}
+      <div className="shrink-0 text-center pb-1">
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          LokiASAM{appVersion ? ` v${appVersion}` : ""} · lokisoft.xyz
+        </p>
       </div>
     </div>
   );

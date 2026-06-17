@@ -120,6 +120,12 @@ pub struct DirCheckResult {
     pub writable: bool,
     pub free_bytes: u64,
     pub error: Option<String>,
+    /// Target path does not exist yet and will be created on install.
+    pub is_new: bool,
+    /// A LokiASAM database was found inside the target path (existing install).
+    pub has_lokiasam: bool,
+    /// Target path exists but contains no files or subdirectories.
+    pub is_empty: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +141,9 @@ pub struct DirCheckResult {
 pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
     let p = Path::new(&path);
 
+    // Whether the target path itself exists (vs. needing to be created).
+    let is_new = !p.exists();
+
     // Find the deepest existing ancestor (may be p itself).
     let check_against = {
         let mut cursor = p;
@@ -149,6 +158,9 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
                         writable: false,
                         free_bytes: 0,
                         error: Some("Cannot find any existing parent directory.".into()),
+                        is_new: true,
+                        has_lokiasam: false,
+                        is_empty: false,
                     });
                 }
             }
@@ -168,6 +180,9 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
                 "Location is not writable (check permissions on {}).",
                 check_against.display()
             )),
+            is_new,
+            has_lokiasam: false,
+            is_empty: false,
         });
     }
 
@@ -182,10 +197,23 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
             .unwrap_or(0)
     };
 
+    // Check for an existing LokiASAM install and whether the dir is empty.
+    let (has_lokiasam, is_empty) = if !is_new {
+        let db_path = p.join("lokiasam").join("lokiasam.db");
+        let has_db = db_path.exists();
+        let empty = p.read_dir().map(|mut d| d.next().is_none()).unwrap_or(false);
+        (has_db, empty)
+    } else {
+        (false, false)
+    };
+
     Ok(DirCheckResult {
         writable: true,
         free_bytes,
         error: None,
+        is_new,
+        has_lokiasam,
+        is_empty,
     })
 }
 
@@ -195,6 +223,44 @@ pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
 #[tauri::command]
 pub async fn check_file_exists(path: String) -> Result<bool, String> {
     Ok(Path::new(&path).exists())
+}
+
+/// Wipe LokiASAM data from a directory.
+///
+/// * `full_wipe = false` — deletes only the `lokiasam/` subdirectory (database,
+///   config, logs).  Server game files are left intact.
+/// * `full_wipe = true`  — deletes ALL contents inside `path` (but not `path`
+///   itself, so it remains as an empty directory ready for a clean install).
+#[tauri::command]
+pub async fn wipe_lokiasam_dir(path: String, full_wipe: bool) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Ok(());
+    }
+
+    if full_wipe {
+        // Delete every entry inside the directory but keep the directory itself.
+        let entries = std::fs::read_dir(p)
+            .map_err(|e| format!("Failed to read directory: {e}"))?;
+        for entry in entries.flatten() {
+            let ep = entry.path();
+            if ep.is_dir() {
+                std::fs::remove_dir_all(&ep)
+                    .map_err(|e| format!("Failed to remove {}: {e}", ep.display()))?;
+            } else {
+                std::fs::remove_file(&ep)
+                    .map_err(|e| format!("Failed to remove {}: {e}", ep.display()))?;
+            }
+        }
+    } else {
+        let loki_dir = p.join("lokiasam");
+        if loki_dir.exists() {
+            std::fs::remove_dir_all(&loki_dir)
+                .map_err(|e| format!("Failed to remove lokiasam directory: {e}"))?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Return CPU % and RSS memory (MB) for a server process and ALL its descendants.

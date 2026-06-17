@@ -521,6 +521,7 @@ pub fn run() {
             commands::system::get_install_method,
             commands::system::check_dir,
             commands::system::check_file_exists,
+            commands::system::wipe_lokiasam_dir,
             commands::system::delete_directory,
             commands::system::move_base_dir,
             commands::system::abort_operation,
