@@ -1076,6 +1076,25 @@ fn find_server_process(install_path: &str) -> Option<u32> {
     None
 }
 
+/// Return the total on-disk size (in bytes) of an arbitrary directory tree.
+/// Returns 0 if the path doesn't exist.
+#[tauri::command]
+pub async fn get_dir_size(path: String) -> u64 {
+    fn walk(p: &std::path::Path) -> u64 {
+        if !p.exists() { return 0; }
+        let mut total = 0u64;
+        if let Ok(rd) = std::fs::read_dir(p) {
+            for entry in rd.flatten() {
+                let ep = entry.path();
+                if ep.is_dir() { total += walk(&ep); }
+                else if let Ok(m) = ep.metadata() { total += m.len(); }
+            }
+        }
+        total
+    }
+    walk(std::path::Path::new(&path))
+}
+
 /// Return the total on-disk size (in bytes) of a server's backup, log, and save data.
 /// Values are 0 if the directories don't exist.
 #[tauri::command]

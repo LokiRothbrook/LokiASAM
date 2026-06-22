@@ -354,6 +354,8 @@ export const tauriCmd = {
   /** Return on-disk byte counts for a server's backups, logs, and save data. */
   getServerDiskUsage: (serverId: string, backupDir: string, baseDir: string, saveFolderName: string) =>
     invoke<{ backupBytes: number; logBytes: number; saveBytes: number }>("get_server_disk_usage", { serverId, backupDir, baseDir, saveFolderName }),
+  /** Return the total size in bytes of any directory path. Returns 0 if path doesn't exist. */
+  getDirSize: (path: string) => invoke<number>("get_dir_size", { path }),
 
   // SteamCMD / installation
   /** Download and extract SteamCMD to targetDir. Streams to steamcmd://output/setup. */
@@ -707,7 +709,7 @@ export const tauriCmd = {
   // Clusters
   createCluster:          (name: string, baseDir: string, clusterDirOverride?: string) =>
     invoke<string>("create_cluster", { name, baseDir, clusterDirOverride }),
-  deleteCluster:          (clusterId: string) => invoke<void>("delete_cluster", { clusterId }),
+  deleteCluster:          (clusterDir: string, deleteFiles: boolean) => invoke<void>("delete_cluster", { clusterDir, deleteFiles }),
   addServerToCluster:     (serverId: string, clusterId: string) =>
     invoke<void>("add_server_to_cluster", { serverId, clusterId }),
   removeServerFromCluster: (serverId: string) =>

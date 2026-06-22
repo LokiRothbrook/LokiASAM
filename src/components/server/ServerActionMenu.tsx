@@ -42,7 +42,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
-import { getExclusivePorts as computeExclusivePorts } from "@/lib/firewall-utils";
+import { getExclusivePorts as computeExclusivePorts, getServerFirewallPorts } from "@/lib/firewall-utils";
 import type { PortDef } from "@/lib/tauri-commands";
 const uuidv4 = () => crypto.randomUUID();
 
@@ -98,23 +98,24 @@ function DeleteDialog({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [deleteFiles, setDeleteFiles]     = useState(false);
-  const [deleteBackups, setDeleteBackups] = useState(false);
-  const [deleteLogs, setDeleteLogs]       = useState(false);
-  const [deleteSaves, setDeleteSaves]     = useState(false);
-  const [removeRules, setRemoveRules]     = useState(false);
+  const [deleteFiles, setDeleteFiles]     = useState(true);
+  const [deleteBackups, setDeleteBackups] = useState(true);
+  const [deleteLogs, setDeleteLogs]       = useState(true);
+  const [deleteSaves, setDeleteSaves]     = useState(true);
+  const [removeRules, setRemoveRules]     = useState(true);
   const [deleting, setDeleting]           = useState(false);
   const [exclusivePorts, setExclusivePorts] = useState<PortDef[]>([]);
+  const [remainingPorts, setRemainingPorts] = useState<PortDef[]>([]);
   const [diskUsage, setDiskUsage]         = useState<DiskUsage | null>(null);
   const [backupDir, setBackupDir]         = useState("");
   const [baseDir, setBaseDir]             = useState("");
 
   useEffect(() => {
     if (!open) return;
-    // Reset toggles each time the dialog opens
-    setDeleteFiles(false); setDeleteBackups(false);
-    setDeleteLogs(false);  setDeleteSaves(false);
-    setRemoveRules(false); setDiskUsage(null);
+    // Reset toggles each time the dialog opens (all ON by default)
+    setDeleteFiles(true); setDeleteBackups(true);
+    setDeleteLogs(true);  setDeleteSaves(true);
+    setRemoveRules(true); setDiskUsage(null);
 
     Promise.all([
       getServers(),
@@ -122,6 +123,18 @@ function DeleteDialog({
       getAppSetting("base_dir"),
     ]).then(([all, bkDir, bsDir]) => {
       setExclusivePorts(computeExclusivePorts(server, all));
+
+      // Remaining ports = every port from servers OTHER than this one.
+      // This is the complete desired state passed to the firewall backend after deletion.
+      const otherServers = all.filter((s) => s.id !== server.id);
+      const remainingMap = new Map<string, PortDef>();
+      for (const s of otherServers) {
+        for (const p of getServerFirewallPorts(s)) {
+          remainingMap.set(`${p.port}/${p.protocol}`, p);
+        }
+      }
+      setRemainingPorts([...remainingMap.values()]);
+
       const bd = bkDir ?? "";
       const bsd = bsDir ?? "";
       setBackupDir(bd);
@@ -137,7 +150,11 @@ function DeleteDialog({
     setDeleting(true);
     try {
       if (removeRules && exclusivePorts.length > 0) {
-        await tauriCmd.removeFirewallRules(exclusivePorts).catch(() => {});
+        // Pass remaining ports (complete desired state after deletion) so the
+        // backend can rebuild from scratch rather than trying to diff a stale profile.
+        await tauriCmd.removeFirewallRules(remainingPorts).catch((e) => {
+          toast.warning(`Firewall rules could not be removed: ${e}`);
+        });
       }
       await tauriCmd.deleteServer(
         server.id,

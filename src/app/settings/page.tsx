@@ -1231,13 +1231,14 @@ function FirewallRepairRow() {
 
   const handleFix = async () => {
     if (!fwStatus) return;
-    const missingPorts: PortDef[] = fwStatus.ports
-      .filter((p) => !p.covered)
-      .map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" }));
     setIsFixing(true);
     try {
+      // Pass the complete desired port set so the backend can rebuild from scratch,
+      // removing any stale entries from previously deleted servers.
+      const allPorts: PortDef[] = fwStatus.ports
+        .map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" }));
       const protonPath = IS_LINUX ? (await getAppSetting("proton_path")) ?? undefined : undefined;
-      await tauriCmd.addFirewallRules(missingPorts, protonPath);
+      await tauriCmd.addFirewallRules(allPorts, protonPath);
       toast.success("Firewall rules added.");
       await runCheck();
     } catch (e) {

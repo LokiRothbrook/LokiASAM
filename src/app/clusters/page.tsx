@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
-  Network, Plus, Trash2, ChevronRight, Server, Folder,
+  Network, Plus, Trash2, ChevronRight, Server, Folder, ToggleLeft, ToggleRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -144,19 +144,45 @@ interface DeleteDialogProps {
   onDeleted: () => void;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "empty";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy]               = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(true);
+  const [clusterDir, setClusterDir]   = useState("");
+  const [dirBytes, setDirBytes]       = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!cluster) return;
+    setDeleteFiles(true);
+    setDirBytes(null);
+
+    // Resolve actual cluster directory
+    getAppSetting("base_dir").then((baseDir) => {
+      const dir = cluster.cluster_dir_override?.trim()
+        ? cluster.cluster_dir_override
+        : `${(baseDir ?? "").replace(/[/\\]$/, "")}/clusters/${cluster.id}`;
+      setClusterDir(dir);
+
+        return tauriCmd.getDirSize(dir).then((bytes) => setDirBytes(bytes)).catch(() => setDirBytes(-1));
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cluster?.id]);
 
   async function handleDelete() {
     if (!cluster) return;
     setBusy(true);
     try {
-      // Clear cluster_id on all member servers first
       const members = await getServersInCluster(cluster.id);
       for (const s of members) {
         await setServerCluster(s.id, null);
       }
-      await tauriCmd.deleteCluster(cluster.id);
+      await tauriCmd.deleteCluster(clusterDir, deleteFiles);
       await deleteClusterRecord(cluster.id);
       toast.success(`Cluster "${cluster.name}" deleted.`);
       onDeleted();
@@ -182,15 +208,33 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
           </DialogTitle>
           <DialogDescription className="sr-only">Confirm cluster deletion.</DialogDescription>
         </DialogHeader>
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          Are you sure you want to delete{" "}
-          <span className="font-semibold" style={{ color: "var(--text-primary)" }}>
-            {cluster?.name}
-          </span>
-          ? All member servers will be detached from the cluster. Server files are
-          not affected. The cluster directory on disk will not be deleted.
+
+        <p className="text-sm mb-3" style={{ color: "var(--text-muted)" }}>
+          All member servers will be detached. Server files are not affected.
         </p>
-        <DialogFooter>
+
+        <div
+          className="flex items-center justify-between px-1 py-2 rounded-lg"
+          style={{ background: "rgba(255,0,85,0.05)", border: "1px solid rgba(255,0,85,0.15)" }}
+        >
+          <div className="min-w-0 pr-3">
+            <p className="text-sm" style={{ color: "var(--text-primary)" }}>
+              Delete cluster directory{dirBytes !== null && dirBytes >= 0 ? ` (${formatBytes(dirBytes)})` : dirBytes === null ? " (scanning…)" : ""}
+            </p>
+            <p className="text-xs mt-0.5 break-all" style={{ color: "var(--text-muted)" }}>{clusterDir || "…"}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDeleteFiles((v) => !v)}
+            className="shrink-0 flex items-center focus:outline-none"
+          >
+            {deleteFiles
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-red)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+          </button>
+        </div>
+
+        <DialogFooter className="mt-2">
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>

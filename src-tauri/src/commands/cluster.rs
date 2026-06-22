@@ -34,11 +34,17 @@ pub async fn create_cluster(
     Ok(id)
 }
 
-/// No-op — the cluster directory is intentionally not deleted automatically.
-/// The frontend removes the SQLite record and can prompt the user to delete
-/// the directory manually if desired.
+/// Delete the cluster directory from disk when `delete_files` is true.
+/// The frontend removes the SQLite record and clears cluster_id on member servers.
 #[tauri::command]
-pub async fn delete_cluster(_cluster_id: String) -> Result<(), String> {
+pub async fn delete_cluster(cluster_dir: String, delete_files: bool) -> Result<(), String> {
+    if delete_files && !cluster_dir.is_empty() {
+        let p = std::path::Path::new(&cluster_dir);
+        if p.exists() {
+            std::fs::remove_dir_all(p)
+                .map_err(|e| format!("Failed to delete cluster directory: {e}"))?;
+        }
+    }
     Ok(())
 }
 

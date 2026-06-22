@@ -3,13 +3,12 @@ import { type ServerRow } from "@/lib/db";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 
-/** Returns the 4-port set required for an ARK SA server. */
+/** Returns the 3-port set required for an ARK SA server. */
 export function getServerFirewallPorts(server: ServerRow): PortDef[] {
   return [
-    { port: server.port,         protocol: "udp" },
-    { port: server.port + 1,     protocol: "udp" }, // Steam P2P peer port
-    { port: server.query_port,   protocol: "udp" },
-    { port: server.rcon_port,    protocol: "tcp" },
+    { port: server.port,       protocol: "udp" },
+    { port: server.query_port, protocol: "udp" },
+    { port: server.rcon_port,  protocol: "tcp" },
   ];
 }
 

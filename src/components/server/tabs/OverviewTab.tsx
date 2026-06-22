@@ -23,14 +23,14 @@ import {
 } from "recharts";
 import { useServerStats } from "@/hooks/useServerStats";
 import { useServerStatsHistory, type Timeframe } from "@/hooks/useServerStatsHistory";
-import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
+import { tauriCmd, type ArkPlayer } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import {
-  updateServerStatus, getServerConfig, getServerModCount, getServerMods,
+  updateServerStatus, getServerConfig, getServerModCount,
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
   pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
-import { buildLaunchCommandPreview } from "@/lib/server-utils";
+import { buildLaunchCommandPreview, buildStartParams, isLinux } from "@/lib/server-utils";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
@@ -38,12 +38,11 @@ import type { ServerRow } from "@/lib/db";
 import { formatServerVersion } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
-import { ARK_MAPS, ARK_EVENTS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { setServerActiveEvent } from "@/lib/db";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { isLinux } from "@/lib/server-utils";
 
 interface Props {
   server: ServerRow;
@@ -652,47 +651,13 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
 
   // ── Action helpers ──────────────────────────────────────────────────────────
 
-  const buildStartParams = async (): Promise<StartServerParams> => {
-    const [config, mods] = await Promise.all([
-      getServerConfig(server.id),
-      getServerMods(server.id),
-    ]);
-    const launchArgs: Record<string, string> = config ? JSON.parse(config.launch_args_json) : {};
-    const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
-      if (!v || v === "false" || v === "0") return [];
-      const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-      if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-      if (param) return v ? [`${param.flag}${v}`] : [];
-      return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-    });
-    const map = ARK_MAPS.find((m) => m.id === server.map_id);
-    const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
-    const params: StartServerParams = {
-      serverId: server.id,
-      serverName: server.name,
-      installPath: server.install_path,
-      mapPath: map?.mapPath ?? "TheIsland_WP",
-      port: server.port,
-      queryPort: server.query_port,
-      rconPort: server.rcon_port,
-      rconPassword: server.rcon_password,
-      extraArgs,
-      modIds: enabledModIds,
-    };
-    if (isLinux) {
-      params.protonPath = (await getAppSetting("proton_path")) ?? undefined;
-      params.prefixPath = (await getAppSetting("proton_prefix_path")) ?? undefined;
-    }
-    return params;
-  };
-
   const handleStart = async () => {
     setActionPending(true);
     try {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       await warnIfFirewallMissing(server);
-      const params = await buildStartParams();
+      const params = await buildStartParams(server);
       const pid = await tauriCmd.startServer(params);
       await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
@@ -749,7 +714,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
 
   const handleRestart = async () => {
     if (server.restart_warn_players) {
-      const startParams = await buildStartParams();
+      const startParams = await buildStartParams(server);
       tauriCmd.startGracefulRestart({
         serverId:      server.id,
         warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
@@ -766,7 +731,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     try {
       await updateServerStatus(server.id, "stopping", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      const params = await buildStartParams();
+      const params = await buildStartParams(server);
       const pid = await tauriCmd.restartServer(params, true);
       await updateServerStatus(server.id, "running", pid);
     } catch (err) {
@@ -789,7 +754,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       if (!baseDir || !steamcmdPath) return;
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+      const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
 
       tauriCmd.startGracefulUpdate({
         serverId:      server.id,

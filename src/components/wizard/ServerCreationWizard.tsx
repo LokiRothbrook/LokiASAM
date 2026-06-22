@@ -53,6 +53,7 @@ import {
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
+import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -1326,12 +1327,12 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
         usedPorts.set(s.rcon_port, s.name);
       }
 
-      // Find next available game port (ARK uses game_port and game_port+1 internally, so step by 2)
+      // Find next available game port (step by 1 — ASA does not use port+1)
       const maxGame  = Math.max(...servers.map((s) => s.port));
       const maxQuery = Math.max(...servers.map((s) => s.query_port));
       const maxRcon  = Math.max(...servers.map((s) => s.rcon_port));
 
-      const suggestGame  = maxGame  + 2;
+      const suggestGame  = maxGame  + 1;
       const suggestQuery = maxQuery + 1;
       const suggestRcon  = maxRcon  + 1;
 
@@ -1342,8 +1343,12 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
         onChange({ port: suggestGame, queryPort: suggestQuery, rconPort: suggestRcon });
       }
 
-      // Check current values for conflicts
-      updateConflicts(data.port, data.queryPort, data.rconPort, usedPorts);
+      // Check conflicts against the ports that will actually be displayed —
+      // if we just auto-incremented, use the suggested values, not the stale closure values.
+      const checkGame  = isDefault ? suggestGame  : data.port;
+      const checkQuery = isDefault ? suggestQuery : data.queryPort;
+      const checkRcon  = isDefault ? suggestRcon  : data.rconPort;
+      updateConflicts(checkGame, checkQuery, checkRcon, usedPorts);
     }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1387,7 +1392,7 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Ports have been auto-suggested based on your existing servers. Each server needs a unique set of three ports.
       </p>
-      <PortField label="Game Port" fieldKey="port" value={data.port} status={portStatus["port"]} conflict={conflicts["port"]} description="Clients connect here (UDP). ARK also uses port+1 internally." onChange={handlePortChange} onBlur={checkPort} />
+      <PortField label="Game Port" fieldKey="port" value={data.port} status={portStatus["port"]} conflict={conflicts["port"]} description="Clients connect here (UDP)." onChange={handlePortChange} onBlur={checkPort} />
       <PortField label="Query Port" fieldKey="queryPort" value={data.queryPort} status={portStatus["queryPort"]} conflict={conflicts["queryPort"]} description="Steam server browser (UDP)." onChange={handlePortChange} onBlur={checkPort} />
       <PortField label="RCON Port" fieldKey="rconPort" value={data.rconPort} status={portStatus["rconPort"]} conflict={conflicts["rconPort"]} description="Remote console (TCP)." onChange={handlePortChange} onBlur={checkPort} />
       {checking && (
@@ -1439,10 +1444,9 @@ function FirewallStep({ data }: { data: WizardData }) {
   const [errorMsg, setErrorMsg] = useState("");
 
   const ports: PortDef[] = [
-    { port: data.port,          protocol: "udp" },
-    { port: data.port + 1,      protocol: "udp" },
-    { port: data.queryPort,     protocol: "udp" },
-    { port: data.rconPort,      protocol: "tcp" },
+    { port: data.port,      protocol: "udp" },
+    { port: data.queryPort, protocol: "udp" },
+    { port: data.rconPort,  protocol: "tcp" },
   ];
 
   useEffect(() => {
@@ -1460,8 +1464,23 @@ function FirewallStep({ data }: { data: WizardData }) {
     if (missing.length === 0) { setPhase("done"); return; }
     setPhase("adding");
     try {
+      // Build the complete desired port set: all existing servers + this new server.
+      // The new server isn't in the DB yet, so we add its ports explicitly.
+      const existingServers = await getServers();
+      const allPortsMap = new Map<string, PortDef>();
+      for (const srv of existingServers) {
+        for (const p of getServerFirewallPorts(srv)) {
+          allPortsMap.set(`${p.port}/${p.protocol}`, p);
+        }
+      }
+      for (const p of ports) {
+        allPortsMap.set(`${p.port}/${p.protocol}`, p);
+      }
       const protonPath = (await getAppSetting("proton_path")) ?? undefined;
-      await tauriCmd.addFirewallRules(missing.map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" })), protonPath);
+      await tauriCmd.addFirewallRules([...allPortsMap.values()], protonPath);
+      // Re-check so the port list shows real green checkmarks instead of staying stale.
+      const updated = await tauriCmd.checkFirewallPorts(ports);
+      setStatus(updated);
       setPhase("done");
     } catch (e) {
       setErrorMsg(String(e));
@@ -1510,8 +1529,7 @@ function FirewallStep({ data }: { data: WizardData }) {
               style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
               <span style={{ color: "var(--text-primary)" }}>
                 {p.port}/{p.protocol.toUpperCase()}
-                {p.port === data.port + 1 ? " (Steam P2P)" : ""}
-              </span>
+                </span>
               {p.covered
                 ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />
                 : <AlertCircle className="w-3.5 h-3.5" style={{ color: "var(--neon-orange, #f97316)" }} />}

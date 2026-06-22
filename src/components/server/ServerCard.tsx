@@ -40,7 +40,7 @@ import { CommandOutputPanel, clearOutputBuffer } from "@/components/shared/Comma
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
 import { useServerStats } from "@/hooks/useServerStats";
-import { tauriCmd, type StartServerParams } from "@/lib/tauri-commands";
+import { tauriCmd } from "@/lib/tauri-commands";
 import {
   updateServerStatus,
   getServerConfig,
@@ -54,7 +54,8 @@ import {
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
-import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { buildStartParams, isLinux } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
@@ -213,50 +214,6 @@ export function ServerCard({ server }: Props) {
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
-  const isLinux =
-    typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
-
-  const buildStartParams = async (): Promise<StartServerParams> => {
-    const [config, mods] = await Promise.all([
-      getServerConfig(server.id),
-      getServerMods(server.id),
-    ]);
-    const launchArgs: Record<string, string> = config
-      ? JSON.parse(config.launch_args_json)
-      : {};
-
-    const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
-      if (!v || v === "false" || v === "0") return [];
-      const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-      if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-      if (param) return v ? [`${param.flag}${v}`] : [];
-      return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-    });
-
-    const map = ARK_MAPS.find((m) => m.id === server.map_id);
-    const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
-
-    const params: StartServerParams = {
-      serverId: server.id,
-      serverName: server.name,
-      installPath: server.install_path,
-      mapPath: map?.mapPath ?? "TheIsland_WP",
-      port: server.port,
-      queryPort: server.query_port,
-      rconPort: server.rcon_port,
-      rconPassword: server.rcon_password,
-      extraArgs,
-      modIds: enabledModIds,
-    };
-
-    if (isLinux) {
-      params.protonPath = (await getAppSetting("proton_path")) ?? undefined;
-      params.prefixPath = (await getAppSetting("proton_prefix_path")) ?? undefined;
-    }
-
-    return params;
-  };
-
   const handleStart = async () => {
     setActionPending(true);
     clearNoRetryServer(server.id);
@@ -265,7 +222,7 @@ export function ServerCard({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
 
       await warnIfFirewallMissing(server);
-      const params = await buildStartParams();
+      const params = await buildStartParams(server);
       const pid = await tauriCmd.startServer(params);
 
       // Stay "starting" — Rust backend emits server://status/{id} with "running"
@@ -330,7 +287,7 @@ export function ServerCard({ server }: Props) {
 
   const handleRestart = async () => {
     if (server.restart_warn_players) {
-      const startParams = await buildStartParams();
+      const startParams = await buildStartParams(server);
       tauriCmd.startGracefulRestart({
         serverId:      server.id,
         warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
@@ -348,7 +305,7 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "stopping", server.pid);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
 
-      const params = await buildStartParams();
+      const params = await buildStartParams(server);
       const newPid = await tauriCmd.restartServer(params, true);
 
       await updateServerStatus(server.id, "running", newPid);
@@ -373,7 +330,7 @@ export function ServerCard({ server }: Props) {
       if (!baseDir || !steamcmdPath) return;
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+      const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
 
       tauriCmd.startGracefulUpdate({
         serverId:      server.id,
