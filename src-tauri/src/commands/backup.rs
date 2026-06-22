@@ -705,10 +705,14 @@ pub async fn create_ini_backup(
     server_id: String,
     install_path: String,
     backup_dir: String,
-    platform: String,
 ) -> Result<IniBackupRecord, String> {
+    #[cfg(target_os = "windows")]
+    let platform = "WindowsServer";
+    #[cfg(not(target_os = "windows"))]
+    let platform = "LinuxServer";
+
     let config_dir = PathBuf::from(&install_path)
-        .join("ShooterGame").join("Saved").join("Config").join(&platform);
+        .join("ShooterGame").join("Saved").join("Config").join(platform);
 
     let ini_files = ["GameUserSettings.ini", "Game.ini"];
     let sources: Vec<PathBuf> = ini_files.iter()
@@ -745,6 +749,144 @@ pub async fn create_ini_backup(
         folder_path: current.to_string_lossy().to_string(),
         created_at: ts_iso,
     })
+}
+
+/// Create the save directory link used with -SaveDirectoryOverride.
+///
+/// Creates:
+///   `{base_dir}/Saves/{save_folder_name}/`            ← the real save location
+///   `{install_path}/ShooterGame/Saved/SavedArks/{save_folder_name}`  ← the link target
+///
+/// On Linux: a symlink pointing to the base_dir/Saves/ subdirectory.
+/// On Windows: an NTFS junction point (no admin rights required for junctions on local filesystems).
+///
+/// If the link already exists and already points to the correct target, returns success without changes.
+#[tauri::command]
+pub async fn create_save_link(
+    install_path: String,
+    save_folder_name: String,
+    base_dir: String,
+) -> Result<(), String> {
+    if save_folder_name.is_empty() {
+        return Err("save_folder_name must not be empty".to_string());
+    }
+
+    // The real save storage directory
+    let save_target = PathBuf::from(&base_dir).join("Saves").join(&save_folder_name);
+    fs::create_dir_all(&save_target).map_err(|e| format!("Failed to create save target dir: {e}"))?;
+
+    // The path where the server expects saves (must be the link)
+    let saved_arks = PathBuf::from(&install_path)
+        .join("ShooterGame").join("Saved").join("SavedArks");
+    fs::create_dir_all(&saved_arks).map_err(|e| format!("Failed to create SavedArks dir: {e}"))?;
+
+    let link_path = saved_arks.join(&save_folder_name);
+
+    // If already correctly linked, do nothing
+    if link_path.exists() || link_path.is_symlink() {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(existing) = std::fs::read_link(&link_path) {
+                if existing == save_target {
+                    return Ok(());
+                }
+            }
+            // Wrong target or broken link — remove and recreate
+            let _ = fs::remove_file(&link_path);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Junction already exists — leave it; user can manage via OS if needed
+            return Ok(());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::os::unix::fs::symlink(&save_target, &link_path)
+            .map_err(|e| format!("Failed to create symlink: {e}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        junction::create(&save_target, &link_path)
+            .map_err(|e| format!("Failed to create junction point: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Wipe server save files at one of three tiers:
+///
+/// - `"map"`     — delete world `.ark` files only (clears map state, preserves characters).
+/// - `"players"` — delete `.arkprofile` and `.arktribe` files only (resets characters/tribes).
+/// - `"full"`    — delete all save files (world + characters + tribe + mod saves).
+///
+/// The save directory is `{install_path}/ShooterGame/Saved/SavedArks/{save_folder_name}/`
+/// when save_folder_name is non-empty, otherwise `{install_path}/ShooterGame/Saved/SavedArks/`.
+///
+/// The server MUST NOT be running when this is called (enforced on the frontend).
+#[tauri::command]
+pub async fn wipe_server_saves(
+    install_path: String,
+    save_folder_name: String,
+    tier: String,
+) -> Result<(), String> {
+    let saves_root = if save_folder_name.is_empty() {
+        PathBuf::from(&install_path).join("ShooterGame").join("Saved").join("SavedArks")
+    } else {
+        PathBuf::from(&install_path)
+            .join("ShooterGame").join("Saved").join("SavedArks")
+            .join(&save_folder_name)
+    };
+
+    if !saves_root.exists() {
+        return Ok(());
+    }
+
+    match tier.as_str() {
+        "map" => {
+            // Remove world state files: *.ark (but NOT *.arkprofile or *.arktribe)
+            for entry in fs::read_dir(&saves_root).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                if path.is_file() {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    if ext == "ark" {
+                        fs::remove_file(&path).map_err(|e| format!("Failed to remove {:?}: {e}", path))?;
+                    }
+                }
+            }
+        }
+        "players" => {
+            // Remove character / tribe files: *.arkprofile, *.arktribe
+            for entry in fs::read_dir(&saves_root).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                if path.is_file() {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    if ext == "arkprofile" || ext == "arktribe" {
+                        fs::remove_file(&path).map_err(|e| format!("Failed to remove {:?}: {e}", path))?;
+                    }
+                }
+            }
+        }
+        "full" => {
+            // Remove everything in the saves directory (but not the directory itself)
+            for entry in fs::read_dir(&saves_root).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                if path.is_file() || path.is_symlink() {
+                    fs::remove_file(&path).map_err(|e| format!("Failed to remove file {:?}: {e}", path))?;
+                } else if path.is_dir() {
+                    fs::remove_dir_all(&path).map_err(|e| format!("Failed to remove dir {:?}: {e}", path))?;
+                }
+            }
+        }
+        _ => return Err(format!("Unknown wipe tier: {tier}")),
+    }
+
+    Ok(())
 }
 
 /// List timestamped INI snapshot folders for a server (newest first).

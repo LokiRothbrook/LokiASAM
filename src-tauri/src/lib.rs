@@ -494,6 +494,8 @@ pub fn run() {
             commands::backup::create_player_backup,
             commands::backup::backup_all_players,
             commands::backup::create_ini_backup,
+            commands::backup::create_save_link,
+            commands::backup::wipe_server_saves,
             commands::backup::create_full_backup,
             commands::backup::list_ini_backups,
             commands::backup::restore_server_backup,

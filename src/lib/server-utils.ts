@@ -6,7 +6,7 @@
  */
 
 import { getServerConfig, getServerMods, getAppSetting } from "@/lib/db";
-import { ARK_MAPS, LAUNCH_PARAMETERS } from "@/data/game-data";
+import { ARK_MAPS, ARK_EVENTS, LAUNCH_PARAMETERS } from "@/data/game-data";
 import type { StartServerParams } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 
@@ -31,8 +31,21 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
   });
 
+  if (server.save_folder_name) {
+    extraArgs.push(`-SaveDirectoryOverride=${server.save_folder_name}`);
+  }
+
   const map = ARK_MAPS.find((m) => m.id === server.map_id);
   const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
+
+  // Inject the active event flag and its mod ID
+  if (server.active_event) {
+    extraArgs.push(`-ActiveEvent=${server.active_event}`);
+    const evt = ARK_EVENTS.find((e) => e.id === server.active_event);
+    if (evt && !enabledModIds.includes(evt.modId)) {
+      enabledModIds.push(evt.modId);
+    }
+  }
 
   const params: StartServerParams = {
     serverId:     server.id,

@@ -603,6 +603,8 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [playersLoading, setPlayersLoading] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
+  const [wipeConfirm, setWipeConfirm] = useState<"map" | "players" | "full" | null>(null);
+  const [wiping, setWiping] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
 
@@ -862,6 +864,19 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
         .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
     } catch (err) {
       toast.error(`Failed to start reinstall for ${server.name}`, { description: String(err) });
+    }
+  };
+
+  const handleWipe = async (tier: "map" | "players" | "full") => {
+    setWiping(true);
+    try {
+      await tauriCmd.wipeServerSaves(server.install_path, server.save_folder_name ?? "", tier);
+      setWipeConfirm(null);
+      toast.success(`Save wipe complete (${tier})`);
+    } catch (e) {
+      toast.error(`Save wipe failed: ${e}`);
+    } finally {
+      setWiping(false);
     }
   };
 
@@ -1194,6 +1209,67 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           </div>
         )}
       </div>
+
+      {/* ── Wipe Saves card ── */}
+      {!isRunning && (
+        <div
+          className="glass-card rounded-xl p-4 space-y-3"
+          style={{ border: "1px solid rgba(255,0,85,0.2)" }}
+        >
+          <div className="flex items-center gap-2">
+            <X className="w-4 h-4" style={{ color: "var(--neon-red)" }} />
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Wipe Save Data</h3>
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Permanently delete save files. This cannot be undone. Take a backup first.
+          </p>
+
+          {wipeConfirm ? (
+            <div className="space-y-3 rounded-lg p-3" style={{ background: "rgba(255,0,85,0.06)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <p className="text-sm font-medium" style={{ color: "var(--neon-red)" }}>
+                {wipeConfirm === "map" && "Wipe Map Data — this will delete all world state (*.ark). Character and tribe data will be preserved."}
+                {wipeConfirm === "players" && "Wipe Player & Tribe Data — this will delete all character profiles and tribe records. World state will be preserved."}
+                {wipeConfirm === "full" && "Full Wipe — this will delete ALL save data including world, characters, tribes, and mod data. This is irreversible."}
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setWipeConfirm(null)} disabled={wiping}
+                  style={{ color: "var(--text-muted)" }}>
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={() => handleWipe(wipeConfirm)} disabled={wiping}
+                  style={{ background: "rgba(255,0,85,0.15)", borderColor: "rgba(255,0,85,0.5)", color: "var(--neon-red)" }}>
+                  {wiping ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <X className="w-3.5 h-3.5 mr-1.5" />}
+                  Confirm Wipe
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => setWipeConfirm("map")}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
+              >
+                Map Wipe
+              </button>
+              <button
+                onClick={() => setWipeConfirm("players")}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
+              >
+                Player & Tribe Reset
+              </button>
+              <button
+                onClick={() => setWipeConfirm("full")}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{ background: "rgba(255,0,85,0.12)", color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.4)" }}
+              >
+                Full Wipe
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Update confirmation dialog ── */}
       <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>

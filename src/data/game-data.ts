@@ -1236,31 +1236,95 @@ export interface LaunchParameter {
  * Server name, ports, passwords, and rates all go in GameUserSettings.ini.
  */
 export const LAUNCH_PARAMETERS: LaunchParameter[] = [
-  // Performance / anti-cheat
-  // Anti-cheat
+  // ── Anti-cheat ────────────────────────────────────────────────────────────
+  // BattlEye is ON by default. -NoBattlEye disables it. There is no -UseBattlEye flag.
   {
     key: "NoBattlEye",
     flag: "-NoBattlEye",
     type: "boolean",
     defaultValue: true,
-    description: "Disable BattlEye anti-cheat. Recommended for private/community servers.",
+    description: "Disable BattlEye anti-cheat. Recommended for private/community servers. BattlEye is enabled by default.",
     category: "performance",
   },
   {
-    key: "UseBattlEye",
-    flag: "-UseBattlEye",
+    key: "NoAntiSpeedHack",
+    flag: "-NoAntiSpeedHack",
     type: "boolean",
     defaultValue: false,
-    description: "Enable BattlEye anti-cheat. Players must also have it enabled to join.",
+    description: "Disable the server-side anti speed-hack check. The check is enabled by default.",
     category: "performance",
   },
-  // Performance
+  {
+    key: "DisableUndermeshChecking",
+    flag: "-DisableUndermeshChecking",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable under-mesh detection.",
+    category: "performance",
+  },
+  {
+    key: "DisableUndermeshKilling",
+    flag: "-DisableUndermeshKilling",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable automatic killing of players detected under the mesh.",
+    category: "performance",
+  },
+  // ── Performance ───────────────────────────────────────────────────────────
   {
     key: "lowmemory",
     flag: "-lowmemory",
     type: "boolean",
     defaultValue: false,
     description: "Enable low-memory mode. Reduces RAM usage — useful on 4–8 GB systems but lowers quality.",
+    category: "performance",
+  },
+  {
+    key: "NoSound",
+    flag: "-NoSound",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable server audio processing to improve performance. Undocumented by Wildcard.",
+    category: "performance",
+  },
+  {
+    key: "OneThread",
+    flag: "-OneThread",
+    type: "boolean",
+    defaultValue: false,
+    description: "Force single-threaded mode. Undocumented by Wildcard.",
+    category: "performance",
+  },
+  {
+    key: "ForceUsePerfThreads",
+    flag: "-ForceUsePerfThreads",
+    type: "boolean",
+    defaultValue: false,
+    description: "Force performance thread pool. Undocumented by Wildcard.",
+    category: "performance",
+  },
+  {
+    key: "NoPerfThreads",
+    flag: "-NoPerfThreads",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable performance thread pool. Undocumented by Wildcard.",
+    category: "performance",
+  },
+  {
+    key: "NoHangDetection",
+    flag: "-NoHangDetection",
+    type: "boolean",
+    defaultValue: false,
+    description: "Prevent the server from auto-shutting down if startup takes more than 45 minutes. Useful for large saves or slow hardware.",
+    category: "performance",
+  },
+  {
+    key: "StasisKeepControllers",
+    flag: "-StasisKeepControllers",
+    type: "boolean",
+    defaultValue: false,
+    description: "Keep AI controllers in memory when actors enter stasis. Improves performance at the cost of higher memory usage on large maps.",
     category: "performance",
   },
   {
@@ -1279,13 +1343,13 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     description: "Server locale / language code (e.g. en, de, fr). Leave blank for default.",
     category: "performance",
   },
-  // Admin / logging
+  // ── Admin / logging ───────────────────────────────────────────────────────
   {
     key: "UseServerNetSpeedCheck",
     flag: "-UseServerNetSpeedCheck",
     type: "boolean",
     defaultValue: false,
-    description: "Enable server-side network speed checks to detect speed-hacking clients.",
+    description: "Enable server-side network speed checks to detect speed-hacking clients. Enabled on official clusters.",
     category: "admin",
   },
   {
@@ -1293,7 +1357,7 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-servergamelog",
     type: "boolean",
     defaultValue: false,
-    description: "Enable server-side game log file (logs kills, tames, admin commands).",
+    description: "Enable the server game log. Logs kills, tames, and admin commands to a dated file. Use RCON command GetGameLog to retrieve up to 600 lines.",
     category: "admin",
   },
   {
@@ -1301,18 +1365,34 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-ServerRCONOutputTribeLogs",
     type: "boolean",
     defaultValue: false,
-    description: "Output tribe log events to the RCON connection.",
+    description: "Include tribe log events in RCON GetGameLog output. Requires -servergamelog.",
     category: "admin",
   },
   {
-    key: "NotifyAdminCommandsInChat",
-    flag: "-NotifyAdminCommandsInChat",
+    key: "servergamelogincludetribelogs",
+    flag: "-servergamelogincludetribelogs",
     type: "boolean",
     defaultValue: false,
-    description: "Broadcast admin commands to all players in chat.",
+    description: "Output tribe logs to the server console / game log file.",
     category: "admin",
   },
-  // Gameplay
+  {
+    key: "EnableIdlePlayerKick",
+    flag: "-EnableIdlePlayerKick",
+    type: "boolean",
+    defaultValue: false,
+    description: "Enable idle player kick. Requires KickIdlePlayersPeriod to be set in GameUserSettings.ini.",
+    category: "admin",
+  },
+  {
+    key: "exclusivejoin",
+    flag: "-exclusivejoin",
+    type: "boolean",
+    defaultValue: false,
+    description: "Whitelist-only mode — only players listed in PlayersExclusiveJoinList.txt can join.",
+    category: "access",
+  },
+  // ── Gameplay / dinos ──────────────────────────────────────────────────────
   {
     key: "ForceRespawnDinos",
     flag: "-ForceRespawnDinos",
@@ -1330,14 +1410,128 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     category: "gameplay",
   },
   {
-    key: "ActiveEvent",
-    flag: "-ActiveEvent=",
-    type: "string",
-    defaultValue: "",
-    description: "Enable a seasonal event (e.g. Summer, Winter, Easter, Eggcellent, FearEvolved). Leave blank for none.",
+    key: "NoAI",
+    flag: "-NoAI",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable AI controllers on all creatures.",
     category: "gameplay",
   },
-  // Access control
+  {
+    key: "NoWildBabies",
+    flag: "-NoWildBabies",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable spawning of wild babies.",
+    category: "gameplay",
+  },
+  {
+    key: "ForceAllowCaveFlyers",
+    flag: "-ForceAllowCaveFlyers",
+    type: "boolean",
+    defaultValue: false,
+    description: "Force flyers to be allowed in caves regardless of map defaults.",
+    category: "gameplay",
+  },
+  {
+    key: "DisableDinoNetRangeScaling",
+    flag: "-DisableDinoNetRangeScaling",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable dynamic network replication range scaling for creatures. More consistent but higher performance cost.",
+    category: "gameplay",
+  },
+  {
+    key: "UnstasisDinoObstruction",
+    flag: "-UnstasisDinoObstruction",
+    type: "boolean",
+    defaultValue: false,
+    description: "Attempt to prevent creatures from ghosting through objects on re-render. Undocumented by Wildcard.",
+    category: "gameplay",
+  },
+  {
+    key: "AlwaysTickDedicatedSkeletalMeshes",
+    flag: "-AlwaysTickDedicatedSkeletalMeshes",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable the optimization that skips dino animations when inactive. May prevent idle collision issues.",
+    category: "gameplay",
+  },
+  // ── Server mechanics ──────────────────────────────────────────────────────
+  {
+    key: "AutoDestroyStructures",
+    flag: "-AutoDestroyStructures",
+    type: "boolean",
+    defaultValue: false,
+    description: "Enable auto-destruction of old player structures. Requires AutoDestroyOldStructuresMultiplier to be set in GameUserSettings.ini.",
+    category: "gameplay",
+  },
+  {
+    key: "DisableCustomCosmetics",
+    flag: "-DisableCustomCosmetics",
+    type: "boolean",
+    defaultValue: false,
+    description: "Disable the use of custom cosmetic mods on this server.",
+    category: "gameplay",
+  },
+  {
+    key: "IgnoreDupedItems",
+    flag: "-IgnoreDupedItems",
+    type: "boolean",
+    defaultValue: false,
+    description: "Ignore detected duped items in inventories rather than removing them. Does not disable dupe checks. Undocumented by Wildcard.",
+    category: "gameplay",
+  },
+  {
+    key: "UseDynamicConfig",
+    flag: "-UseDynamicConfig",
+    type: "boolean",
+    defaultValue: false,
+    description: "Enable live dynamic config. Requires CustomDynamicConfigUrl to be set in GameUserSettings.ini (HTTP only).",
+    category: "gameplay",
+  },
+  {
+    key: "ForceClampItemQuality",
+    flag: "-ForceClampItemQuality",
+    type: "boolean",
+    defaultValue: false,
+    description: "Force item quality cap for blueprints using the official quality limits in GameUserSettings.ini.",
+    category: "gameplay",
+  },
+  {
+    key: "ForceWipeTinkerExploit",
+    flag: "-ForceWipeTinkerExploit",
+    type: "boolean",
+    defaultValue: false,
+    description: "One-time wipe of items above the official quality cap. Run once then remove. Also sets official quality caps unless overridden in GameUserSettings.ini.",
+    category: "gameplay",
+  },
+  {
+    key: "ForceWipeTinkerExploitNoDinos",
+    flag: "-ForceWipeTinkerExploitNoDinos",
+    type: "boolean",
+    defaultValue: false,
+    description: "Same as ForceWipeTinkerExploit but skips creature quality checks for faster startup.",
+    category: "gameplay",
+  },
+  {
+    key: "ForceClearItemTraits",
+    flag: "-ForceClearItemTraits",
+    type: "boolean",
+    defaultValue: false,
+    description: "One-time wipe of item traits that were gained via an exploit. Run once then remove.",
+    category: "gameplay",
+  },
+  // ── Network ───────────────────────────────────────────────────────────────
+  {
+    key: "MULTIHOME",
+    flag: "-MULTIHOME=",
+    type: "string",
+    defaultValue: "",
+    description: "Bind the server to a specific network interface IP. Used when the host has multiple network interfaces or for VPN/DDoS protection setups.",
+    category: "network",
+  },
+  // ── Access control ────────────────────────────────────────────────────────
   {
     key: "crossplay",
     flag: "-crossplay",
@@ -1354,15 +1548,7 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     description: "Restrict server to Epic Games Store players only.",
     category: "access",
   },
-  {
-    key: "exclusivejoin",
-    flag: "-exclusivejoin",
-    type: "boolean",
-    defaultValue: false,
-    description: "Whitelist-only mode — only players on the server whitelist can join.",
-    category: "access",
-  },
-  // Cluster
+  // ── Cluster ───────────────────────────────────────────────────────────────
   {
     key: "ClusterID",
     flag: "-clusterid=",
@@ -1384,7 +1570,7 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-NoTransferFromFiltering",
     type: "boolean",
     defaultValue: false,
-    description: "Prevent character/dino/item uploads from servers outside this cluster.",
+    description: "Prevent character/dino/item uploads from servers outside this cluster. Required for proper cluster isolation.",
     category: "cluster",
   },
 ];
@@ -1508,3 +1694,29 @@ export const CRON_PRESETS: CronPreset[] = [
   { label: "Weekly (Sunday 3 AM)", expression: "0 3 * * 0",    description: "Runs every Sunday at 3:00 AM." },
   { label: "Custom",               expression: "",              description: "Enter a custom cron expression." },
 ];
+
+// ---------------------------------------------------------------------------
+// ARK Events
+// ---------------------------------------------------------------------------
+
+export interface ArkEvent {
+  id: string;
+  /** Display name shown in the UI */
+  displayName: string;
+  /** Mod ID required for this event; auto-installed when event is active */
+  modId: string;
+  /** Brief description of the event */
+  description: string;
+}
+
+export const ARK_EVENTS: ArkEvent[] = [
+  { id: "FearEvolved",       displayName: "Fear Ascended",      modId: "877752",  description: "Halloween themed event with special creature skins, items, and decorations." },
+  { id: "EggcellentAdventure", displayName: "Eggcellent Adventure", modId: "877745", description: "Easter themed event with colorful egg hunts and cosmetic rewards." },
+  { id: "WinterWonderland",  displayName: "Winter Wonderland",  modId: "927090",  description: "Christmas themed event with snowfall, holiday structures, and cosmetics." },
+  { id: "LoveEvolved",       displayName: "Love Ascended",      modId: "927084",  description: "Valentine's Day themed event with heart-themed items and creature skins." },
+  { id: "TurkeyTrial",       displayName: "Turkey Trial",       modId: "927083",  description: "Thanksgiving themed event with unique cosmetics and seasonal content." },
+  { id: "SummerBash",        displayName: "Summer Bash",        modId: "927091",  description: "Summer themed event with water-themed items and seasonal cosmetics." },
+];
+
+/** Mod IDs that belong to ARK event mods and should not be manually installed. */
+export const ARK_EVENT_MOD_IDS = new Set(ARK_EVENTS.map((e) => e.modId));

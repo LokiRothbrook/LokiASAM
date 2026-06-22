@@ -479,6 +479,16 @@ async function runMigrations(db: Database): Promise<void> {
   try {
     await db.execute("ALTER TABLE servers ADD COLUMN installed_build_id TEXT");
   } catch { /* already exists */ }
+
+  // ── Migration 016: save folder name for -SaveDirectoryOverride ─────────────
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN save_folder_name TEXT NOT NULL DEFAULT ''");
+  } catch { /* already exists */ }
+
+  // ── Migration 017: active event id (null = no event) ──────────────────────
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN active_event TEXT");
+  } catch { /* already exists */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +526,8 @@ export interface ServerRow {
   update_cancel_message: string;
   auto_start: number;                // 0 | 1 — always start on app launch
   installed_build_id: string | null; // populated by Rust on install/update
+  save_folder_name: string;          // subfolder name for -SaveDirectoryOverride; empty = no override
+  active_event: string | null;       // ARK event id (e.g. "FearEvolved"); null = no active event
   created_at: string;
   updated_at: string;
 }
@@ -615,6 +627,7 @@ export interface CreateServerInput {
   rconPort: number;
   rconPassword: string;
   maxPlayers: number;
+  saveFolderName?: string;
   serverPassword?: string;
   adminPassword: string;
   clusterId?: string;
@@ -627,8 +640,8 @@ export async function createServer(input: CreateServerInput): Promise<string> {
   await db.execute(
     `INSERT INTO servers
        (id, name, map_id, install_path, port, query_port, rcon_port, rcon_password,
-        max_players, server_password, admin_password, cluster_id, preset_id, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped')`,
+        max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
     [
       input.id,
       input.name,
@@ -643,6 +656,7 @@ export async function createServer(input: CreateServerInput): Promise<string> {
       input.adminPassword,
       input.clusterId ?? null,
       input.presetId ?? null,
+      input.saveFolderName ?? "",
     ]
   );
   return input.id;
@@ -839,6 +853,15 @@ export async function updateServerStatus(
   );
 }
 
+/** Set the active ARK event for a server (null to clear). */
+export async function setServerActiveEvent(id: string, eventId: string | null): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET active_event = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [eventId ?? null, id]
+  );
+}
+
 /** Set the update_available flag for a single server. */
 export async function setServerUpdateAvailable(
   id: string,
@@ -1015,6 +1038,30 @@ export async function removeServerMod(serverId: string, modId: string): Promise<
   await db.execute(
     "DELETE FROM server_mods WHERE server_id = ? AND mod_id = ?",
     [serverId, modId]
+  );
+}
+
+/** Copy all mods from sourceServerId to targetServerId. Skips duplicates. */
+export async function copyServerMods(sourceServerId: string, targetServerId: string): Promise<void> {
+  const sourceMods = await getServerMods(sourceServerId);
+  for (const mod of sourceMods) {
+    await addServerMod(targetServerId, mod.mod_id, mod.mod_name);
+    if (mod.locked_by_map) {
+      await setModMapLock(targetServerId, mod.mod_id, true);
+    }
+  }
+}
+
+/** Copy the server config (INI + launch args) from sourceServerId to targetServerId. */
+export async function copyServerConfig(sourceServerId: string, targetServerId: string): Promise<void> {
+  const db = await getDb();
+  const src = await getServerConfig(sourceServerId);
+  if (!src) return;
+  await saveServerConfig(
+    targetServerId,
+    src.game_user_settings_json,
+    src.game_ini_json,
+    src.launch_args_json,
   );
 }
 

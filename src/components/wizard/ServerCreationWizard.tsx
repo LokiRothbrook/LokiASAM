@@ -45,7 +45,7 @@ import { dispatchNotification } from "@/lib/notifications";
 import {
   getAppSetting, createServer, deleteServerRecord, saveServerConfig,
   createSchedule, getClusters, isServerNameTaken, updateServerStatus,
-  addServerMod,
+  addServerMod, getServers, getServerMods, createClusterRecord,
   type ClusterRow,
 } from "@/lib/db";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -130,14 +130,15 @@ interface WizardData {
   rconPort: number;
   // Cluster
   clusterId: string;
+  // Save directory
+  saveFolderName: string;
   // Automation
-  autoUpdate: boolean;
-  autoUpdateCron: string;
   autoRestart: boolean;
   autoRestartCron: string;
   autoBackup: boolean;
   autoBackupCron: string;
   backupRetention: number;
+  autoPlayerBackup: boolean;
   // Mods — lockedModIds are auto-added from map selection and cannot be removed
   modIds: string[];
   lockedModIds: string[];
@@ -210,13 +211,13 @@ const DEFAULT_DATA: WizardData = {
   queryPort: 27015,
   rconPort: 27020,
   clusterId: "",
-  autoUpdate: true,
-  autoUpdateCron: "0 3 * * *",
+  saveFolderName: "",
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
   autoBackup: true,
   autoBackupCron: "0 */6 * * *",
-  backupRetention: 10,
+  backupRetention: 7,
+  autoPlayerBackup: false,
   modIds: [],
   lockedModIds: [],
   modNames: {},
@@ -349,6 +350,15 @@ function BasicInfoStep({
 
   const handleMapSelect = (map: ArkMap) => {
     const patch: Partial<WizardData> = { mapId: map.id };
+
+    // Auto-update save folder name if it hasn't been manually edited
+    // (still empty or still equal to the old map's display name)
+    const prevMap = getMapById(data.mapId);
+    const prevDefaultName = prevMap?.displayName ?? "";
+    if (!data.saveFolderName || data.saveFolderName === prevDefaultName) {
+      patch.saveFolderName = map.displayName;
+    }
+
     if (map.isMod && map.requiredModId) {
       // Auto-add the required mod and lock it
       const newModIds = data.modIds.includes(map.requiredModId)
@@ -357,8 +367,6 @@ function BasicInfoStep({
       patch.modIds = newModIds;
       patch.lockedModIds = [map.requiredModId];
     } else {
-      // Removing any previously locked mod (map changed to non-mod)
-      const prevMap = getMapById(data.mapId);
       if (prevMap?.isMod && prevMap.requiredModId) {
         patch.modIds = data.modIds.filter((id) => id !== prevMap.requiredModId);
         patch.lockedModIds = [];
@@ -503,6 +511,21 @@ function BasicInfoStep({
             </p>
           </div>
         )}
+      </div>
+
+      {/* Save Folder Name */}
+      <div className="space-y-1.5">
+        <Label style={{ color: "var(--text-primary)" }}>Save Folder Name</Label>
+        <Input
+          value={data.saveFolderName}
+          onChange={(e) => onChange({ saveFolderName: e.target.value })}
+          placeholder={selectedMap?.displayName ?? "e.g. TheIsland"}
+          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+        />
+        <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+          Save files for this server will be stored in <span className="font-mono" style={{ color: "var(--neon-cyan)" }}>Saves/{data.saveFolderName || (selectedMap?.displayName ?? "…")}/</span> inside your base directory.
+          Use a unique name if you run two servers on the same map.
+        </p>
       </div>
 
       {/* Max Players */}
@@ -1220,6 +1243,58 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
 function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [portStatus, setPortStatus] = useState<Record<string, boolean | null>>({});
   const [checking, setChecking] = useState(false);
+  const [conflicts, setConflicts] = useState<Record<string, string>>({});
+
+  // On mount: load existing servers, suggest next available ports, detect conflicts
+  useEffect(() => {
+    getServers().then((servers) => {
+      if (servers.length === 0) return;
+
+      // Collect all ports in use
+      const usedPorts = new Map<number, string>(); // port → server name
+      for (const s of servers) {
+        usedPorts.set(s.port, s.name);
+        usedPorts.set(s.query_port, s.name);
+        usedPorts.set(s.rcon_port, s.name);
+      }
+
+      // Find next available game port (ARK uses game_port and game_port+1 internally, so step by 2)
+      const maxGame  = Math.max(...servers.map((s) => s.port));
+      const maxQuery = Math.max(...servers.map((s) => s.query_port));
+      const maxRcon  = Math.max(...servers.map((s) => s.rcon_port));
+
+      const suggestGame  = maxGame  + 2;
+      const suggestQuery = maxQuery + 1;
+      const suggestRcon  = maxRcon  + 1;
+
+      // Only apply suggestion if the user hasn't changed from the default
+      const isDefault =
+        data.port === 7777 && data.queryPort === 27015 && data.rconPort === 27020;
+      if (isDefault) {
+        onChange({ port: suggestGame, queryPort: suggestQuery, rconPort: suggestRcon });
+      }
+
+      // Check current values for conflicts
+      updateConflicts(data.port, data.queryPort, data.rconPort, usedPorts);
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function updateConflicts(
+    game: number, query: number, rcon: number,
+    usedMap?: Map<number, string>,
+  ) {
+    getServers().then((servers) => {
+      const used = usedMap ?? new Map(servers.flatMap((s) => [
+        [s.port, s.name], [s.query_port, s.name], [s.rcon_port, s.name],
+      ] as [number, string][]));
+      const next: Record<string, string> = {};
+      if (used.has(game))  next.port      = used.get(game)!;
+      if (used.has(query)) next.queryPort  = used.get(query)!;
+      if (used.has(rcon))  next.rconPort   = used.get(rcon)!;
+      setConflicts(next);
+    }).catch(() => {});
+  }
 
   const checkPort = async (portKey: string, port: number) => {
     setChecking(true);
@@ -1233,27 +1308,40 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     }
   };
 
+  const handlePortChange = (fieldKey: "port" | "queryPort" | "rconPort", val: number) => {
+    const next = { ...{ port: data.port, queryPort: data.queryPort, rconPort: data.rconPort }, [fieldKey]: val };
+    onChange({ [fieldKey]: val });
+    updateConflicts(next.port, next.queryPort, next.rconPort);
+  };
+
   const PortField = ({ label, fieldKey, description }: { label: string; fieldKey: "port" | "queryPort" | "rconPort"; description: string }) => {
     const val = data[fieldKey] as number;
     const status = portStatus[fieldKey];
+    const conflict = conflicts[fieldKey];
     return (
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <Label style={{ color: "var(--text-primary)" }}>{label}</Label>
-          {status === true && <span className="text-[10px]" style={{ color: "var(--neon-green)" }}>Available</span>}
-          {status === false && <span className="text-[10px]" style={{ color: "var(--neon-red)" }}>In use!</span>}
+          {status === true && !conflict && <span className="text-[10px]" style={{ color: "var(--neon-green)" }}>Available</span>}
+          {status === false && <span className="text-[10px]" style={{ color: "var(--neon-red)" }}>In use on this machine!</span>}
         </div>
         <Input
           type="number" min={1024} max={65535} value={val}
-          onChange={(e) => onChange({ [fieldKey]: Number(e.target.value) })}
+          onChange={(e) => handlePortChange(fieldKey, Number(e.target.value))}
           onBlur={() => checkPort(fieldKey, val)}
           className="font-mono"
           style={{
             background: "rgba(10,10,30,0.8)",
-            borderColor: status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
+            borderColor: conflict ? "rgba(255,140,0,0.6)" : status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
             color: "var(--text-primary)",
           }}
         />
+        {conflict && (
+          <p className="text-[10px] flex items-center gap-1" style={{ color: "rgba(255,140,0,0.9)" }}>
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            Shared with <strong>{conflict}</strong> — both servers cannot run at the same time.
+          </p>
+        )}
         <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{description}</p>
       </div>
     );
@@ -1262,17 +1350,16 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   return (
     <div className="space-y-5">
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-        Configure the ports this server will listen on. Each server needs a unique set of three ports.
+        Ports have been auto-suggested based on your existing servers. Each server needs a unique set of three ports.
       </p>
-      <PortField label="Game Port" fieldKey="port" description="Clients connect here (UDP). Default: 7777" />
-      <PortField label="Query Port" fieldKey="queryPort" description="Steam server browser (UDP). Default: 27015" />
-      <PortField label="RCON Port" fieldKey="rconPort" description="Remote console (TCP). Default: 27020" />
+      <PortField label="Game Port" fieldKey="port" description="Clients connect here (UDP). ARK also uses port+1 internally." />
+      <PortField label="Query Port" fieldKey="queryPort" description="Steam server browser (UDP)." />
+      <PortField label="RCON Port" fieldKey="rconPort" description="Remote console (TCP)." />
       {checking && (
         <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
           <Loader2 className="w-3 h-3 animate-spin" /> Checking port availability…
         </p>
       )}
-      {/* Port forwarding info */}
       <div
         className="flex gap-2.5 rounded-lg px-3 py-2.5"
         style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
@@ -1282,7 +1369,7 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           These ports also need to be forwarded on your router or VPN service for players outside
           your home network to connect. See the{" "}
           <span style={{ color: "var(--neon-purple)" }}>Quick Start Guide</span>
-          {" "}(? in the sidebar) for details on router forwarding and VPN options.
+          {" "}(? in the sidebar) for details.
         </p>
       </div>
     </div>
@@ -1452,8 +1539,44 @@ function FirewallStep({ data }: { data: WizardData }) {
 function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [clusters, setClusters] = useState<ClusterRow[]>([]);
   const [joinCluster, setJoinCluster] = useState(!!data.clusterId);
+  const [newClusterName, setNewClusterName] = useState("");
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => { getClusters().then(setClusters).catch(() => {}); }, []);
+
+  const handleToggleJoin = (join: boolean) => {
+    setJoinCluster(join);
+    if (!join) {
+      // Remove NoTransferFromFiltering when leaving cluster
+      const nextArgs = { ...data.launchArgs };
+      delete nextArgs["NoTransferFromFiltering"];
+      onChange({ clusterId: "", launchArgs: nextArgs });
+    }
+  };
+
+  const handleSelectCluster = (id: string) => {
+    // Auto-apply NoTransferFromFiltering when joining a cluster
+    const nextArgs = { ...data.launchArgs, NoTransferFromFiltering: "true" };
+    onChange({ clusterId: id, launchArgs: nextArgs });
+  };
+
+  const handleCreateCluster = async () => {
+    const name = newClusterName.trim();
+    if (!name) return;
+    setCreating(true);
+    try {
+      const id = generateUUID();
+      await createClusterRecord(id, name, null);
+      const updated = await getClusters();
+      setClusters(updated);
+      setNewClusterName("");
+      handleSelectCluster(id);
+    } catch (e) {
+      console.error("Failed to create cluster:", e);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -1467,7 +1590,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
         </div>
         <button
           type="button"
-          onClick={() => { const v = !joinCluster; setJoinCluster(v); if (!v) onChange({ clusterId: "" }); }}
+          onClick={() => handleToggleJoin(!joinCluster)}
           className="shrink-0 flex items-center"
           aria-label={joinCluster ? "Disable cluster" : "Enable cluster"}
         >
@@ -1477,25 +1600,51 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
         </button>
       </div>
       {joinCluster && (
-        <div className="space-y-2">
-          {clusters.length === 0 ? (
-            <div className="rounded-lg p-4 text-center" style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-              <p className="text-sm" style={{ color: "var(--text-muted)" }}>No clusters yet. Create one from the Clusters page after setup.</p>
-            </div>
-          ) : (
-            clusters.map((cluster) => (
-              <button
-                key={cluster.id}
-                onClick={() => onChange({ clusterId: cluster.id })}
-                className="w-full rounded-lg p-3 text-left transition-all"
-                style={{
-                  background: data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
-                  border: `1px solid ${data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
-                }}
+        <div className="space-y-3">
+          {clusters.map((cluster) => (
+            <button
+              key={cluster.id}
+              onClick={() => handleSelectCluster(cluster.id)}
+              className="w-full rounded-lg p-3 text-left transition-all"
+              style={{
+                background: data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+              }}
+            >
+              <p className="text-sm font-medium" style={{ color: data.clusterId === cluster.id ? "var(--neon-purple)" : "var(--text-primary)" }}>{cluster.name}</p>
+            </button>
+          ))}
+
+          {/* Create new cluster inline */}
+          <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(10,10,30,0.4)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
+            <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Create a new cluster</p>
+            <div className="flex gap-2">
+              <Input
+                value={newClusterName}
+                onChange={(e) => setNewClusterName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateCluster()}
+                placeholder="Cluster name"
+                className="text-sm"
+                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+              />
+              <Button
+                size="sm" variant="outline"
+                disabled={!newClusterName.trim() || creating}
+                onClick={handleCreateCluster}
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
               >
-                <p className="text-sm font-medium" style={{ color: data.clusterId === cluster.id ? "var(--neon-purple)" : "var(--text-primary)" }}>{cluster.name}</p>
-              </button>
-            ))
+                {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Create"}
+              </Button>
+            </div>
+          </div>
+
+          {data.clusterId && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)" }}>
+              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
+              <p style={{ color: "var(--text-muted)" }}>
+                <strong style={{ color: "var(--text-primary)" }}>NoTransferFromFiltering</strong> has been automatically enabled to isolate this cluster from other servers.
+              </p>
+            </div>
           )}
         </div>
       )}
@@ -1621,46 +1770,93 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
 // Automation Step
 // ---------------------------------------------------------------------------
 
-function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
-  const schedules = [
-    { key: "autoUpdate" as const, cronKey: "autoUpdateCron" as const, label: "Auto-Update", desc: "Download and apply ASA server updates automatically" },
-    { key: "autoRestart" as const, cronKey: "autoRestartCron" as const, label: "Auto-Restart", desc: "Restart the server on a schedule with an in-game broadcast warning" },
-    { key: "autoBackup" as const, cronKey: "autoBackupCron" as const, label: "Auto-Backup", desc: "Create scheduled save-game ZIP backups" },
-  ];
+function AutomationToggleCard({
+  enabled, onToggle, label, description,
+}: { enabled: boolean; onToggle: () => void; label: string; description: string }) {
+  return (
+    <div
+      className="rounded-lg p-4 space-y-3 flex items-start justify-between gap-3"
+      style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}
+    >
+      <div>
+        <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
+        <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{description}</p>
+      </div>
+      <button type="button" onClick={onToggle} className="shrink-0 flex items-center" aria-label={enabled ? "Disable" : "Enable"}>
+        {enabled
+          ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+          : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+      </button>
+    </div>
+  );
+}
 
+function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   return (
     <div className="space-y-4">
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>Configure automation schedules. All times are in your local timezone.</p>
-      {schedules.map(({ key, cronKey, label, desc }) => (
-        <div key={key} className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data[key] ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{desc}</p>
+
+      {/* Auto-Restart */}
+      <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data.autoRestart ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Auto-Restart</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Gracefully restart the server on a schedule with in-game broadcast warnings.</p>
+          </div>
+          <button type="button" onClick={() => onChange({ autoRestart: !data.autoRestart })} className="shrink-0 flex items-center">
+            {data.autoRestart
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
+        </div>
+        {data.autoRestart && <CronPicker value={data.autoRestartCron} onChange={(v) => onChange({ autoRestartCron: v })} />}
+      </div>
+
+      {/* Server Backup */}
+      <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data.autoBackup ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Server Backups</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Create scheduled world-save ZIP backups. Saved per-tier in the Backups folder.</p>
+          </div>
+          <button type="button" onClick={() => onChange({ autoBackup: !data.autoBackup })} className="shrink-0 flex items-center">
+            {data.autoBackup
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
+        </div>
+        {data.autoBackup && (
+          <>
+            <CronPicker value={data.autoBackupCron} onChange={(v) => onChange({ autoBackupCron: v })} />
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Keep last N daily backups</Label>
+                <span className="font-mono text-sm" style={{ color: "var(--neon-purple)" }}>{data.backupRetention}</span>
+              </div>
+              <Slider min={1} max={50} step={1} value={[data.backupRetention]} onValueChange={([v]) => onChange({ backupRetention: v })} />
             </div>
-            <button
-              type="button"
-              onClick={() => onChange({ [key]: !data[key] })}
-              className="shrink-0 flex items-center"
-              aria-label={(data[key] as boolean) ? "Disable" : "Enable"}
-            >
-              {(data[key] as boolean)
-                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-            </button>
-          </div>
-          {data[key] && <CronPicker value={data[cronKey] as string} onChange={(v) => onChange({ [cronKey]: v })} />}
-        </div>
-      ))}
-      {data.autoBackup && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label style={{ color: "var(--text-primary)" }}>Keep last N backups</Label>
-            <span className="font-mono text-sm" style={{ color: "var(--neon-purple)" }}>{data.backupRetention}</span>
-          </div>
-          <Slider min={1} max={50} step={1} value={[data.backupRetention]} onValueChange={([v]) => onChange({ backupRetention: v })} />
-        </div>
-      )}
+          </>
+        )}
+      </div>
+
+      {/* Player Backup */}
+      <AutomationToggleCard
+        enabled={data.autoPlayerBackup}
+        onToggle={() => onChange({ autoPlayerBackup: !data.autoPlayerBackup })}
+        label="Player & Tribe Backups"
+        description="Independently back up player profiles and tribe data. Useful for rolling back character loss separately from world saves."
+      />
+
+      {/* Update note */}
+      <div
+        className="flex gap-2.5 rounded-lg px-3 py-2.5"
+        style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)" }}
+      >
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-cyan)" }} />
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <strong style={{ color: "var(--text-primary)" }}>Auto-Update</strong> is configured per-server in the Automation tab after setup — it controls update checks and can apply updates automatically when a new ASA build is available.
+        </p>
+      </div>
     </div>
   );
 }
@@ -1671,6 +1867,12 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [input, setInput] = useState("");
+  const [existingServers, setExistingServers] = useState<import("@/lib/db").ServerRow[]>([]);
+  const [copyFromId, setCopyFromId] = useState("");
+
+  useEffect(() => {
+    getServers().then(setExistingServers).catch(() => {});
+  }, []);
 
   const modBrowserOpen      = useAppStore((s) => s.modBrowserOpen);
   const setModBrowserOpen   = useAppStore((s) => s.setModBrowserOpen);
@@ -1765,6 +1967,36 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
         </div>
       )}
 
+      {/* Copy mods from existing server */}
+      {existingServers.length > 0 && (
+        <div className="flex gap-2 items-center">
+          <select
+            value={copyFromId}
+            onChange={(e) => setCopyFromId(e.target.value)}
+            className="flex-1 text-xs rounded-lg px-2 py-1.5"
+            style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          >
+            <option value="">Copy mods from existing server…</option>
+            {existingServers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <Button
+            size="sm" variant="outline"
+            disabled={!copyFromId}
+            onClick={async () => {
+              const srcMods = await getServerMods(copyFromId);
+              const newIds = srcMods.map((m) => m.mod_id).filter((id) => !data.modIds.includes(id));
+              const newNames = { ...data.modNames };
+              for (const m of srcMods) newNames[m.mod_id] = m.mod_name;
+              onChange({ modIds: [...data.modIds, ...newIds], modNames: newNames });
+              setCopyFromId("");
+            }}
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
+          >
+            Copy
+          </Button>
+        </div>
+      )}
+
       <div className="flex gap-2">
         <Input
           value={input}
@@ -1856,6 +2088,8 @@ function InstallStep({
   const installPathRef = useRef("");
   const steamcmdPathRef = useRef("");
   const cacheDirRef = useRef("");
+  const baseDirRef = useRef("");
+  const saveFolderNameRef = useRef("");
   const terminalRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const backgroundRef = useRef(false);
@@ -1887,9 +2121,10 @@ function InstallStep({
     { label: "Mode / Style", value: presetLabel },
     { label: "Max Players",  value: String(data.maxPlayers) },
     { label: "Ports",        value: `${data.port} / ${data.queryPort} / ${data.rconPort}` },
-    { label: "Auto-Update",  value: data.autoUpdate ? humanCron(data.autoUpdateCron) : "Disabled" },
-    { label: "Auto-Restart", value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
-    { label: "Auto-Backup",  value: data.autoBackup ? `${humanCron(data.autoBackupCron)}, keep ${data.backupRetention}` : "Disabled" },
+    { label: "Save Folder",      value: data.saveFolderName || getMapById(data.mapId)?.displayName || data.mapId },
+    { label: "Auto-Restart",     value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
+    { label: "Server Backups",   value: data.autoBackup ? `${humanCron(data.autoBackupCron)}, keep ${data.backupRetention}` : "Disabled" },
+    { label: "Player Backups",   value: data.autoPlayerBackup ? "Enabled (daily)" : "Disabled" },
     { label: "Mods",         value: data.modIds.length > 0 ? `${data.modIds.length} mod(s)` : "None" },
   ];
 
@@ -2237,7 +2472,7 @@ function InstallStep({
         if (!scmdPath) throw new Error("SteamCMD path not configured. Please run Setup first.");
 
         const sep = baseDir.includes("\\") ? "\\" : "/";
-        installPath = `${baseDir}${sep}servers${sep}${data.name}`;
+        installPath = `${baseDir}${sep}servers${sep}${serverId}`;
         steamcmdPath = scmdPath;
         cacheDirRef.current = `${baseDir}${sep}lokiasam${sep}cache${sep}asa-server`;
 
@@ -2245,6 +2480,13 @@ function InstallStep({
         const presetId = (data.presetStyle === "guided_custom" || data.presetStyle === "full_custom")
           ? data.presetStyle
           : `${data.gameMode}_${data.presetStyle}`;
+
+        // Resolve the effective save folder name (fall back to map display name)
+        const effectiveSaveFolderName = data.saveFolderName.trim()
+          || getMapById(data.mapId)?.displayName
+          || data.mapId;
+        baseDirRef.current = baseDir;
+        saveFolderNameRef.current = effectiveSaveFolderName;
 
         await createServer({
           id: serverId,
@@ -2260,6 +2502,7 @@ function InstallStep({
           adminPassword: data.adminPassword,
           clusterId: data.clusterId || undefined,
           presetId,
+          saveFolderName: effectiveSaveFolderName,
         });
         await updateServerStatus(serverId, "installing", null);
         await saveServerConfig(serverId, "{}", "{}", "{}");
@@ -2277,19 +2520,16 @@ function InstallStep({
           }
         }
 
-        const scheduleEntries = [
-          { enabled: data.autoUpdate,  cron: data.autoUpdateCron,  type: "update" },
-          { enabled: data.autoRestart, cron: data.autoRestartCron, type: "restart" },
-          { enabled: data.autoBackup,  cron: data.autoBackupCron,  type: "backup" },
-        ];
-        for (const s of scheduleEntries) {
-          if (s.enabled) {
-            await createSchedule({
-              id: generateUUID(), serverId, scheduleType: s.type,
-              cronExpression: s.cron, enabled: true,
-              configJson: s.type === "backup" ? JSON.stringify({ retention: data.backupRetention }) : "{}",
-            });
-          }
+        if (data.autoRestart) {
+          await createSchedule({ id: generateUUID(), serverId, scheduleType: "restart", cronExpression: data.autoRestartCron, enabled: true, configJson: "{}" });
+        }
+        if (data.autoBackup) {
+          const cfg = JSON.stringify({ daily: { enabled: true, keep: data.backupRetention }, weekly: { enabled: false, keep: 4 }, monthly: { enabled: false, keep: 3 } });
+          await createSchedule({ id: generateUUID(), serverId, scheduleType: "backup_server", cronExpression: data.autoBackupCron, enabled: true, configJson: cfg });
+        }
+        if (data.autoPlayerBackup) {
+          const cfg = JSON.stringify({ daily: { enabled: true, keep: 7 }, weekly: { enabled: false, keep: 4 }, monthly: { enabled: false, keep: 3 } });
+          await createSchedule({ id: generateUUID(), serverId, scheduleType: "backup_player", cronExpression: "0 2 * * *", enabled: true, configJson: cfg });
         }
 
         installPathRef.current = installPath;
@@ -2326,6 +2566,14 @@ function InstallStep({
 
       await saveServerConfig(serverId, JSON.stringify(gusJson), JSON.stringify(gameIniJson), JSON.stringify(data.launchArgs));
       await updateServerStatus(serverId, "stopped", null);
+
+      // Create symlink/junction so -SaveDirectoryOverride writes to the managed Saves folder
+      if (saveFolderNameRef.current && baseDirRef.current) {
+        await tauriCmd.createSaveLink(installPath, saveFolderNameRef.current, baseDirRef.current).catch((e) => {
+          console.warn("createSaveLink failed (non-fatal):", e);
+        });
+      }
+
       queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
 
       dispatchNotification({
