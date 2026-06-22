@@ -339,9 +339,21 @@ export const tauriCmd = {
    */
   cloneServer: (sourceInstallPath: string, destInstallPath: string) =>
     invoke<void>("clone_server", { sourceInstallPath, destInstallPath }),
-  /** Delete server files from disk. DB record deletion is done separately via db.ts. */
-  deleteServer: (serverId: string, installPath: string, deleteFiles: boolean) =>
-    invoke<void>("delete_server", { serverId, installPath, deleteFiles }),
+  /** Delete server files and optional data from disk. DB record deletion is done separately via db.ts. */
+  deleteServer: (
+    serverId: string,
+    installPath: string,
+    backupDir: string,
+    baseDir: string,
+    saveFolderName: string,
+    deleteFiles: boolean,
+    deleteBackups: boolean,
+    deleteLogs: boolean,
+    deleteSaves: boolean,
+  ) => invoke<void>("delete_server", { serverId, installPath, backupDir, baseDir, saveFolderName, deleteFiles, deleteBackups, deleteLogs, deleteSaves }),
+  /** Return on-disk byte counts for a server's backups, logs, and save data. */
+  getServerDiskUsage: (serverId: string, backupDir: string, baseDir: string, saveFolderName: string) =>
+    invoke<{ backupBytes: number; logBytes: number; saveBytes: number }>("get_server_disk_usage", { serverId, backupDir, baseDir, saveFolderName }),
 
   // SteamCMD / installation
   /** Download and extract SteamCMD to targetDir. Streams to steamcmd://output/setup. */

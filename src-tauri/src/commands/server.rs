@@ -1076,16 +1076,78 @@ fn find_server_process(install_path: &str) -> Option<u32> {
     None
 }
 
+/// Return the total on-disk size (in bytes) of a server's backup, log, and save data.
+/// Values are 0 if the directories don't exist.
+#[tauri::command]
+pub async fn get_server_disk_usage(
+    app: tauri::AppHandle,
+    server_id: String,
+    backup_dir: String,
+    base_dir: String,
+    save_folder_name: String,
+) -> Result<serde_json::Value, String> {
+    fn dir_size(path: &std::path::Path) -> u64 {
+        if !path.exists() { return 0; }
+        // Follow symlinks for the top-level dir but not recursively, to handle
+        // the SavedArks symlink case where the real data is under base_dir/Saves/.
+        let mut total = 0u64;
+        if let Ok(walker) = std::fs::read_dir(path) {
+            for entry in walker.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    total += dir_size(&p);
+                } else if let Ok(meta) = p.metadata() {
+                    total += meta.len();
+                }
+            }
+        }
+        total
+    }
+
+    let backup_bytes = if !backup_dir.is_empty() {
+        let p = std::path::PathBuf::from(&backup_dir).join(&server_id);
+        dir_size(&p)
+    } else {
+        0
+    };
+
+    let log_bytes = {
+        use crate::state::log_manager::LogManagerState;
+        let p = LogManagerState::server_logs_dir(&app, &server_id);
+        p.map(|d| dir_size(&d)).unwrap_or(0)
+    };
+
+    let save_bytes = if !base_dir.is_empty() && !save_folder_name.is_empty() {
+        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&save_folder_name);
+        dir_size(&p)
+    } else {
+        0
+    };
+
+    Ok(serde_json::json!({
+        "backupBytes": backup_bytes,
+        "logBytes": log_bytes,
+        "saveBytes": save_bytes,
+    }))
+}
+
 /// Delete a server from disk (optionally) and clean up in-memory state.
 ///
 /// Database record deletion is handled by the frontend via `db.deleteServerRecord()`.
 /// This command only removes the install directory when `delete_files` is true.
 #[tauri::command]
 pub async fn delete_server(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     server_id: String,
     install_path: String,
+    backup_dir: String,
+    base_dir: String,
+    save_folder_name: String,
     delete_files: bool,
+    delete_backups: bool,
+    delete_logs: bool,
+    delete_saves: bool,
 ) -> Result<(), String> {
     // If the server is running, force-stop it first.
     let pid = {
@@ -1108,6 +1170,32 @@ pub async fn delete_server(
     if delete_files && !install_path.is_empty() {
         std::fs::remove_dir_all(&install_path)
             .map_err(|e| format!("Failed to delete server files at {install_path}: {e}"))?;
+    }
+
+    if delete_backups && !backup_dir.is_empty() {
+        let p = std::path::PathBuf::from(&backup_dir).join(&server_id);
+        if p.exists() {
+            std::fs::remove_dir_all(&p)
+                .map_err(|e| format!("Failed to delete backup data: {e}"))?;
+        }
+    }
+
+    if delete_logs {
+        use crate::state::log_manager::LogManagerState;
+        if let Some(p) = LogManagerState::server_logs_dir(&app, &server_id) {
+            if p.exists() {
+                std::fs::remove_dir_all(&p)
+                    .map_err(|e| format!("Failed to delete log data: {e}"))?;
+            }
+        }
+    }
+
+    if delete_saves && !base_dir.is_empty() && !save_folder_name.is_empty() {
+        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&save_folder_name);
+        if p.exists() {
+            std::fs::remove_dir_all(&p)
+                .map_err(|e| format!("Failed to delete save data: {e}"))?;
+        }
     }
 
     Ok(())

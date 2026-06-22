@@ -54,6 +54,40 @@ interface Props {
 // Delete dialog
 // ---------------------------------------------------------------------------
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+interface DiskUsage { backupBytes: number; logBytes: number; saveBytes: number; }
+
+function DeleteToggleRow({
+  label, sublabel, enabled, onToggle, color = "var(--neon-red)",
+}: {
+  label: string; sublabel: string; enabled: boolean;
+  onToggle: () => void; color?: string;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between px-1 py-2 rounded-lg"
+      style={{ background: `rgba(${color === "var(--neon-red)" ? "255,0,85" : color === "var(--neon-purple)" ? "var(--neon-purple-rgb)" : "255,165,0"},0.05)`, border: `1px solid rgba(${color === "var(--neon-red)" ? "255,0,85" : color === "var(--neon-purple)" ? "var(--neon-purple-rgb)" : "255,165,0"},0.15)` }}
+    >
+      <div className="min-w-0 pr-3">
+        <p className="text-sm" style={{ color: "var(--text-primary)" }}>{label}</p>
+        <p className="text-xs mt-0.5 break-all" style={{ color: "var(--text-muted)" }}>{sublabel}</p>
+      </div>
+      <button type="button" onClick={onToggle} className="shrink-0 flex items-center focus:outline-none">
+        {enabled
+          ? <ToggleRight className="w-8 h-8" style={{ color }} />
+          : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+      </button>
+    </div>
+  );
+}
+
 function DeleteDialog({
   server,
   open,
@@ -64,16 +98,37 @@ function DeleteDialog({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [deleteFiles, setDeleteFiles] = useState(false);
-  const [removeRules, setRemoveRules] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [deleteFiles, setDeleteFiles]     = useState(false);
+  const [deleteBackups, setDeleteBackups] = useState(false);
+  const [deleteLogs, setDeleteLogs]       = useState(false);
+  const [deleteSaves, setDeleteSaves]     = useState(false);
+  const [removeRules, setRemoveRules]     = useState(false);
+  const [deleting, setDeleting]           = useState(false);
   const [exclusivePorts, setExclusivePorts] = useState<PortDef[]>([]);
+  const [diskUsage, setDiskUsage]         = useState<DiskUsage | null>(null);
+  const [backupDir, setBackupDir]         = useState("");
+  const [baseDir, setBaseDir]             = useState("");
 
-  // Compute exclusive ports when the dialog opens
   useEffect(() => {
     if (!open) return;
-    getServers().then((all) => {
+    // Reset toggles each time the dialog opens
+    setDeleteFiles(false); setDeleteBackups(false);
+    setDeleteLogs(false);  setDeleteSaves(false);
+    setRemoveRules(false); setDiskUsage(null);
+
+    Promise.all([
+      getServers(),
+      getAppSetting("backup_dir"),
+      getAppSetting("base_dir"),
+    ]).then(([all, bkDir, bsDir]) => {
       setExclusivePorts(computeExclusivePorts(server, all));
+      const bd = bkDir ?? "";
+      const bsd = bsDir ?? "";
+      setBackupDir(bd);
+      setBaseDir(bsd);
+      return tauriCmd.getServerDiskUsage(server.id, bd, bsd, server.save_folder_name ?? "");
+    }).then((usage) => {
+      setDiskUsage(usage);
     }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -84,7 +139,17 @@ function DeleteDialog({
       if (removeRules && exclusivePorts.length > 0) {
         await tauriCmd.removeFirewallRules(exclusivePorts).catch(() => {});
       }
-      await tauriCmd.deleteServer(server.id, server.install_path, deleteFiles);
+      await tauriCmd.deleteServer(
+        server.id,
+        server.install_path,
+        backupDir,
+        baseDir,
+        server.save_folder_name ?? "",
+        deleteFiles,
+        deleteBackups,
+        deleteLogs,
+        deleteSaves,
+      );
       await deleteServerRecord(server.id);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       onClose();
@@ -99,6 +164,8 @@ function DeleteDialog({
     .map((p) => `${p.port}/${p.protocol.toUpperCase()}`)
     .join(", ");
 
+  const hasSaveFolder = !!(server.save_folder_name);
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent onClick={(e) => e.stopPropagation()}>
@@ -107,51 +174,49 @@ function DeleteDialog({
             Delete &ldquo;{server.name}&rdquo;?
           </DialogTitle>
           <DialogDescription>
-            This will remove the server from LokiASAM. Backup archives are never deleted.
+            This will remove the server from LokiASAM. Choose what to clean up from disk below — everything is off by default.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3 mt-1">
-          <div
-            className="flex items-center justify-between px-1 py-2 rounded-lg"
-            style={{ background: "rgba(255,0,85,0.05)", border: "1px solid rgba(255,0,85,0.15)" }}
-          >
-            <div>
-              <p className="text-sm" style={{ color: "var(--text-primary)" }}>Also delete server files on disk</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{server.install_path}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setDeleteFiles((v) => !v)}
-              className="shrink-0 flex items-center focus:outline-none"
-              aria-label={deleteFiles ? "Disable delete files" : "Enable delete files"}
-            >
-              {deleteFiles
-                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-red)" }} />
-                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
-            </button>
-          </div>
-
+        <div className="space-y-2 mt-1">
+          <DeleteToggleRow
+            label="Delete server files"
+            sublabel={server.install_path}
+            enabled={deleteFiles}
+            onToggle={() => setDeleteFiles((v) => !v)}
+            color="var(--neon-red)"
+          />
+          <DeleteToggleRow
+            label={`Delete backups${diskUsage && diskUsage.backupBytes > 0 ? ` (${formatBytes(diskUsage.backupBytes)})` : diskUsage ? " (none)" : ""}`}
+            sublabel={backupDir ? `${backupDir}/${server.id}/` : "Backup directory not configured"}
+            enabled={deleteBackups}
+            onToggle={() => setDeleteBackups((v) => !v)}
+            color="var(--neon-red)"
+          />
+          <DeleteToggleRow
+            label={`Delete logs & crash reports${diskUsage && diskUsage.logBytes > 0 ? ` (${formatBytes(diskUsage.logBytes)})` : diskUsage ? " (none)" : ""}`}
+            sublabel="Archived logs and crash folders stored by LokiASAM"
+            enabled={deleteLogs}
+            onToggle={() => setDeleteLogs((v) => !v)}
+            color="var(--neon-red)"
+          />
+          {hasSaveFolder && (
+            <DeleteToggleRow
+              label={`Delete map saves${diskUsage && diskUsage.saveBytes > 0 ? ` (${formatBytes(diskUsage.saveBytes)})` : diskUsage ? " (none)" : ""}`}
+              sublabel={baseDir ? `${baseDir}/Saves/${server.save_folder_name}/` : "Saves directory"}
+              enabled={deleteSaves}
+              onToggle={() => setDeleteSaves((v) => !v)}
+              color="var(--neon-red)"
+            />
+          )}
           {exclusivePorts.length > 0 && (
-            <div
-              className="flex items-center justify-between px-1 py-2 rounded-lg"
-              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
-            >
-              <div>
-                <p className="text-sm" style={{ color: "var(--text-primary)" }}>Also remove firewall rules for ports {exclusivePortList}</p>
-                <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Only ports not used by any other server will be removed</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setRemoveRules((v) => !v)}
-                className="shrink-0 flex items-center focus:outline-none"
-                aria-label={removeRules ? "Disable remove rules" : "Enable remove rules"}
-              >
-                {removeRules
-                  ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-                  : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
-              </button>
-            </div>
+            <DeleteToggleRow
+              label={`Remove firewall rules for ${exclusivePortList}`}
+              sublabel="Only ports not shared with any other server will be removed"
+              enabled={removeRules}
+              onToggle={() => setRemoveRules((v) => !v)}
+              color="rgba(255,165,0,1)"
+            />
           )}
         </div>
 
@@ -160,11 +225,7 @@ function DeleteDialog({
           <Button
             disabled={deleting}
             onClick={handleDelete}
-            style={{
-              background: "rgba(255,0,85,0.15)",
-              borderColor: "var(--neon-red)",
-              color: "var(--neon-red)",
-            }}
+            style={{ background: "rgba(255,0,85,0.15)", borderColor: "var(--neon-red)", color: "var(--neon-red)" }}
           >
             {deleting ? <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Deleting…</> : "Delete"}
           </Button>

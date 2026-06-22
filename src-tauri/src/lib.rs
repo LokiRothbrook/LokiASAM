@@ -488,6 +488,7 @@ pub fn run() {
             commands::server::scan_running_servers,
             commands::server::clone_server,
             commands::server::delete_server,
+            commands::server::get_server_disk_usage,
             commands::server::force_server_start_failed,
             // Certificates
             commands::certs::download_amazon_root_ca,
