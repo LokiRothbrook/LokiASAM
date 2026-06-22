@@ -1392,12 +1392,12 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
         style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
         <div>
           <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>All Platforms (Crossplay)</p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow PC, Xbox, PlayStation, and other platforms to join via <code>-AllPlatforms</code>.</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow PC, Xbox, PlayStation, and other platforms to join via <code>-crossplay</code>.</p>
         </div>
         <button type="button"
-          onClick={() => onChange({ launchArgs: { ...data.launchArgs, AllPlatforms: data.launchArgs?.AllPlatforms === "true" ? "false" : "true" } })}
+          onClick={() => onChange({ launchArgs: { ...data.launchArgs, crossplay: data.launchArgs?.crossplay === "true" ? "false" : "true" } })}
           className="shrink-0 flex items-center">
-          {data.launchArgs?.AllPlatforms === "true"
+          {data.launchArgs?.crossplay === "true"
             ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
             : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
         </button>

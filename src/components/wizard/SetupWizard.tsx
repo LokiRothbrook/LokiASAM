@@ -44,6 +44,7 @@ import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents 
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useAutostart } from "@/hooks/useAutostart";
 import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -2053,6 +2054,7 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
 
 function TrayStep() {
   const { closeToTray, setCloseToTray } = useSetupStore();
+  const { enabled: autostartEnabled, loading: autostartLoading, toggle: toggleAutostart } = useAutostart();
 
   return (
     <div className="space-y-6">
@@ -2114,6 +2116,30 @@ function TrayStep() {
             <p className="text-xs pl-5" style={{ color: "var(--text-muted)" }}>{desc}</p>
           </button>
         ))}
+      </div>
+
+      {/* Auto-start with OS */}
+      <div
+        className="flex items-center justify-between gap-4 rounded-lg px-4 py-3"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Launch at login</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Start LokiASAM automatically when your OS boots. Pairs well with &ldquo;Minimize to tray&rdquo; above.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={autostartLoading}
+          onClick={() => toggleAutostart(!autostartEnabled)}
+          className="shrink-0"
+          aria-label={autostartEnabled ? "Disable launch at login" : "Enable launch at login"}
+        >
+          {autostartEnabled
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
       </div>
 
       <div className="space-y-2">

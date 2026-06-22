@@ -28,6 +28,7 @@ import {
   type NotificationConfigRow,
 } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
+import { useAutostart } from "@/hooks/useAutostart";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
@@ -1820,6 +1821,7 @@ function AppImageIntegrationSection() {
 
 function CloseToTraySection() {
   const [closeToTray, setCloseToTrayState] = useState(true);
+  const { enabled: autostartEnabled, loading: autostartLoading, toggle: toggleAutostart } = useAutostart();
 
   useEffect(() => { getAppSetting("close_to_tray").then((v) => setCloseToTrayState(v !== "false")); }, []);
 
@@ -1844,6 +1846,25 @@ function CloseToTraySection() {
           )}
         </div>
         <SettingsToggle checked={closeToTray} onChange={handleToggle} />
+      </div>
+
+      <div className="flex items-start justify-between gap-6">
+        <div className="space-y-1.5 flex-1">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Launch at Login</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Start LokiASAM automatically when your OS boots. Pairs well with &ldquo;Minimize to tray on close&rdquo; so the app runs quietly in the background.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={autostartLoading}
+          onClick={() => toggleAutostart(!autostartEnabled)}
+          aria-label={autostartEnabled ? "Disable launch at login" : "Enable launch at login"}
+        >
+          {autostartEnabled
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
       </div>
     </div>
   );

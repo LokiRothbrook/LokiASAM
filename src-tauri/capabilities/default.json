@@ -33,6 +33,10 @@
     "updater:default",
     "updater:allow-check",
     "updater:allow-download-and-install",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "autostart:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }
