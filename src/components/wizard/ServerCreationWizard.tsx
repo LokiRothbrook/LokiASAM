@@ -1267,6 +1267,47 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
 // Network Step
 // ---------------------------------------------------------------------------
 
+function PortField({
+  label, fieldKey, value, status, conflict, description, onChange, onBlur,
+}: {
+  label: string;
+  fieldKey: "port" | "queryPort" | "rconPort";
+  value: number;
+  status: boolean | null | undefined;
+  conflict: string | undefined;
+  description: string;
+  onChange: (fieldKey: "port" | "queryPort" | "rconPort", val: number) => void;
+  onBlur: (fieldKey: string, val: number) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label style={{ color: "var(--text-primary)" }}>{label}</Label>
+        {status === true && !conflict && <span className="text-[10px]" style={{ color: "var(--neon-green)" }}>Available</span>}
+        {status === false && <span className="text-[10px]" style={{ color: "var(--neon-red)" }}>In use on this machine!</span>}
+      </div>
+      <Input
+        type="number" min={1024} max={65535} value={value}
+        onChange={(e) => onChange(fieldKey, Number(e.target.value))}
+        onBlur={() => onBlur(fieldKey, value)}
+        className="font-mono"
+        style={{
+          background: "rgba(10,10,30,0.8)",
+          borderColor: conflict ? "rgba(255,140,0,0.6)" : status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
+          color: "var(--text-primary)",
+        }}
+      />
+      {conflict && (
+        <p className="text-[10px] flex items-center gap-1" style={{ color: "rgba(255,140,0,0.9)" }}>
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          Shared with <strong>{conflict}</strong> — both servers cannot run at the same time.
+        </p>
+      )}
+      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{description}</p>
+    </div>
+  );
+}
+
 function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [portStatus, setPortStatus] = useState<Record<string, boolean | null>>({});
   const [checking, setChecking] = useState(false);
@@ -1341,47 +1382,14 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     updateConflicts(next.port, next.queryPort, next.rconPort);
   };
 
-  const PortField = ({ label, fieldKey, description }: { label: string; fieldKey: "port" | "queryPort" | "rconPort"; description: string }) => {
-    const val = data[fieldKey] as number;
-    const status = portStatus[fieldKey];
-    const conflict = conflicts[fieldKey];
-    return (
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <Label style={{ color: "var(--text-primary)" }}>{label}</Label>
-          {status === true && !conflict && <span className="text-[10px]" style={{ color: "var(--neon-green)" }}>Available</span>}
-          {status === false && <span className="text-[10px]" style={{ color: "var(--neon-red)" }}>In use on this machine!</span>}
-        </div>
-        <Input
-          type="number" min={1024} max={65535} value={val}
-          onChange={(e) => handlePortChange(fieldKey, Number(e.target.value))}
-          onBlur={() => checkPort(fieldKey, val)}
-          className="font-mono"
-          style={{
-            background: "rgba(10,10,30,0.8)",
-            borderColor: conflict ? "rgba(255,140,0,0.6)" : status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
-            color: "var(--text-primary)",
-          }}
-        />
-        {conflict && (
-          <p className="text-[10px] flex items-center gap-1" style={{ color: "rgba(255,140,0,0.9)" }}>
-            <AlertTriangle className="w-3 h-3 shrink-0" />
-            Shared with <strong>{conflict}</strong> — both servers cannot run at the same time.
-          </p>
-        )}
-        <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{description}</p>
-      </div>
-    );
-  };
-
   return (
     <div className="space-y-5">
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Ports have been auto-suggested based on your existing servers. Each server needs a unique set of three ports.
       </p>
-      <PortField label="Game Port" fieldKey="port" description="Clients connect here (UDP). ARK also uses port+1 internally." />
-      <PortField label="Query Port" fieldKey="queryPort" description="Steam server browser (UDP)." />
-      <PortField label="RCON Port" fieldKey="rconPort" description="Remote console (TCP)." />
+      <PortField label="Game Port" fieldKey="port" value={data.port} status={portStatus["port"]} conflict={conflicts["port"]} description="Clients connect here (UDP). ARK also uses port+1 internally." onChange={handlePortChange} onBlur={checkPort} />
+      <PortField label="Query Port" fieldKey="queryPort" value={data.queryPort} status={portStatus["queryPort"]} conflict={conflicts["queryPort"]} description="Steam server browser (UDP)." onChange={handlePortChange} onBlur={checkPort} />
+      <PortField label="RCON Port" fieldKey="rconPort" value={data.rconPort} status={portStatus["rconPort"]} conflict={conflicts["rconPort"]} description="Remote console (TCP)." onChange={handlePortChange} onBlur={checkPort} />
       {checking && (
         <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
           <Loader2 className="w-3 h-3 animate-spin" /> Checking port availability…
