@@ -22,7 +22,7 @@ use crate::state::rcon_pool::RconPool;
 
 use super::backup::{
     create_server_backup_inner, backup_all_players_inner, create_player_backup_inner,
-    rcon_save_world, BackupRecord,
+    rcon_save_world, rcon_broadcast, BackupRecord,
 };
 
 fn fmt_size(bytes: u64) -> String {
@@ -57,7 +57,7 @@ fn map_id_to_path(map_id: &str) -> &'static str {
         "crystalisles"=> "CrystalIsles_WP",
         "amissa"      => "Amissa_WP",
         "svartalfheim"=> "Svartalfheim_WP",
-        "clubark"     => "ClubARK_WP",
+        "clubark"     => "BobsMissions_WP",
         _             => "TheIsland_WP",
     }
 }
@@ -488,7 +488,10 @@ pub async fn execute_tick(app: &AppHandle) {
         }
 
         let schedules = db::get_server_schedules(&conn, &server.id);
-        let map_path  = map_id_to_path(&server.map_id);
+        let base_map_path = map_id_to_path(&server.map_id);
+        let map_path = server.save_folder_name.as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(base_map_path);
 
         // Parse both schedule configs up front so we can decide whether a
         // world save is needed before starting either backup.
@@ -506,6 +509,12 @@ pub async fn execute_tick(app: &AppHandle) {
         // Issue SaveWorld once if any backup type is going to run, so both
         // server and player backups read from the same flushed on-disk state.
         if server_active || player_active {
+            // Send pre-backup broadcast if configured
+            if let Some(ref msg) = server.backup_broadcast_message {
+                if !msg.is_empty() {
+                    rcon_broadcast(&pool, &server.id, msg).await;
+                }
+            }
             let _ = rcon_save_world(&pool, &server.id).await;
             // ASA confirms SaveWorld via RCON before all file I/O is done;
             // wait for atomic writes (delete → rename) to settle.

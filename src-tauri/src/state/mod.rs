@@ -28,6 +28,9 @@ pub struct RunningServer {
     /// The crash monitor uses this to distinguish a startup failure (false → "start-failed")
     /// from a genuine runtime crash (true → "crashed").
     pub confirmed_running: bool,
+    /// Full start parameters — stored so the memory-limit restart can re-launch
+    /// without needing to re-derive params from the DB.
+    pub start_params: crate::commands::server::StartServerParams,
 }
 
 /// Global application state shared across all Tauri commands via `tauri::State`.

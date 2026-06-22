@@ -10,18 +10,71 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  getServerMods,
+  getServerMods, getServers,
   removeServerMod,
   toggleServerMod,
   reorderServerMods,
+  copyServerMods,
   type ModRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import type { ServerRow } from "@/lib/db";
+import { ARK_EVENT_MOD_IDS, ARK_EVENTS } from "@/data/game-data";
 
 interface Props {
   server: ServerRow;
+}
+
+// ---------------------------------------------------------------------------
+// CopyModsCard — copy mod list from another server
+// ---------------------------------------------------------------------------
+
+function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () => void }) {
+  const [servers, setServers] = useState<import("@/lib/db").ServerRow[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [copying, setCopying] = useState(false);
+
+  useEffect(() => {
+    getServers().then((all) => setServers(all.filter((s) => s.id !== serverId))).catch(() => {});
+  }, [serverId]);
+
+  if (servers.length === 0) return null;
+
+  const handleCopy = async () => {
+    if (!selectedId) return;
+    setCopying(true);
+    try {
+      await copyServerMods(selectedId, serverId);
+      onCopied();
+      toast.success("Mods copied successfully");
+    } catch (e) {
+      toast.error(`Failed to copy mods: ${e}`);
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  return (
+    <div className="glass-card flex flex-col gap-3 p-4 rounded-xl" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}>
+      <p className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>Copy Mods from Server</p>
+      <select
+        value={selectedId}
+        onChange={(e) => setSelectedId(e.target.value)}
+        className="w-full text-xs rounded-lg px-2 py-1.5"
+        style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+      >
+        <option value="">Select a server…</option>
+        {servers.map((s) => (
+          <option key={s.id} value={s.id}>{s.name}</option>
+        ))}
+      </select>
+      <Button size="sm" disabled={!selectedId || copying} onClick={handleCopy} className="btn-neon-purple w-full">
+        {copying ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
+        Copy Mods
+      </Button>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +179,14 @@ export function ModsTab({ server }: Props) {
     const invalid = ids.filter((id) => !/^\d+$/.test(id));
     if (invalid.length > 0) {
       setAddError(`Invalid ID${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")} — IDs must be numbers.`);
+      return;
+    }
+
+    // Block manual addition of event mods — they're managed via the Events section in Config
+    const eventBlocked = ids.filter((id) => ARK_EVENT_MOD_IDS.has(id));
+    if (eventBlocked.length > 0) {
+      const names = eventBlocked.map((id) => ARK_EVENTS.find((e) => e.modId === id)?.displayName ?? id);
+      setAddError(`Event mods are managed in the Config tab Events section: ${names.join(", ")}`);
       return;
     }
 
@@ -408,6 +469,9 @@ export function ModsTab({ server }: Props) {
           </Button>
         </div>
 
+        {/* Copy from server card */}
+        <CopyModsCard serverId={server.id} onCopied={() => loadMods()} />
+
         {/* Info card */}
         <div
           className="glass-card flex flex-col gap-2 p-4 rounded-xl"
@@ -462,8 +526,10 @@ function ModRowItem({
   onToggle,
   onRemove,
 }: ModRowItemProps) {
-  const enabled = mod.enabled === 1;
-  const locked  = mod.locked_by_map === 1;
+  const enabled    = mod.enabled === 1;
+  const locked     = mod.locked_by_map === 1;
+  const isEventMod = ARK_EVENT_MOD_IDS.has(mod.mod_id);
+  const eventName  = isEventMod ? (ARK_EVENTS.find((e) => e.modId === mod.mod_id)?.displayName ?? null) : null;
 
   return (
     <div
@@ -505,10 +571,18 @@ function ModRowItem({
               Map Mod
             </span>
           )}
+          {isEventMod && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,140,0,0.08)", color: "rgba(255,140,0,0.9)", border: "1px solid rgba(255,140,0,0.25)" }}>
+              Event — Manage in Config
+            </span>
+          )}
         </div>
         <span className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>{mod.mod_id}</span>
         {locked && (
           <p className="text-[10px] mt-0.5" style={{ color: "var(--text-subtle)" }}>Required by this server&apos;s map — change the map to remove.</p>
+        )}
+        {isEventMod && (
+          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-subtle)" }}>{eventName} event mod — managed via the Events section in the Config tab.</p>
         )}
       </div>
 

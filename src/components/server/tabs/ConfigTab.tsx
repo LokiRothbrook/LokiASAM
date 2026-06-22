@@ -19,10 +19,10 @@ import {
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import {
   INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
-  buildPresetConfig,
+  buildPresetConfig, ARK_EVENTS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -894,7 +894,6 @@ function QuickSetupModal({
 // Quick-edit groups shown in the structured tab (subset of all groups)
 // ---------------------------------------------------------------------------
 
-const QUICK_EDIT_GROUP_IDS = ["session", "admin", "rates", "breeding"];
 
 // ---------------------------------------------------------------------------
 // Main ConfigTab
@@ -903,6 +902,87 @@ const QUICK_EDIT_GROUP_IDS = ["session", "admin", "rates", "breeding"];
 // ---------------------------------------------------------------------------
 // Shutdown Settings Card
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Active Event card
+// ---------------------------------------------------------------------------
+
+function EventCard({ server }: { server: ServerRow }) {
+  const [activeEventId, setActiveEventId] = useState<string | null>(server.active_event ?? null);
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  const currentEvent = ARK_EVENTS.find((e) => e.id === activeEventId) ?? null;
+
+  const handleSelect = async (eventId: string | null) => {
+    setActiveEventId(eventId);
+    setSaving(true);
+    try {
+      await setServerActiveEvent(server.id, eventId);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      toast.error(`Failed to save event: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="glass-card rounded-xl p-4 space-y-3"
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-base">🎃</span>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</h3>
+        </div>
+        {saved && <span className="text-xs" style={{ color: "var(--neon-green)" }}>Saved</span>}
+        {saving && !saved && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Saving…</span>}
+      </div>
+
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Activating an event auto-loads its mod on server start and passes <span className="font-mono" style={{ color: "var(--neon-cyan)" }}>-ActiveEvent=</span> to the launcher.
+        The mod will be locked in the mod list while the event is active.
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => handleSelect(null)}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+          style={!activeEventId
+            ? { background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)" }
+            : { background: "rgba(10,10,30,0.5)", color: "var(--text-muted)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+        >
+          No Event
+        </button>
+        {ARK_EVENTS.map((evt) => (
+          <button
+            key={evt.id}
+            onClick={() => handleSelect(evt.id)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+            style={activeEventId === evt.id
+              ? { background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)" }
+              : { background: "rgba(10,10,30,0.5)", color: "var(--text-muted)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+          >
+            {evt.displayName}
+          </button>
+        ))}
+      </div>
+
+      {currentEvent && (
+        <div
+          className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+          style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
+        >
+          <span style={{ color: "var(--neon-purple)" }}>{currentEvent.description}</span>
+          <span className="ml-auto shrink-0 font-mono" style={{ color: "var(--text-subtle)" }}>Mod: {currentEvent.modId}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ShutdownSettingsCard({ server }: { server: ServerRow }) {
   const [warnPlayers, setWarnPlayers] = useState(server.shutdown_warn_players !== 0);
@@ -1188,20 +1268,193 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// AdvancedConfigTab
+// ---------------------------------------------------------------------------
+
+const THREAD_OPTIONS = [
+  { value: "", label: "Default (let ARK decide)" },
+  { value: "OneThread", label: "OneThread — single CPU thread" },
+  { value: "ForceUsePerfThreads", label: "ForceUsePerfThreads — maximize perf threads" },
+  { value: "NoPerfThreads", label: "NoPerfThreads — disable perf threads" },
+];
+
+function AdvancedConfigTab({
+  server,
+  config,
+  onChange,
+}: {
+  server: ServerRow;
+  config: ServerConfigJson;
+  onChange: (patch: Partial<ServerConfigJson>) => void;
+}) {
+  const [memLimit, setMemLimit] = useState(server.memory_limit_gb != null ? String(server.memory_limit_gb) : "");
+  const [savingMem, setSavingMem] = useState(false);
+
+  const launchArgs = config.launchArgs as Record<string, string>;
+
+  const setArg = (key: string, value: string) => {
+    onChange({ launchArgs: { ...launchArgs, [key]: value } });
+  };
+
+  const currentThread = THREAD_OPTIONS.find((o) => o.value && launchArgs[o.value] === "true")?.value ?? "";
+
+  const handleThreadChange = (val: string) => {
+    const next = { ...launchArgs };
+    for (const o of THREAD_OPTIONS) { if (o.value) delete next[o.value]; }
+    if (val) next[val] = "true";
+    onChange({ launchArgs: next });
+  };
+
+  const handleSaveMemLimit = async () => {
+    setSavingMem(true);
+    try {
+      const n = parseFloat(memLimit);
+      await updateServerMemoryLimit(server.id, isNaN(n) || n <= 0 ? null : n);
+      toast.success("Memory limit saved");
+    } catch (e) { toast.error(`Failed: ${e}`); }
+    finally { setSavingMem(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Thread options */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Thread Options</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Undocumented by Wildcard. Leave at Default unless you have a specific reason to change.
+        </p>
+        <select
+          value={currentThread}
+          onChange={(e) => handleThreadChange(e.target.value)}
+          className="w-full text-xs rounded-lg px-2 py-1.5"
+          style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+        >
+          {THREAD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+
+      {/* Platform */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Platform</h3>
+        <div className="flex items-center justify-between px-1 py-2 rounded-lg" style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.15)" }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>All Platforms (Crossplay)</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Pass <code>-AllPlatforms</code> — allow PC, Xbox, PlayStation, and other platforms to join.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setArg("AllPlatforms", launchArgs["AllPlatforms"] === "true" ? "false" : "true")}
+            className="shrink-0 flex items-center"
+          >
+            {launchArgs["AllPlatforms"] === "true"
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
+        </div>
+      </div>
+
+      {/* Custom CLI */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Custom Launch Arguments</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Appended verbatim to the launch command. Useful for undocumented or mod-specific flags.
+        </p>
+        <Input
+          value={launchArgs["_customCli"] ?? ""}
+          onChange={(e) => setArg("_customCli", e.target.value)}
+          placeholder="-SomeFlag -AnotherFlag=value"
+          className="font-mono text-xs"
+          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+        />
+      </div>
+
+      {/* Memory limit */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Memory Limit Restart</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Automatically restart the server if RAM usage exceeds this threshold. Leave blank to disable.
+        </p>
+        <div className="flex gap-2 items-center">
+          <Input
+            value={memLimit}
+            onChange={(e) => setMemLimit(e.target.value)}
+            placeholder="e.g. 12"
+            type="number"
+            min={1}
+            step={0.5}
+            className="w-32 text-xs"
+            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          />
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>GB</span>
+          <Button size="sm" variant="outline" onClick={handleSaveMemLimit} disabled={savingMem}
+            style={{ borderColor: "rgba(255,165,0,0.4)", color: "rgba(255,165,0,0.9)", background: "rgba(255,165,0,0.06)" }}>
+            {savingMem ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Network settings */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Advanced Network</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          For multi-NIC setups, VPN-based DDoS protection, or port forwarding edge cases. Leave blank if not needed.
+        </p>
+        {[
+          { key: "ServerIP", label: "Server IP (-ServerIP=)", placeholder: "e.g. 1.2.3.4 — public IP for DDoS protection VPN" },
+          { key: "MultiHome", label: "MultiHome IP (-MULTIHOME=)", placeholder: "e.g. 192.168.1.100 — internal NIC IP" },
+          { key: "UDPSocketPort", label: "UDP Socket Port (-UDPSocketPort=)", placeholder: "Experimental — leave blank (undocumented)" },
+        ].map(({ key, label, placeholder }) => (
+          <div key={key}>
+            <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>{label}</label>
+            <Input
+              value={launchArgs[key] ?? ""}
+              onChange={(e) => setArg(key, e.target.value)}
+              placeholder={placeholder}
+              className="text-xs font-mono"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ConfigTab({ server }: Props) {
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
   const [rawMode, setRawMode] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showFullModal, setShowFullModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [showQuickSetup, setShowQuickSetup] = useState(false);
+  const [showCopyFromServer, setShowCopyFromServer] = useState(false);
+  const [copyFromServerId, setCopyFromServerId] = useState("");
+  const [otherServers, setOtherServers] = useState<ServerRow[]>([]);
+
+  useEffect(() => {
+    getServers().then((all) => setOtherServers(all.filter((s) => s.id !== server.id))).catch(() => {});
+  }, [server.id]);
+
+  const handleCopyFromServer = async () => {
+    if (!copyFromServerId) return;
+    try {
+      await copyServerConfig(copyFromServerId, server.id);
+      await loadFromDb();
+      setShowCopyFromServer(false);
+      setCopyFromServerId("");
+      toast.success("Config copied");
+    } catch (e) {
+      toast.error(`Failed to copy config: ${e}`);
+    }
+  };
 
   // Load from DB on mount — reflects what we last saved, not what the server may have overwritten
   const loadFromDb = useCallback(async () => {
@@ -1360,10 +1613,8 @@ export function ConfigTab({ server }: Props) {
 
       // Snapshot INI files into the backup system (best-effort, non-blocking)
       const backupDir = await getAppSetting("backup_dir").catch(() => null);
-      const plat = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows")
-        ? "LinuxServer" : "WindowsServer";
       if (backupDir) {
-        tauriCmd.createIniBackup(server.id, server.install_path, backupDir, plat).catch(() => {});
+        tauriCmd.createIniBackup(server.id, server.install_path, backupDir).catch(() => {});
       }
     } catch (e) {
       setError(String(e));
@@ -1385,6 +1636,7 @@ export function ConfigTab({ server }: Props) {
     const game = rawTextToSections(rawGame);
     if (config) setConfig({ ...config, gameUserSettings: gus, gameIni: game });
     setRawMode(false);
+    setAdvancedMode(false);
   };
 
   if (loading) {
@@ -1396,59 +1648,64 @@ export function ConfigTab({ server }: Props) {
     );
   }
 
-  // Quick-edit: only show a curated subset of groups
-  const quickGroups = INI_FIELD_GROUPS.filter((g) => QUICK_EDIT_GROUP_IDS.includes(g.id));
-
   return (
     <TooltipProvider delayDuration={300}>
     <div className="flex flex-col gap-4 pr-6">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant={rawMode ? "ghost" : "outline"} className={rawMode ? "" : "btn-neon-purple"} onClick={switchToStructured}>
-            <LayoutList className="w-3.5 h-3.5 mr-1.5" /> Structured
-          </Button>
-          <Button size="sm" variant={rawMode ? "outline" : "ghost"} className={rawMode ? "btn-neon-cyan" : ""} onClick={switchToRaw}>
-            <Code className="w-3.5 h-3.5 mr-1.5" /> Raw INI
-          </Button>
-          {!rawMode && (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowFullModal(true)}
-                disabled={!config}
-                style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
-              >
-                <Settings2 className="w-3.5 h-3.5 mr-1.5" /> Full INI Editor
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowQuickSetup(true)}
-                disabled={!config}
-                style={{ color: "var(--text-muted)" }}
-              >
-                <Wand2 className="w-3.5 h-3.5 mr-1.5" /> Quick Setup
-              </Button>
-            </>
-          )}
+
+      {/* ── Sticky toolbar — always visible at top ─────────────────────────── */}
+      <div
+        className="sticky top-0 z-10 flex items-center justify-between gap-3 flex-wrap py-2 -mx-1 px-1"
+        style={{ background: "var(--bg-base, #05050f)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+      >
+        {/* Tab selectors */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={switchToStructured}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={!rawMode && !advancedMode
+              ? { background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <LayoutList className="w-3.5 h-3.5" /> Structured
+          </button>
+          <button
+            onClick={() => { setAdvancedMode(true); setRawMode(false); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={advancedMode
+              ? { background: "rgba(255,165,0,0.1)", color: "rgba(255,165,0,0.9)", border: "1px solid rgba(255,165,0,0.35)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <Settings2 className="w-3.5 h-3.5" /> Advanced
+          </button>
+          <button
+            onClick={switchToRaw}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={rawMode
+              ? { background: "rgba(0,255,255,0.08)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.35)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <Code className="w-3.5 h-3.5" /> Raw INI
+          </button>
+          <button
+            onClick={() => setShowQuickSetup(true)}
+            disabled={!config}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={{ color: "var(--text-subtle)", border: "1px solid transparent" }}
+          >
+            <Wand2 className="w-3.5 h-3.5" /> Quick Setup
+          </button>
         </div>
+
+        {/* Right: dirty badge + import + save */}
         <div className="flex items-center gap-2">
           {isDirty && (
             <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(255,140,0,0.12)", color: "rgba(255,140,0,0.9)", border: "1px solid rgba(255,140,0,0.3)" }}>
               Unsaved changes
             </span>
           )}
-          {/* Import dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!config}
-                style={{ color: "var(--text-muted)" }}
-              >
+              <Button size="sm" variant="ghost" disabled={!config} style={{ color: "var(--text-muted)" }}>
                 <Upload className="w-3.5 h-3.5 mr-1.5" />
                 Import
                 <ChevronDown className="w-3 h-3 ml-1" />
@@ -1467,6 +1724,12 @@ export function ConfigTab({ server }: Props) {
                 <Clipboard className="w-3.5 h-3.5 mr-2" />
                 Paste INI text…
               </DropdownMenuItem>
+              {otherServers.length > 0 && (
+                <DropdownMenuItem onClick={() => setShowCopyFromServer(true)}>
+                  <Settings2 className="w-3.5 h-3.5 mr-2" />
+                  Copy from server…
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <Tooltip>
@@ -1494,10 +1757,10 @@ export function ConfigTab({ server }: Props) {
         </div>
       )}
 
-      {/* Structured editor — quick groups */}
+      {/* ── Structured view — ALL INI groups ──────────────────────────────── */}
       {!rawMode && config && (
         <div className="flex flex-col gap-4">
-          {quickGroups.map((g, idx) => (
+          {INI_FIELD_GROUPS.map((g, idx) => (
             <SectionGroup
               key={g.id}
               title={g.title}
@@ -1515,13 +1778,10 @@ export function ConfigTab({ server }: Props) {
               setIsDirty(true);
             }}
           />
-          <p className="text-xs text-center" style={{ color: "var(--text-subtle)" }}>
-            Click <strong style={{ color: "var(--neon-purple)" }}>Full INI Editor</strong> in the toolbar to access all server settings.
-          </p>
         </div>
       )}
 
-      {/* Raw INI editor */}
+      {/* ── Raw INI editor ────────────────────────────────────────────────── */}
       {rawMode && (
         <div className="flex flex-col gap-4">
           <div>
@@ -1529,7 +1789,7 @@ export function ConfigTab({ server }: Props) {
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={20}
-              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGus}
               onChange={(e) => { setRawGus(e.target.value); setIsDirty(true); }}
               spellCheck={false}
@@ -1540,7 +1800,7 @@ export function ConfigTab({ server }: Props) {
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={10}
-              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGame}
               onChange={(e) => { setRawGame(e.target.value); setIsDirty(true); }}
               spellCheck={false}
@@ -1549,19 +1809,16 @@ export function ConfigTab({ server }: Props) {
         </div>
       )}
 
-      {/* Graceful shutdown / restart / update warning settings */}
+      {/* ── Advanced tab ──────────────────────────────────────────────────── */}
+      {advancedMode && config && (
+        <AdvancedConfigTab server={server} config={config} onChange={(patch) => { setConfig({ ...config, ...patch }); setIsDirty(true); }} />
+      )}
+
+      {/* ── Server behaviour cards (always visible) ───────────────────────── */}
+      <EventCard server={server} />
       <ShutdownSettingsCard server={server} />
       <RestartSettingsCard server={server} />
       <UpdateSettingsCard server={server} />
-
-      {/* Full INI Editor modal */}
-      {showFullModal && config && (
-        <FullIniModal
-          config={config}
-          onSave={(updated) => handleSave(updated)}
-          onClose={() => setShowFullModal(false)}
-        />
-      )}
 
       {/* Paste INI modal */}
       {showPasteModal && (
@@ -1577,6 +1834,40 @@ export function ConfigTab({ server }: Props) {
           onApply={handleQuickSetupApply}
           onClose={() => setShowQuickSetup(false)}
         />
+      )}
+
+      {/* Copy from server modal */}
+      {showCopyFromServer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }}>
+          <div className="glass-card rounded-xl p-5 space-y-4 w-80" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Copy Config from Server</h3>
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>This will overwrite the current INI config with the selected server&apos;s config.</p>
+            <select
+              value={copyFromServerId}
+              onChange={(e) => setCopyFromServerId(e.target.value)}
+              className="w-full text-xs rounded-lg px-2 py-1.5"
+              style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+            >
+              <option value="">Select a server…</option>
+              {otherServers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowCopyFromServer(false); setCopyFromServerId(""); }}
+                className="flex-1 text-xs px-3 py-1.5 rounded-lg"
+                style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}
+              >Cancel</button>
+              <button
+                onClick={handleCopyFromServer}
+                disabled={!copyFromServerId}
+                className="flex-1 text-xs px-3 py-1.5 rounded-lg"
+                style={{ background: copyFromServerId ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(10,10,30,0.5)", color: copyFromServerId ? "var(--neon-purple)" : "var(--text-subtle)", border: `1px solid ${copyFromServerId ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}` }}
+              >Copy Config</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
     </TooltipProvider>

@@ -1,6 +1,6 @@
 [package]
 name = "lokiasam"
-version = "0.14.0"
+version = "0.14.1"
 description = "Loki Ark Survival Ascended Server Manager"
 authors = ["Loki"]
 license = "GPL-3.0-or-later"
@@ -28,6 +28,7 @@ tauri-plugin-notification      = { version = "2" }
 tauri-plugin-single-instance   = { version = "2" }
 tauri-plugin-clipboard-manager = { version = "2" }
 tauri-plugin-updater           = { version = "2" }
+tauri-plugin-autostart         = { version = "2" }
 
 # Serialization
 serde      = { version = "1", features = ["derive"] }
@@ -76,5 +77,7 @@ procfs = { version = "0.17", default-features = false }
 
 # Windows elevation: spawn a child process with "runas" verb (UAC prompt).
 # Used for netsh firewall rule management which requires admin rights.
+# Junction point creation for save directory symlink equivalents on Windows.
 [target.'cfg(target_os = "windows")'.dependencies]
-runas = { version = "0.2" }
+runas   = { version = "0.2" }
+junction = { version = "2.0.0" }

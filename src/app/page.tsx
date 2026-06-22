@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Plus, Server, Activity, RefreshCw, Upload,
   ArrowUp, Loader2, CheckCircle2, AlertTriangle, LayoutDashboard,
+  Play, Square, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -427,6 +428,57 @@ export default function DashboardPage() {
     }));
 
   const anyUpdatesStarting = serversWithUpdates.some((s) => s.status === "starting");
+  const [globalActionPending, setGlobalActionPending] = useState(false);
+
+  // ── Global start/stop/restart handlers ───────────────────────────────────
+
+  const handleStartAll = useCallback(async () => {
+    const stopped = servers.filter((s) =>
+      s.status === "stopped" || s.status === "start-failed" || s.status === "crashed"
+    );
+    if (stopped.length === 0) return;
+    setGlobalActionPending(true);
+    try {
+      for (const s of stopped) {
+        await updateServerStatus(s.id, "starting", null);
+        const params = await buildStartParams(s);
+        tauriCmd.startServer(params)
+          .then((pid) => updateServerStatus(s.id, "starting", pid))
+          .catch(async (e) => {
+            await updateServerStatus(s.id, "start-failed", null);
+            toast.error(`Failed to start ${s.name}: ${e}`);
+          });
+      }
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.info(`Starting ${stopped.length} server${stopped.length === 1 ? "" : "s"}…`);
+    } finally { setGlobalActionPending(false); }
+  }, [servers, queryClient]);
+
+  const handleStopAll = useCallback(async () => {
+    const running = servers.filter((s) => s.status === "running" || s.status === "starting");
+    if (running.length === 0) return;
+    setGlobalActionPending(true);
+    try {
+      await Promise.all(running.map((s) => tauriCmd.stopServer(s.id, false).catch(() => null)));
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
+    } finally { setGlobalActionPending(false); }
+  }, [servers, queryClient]);
+
+  const handleRestartAll = useCallback(async () => {
+    const running = servers.filter((s) => s.status === "running");
+    if (running.length === 0) return;
+    setGlobalActionPending(true);
+    try {
+      for (const s of running) {
+        const params = await buildStartParams(s);
+        tauriCmd.restartServer(params, true).catch((e) =>
+          toast.error(`Failed to restart ${s.name}: ${e}`)
+        );
+      }
+      toast.info(`Restarting ${running.length} server${running.length === 1 ? "" : "s"}…`);
+    } finally { setGlobalActionPending(false); }
+  }, [servers]);
 
   // ── Update All handler ────────────────────────────────────────────────────
 
@@ -511,14 +563,40 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {servers.length > 0 && (
-            <UpdateStatusChip
-              servers={servers}
-              onUpdateAllClick={() => setShowUpdateAllDialog(true)}
-              onUpdatesFound={(updates) => {
-                setPendingUpdates(updates);
-                setShowUpdatesFoundDialog(true);
-              }}
-            />
+            <>
+              <UpdateStatusChip
+                servers={servers}
+                onUpdateAllClick={() => setShowUpdateAllDialog(true)}
+                onUpdatesFound={(updates) => {
+                  setPendingUpdates(updates);
+                  setShowUpdatesFoundDialog(true);
+                }}
+              />
+              <Button size="sm" variant="outline" disabled={globalActionPending}
+                onClick={handleStartAll}
+                title="Start all stopped servers"
+                className="gap-1.5"
+                style={{ borderColor: "rgba(0,255,136,0.3)", color: "var(--neon-green)", background: "rgba(0,255,136,0.05)" }}
+              >
+                <Play className="w-3.5 h-3.5" /> Start All
+              </Button>
+              <Button size="sm" variant="outline" disabled={globalActionPending}
+                onClick={handleStopAll}
+                title="Stop all running servers"
+                className="gap-1.5"
+                style={{ borderColor: "rgba(255,0,85,0.3)", color: "rgba(255,0,85,0.85)", background: "rgba(255,0,85,0.05)" }}
+              >
+                <Square className="w-3.5 h-3.5" /> Stop All
+              </Button>
+              <Button size="sm" variant="outline" disabled={globalActionPending}
+                onClick={handleRestartAll}
+                title="Restart all running servers"
+                className="gap-1.5"
+                style={{ borderColor: "rgba(0,255,255,0.3)", color: "var(--neon-cyan)", background: "rgba(0,255,255,0.05)" }}
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Restart All
+              </Button>
+            </>
           )}
           <Button
             variant="outline"

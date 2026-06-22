@@ -518,8 +518,8 @@ export const tauriCmd = {
   /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
   createServerBackup: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string, tier = "",
-  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier }),
+    mapId: string, backupDir: string, triggeredBy: string, tier = "", saveFolderName?: string,
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier, saveFolderName: saveFolderName ?? null }),
 
   /** Player backup: 7z a single .arkprofile file. */
   createPlayerBackup: (
@@ -530,12 +530,21 @@ export const tauriCmd = {
   /** Back up every .arkprofile in SavedArks/{mapPath}/ in one call. */
   backupAllPlayers: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+    mapId: string, backupDir: string, triggeredBy: string, saveFolderName?: string,
+  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, saveFolderName: saveFolderName ?? null }),
 
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
-  createIniBackup: (serverId: string, installPath: string, backupDir: string, platform: string) =>
-    invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir, platform }),
+  createIniBackup: (serverId: string, installPath: string, backupDir: string) =>
+    invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir }),
+  /** Wipe server save files. tier: "map" | "players" | "full". Server must be stopped. */
+  wipeServerSaves: (installPath: string, saveFolderName: string, tier: "map" | "players" | "full") =>
+    invoke<void>("wipe_server_saves", { installPath, saveFolderName, tier }),
+  /** Create a symlink (Linux) or NTFS junction point (Windows) from
+   *  {installPath}/ShooterGame/Saved/SavedArks/{saveFolderName}
+   *  → {baseDir}/Saves/{saveFolderName}/
+   *  so -SaveDirectoryOverride writes saves to the managed Saves folder. */
+  createSaveLink: (installPath: string, saveFolderName: string, baseDir: string) =>
+    invoke<void>("create_save_link", { installPath, saveFolderName, baseDir }),
 
   /** Full backup: 7z the entire install_path directory. */
   createFullBackup: (

@@ -116,6 +116,13 @@ async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::Schedu
     Ok(())
 }
 
+async fn fire_wipe_dinos(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
+    let _ = app;
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "ServerChat Wild dinos are being wiped — expect brief lag.").await;
+    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "destroywilddinos").await;
+    Ok(())
+}
+
 async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
     if !is_server_running(app, &entry.server_id) {
         return Ok(());
@@ -395,6 +402,10 @@ pub fn tick_scheduler(app: &AppHandle) {
                     Err(e) => (false, Some(e), vec![]),
                 },
                 "global_update_check" => match fire_global_update_check(&app, &entry).await {
+                    Ok(_) => (true, None, vec![]),
+                    Err(e) => (false, Some(e), vec![]),
+                },
+                "wipe_dinos" => match fire_wipe_dinos(&app, &entry).await {
                     Ok(_) => (true, None, vec![]),
                     Err(e) => (false, Some(e), vec![]),
                 },
