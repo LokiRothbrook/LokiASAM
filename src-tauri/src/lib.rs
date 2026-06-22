@@ -282,6 +282,10 @@ pub fn run() {
                 let mut open_sessions: HashMap<String, String> = HashMap::new();
                 let mut rollup_done = false;
                 let mut last_rollup = tokio::time::Instant::now();
+                // Servers currently being memory-limit-restarted — skip them in the
+                // memory check until the restart completes.
+                let mem_restarting: std::sync::Arc<std::sync::Mutex<HashSet<String>>> =
+                    std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
 
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(5));
@@ -404,6 +408,50 @@ pub fn run() {
                                 mem,
                                 players,
                             );
+                        }
+
+                        // ── Memory-limit restart ───────────────────────────────
+                        // Check memory_limit_gb from the DB and restart the server
+                        // gracefully if RAM usage exceeds the configured threshold.
+                        if mem_restarting.lock().unwrap().contains(&server_id) {
+                            continue;
+                        }
+                        if let Some(mem_mb) = mem {
+                            let app_state = stats_handle.state::<state::AppState>();
+                            let db_path = app_state.get_db_path();
+                            let start_params = app_state
+                                .running_servers.lock().unwrap()
+                                .get(&server_id).map(|rs| rs.start_params.clone());
+
+                            if let (Some(db_path), Some(params)) = (db_path, start_params) {
+                                let limit_mb: Option<f64> = crate::db::open(&db_path).ok()
+                                    .and_then(|conn| crate::db::get_server(&conn, &server_id))
+                                    .and_then(|s| s.memory_limit_gb)
+                                    .map(|gb| gb * 1024.0);
+
+                                if let Some(limit_mb) = limit_mb {
+                                    if (mem_mb as f64) > limit_mb {
+                                        eprintln!(
+                                            "[mem-limit] {} using {mem_mb} MB > {limit_mb:.0} MB limit — restarting",
+                                            server_id
+                                        );
+                                        mem_restarting.lock().unwrap().insert(server_id.clone());
+                                        let handle = stats_handle.clone();
+                                        let sid = server_id.clone();
+                                        let restarting = mem_restarting.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            let _ = crate::commands::server::inner_restart_server(
+                                                handle.clone(), params, true,
+                                            ).await;
+                                            restarting.lock().unwrap().remove(&sid);
+                                        });
+                                        let _ = stats_handle.emit(
+                                            "server://memory-restart",
+                                            serde_json::json!({ "serverId": server_id }),
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                 }

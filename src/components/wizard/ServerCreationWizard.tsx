@@ -25,6 +25,7 @@ import {
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
   Shield, Info, Heart, AlertTriangle, HelpCircle, Eye, EyeOff,
+  HardDrive, Skull, RotateCcw, Megaphone, MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,11 +44,13 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { dispatchNotification } from "@/lib/notifications";
 import {
-  getAppSetting, createServer, deleteServerRecord, saveServerConfig,
-  createSchedule, getClusters, isServerNameTaken, updateServerStatus,
+  getAppSetting, setAppSetting, createServer, deleteServerRecord, saveServerConfig,
+  createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
   addServerMod, getServers, getServerMods, createClusterRecord,
+  updateBackupBroadcastMessage,
   type ClusterRow,
 } from "@/lib/db";
+import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
@@ -132,13 +135,21 @@ interface WizardData {
   clusterId: string;
   // Save directory
   saveFolderName: string;
-  // Automation
+  // Automation — restart
   autoRestart: boolean;
   autoRestartCron: string;
-  autoBackup: boolean;
-  autoBackupCron: string;
-  backupRetention: number;
-  autoPlayerBackup: boolean;
+  // Automation — backup tiers (TimeShift)
+  serverBackupTiers: Record<"H"|"D"|"W"|"M", { enabled: boolean; keep: number }>;
+  playerBackupTiers: Record<"H"|"D"|"W"|"M", { enabled: boolean; keep: number }>;
+  fullBackupEnabled: boolean;
+  fullBackupKeep: number;
+  loginBackupEnabled: boolean;
+  loginBackupKeep: number;
+  manualBackupKeep: number;
+  backupBroadcastMessage: string;
+  // Automation — wild dino wipe
+  wipeDinosEnabled: boolean;
+  wipeDinosCron: string;
   // Mods — lockedModIds are auto-added from map selection and cannot be removed
   modIds: string[];
   lockedModIds: string[];
@@ -214,10 +225,26 @@ const DEFAULT_DATA: WizardData = {
   saveFolderName: "",
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
-  autoBackup: true,
-  autoBackupCron: "0 */6 * * *",
-  backupRetention: 7,
-  autoPlayerBackup: false,
+  serverBackupTiers: {
+    H: { enabled: false, keep: 24 },
+    D: { enabled: true,  keep: 7  },
+    W: { enabled: false, keep: 4  },
+    M: { enabled: false, keep: 3  },
+  },
+  playerBackupTiers: {
+    H: { enabled: false, keep: 24 },
+    D: { enabled: false, keep: 7  },
+    W: { enabled: false, keep: 4  },
+    M: { enabled: false, keep: 3  },
+  },
+  fullBackupEnabled: false,
+  fullBackupKeep: 3,
+  loginBackupEnabled: false,
+  loginBackupKeep: 3,
+  manualBackupKeep: 5,
+  backupBroadcastMessage: "Server backup in progress — lag may occur.",
+  wipeDinosEnabled: false,
+  wipeDinosCron: "0 6 * * *",
   modIds: [],
   lockedModIds: [],
   modNames: {},
@@ -1673,14 +1700,16 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
 // ---------------------------------------------------------------------------
 
 const CRON_OPTIONS = [
-  { value: "0 3 * * *",   label: "Daily at 3:00 AM" },
-  { value: "0 6 * * *",   label: "Daily at 6:00 AM" },
-  { value: "0 0 * * *",   label: "Daily at midnight" },
-  { value: "0 */6 * * *", label: "Every 6 hours" },
-  { value: "0 */12 * * *",label: "Every 12 hours" },
+  { value: "0 3 * * *",    label: "Daily at 3:00 AM" },
+  { value: "0 6 * * *",    label: "Daily at 6:00 AM" },
+  { value: "0 0 * * *",    label: "Daily at midnight" },
+  { value: "0 */6 * * *",  label: "Every 6 hours" },
+  { value: "0 */12 * * *", label: "Every 12 hours" },
+  { value: "0 * * * *",    label: "Every hour" },
+  { value: "0 */2 * * *",  label: "Every 2 hours" },
 ];
 
-function CronPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function CronSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <select
       value={CRON_OPTIONS.find((o) => o.value === value) ? value : "custom"}
@@ -1691,6 +1720,59 @@ function CronPicker({ value, onChange }: { value: string; onChange: (v: string) 
       {CRON_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       <option value="custom">Custom…</option>
     </select>
+  );
+}
+
+const WIZ_TIER_ORDER = ["M", "W", "D", "H"] as const;
+type WizTier = typeof WIZ_TIER_ORDER[number];
+const WIZ_TIER_LABEL: Record<WizTier, string> = { M: "monthly", W: "weekly", D: "daily", H: "hourly" };
+const WIZ_TIER_DEFAULT_KEEP: Record<WizTier, number> = { M: 3, W: 4, D: 7, H: 24 };
+
+function wizBackupEffectiveCron(tiers: WizardData["serverBackupTiers"]): string {
+  if (tiers.H.enabled) return "0 * * * *";
+  if (tiers.D.enabled) return "0 2 * * *";
+  if (tiers.W.enabled) return "0 3 * * 0";
+  if (tiers.M.enabled) return "0 4 1 * *";
+  return "0 * * * *";
+}
+
+function WizTierRow({
+  tier,
+  state,
+  onChange,
+}: {
+  tier: WizTier;
+  state: { enabled: boolean; keep: number };
+  onChange: (patch: { enabled?: boolean; keep?: number }) => void;
+}) {
+  return (
+    <div
+      className="flex items-center gap-3 px-3 py-2 rounded-lg"
+      style={{
+        background: "rgba(255,255,255,0.02)",
+        border: `1px solid ${state.enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
+      }}
+    >
+      <Input
+        type="number" min={1} max={999} value={state.keep}
+        onChange={(e) => onChange({ keep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+        className="w-16 h-8 text-sm text-center shrink-0"
+        style={{
+          background: "rgba(0,0,0,0.4)",
+          border: `1px solid ${state.enabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+          color: "var(--text-primary)",
+        }}
+      />
+      <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>
+        {WIZ_TIER_LABEL[tier]} backups to keep
+      </span>
+      <button type="button" onClick={() => onChange({ enabled: !state.enabled })} className="cursor-pointer shrink-0">
+        {state.enabled
+          ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+          : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+        }
+      </button>
+    </div>
   );
 }
 
@@ -1786,91 +1868,219 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
 // Automation Step
 // ---------------------------------------------------------------------------
 
-function AutomationToggleCard({
-  enabled, onToggle, label, description,
-}: { enabled: boolean; onToggle: () => void; label: string; description: string }) {
-  return (
-    <div
-      className="rounded-lg p-4 space-y-3 flex items-start justify-between gap-3"
-      style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${enabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}
-    >
-      <div>
-        <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</p>
-        <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{description}</p>
-      </div>
-      <button type="button" onClick={onToggle} className="shrink-0 flex items-center" aria-label={enabled ? "Disable" : "Enable"}>
-        {enabled
-          ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-          : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-      </button>
-    </div>
-  );
-}
-
 function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const patchServerTier = (tier: WizTier, patch: { enabled?: boolean; keep?: number }) =>
+    onChange({ serverBackupTiers: { ...data.serverBackupTiers, [tier]: { ...data.serverBackupTiers[tier], ...patch } } });
+  const patchPlayerTier = (tier: WizTier, patch: { enabled?: boolean; keep?: number }) =>
+    onChange({ playerBackupTiers: { ...data.playerBackupTiers, [tier]: { ...data.playerBackupTiers[tier], ...patch } } });
+
+  const serverAny = WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled);
+  const playerAny = WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled);
+
   return (
     <div className="space-y-4">
-      <p className="text-sm" style={{ color: "var(--text-muted)" }}>Configure automation schedules. All times are in your local timezone.</p>
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        Configure automation schedules. All times are in your local timezone.
+      </p>
 
-      {/* Auto-Restart */}
-      <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data.autoRestart ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Auto-Restart</p>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Gracefully restart the server on a schedule with in-game broadcast warnings.</p>
+      {/* ── Backup Schedules ─────────────────────────────────────── */}
+      <div className="glass-card rounded-xl p-4 space-y-5"
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            <HardDrive className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
           </div>
-          <button type="button" onClick={() => onChange({ autoRestart: !data.autoRestart })} className="shrink-0 flex items-center">
-            {data.autoRestart
-              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-          </button>
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Backup Schedules</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              TimeShift — each tier keeps its own independent rotation
+            </p>
+          </div>
         </div>
-        {data.autoRestart && <CronPicker value={data.autoRestartCron} onChange={(v) => onChange({ autoRestartCron: v })} />}
+
+        <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.08)" }}>
+          {/* Server Backups */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Server Backups</p>
+            {WIZ_TIER_ORDER.map((tier) => (
+              <WizTierRow key={tier} tier={tier} state={data.serverBackupTiers[tier]} onChange={(p) => patchServerTier(tier, p)} />
+            ))}
+          </div>
+
+          <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+
+          {/* Player Backups */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Player Backups</p>
+            {WIZ_TIER_ORDER.map((tier) => (
+              <WizTierRow key={tier} tier={tier} state={data.playerBackupTiers[tier]} onChange={(p) => patchPlayerTier(tier, p)} />
+            ))}
+          </div>
+
+          {/* Login backup keep */}
+          <div
+            className="flex items-center gap-3 px-3 py-2 rounded-lg"
+            style={{
+              background: "rgba(255,255,255,0.02)",
+              border: `1px solid ${data.loginBackupEnabled ? "rgba(0,255,255,0.3)" : "rgba(255,255,255,0.05)"}`,
+            }}
+          >
+            <Input type="number" min={1} max={999} value={data.loginBackupKeep}
+              onChange={(e) => onChange({ loginBackupKeep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+              className="w-16 h-8 text-sm text-center shrink-0"
+              style={{
+                background: "rgba(0,0,0,0.4)",
+                border: `1px solid ${data.loginBackupEnabled ? "rgba(0,255,255,0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                color: "var(--text-primary)",
+              }} />
+            <div className="flex-1 min-w-0">
+              <span className="text-sm" style={{ color: "var(--text-muted)" }}>login backups to keep</span>
+              <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+                Triggered when a player connects. Independent rotation.
+              </p>
+            </div>
+            <button type="button" onClick={() => onChange({ loginBackupEnabled: !data.loginBackupEnabled })} className="cursor-pointer shrink-0">
+              {data.loginBackupEnabled
+                ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-cyan)" }} />
+                : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+              }
+            </button>
+          </div>
+
+          {/* Manual backup keep */}
+          <div
+            className="flex items-center gap-3 px-3 py-2 rounded-lg"
+            style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
+          >
+            <Input type="number" min={1} max={999} value={data.manualBackupKeep}
+              onChange={(e) => onChange({ manualBackupKeep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+              className="w-16 h-8 text-sm text-center shrink-0"
+              style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--text-primary)" }} />
+            <div className="flex-1 min-w-0">
+              <span className="text-sm" style={{ color: "var(--text-muted)" }}>manual backups to keep</span>
+              <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+                Applies to on-demand backups triggered by the Backup Now buttons.
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+
+          {/* Full backup */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Full Backups</p>
+            <div
+              className="flex items-center gap-3 px-3 py-2 rounded-lg"
+              style={{
+                background: "rgba(255,255,255,0.02)",
+                border: `1px solid ${data.fullBackupEnabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
+              }}
+            >
+              <Input type="number" min={1} max={20} value={data.fullBackupKeep}
+                onChange={(e) => onChange({ fullBackupKeep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                className="w-16 h-8 text-sm text-center shrink-0"
+                style={{
+                  background: "rgba(0,0,0,0.4)",
+                  border: `1px solid ${data.fullBackupEnabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                  color: "var(--text-primary)",
+                }} />
+              <span className="flex-1 text-sm" style={{ color: "var(--text-muted)" }}>full backups to keep</span>
+              <button type="button" onClick={() => onChange({ fullBackupEnabled: !data.fullBackupEnabled })} className="cursor-pointer shrink-0">
+                {data.fullBackupEnabled
+                  ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+                }
+              </button>
+            </div>
+            <p className="text-xs px-1" style={{ color: "var(--text-muted)" }}>
+              Zips the entire install folder — runs monthly on the 1st at 3am.
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* Server Backup */}
-      <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: `1px solid ${data.autoBackup ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Server Backups</p>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Create scheduled world-save ZIP backups. Saved per-tier in the Backups folder.</p>
-          </div>
-          <button type="button" onClick={() => onChange({ autoBackup: !data.autoBackup })} className="shrink-0 flex items-center">
-            {data.autoBackup
-              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-          </button>
+      {/* ── Pre-backup message ──────────────────────────────────── */}
+      <div className="glass-card rounded-xl p-4 space-y-3"
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Pre-Backup In-Game Message</p>
         </div>
-        {data.autoBackup && (
-          <>
-            <CronPicker value={data.autoBackupCron} onChange={(v) => onChange({ autoBackupCron: v })} />
-            <div className="space-y-2 pt-1">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Keep last N daily backups</Label>
-                <span className="font-mono text-sm" style={{ color: "var(--neon-purple)" }}>{data.backupRetention}</span>
-              </div>
-              <Slider min={1} max={50} step={1} value={[data.backupRetention]} onValueChange={([v]) => onChange({ backupRetention: v })} />
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Broadcast this message via RCON before each scheduled backup begins.
+        </p>
+        <Input
+          value={data.backupBroadcastMessage}
+          onChange={(e) => onChange({ backupBroadcastMessage: e.target.value })}
+          placeholder="Backup in progress — lag may occur."
+          className="text-xs"
+          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+        />
+      </div>
+
+      {/* ── Auto-Restart ─────────────────────────────────────────── */}
+      <div className="glass-card rounded-xl p-4 space-y-3"
+        style={{ border: `1px solid ${data.autoRestart ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: data.autoRestart ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            <RotateCcw className="w-4 h-4" style={{ color: data.autoRestart ? "var(--neon-purple)" : "var(--text-muted)" }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Restart</p>
+              <button type="button" onClick={() => onChange({ autoRestart: !data.autoRestart })} className="cursor-pointer shrink-0">
+                {data.autoRestart
+                  ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+                }
+              </button>
             </div>
-          </>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Gracefully restart the server on a schedule with optional in-game warnings.
+            </p>
+          </div>
+        </div>
+        {data.autoRestart && (
+          <CronSelect value={data.autoRestartCron} onChange={(v) => onChange({ autoRestartCron: v })} />
         )}
       </div>
 
-      {/* Player Backup */}
-      <AutomationToggleCard
-        enabled={data.autoPlayerBackup}
-        onToggle={() => onChange({ autoPlayerBackup: !data.autoPlayerBackup })}
-        label="Player & Tribe Backups"
-        description="Independently back up player profiles and tribe data. Useful for rolling back character loss separately from world saves."
-      />
+      {/* ── Wild Dino Wipe ───────────────────────────────────────── */}
+      <div className="glass-card rounded-xl p-4 space-y-3"
+        style={{ border: `1px solid ${data.wipeDinosEnabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: data.wipeDinosEnabled ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            <Skull className="w-4 h-4" style={{ color: data.wipeDinosEnabled ? "var(--neon-purple)" : "var(--text-muted)" }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Wild Dino Wipe</p>
+              <button type="button" onClick={() => onChange({ wipeDinosEnabled: !data.wipeDinosEnabled })} className="cursor-pointer shrink-0">
+                {data.wipeDinosEnabled
+                  ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
+                }
+              </button>
+            </div>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Send a chat warning then destroy all wild dinos via RCON on a schedule.
+            </p>
+          </div>
+        </div>
+        {data.wipeDinosEnabled && (
+          <CronSelect value={data.wipeDinosCron} onChange={(v) => onChange({ wipeDinosCron: v })} />
+        )}
+      </div>
 
-      {/* Update note */}
-      <div
-        className="flex gap-2.5 rounded-lg px-3 py-2.5"
-        style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)" }}
-      >
+      {/* ── Auto-Update note ─────────────────────────────────────── */}
+      <div className="flex gap-2.5 rounded-lg px-3 py-2.5"
+        style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)" }}>
         <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-cyan)" }} />
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          <strong style={{ color: "var(--text-primary)" }}>Auto-Update</strong> is configured per-server in the Automation tab after setup — it controls update checks and can apply updates automatically when a new ASA build is available.
+          <strong style={{ color: "var(--text-primary)" }}>Auto-Update</strong> is configured per-server in the Automation tab after setup.
         </p>
       </div>
     </div>
@@ -2139,8 +2349,9 @@ function InstallStep({
     { label: "Ports",        value: `${data.port} / ${data.queryPort} / ${data.rconPort}` },
     { label: "Save Folder",      value: data.saveFolderName || getMapById(data.mapId)?.displayName || data.mapId },
     { label: "Auto-Restart",     value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
-    { label: "Server Backups",   value: data.autoBackup ? `${humanCron(data.autoBackupCron)}, keep ${data.backupRetention}` : "Disabled" },
-    { label: "Player Backups",   value: data.autoPlayerBackup ? "Enabled (daily)" : "Disabled" },
+    { label: "Server Backups",   value: WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.serverBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
+    { label: "Player Backups",   value: WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.playerBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
+    { label: "Dino Wipe",        value: data.wipeDinosEnabled ? humanCron(data.wipeDinosCron) : "Disabled" },
     { label: "Mods",         value: data.modIds.length > 0 ? `${data.modIds.length} mod(s)` : "None" },
   ];
 
@@ -2537,15 +2748,59 @@ function InstallStep({
         }
 
         if (data.autoRestart) {
-          await createSchedule({ id: generateUUID(), serverId, scheduleType: "restart", cronExpression: data.autoRestartCron, enabled: true, configJson: "{}" });
+          const id = generateUUID();
+          const restartCfg = JSON.stringify({ broadcastWarning: true, warningMinutes: 15, message: "Server restarting in {minutes} minutes. Progress will be saved." });
+          await createSchedule({ id, serverId, scheduleType: "restart", cronExpression: data.autoRestartCron, enabled: true, configJson: restartCfg });
+          const nextIso = getNextCronDate(data.autoRestartCron)?.toISOString() ?? new Date().toISOString();
+          await updateScheduleConfig(id, data.autoRestartCron, restartCfg, nextIso);
         }
-        if (data.autoBackup) {
-          const cfg = JSON.stringify({ daily: { enabled: true, keep: data.backupRetention }, weekly: { enabled: false, keep: 4 }, monthly: { enabled: false, keep: 3 } });
-          await createSchedule({ id: generateUUID(), serverId, scheduleType: "backup_server", cronExpression: data.autoBackupCron, enabled: true, configJson: cfg });
+
+        const buildTierConfig = (tiers: WizardData["serverBackupTiers"]) =>
+          JSON.stringify({ hourly: tiers.H, daily: tiers.D, weekly: tiers.W, monthly: tiers.M });
+
+        const serverAny = WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled);
+        if (serverAny) {
+          const cron = wizBackupEffectiveCron(data.serverBackupTiers);
+          const cfg  = buildTierConfig(data.serverBackupTiers);
+          const id   = generateUUID();
+          await createSchedule({ id, serverId, scheduleType: "backup_server", cronExpression: cron, enabled: true, configJson: cfg });
+          const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+          await updateScheduleConfig(id, cron, cfg, nextIso);
         }
-        if (data.autoPlayerBackup) {
-          const cfg = JSON.stringify({ daily: { enabled: true, keep: 7 }, weekly: { enabled: false, keep: 4 }, monthly: { enabled: false, keep: 3 } });
-          await createSchedule({ id: generateUUID(), serverId, scheduleType: "backup_player", cronExpression: "0 2 * * *", enabled: true, configJson: cfg });
+
+        const playerAny = WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled);
+        if (playerAny) {
+          const cron = wizBackupEffectiveCron(data.playerBackupTiers);
+          const cfg  = buildTierConfig(data.playerBackupTiers);
+          const id   = generateUUID();
+          await createSchedule({ id, serverId, scheduleType: "backup_player", cronExpression: cron, enabled: true, configJson: cfg });
+          const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+          await updateScheduleConfig(id, cron, cfg, nextIso);
+        }
+
+        if (data.fullBackupEnabled) {
+          const cron = "0 3 1 * *";
+          const cfg  = JSON.stringify({ keep: data.fullBackupKeep });
+          const id   = generateUUID();
+          await createSchedule({ id, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson: cfg });
+          const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+          await updateScheduleConfig(id, cron, cfg, nextIso);
+        }
+
+        if (data.loginBackupEnabled) {
+          await setAppSetting(`login_backup_keep_${serverId}`, String(data.loginBackupKeep));
+        }
+        await setAppSetting(`manual_backup_keep_${serverId}`, String(data.manualBackupKeep));
+
+        if (data.backupBroadcastMessage) {
+          await updateBackupBroadcastMessage(serverId, data.backupBroadcastMessage);
+        }
+
+        if (data.wipeDinosEnabled) {
+          const id = generateUUID();
+          await createSchedule({ id, serverId, scheduleType: "wipe_dinos", cronExpression: data.wipeDinosCron, enabled: true, configJson: "{}" });
+          const nextIso = getNextCronDate(data.wipeDinosCron)?.toISOString() ?? new Date().toISOString();
+          await updateScheduleConfig(id, data.wipeDinosCron, "{}", nextIso);
         }
 
         installPathRef.current = installPath;

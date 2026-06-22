@@ -362,6 +362,7 @@ async fn inner_start_server_with_state(
                 started_at: Instant::now(),
                 install_path: params.install_path.clone(),
                 confirmed_running: false,
+                start_params: params.clone(),
             },
         );
     }
@@ -929,6 +930,23 @@ pub async fn scan_running_servers(
             let install_path_watcher = entry.install_path.clone();
             {
                 let mut registry = state.running_servers.lock().unwrap();
+                // Build a minimal params stub — port/rcon fields are unknown for
+                // servers detected on startup.  The memory-limit checker emits an
+                // event instead of doing an in-process restart when rcon_port == 0.
+                let stub_params = StartServerParams {
+                    server_id:    entry.server_id.clone(),
+                    server_name:  String::new(),
+                    install_path: entry.install_path.clone(),
+                    map_path:     String::new(),
+                    port:         0,
+                    query_port:   0,
+                    rcon_port:    0,
+                    rcon_password: String::new(),
+                    extra_args:   vec![],
+                    mod_ids:      vec![],
+                    proton_path:  None,
+                    prefix_path:  None,
+                };
                 registry.insert(
                     entry.server_id.clone(),
                     crate::state::RunningServer {
@@ -936,6 +954,7 @@ pub async fn scan_running_servers(
                         started_at: Instant::now(),
                         install_path: entry.install_path,
                         confirmed_running: true,
+                        start_params: stub_params,
                     },
                 );
             }
