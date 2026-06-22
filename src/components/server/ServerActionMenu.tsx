@@ -391,7 +391,9 @@ export function ServerActionMenu({ server }: Props) {
         mapPath,
         server.map_id,
         backupDir,
-        "manual"
+        "manual",
+        "",
+        server.save_folder_name || undefined
       );
       await insertBackup({
         id:              record.id,

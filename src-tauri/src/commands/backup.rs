@@ -393,7 +393,7 @@ pub async fn create_server_backup(
         let size = fmt_size(rec.file_size_bytes);
         crate::commands::notifications::dispatch_notification(
             &app, "backup_completed", Some(&server_id), &server_name,
-            "Backup Complete", &format!("Server backup completed ({size})"), "success",
+            "Server Backup", &format!("{server_name} — server backup complete ({size})"), "success",
         ).await;
     }
     result
@@ -595,7 +595,7 @@ pub async fn backup_all_players(
         if count > 0 {
             crate::commands::notifications::dispatch_notification(
                 &app, "backup_completed", Some(&server_id), &server_name,
-                "Backup Complete", &format!("Player backups completed ({count} players)"), "success",
+                "Player Backup", &format!("{server_name} — {count} player backups complete"), "success",
             ).await;
         }
     }
@@ -702,7 +702,7 @@ pub async fn create_player_backup(
         let display_name = rec.player_name.as_deref().unwrap_or(&eos_id);
         crate::commands::notifications::dispatch_notification(
             &app, "backup_completed", Some(&server_id), &server_name,
-            "Backup Complete", &format!("Player backup for {display_name} completed ({size})"), "success",
+            "Player Backup", &format!("{server_name} — backup for {display_name} complete ({size})"), "success",
         ).await;
     }
     result
@@ -1013,7 +1013,7 @@ pub async fn create_full_backup(
     let size = fmt_size(rec.file_size_bytes);
     crate::commands::notifications::dispatch_notification(
         &app, "backup_completed", Some(&rec.server_id), &server_name,
-        "Backup Complete", &format!("Full backup completed ({size})"), "success",
+        "Full Backup", &format!("{server_name} — full backup complete ({size})"), "success",
     ).await;
     Ok(rec)
 }

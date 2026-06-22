@@ -116,6 +116,9 @@ pub struct StartServerParams {
     pub proton_path: Option<String>,
     /// Linux only: WINEPREFIX path where Proton creates its fake C: drive.
     pub prefix_path: Option<String>,
+    /// When set, appended as ?AltSaveDirectoryName= in the map query string.
+    /// ASA reads this from the URL and saves to SavedArks/{name} instead of SavedArks/{mapPath}.
+    pub alt_save_directory_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -238,11 +241,16 @@ async fn inner_start_server_with_state(
     // Passwords, RCON, MaxPlayers, and all gameplay settings are read by the
     // server from GameUserSettings.ini — they must NOT be duplicated on the CLI
     // or they will override INI values on every restart.
+    let alt_save = params.alt_save_directory_name.as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("?AltSaveDirectoryName={s}"))
+        .unwrap_or_default();
     let query_string = format!(
-        "{}?listen?Port={}?QueryPort={}",
+        "{}?listen?Port={}?QueryPort={}{}",
         params.map_path,
         params.port,
         params.query_port,
+        alt_save,
     );
 
     // Build the platform-specific Command.
@@ -946,6 +954,7 @@ pub async fn scan_running_servers(
                     mod_ids:      vec![],
                     proton_path:  None,
                     prefix_path:  None,
+                    alt_save_directory_name: None,
                 };
                 registry.insert(
                     entry.server_id.clone(),

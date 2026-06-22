@@ -88,6 +88,8 @@ export interface StartServerParams {
   protonPath?: string;
   /** Linux only: path to the Steam compatibility prefix (WINEPREFIX). */
   prefixPath?: string;
+  /** When set, appended as ?AltSaveDirectoryName= in the map query string so ASA saves to SavedArks/{name}. */
+  altSaveDirectoryName?: string;
 }
 
 export interface ProtonEntry {

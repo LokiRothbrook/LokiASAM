@@ -764,7 +764,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting server backup…" });
     try {
       const rec: BackupRecord = await tauriCmd.createServerBackup(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
+        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual",
+        "", server.save_folder_name || undefined
       );
       await insertBackup({
         id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
@@ -788,7 +789,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting player backups…" });
     try {
       const records = await tauriCmd.backupAllPlayers(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
+        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual",
+        server.save_folder_name || undefined
       );
       if (records.length === 0) {
         toast.info("No player profiles found to back up.");

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Zap, Settings2, Terminal, Skull, CheckCircle2, ShieldCheck,
+  Zap, Settings2, Terminal, Skull, CheckCircle2, ShieldCheck, ChevronDown, ChevronRight, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +38,8 @@ import type { ServerRow } from "@/lib/db";
 import { formatServerVersion } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
-import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { ARK_MAPS, ARK_EVENTS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { setServerActiveEvent } from "@/lib/db";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -495,6 +496,7 @@ function ActiveConfigPanel({
   launchCommand: string;
   onNavigateToConfig: () => void;
 }) {
+  const [cliExpanded, setCliExpanded] = useState(false);
   if (!config) return null;
 
   const pvp = gusVal(config, "ServerPVE") !== "True";
@@ -541,16 +543,25 @@ function ActiveConfigPanel({
         ))}
       </div>
 
-      {/* Launch command */}
+      {/* Launch command — collapsed by default */}
       {launchCommand && (
         <div>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Terminal className="w-3 h-3" style={{ color: "var(--text-muted)" }} />
+          <button
+            type="button"
+            onClick={() => setCliExpanded((v) => !v)}
+            className="flex items-center gap-1.5 w-full text-left"
+          >
+            {cliExpanded
+              ? <ChevronDown  className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />
+              : <ChevronRight className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />}
+            <Terminal className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>Launch Command</span>
-          </div>
-          <div className="rounded-lg px-3 py-2 overflow-x-auto" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
-            <code className="text-xs font-mono whitespace-pre-wrap break-all" style={{ color: "var(--neon-cyan)" }}>{launchCommand}</code>
-          </div>
+          </button>
+          {cliExpanded && (
+            <div className="mt-1.5 rounded-lg px-3 py-2 overflow-x-auto" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+              <code className="text-xs font-mono whitespace-pre-wrap break-all" style={{ color: "var(--neon-cyan)" }}>{launchCommand}</code>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -585,6 +596,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [launchCommand, setLaunchCommand] = useState("");
   const [wipingDinos, setWipingDinos] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [activeEventId, setActiveEventId] = useState<string | null>(server.active_event ?? null);
 
   // Per-tile timeframe selectors
   const [playersTf, setPlayersTf] = useState<Timeframe>("Live");
@@ -1013,7 +1025,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
               const backupDir = await getAppSetting("backup_dir");
               if (!backupDir) return;
               const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
-              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual")
+              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual", "", server.save_folder_name || undefined)
                 .then(async (record: BackupRecord) => {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,
@@ -1097,6 +1109,55 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           <StatChart serverId={server.id} metric="mem" timeframe={memTf} />
         </ChartStatTile>
 
+      </div>
+
+      {/* ── Active Event selector ── */}
+      <div
+        className="glass-card rounded-xl p-4"
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <Sparkles className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                Loads the event mod and passes <span className="font-mono">-ActiveEvent=</span> on next server start.
+              </p>
+            </div>
+          </div>
+          <Select
+            value={activeEventId ?? "none"}
+            onValueChange={async (val) => {
+              const newId = val === "none" ? null : val;
+              setActiveEventId(newId);
+              try {
+                await setServerActiveEvent(server.id, newId);
+                queryClient.invalidateQueries({ queryKey: ["servers"] });
+              } catch (e) {
+                toast.error(`Failed to set event: ${e}`);
+              }
+            }}
+          >
+            <SelectTrigger className="w-52 text-sm" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}>
+              <SelectValue placeholder="No Event" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No Event</SelectItem>
+              {ARK_EVENTS.map((evt) => (
+                <SelectItem key={evt.id} value={evt.id}>{evt.displayName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {activeEventId && (() => {
+          const evt = ARK_EVENTS.find((e) => e.id === activeEventId);
+          return evt ? (
+            <p className="text-xs mt-2 pl-6" style={{ color: "var(--text-muted)" }}>
+              {evt.description} <span className="font-mono ml-1" style={{ color: "var(--text-subtle)" }}>Mod: {evt.modId}</span>
+            </p>
+          ) : null;
+        })()}
       </div>
 
       {/* ── Active Configuration panel ── */}

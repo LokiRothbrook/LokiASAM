@@ -387,7 +387,10 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         _ => return,
     };
 
-    let map_path = map_id_to_path(&server.map_id);
+    let base_map_path = map_id_to_path(&server.map_id);
+    let map_path = server.save_folder_name.as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(base_map_path);
 
     // Create the archive (eos_id used as player_name for the filename).
     let rec = match create_player_backup_inner(
@@ -590,63 +593,64 @@ pub async fn execute_tick(app: &AppHandle) {
         // One notification per server per tick regardless of how many backup
         // types ran. Titles are specific when only one type ran; generic when
         // both ran so the body can carry the combined detail.
+        let sname = &server.name;
         let notification: Option<(&str, &str, String, &str)> = match (&server_outcome, &player_outcome) {
             // Both ran — both succeeded
             (Some(Ok(size)), Some(Ok(count))) if *count > 0 => Some((
-                "backup_completed", "Backup Complete",
-                format!("Server backup: {size} · {count} players backed up"),
+                "backup_completed", "Server & Player Backup",
+                format!("{sname} — server backup: {size} · {count} players"),
                 "success",
             )),
             // Both ran — server ok, players ran but 0 profiles found
             (Some(Ok(size)), Some(Ok(_))) => Some((
-                "backup_completed", "Server Backup Complete",
-                format!("Scheduled server backup completed ({size})"),
+                "backup_completed", "Server Backup",
+                format!("{sname} — server backup complete ({size})"),
                 "success",
             )),
             // Both ran — server ok, players failed
             (Some(Ok(size)), Some(Err(pe))) => Some((
                 "backup_failed", "Backup Partially Failed",
-                format!("Server backup complete ({size}) · Player backup failed: {pe}"),
+                format!("{sname} — server backup: {size} · player backup failed: {pe}"),
                 "error",
             )),
             // Both ran — server failed, players ok
             (Some(Err(se)), Some(Ok(count))) if *count > 0 => Some((
                 "backup_failed", "Backup Partially Failed",
-                format!("Server backup failed: {se} · {count} player backups complete"),
+                format!("{sname} — server backup failed: {se} · {count} player backups complete"),
                 "error",
             )),
             // Both ran — server failed, 0 players
             (Some(Err(se)), Some(Ok(_))) => Some((
                 "backup_failed", "Server Backup Failed",
-                format!("Scheduled server backup failed: {se}"),
+                format!("{sname} — server backup failed: {se}"),
                 "error",
             )),
             // Both ran — both failed
             (Some(Err(se)), Some(Err(pe))) => Some((
                 "backup_failed", "Backup Failed",
-                format!("Server backup failed: {se} · Player backup failed: {pe}"),
+                format!("{sname} — server backup failed: {se} · player backup failed: {pe}"),
                 "error",
             )),
             // Server only
             (Some(Ok(size)), None) => Some((
-                "backup_completed", "Server Backup Complete",
-                format!("Scheduled server backup completed ({size})"),
+                "backup_completed", "Server Backup",
+                format!("{sname} — server backup complete ({size})"),
                 "success",
             )),
             (Some(Err(se)), None) => Some((
                 "backup_failed", "Server Backup Failed",
-                format!("Scheduled server backup failed: {se}"),
+                format!("{sname} — server backup failed: {se}"),
                 "error",
             )),
             // Player only
             (None, Some(Ok(count))) if *count > 0 => Some((
-                "backup_completed", "Player Backup Complete",
-                format!("Scheduled player backups completed ({count} players)"),
+                "backup_completed", "Player Backup",
+                format!("{sname} — {count} player backups complete"),
                 "success",
             )),
             (None, Some(Err(pe))) => Some((
                 "backup_failed", "Player Backup Failed",
-                format!("Scheduled player backup failed: {pe}"),
+                format!("{sname} — player backup failed: {pe}"),
                 "error",
             )),
             // Player only with 0 profiles, or nothing ran

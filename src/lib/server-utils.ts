@@ -31,10 +31,6 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
   });
 
-  if (server.save_folder_name) {
-    extraArgs.push(`-SaveDirectoryOverride=${server.save_folder_name}`);
-  }
-
   const map = ARK_MAPS.find((m) => m.id === server.map_id);
   const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
@@ -71,6 +67,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     rconPassword: server.rcon_password,
     extraArgs,
     modIds:       enabledModIds,
+    altSaveDirectoryName: server.save_folder_name || undefined,
   };
 
   if (isLinux) {
@@ -102,7 +99,6 @@ export async function buildLaunchCommandPreview(
     return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
   });
 
-  if (server.save_folder_name) extraArgs.push(`-SaveDirectoryOverride=${server.save_folder_name}`);
 
   if (server.active_event) {
     extraArgs.push(`-ActiveEvent=${server.active_event}`);
@@ -128,10 +124,11 @@ export async function buildLaunchCommandPreview(
   const exe = isLinux ? "./ShooterGameServer" : "ShooterGameServer.exe";
   const modsArg = enabledModIds.length > 0 ? `-mods=${enabledModIds.join(",")}` : "";
   const portArgs = `-port=${server.port} -queryport=${server.query_port} -RCONPort=${server.rcon_port} -MaxPlayers=${server.max_players}`;
+  const altSave = server.save_folder_name ? `?AltSaveDirectoryName=${server.save_folder_name}` : "";
 
   const parts = [
-    `${exe} ${mapPath}`,
-    portArgs,
+    `${exe} ${mapPath}?listen?Port=${server.port}?QueryPort=${server.query_port}${altSave}`,
+    "-server -log",
     ...extraArgs,
     modsArg,
   ].filter(Boolean);
