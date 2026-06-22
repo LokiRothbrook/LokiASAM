@@ -65,8 +65,8 @@ export interface ArkMap {
  *
  * Official map release status as of 2026:
  *   Released: The Island, Scorched Earth, Aberration, The Center, Extinction,
- *             Astraeos, Ragnarok, Valguero, Lost Colony, Genesis Part 1
- *   Upcoming: Genesis Part 2, Lost Island, Fjordur, Crystal Isles (2027+)
+ *             Astraeos, Ragnarok, Valguero, Lost Colony
+ *   Upcoming: Genesis Part 1, Genesis Part 2, Lost Island, Fjordur, Crystal Isles
  */
 export const ARK_MAPS: ArkMap[] = [
   // ── Official / Base Game ──────────────────────────────────────────────────
@@ -158,6 +158,7 @@ export const ARK_MAPS: ArkMap[] = [
     released: true,
     isMod: false,
   },
+  // ── Official / Announced but Not Yet Released ─────────────────────────────
   {
     id: "genesis1",
     displayName: "Genesis: Part 1",
@@ -165,11 +166,9 @@ export const ARK_MAPS: ArkMap[] = [
     isOfficial: true,
     dlcRequired: true,
     dlcName: "Genesis: Part 1",
-    released: true,
+    released: false,
     isMod: false,
   },
-
-  // ── Official / Announced but Not Yet Released ─────────────────────────────
   {
     id: "genesis2",
     displayName: "Genesis: Part 2",
@@ -559,7 +558,7 @@ export const PRESET_STYLES: PresetStyle[] = [
     tags: ["Casual", "2–3× Rates"],
     gameUserSettings: {
       XPMultiplier: 2.0,
-      TamingSpeedMultiplier: 3.0,
+      TamingSpeedMultiplier: 5.0,
       HarvestAmountMultiplier: 2.0,
       ResourcesRespawnPeriodMultiplier: 0.5,
       MatingIntervalMultiplier: 0.5,
@@ -1281,6 +1280,14 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     category: "performance",
   },
   // Admin / logging
+  {
+    key: "UseServerNetSpeedCheck",
+    flag: "-UseServerNetSpeedCheck",
+    type: "boolean",
+    defaultValue: false,
+    description: "Enable server-side network speed checks to detect speed-hacking clients.",
+    category: "admin",
+  },
   {
     key: "servergamelog",
     flag: "-servergamelog",

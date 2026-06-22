@@ -745,10 +745,15 @@ function QuickSetupModal({
 
   const handleApply = () => {
     const presetGus = buildPresetConfig(selectedMode, selectedStyle);
-    // Convert GameUserSettingsConfig into the nested Record<section, Record<key, value>> format
+    // Keys that belong to a separate section or are managed elsewhere — never overwrite from a preset
+    const skipKeys = new Set([
+      "MaxPlayers", "SessionName", "ServerPassword", "ServerAdminPassword",
+      "Port", "QueryPort", "RCONPort", "RCONEnabled",
+    ]);
     const gusSection: Record<string, string> = {};
     for (const [k, v] of Object.entries(presetGus)) {
-      if (v !== undefined && v !== null) gusSection[k] = String(v);
+      if (skipKeys.has(k) || v === undefined || v === null) continue;
+      gusSection[k] = String(v);
     }
     const gameSection: Record<string, string> = {};
     const style = PRESET_STYLES.find((s) => s.id === selectedStyle);

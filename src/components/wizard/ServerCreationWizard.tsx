@@ -24,7 +24,7 @@ import {
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
-  Shield, Info,
+  Shield, Info, Heart, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,15 +58,47 @@ import { useQueryClient } from "@tanstack/react-query";
 // ---------------------------------------------------------------------------
 
 interface GuidedRates {
+  // Core Rates (page 1)
   xpMultiplier: number;
   harvestMultiplier: number;
+  harvestHealthMultiplier: number;
   tamingMultiplier: number;
-  breedingSpeedMultiplier: number;
-  resourceRespawnMultiplier: number;
-  playerDamageMultiplier: number;
-  nightSpeedMultiplier: number;
   wildDinoMaxLevel: number;
+  resourceRespawnMultiplier: number;
+  nightSpeedMultiplier: number;
+  // Breeding (page 2)
+  matureSpeedMultiplier: number;
+  hatchSpeedMultiplier: number;
+  foodConsumptionMultiplier: number;
+  matingIntervalMultiplier: number;
+  matingSpeedMultiplier: number;
+  cuddleIntervalMultiplier: number;
+  cuddleGraceMultiplier: number;
+  imprintAmountMultiplier: number;
+  // Combat (page 3)
+  playerDamageMultiplier: number;
+  playerResistanceMultiplier: number;
+  dinoDamageMultiplier: number;
+  dinoResistanceMultiplier: number;
+  tamedDinoDamageMultiplier: number;
+  tamedDinoResistanceMultiplier: number;
+  structureDamageMultiplier: number;
+  structureResistanceMultiplier: number;
+  enableRespawnPenalty: boolean;
+  enableTurretLimits: boolean;
+  // Server QoL (page 4)
+  allowFlyingStaminaRecovery: boolean;
+  allowSpeedLeveling: boolean;
+  allowFlyerSpeedLeveling: boolean;
+  allowUnlimitedRespecs: boolean;
   enhanceSkillGains: boolean;
+  globalSpoilingTimeMultiplier: number;
+  globalItemDecompMultiplier: number;
+  globalCorpseDecompMultiplier: number;
+  enableORP: boolean;
+  orpInterval: number;
+  disableStructureDecay: boolean;
+  disableDinoDecay: boolean;
 }
 
 interface WizardData {
@@ -75,7 +107,9 @@ interface WizardData {
   mapId: string;
   maxPlayers: number;
   serverPassword: string;
+  serverPasswordConfirm: string;
   adminPassword: string;
+  adminPasswordConfirm: string;
   // Step 1 — Game Mode
   gameMode: "pvp" | "pve";
   flyerCarryPvE: boolean;
@@ -112,15 +146,47 @@ interface WizardData {
 }
 
 const DEFAULT_GUIDED_RATES: GuidedRates = {
+  // Core Rates
   xpMultiplier: 2.0,
   harvestMultiplier: 2.0,
-  tamingMultiplier: 3.0,
-  breedingSpeedMultiplier: 5.0,
-  resourceRespawnMultiplier: 0.5,
-  playerDamageMultiplier: 1.0,
-  nightSpeedMultiplier: 2.0,
+  harvestHealthMultiplier: 2.0,
+  tamingMultiplier: 5.0,
   wildDinoMaxLevel: 150,
+  resourceRespawnMultiplier: 0.5,
+  nightSpeedMultiplier: 2.0,
+  // Breeding
+  matureSpeedMultiplier: 10.0,
+  hatchSpeedMultiplier: 10.0,
+  foodConsumptionMultiplier: 5.0,
+  matingIntervalMultiplier: 0.25,
+  matingSpeedMultiplier: 2.0,
+  cuddleIntervalMultiplier: 0.3,
+  cuddleGraceMultiplier: 2.0,
+  imprintAmountMultiplier: 2.0,
+  // Combat
+  playerDamageMultiplier: 1.0,
+  playerResistanceMultiplier: 1.0,
+  dinoDamageMultiplier: 1.0,
+  dinoResistanceMultiplier: 1.0,
+  tamedDinoDamageMultiplier: 1.0,
+  tamedDinoResistanceMultiplier: 1.0,
+  structureDamageMultiplier: 1.0,
+  structureResistanceMultiplier: 1.0,
+  enableRespawnPenalty: true,
+  enableTurretLimits: true,
+  // QoL
+  allowFlyingStaminaRecovery: true,
+  allowSpeedLeveling: false,
+  allowFlyerSpeedLeveling: false,
+  allowUnlimitedRespecs: false,
   enhanceSkillGains: false,
+  globalSpoilingTimeMultiplier: 2.0,
+  globalItemDecompMultiplier: 2.0,
+  globalCorpseDecompMultiplier: 2.0,
+  enableORP: true,
+  orpInterval: 900,
+  disableStructureDecay: true,
+  disableDinoDecay: true,
 };
 
 const DEFAULT_DATA: WizardData = {
@@ -128,7 +194,9 @@ const DEFAULT_DATA: WizardData = {
   mapId: "theisland",
   maxPlayers: 70,
   serverPassword: "",
+  serverPasswordConfirm: "",
   adminPassword: "",
+  adminPasswordConfirm: "",
   gameMode: "pve",
   flyerCarryPvE: true,
   pvpFriendlyFire: true,
@@ -136,7 +204,7 @@ const DEFAULT_DATA: WizardData = {
   guidedRates: DEFAULT_GUIDED_RATES,
   fullCustomGus: {},
   fullCustomGameIni: {},
-  launchArgs: { NoBattlEye: "true" },
+  launchArgs: { NoBattlEye: "true", servergamelog: "true" },
   port: 7777,
   queryPort: 27015,
   rconPort: 27020,
@@ -170,7 +238,10 @@ function computeSteps(data: WizardData): StepDef[] {
     { id: "style",    label: "Server Style", icon: Sliders },
   ];
   if (data.presetStyle === "guided_custom") {
-    steps.push({ id: "guided", label: "Custom Rates", icon: Settings2 });
+    steps.push({ id: "guided_rates",    label: "Core Rates", icon: Sliders });
+    steps.push({ id: "guided_breeding", label: "Breeding",   icon: Heart });
+    steps.push({ id: "guided_combat",   label: "Combat",     icon: Sword });
+    steps.push({ id: "guided_behavior", label: "Server QoL", icon: Settings2 });
   }
   if (data.presetStyle === "full_custom") {
     steps.push({ id: "full_ini", label: "INI Config", icon: Code2 });
@@ -439,32 +510,73 @@ function BasicInfoStep({
       </div>
 
       {/* Passwords */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label style={{ color: "var(--text-primary)" }}>Server Password <span style={{ color: "var(--text-muted)" }}>(optional)</span></Label>
-          <Input
-            type="password"
-            value={data.serverPassword}
-            onChange={(e) => onChange({ serverPassword: e.target.value })}
-            placeholder="Leave blank for public"
-            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label style={{ color: "var(--text-primary)" }}>Admin Password <span style={{ color: "var(--neon-red)" }}>*</span></Label>
-          <Input
-            type="password"
-            value={data.adminPassword}
-            onChange={(e) => onChange({ adminPassword: e.target.value })}
-            placeholder="Required"
-            style={{
-              background: "rgba(10,10,30,0.8)",
-              borderColor: !data.adminPassword ? "var(--neon-red)" : "rgba(var(--neon-purple-rgb),0.3)",
-              color: "var(--text-primary)",
-            }}
-          />
-        </div>
-      </div>
+      {(() => {
+        const adminMismatch = !!data.adminPasswordConfirm && data.adminPassword !== data.adminPasswordConfirm;
+        const serverMismatch = !!data.serverPasswordConfirm && data.serverPassword !== data.serverPasswordConfirm;
+        const fieldStyle = (hasValue: boolean, mismatch: boolean) => ({
+          background: "rgba(10,10,30,0.8)",
+          borderColor: mismatch ? "var(--neon-red)" : !hasValue ? "rgba(255,0,85,0.5)" : "rgba(var(--neon-purple-rgb),0.3)",
+          color: "var(--text-primary)",
+        });
+        return (
+          <div className="space-y-3">
+            {/* Admin password */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label style={{ color: "var(--text-primary)" }}>Admin Password <span style={{ color: "var(--neon-red)" }}>*</span></Label>
+                <Input
+                  type="password"
+                  value={data.adminPassword}
+                  onChange={(e) => onChange({ adminPassword: e.target.value })}
+                  placeholder="Required"
+                  style={fieldStyle(!!data.adminPassword, false)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label style={{ color: "var(--text-primary)" }}>Confirm Admin Password <span style={{ color: "var(--neon-red)" }}>*</span></Label>
+                <Input
+                  type="password"
+                  value={data.adminPasswordConfirm}
+                  onChange={(e) => onChange({ adminPasswordConfirm: e.target.value })}
+                  placeholder="Re-enter password"
+                  style={fieldStyle(!!data.adminPasswordConfirm, adminMismatch)}
+                />
+                {adminMismatch && (
+                  <p className="text-xs" style={{ color: "var(--neon-red)" }}>Passwords do not match</p>
+                )}
+              </div>
+            </div>
+
+            {/* Server password */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label style={{ color: "var(--text-primary)" }}>Server Password <span style={{ color: "var(--text-muted)" }}>(optional)</span></Label>
+                <Input
+                  type="password"
+                  value={data.serverPassword}
+                  onChange={(e) => onChange({ serverPassword: e.target.value })}
+                  placeholder="Leave blank for public"
+                  style={fieldStyle(true, false)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label style={{ color: "var(--text-primary)" }}>Confirm Server Password</Label>
+                <Input
+                  type="password"
+                  value={data.serverPasswordConfirm}
+                  onChange={(e) => onChange({ serverPasswordConfirm: e.target.value })}
+                  placeholder={data.serverPassword ? "Re-enter password" : "—"}
+                  disabled={!data.serverPassword}
+                  style={fieldStyle(true, serverMismatch)}
+                />
+                {serverMismatch && (
+                  <p className="text-xs" style={{ color: "var(--neon-red)" }}>Passwords do not match</p>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -632,7 +744,7 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
               {(style.id === "guided_custom" || style.id === "full_custom") && active && (
                 <p className="text-[10px] mt-2 flex items-center gap-1" style={{ color: "var(--neon-cyan)" }}>
                   <ArrowRight className="w-3 h-3" />
-                  {style.id === "guided_custom" ? "Next step: configure your rates" : "Next step: open INI editor"}
+                  {style.id === "guided_custom" ? "Next: 4-step guided setup — rates, breeding, combat, and QoL" : "Next step: open INI editor"}
                 </p>
               )}
             </button>
@@ -644,7 +756,7 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
 }
 
 // ---------------------------------------------------------------------------
-// Step 2a — Guided Custom Rates
+// Step 2a–2d — Guided Custom Setup (4 pages)
 // ---------------------------------------------------------------------------
 
 interface RateSliderProps {
@@ -674,6 +786,28 @@ function RateSlider({ label, description, value, min, max, step, onChange, forma
   );
 }
 
+function GuidedToggle({ label, description, value, onChange, warn }: {
+  label: string; description: string; value: boolean;
+  onChange: (v: boolean) => void; warn?: boolean;
+}) {
+  const color = warn ? "var(--neon-red)" : "var(--neon-purple)";
+  const border = warn ? "rgba(255,0,85,0.2)" : "rgba(var(--neon-purple-rgb),0.12)";
+  return (
+    <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: `1px solid ${border}` }}>
+      <div>
+        <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{label}</p>
+        <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>{description}</p>
+      </div>
+      <button type="button" onClick={() => onChange(!value)} className="shrink-0" aria-label={value ? "Disable" : "Enable"}>
+        {value
+          ? <ToggleRight className="w-8 h-8" style={{ color }} />
+          : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+      </button>
+    </div>
+  );
+}
+
+// Page 1 — Core Rates
 function GuidedRatesStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const r = data.guidedRates;
   const set = (k: keyof GuidedRates, v: number | boolean) =>
@@ -682,35 +816,197 @@ function GuidedRatesStep({ data, onChange }: { data: WizardData; onChange: (patc
   return (
     <div className="space-y-3">
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-        Tune your server rates. These stack on top of the {data.gameMode === "pvp" ? "PvP" : "PvE"} base settings.
-        All values can be changed from the Config tab later.
+        Set the core experience rates. Everything else can be fine-tuned on the next pages or in the Config tab later.
       </p>
       <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
         <RateSlider label="XP Multiplier" description="How fast players and tames gain experience." value={r.xpMultiplier} min={0.5} max={20} step={0.5} onChange={(v) => set("xpMultiplier", v)} />
         <RateSlider label="Harvest Amount" description="Resource yield per harvest action." value={r.harvestMultiplier} min={0.5} max={20} step={0.5} onChange={(v) => set("harvestMultiplier", v)} />
-        <RateSlider label="Taming Speed" description="How quickly taming effectiveness increases." value={r.tamingMultiplier} min={0.5} max={20} step={0.5} onChange={(v) => set("tamingMultiplier", v)} />
-        <RateSlider label="Breeding Speed" description="Baby mature speed + egg hatch speed multiplier." value={r.breedingSpeedMultiplier} min={0.5} max={50} step={0.5} onChange={(v) => set("breedingSpeedMultiplier", v)} />
-        <RateSlider label="Resource Respawn" description="Lower = faster respawn. 0.5 = twice as fast." value={r.resourceRespawnMultiplier} min={0.05} max={2.0} step={0.05} onChange={(v) => set("resourceRespawnMultiplier", v)} formatValue={(v) => `${v}×`} />
-        <RateSlider label="Player Damage" description="Damage output multiplier for players." value={r.playerDamageMultiplier} min={0.5} max={5.0} step={0.1} onChange={(v) => set("playerDamageMultiplier", v)} />
-        <RateSlider label="Night Speed" description="Higher = nights pass faster." value={r.nightSpeedMultiplier} min={1.0} max={10} step={0.5} onChange={(v) => set("nightSpeedMultiplier", v)} />
-        <RateSlider label="Wild Dino Max Level" description="Highest level wild dinos can spawn. 150 is the standard for most community servers." value={r.wildDinoMaxLevel} min={30} max={300} step={30} onChange={(v) => set("wildDinoMaxLevel", v)} formatValue={(v) => `Level ${v}`} />
+        <RateSlider label="Harvest Health" description="How many hits a resource node takes before it depletes. Higher = resources last longer per node." value={r.harvestHealthMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("harvestHealthMultiplier", v)} />
+        <RateSlider label="Taming Speed" description="How quickly taming effectiveness increases per feeding." value={r.tamingMultiplier} min={0.5} max={30} step={0.5} onChange={(v) => set("tamingMultiplier", v)} />
+        <RateSlider label="Wild Dino Max Level" description="Highest level wild dinos can spawn. 150 is standard for most community servers." value={r.wildDinoMaxLevel} min={30} max={300} step={30} onChange={(v) => set("wildDinoMaxLevel", v)} formatValue={(v) => `Level ${v}`} />
+        <RateSlider label="Resource Respawn" description="Lower = faster respawn. 0.5 = twice as fast as vanilla." value={r.resourceRespawnMultiplier} min={0.05} max={2.0} step={0.05} onChange={(v) => set("resourceRespawnMultiplier", v)} />
+        <RateSlider label="Night Speed" description="How fast nights pass. 2× means nights are half as long." value={r.nightSpeedMultiplier} min={1.0} max={10} step={0.5} onChange={(v) => set("nightSpeedMultiplier", v)} />
+      </div>
+    </div>
+  );
+}
 
-        <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-          <div>
-            <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Enhance Skill Gains</p>
-            <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>Boosts per-level stat gains for players (increases health, stamina, and damage points per level).</p>
+// Page 2 — Breeding
+function GuidedBreedingStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const r = data.guidedRates;
+  const set = (k: keyof GuidedRates, v: number | boolean) =>
+    onChange({ guidedRates: { ...r, [k]: v } });
+
+  // Warn if food consumption is high enough relative to mature speed that babies could starve
+  const starvationRisk = r.foodConsumptionMultiplier > r.matureSpeedMultiplier;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        Tune breeding rates. Food consumption speed is critical — if it's too high relative to mature speed, babies will starve before they grow up.
+      </p>
+      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+        <RateSlider label="Baby Mature Speed" description="How fast babies grow to adults. 10× = maturation is 10× faster than vanilla." value={r.matureSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("matureSpeedMultiplier", v)} />
+        <RateSlider label="Egg Hatch Speed" description="How fast eggs hatch. Can be set independently from mature speed." value={r.hatchSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("hatchSpeedMultiplier", v)} />
+
+        <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: `1px solid ${starvationRisk ? "rgba(255,0,85,0.4)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold" style={{ color: starvationRisk ? "var(--neon-red)" : "var(--text-primary)" }}>
+                Baby Food Consumption Speed
+              </p>
+              <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                How fast babies eat food. Keep this below your Mature Speed or babies will starve.
+              </p>
+            </div>
+            <span className="text-sm font-mono font-bold min-w-16 text-right" style={{ color: starvationRisk ? "var(--neon-red)" : "var(--neon-purple)" }}>{r.foodConsumptionMultiplier}×</span>
           </div>
-          <button
-            type="button"
-            onClick={() => set("enhanceSkillGains", !r.enhanceSkillGains)}
-            className="shrink-0 flex items-center"
-            aria-label={r.enhanceSkillGains ? "Disable" : "Enable"}
-          >
-            {r.enhanceSkillGains
-              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-          </button>
+          <Slider min={0.1} max={50} step={0.5} value={[r.foodConsumptionMultiplier]} onValueChange={([v]) => set("foodConsumptionMultiplier", v)} />
+          {starvationRisk && (
+            <div className="flex items-center gap-1.5 mt-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" style={{ color: "var(--neon-red)" }} />
+              <p className="text-[10px]" style={{ color: "var(--neon-red)" }}>
+                Food consumption ({r.foodConsumptionMultiplier}×) exceeds mature speed ({r.matureSpeedMultiplier}×) — babies will likely starve. Set food consumption lower than mature speed.
+              </p>
+            </div>
+          )}
         </div>
+
+        <RateSlider label="Mating Interval" description="Cooldown between matings. Lower = breed more often. 0.25 = 4× more frequent." value={r.matingIntervalMultiplier} min={0.01} max={2.0} step={0.01} onChange={(v) => set("matingIntervalMultiplier", v)} />
+        <RateSlider label="Mating Speed" description="How fast the mating animation completes." value={r.matingSpeedMultiplier} min={1} max={5} step={0.5} onChange={(v) => set("matingSpeedMultiplier", v)} />
+        <RateSlider label="Cuddle Interval" description="How often babies request cuddles (imprinting). Lower = less frequent requests." value={r.cuddleIntervalMultiplier} min={0.05} max={2.0} step={0.05} onChange={(v) => set("cuddleIntervalMultiplier", v)} />
+        <RateSlider label="Cuddle Grace Period" description="How long you have to respond to a cuddle before imprint quality drops." value={r.cuddleGraceMultiplier} min={1} max={10} step={0.5} onChange={(v) => set("cuddleGraceMultiplier", v)} />
+        <RateSlider label="Imprint Amount per Cuddle" description="How much imprint % each cuddle gives. Higher = reach 100% with fewer cuddles." value={r.imprintAmountMultiplier} min={1} max={10} step={0.5} onChange={(v) => set("imprintAmountMultiplier", v)} />
+      </div>
+    </div>
+  );
+}
+
+// Page 3 — Combat
+function GuidedCombatStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const r = data.guidedRates;
+  const set = (k: keyof GuidedRates, v: number | boolean) =>
+    onChange({ guidedRates: { ...r, [k]: v } });
+  const isPvP = data.gameMode === "pvp";
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        Tune combat damage and resistance. 1× is vanilla. All values can be changed from the Config tab later.
+      </p>
+      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+        <RateSlider label="Player Damage" description="Damage output multiplier for players." value={r.playerDamageMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("playerDamageMultiplier", v)} />
+        <RateSlider label="Player Resistance" description="Incoming damage reduction for players. Higher = tankier players." value={r.playerResistanceMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("playerResistanceMultiplier", v)} />
+        <RateSlider label="Dino Damage (Wild)" description="Damage output multiplier for wild dinos." value={r.dinoDamageMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("dinoDamageMultiplier", v)} />
+        <RateSlider label="Dino Resistance (Wild)" description="Incoming damage reduction for wild dinos." value={r.dinoResistanceMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("dinoResistanceMultiplier", v)} />
+        <RateSlider label="Tamed Dino Damage" description="Damage output multiplier for player-tamed dinos." value={r.tamedDinoDamageMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("tamedDinoDamageMultiplier", v)} />
+        <RateSlider label="Tamed Dino Resistance" description="Incoming damage reduction for player-tamed dinos." value={r.tamedDinoResistanceMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("tamedDinoResistanceMultiplier", v)} />
+        {isPvP && <>
+          <RateSlider label="Structure Damage" description="Damage multiplier for attacks against player structures. Affects raiding." value={r.structureDamageMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("structureDamageMultiplier", v)} />
+          <RateSlider label="Structure Resistance" description="Incoming damage reduction for player-built structures." value={r.structureResistanceMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("structureResistanceMultiplier", v)} />
+          <GuidedToggle
+            label="PvP Respawn Penalty"
+            description="Adds increasing respawn time when a player is repeatedly killed by the same player. Discourages spawn camping."
+            value={r.enableRespawnPenalty}
+            onChange={(v) => set("enableRespawnPenalty", v)}
+          />
+        </>}
+        <GuidedToggle
+          label="Turret Limits"
+          description="Limits turrets to 100 within a 10,000 unit radius. Prevents server performance issues from turret spam."
+          value={r.enableTurretLimits}
+          onChange={(v) => set("enableTurretLimits", v)}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Page 4 — Server QoL / Behavior
+function GuidedBehaviorStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const r = data.guidedRates;
+  const set = (k: keyof GuidedRates, v: number | boolean) =>
+    onChange({ guidedRates: { ...r, [k]: v } });
+  const isPvP = data.gameMode === "pvp";
+  const isPvE = data.gameMode === "pve";
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        Quality-of-life and server behavior settings. {isPvP ? "ORP protects offline players." : "Decay settings reduce maintenance stress for PvE."}
+      </p>
+      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+        <GuidedToggle
+          label="Flyer Stamina Recovery"
+          description="Flyers recover stamina while the rider is standing on them in-flight (not just when landed)."
+          value={r.allowFlyingStaminaRecovery}
+          onChange={(v) => set("allowFlyingStaminaRecovery", v)}
+        />
+        <GuidedToggle
+          label="Speed Leveling"
+          description="Players can spend level-up points on movement speed for creatures."
+          value={r.allowSpeedLeveling}
+          onChange={(v) => set("allowSpeedLeveling", v)}
+        />
+        <GuidedToggle
+          label="Flyer Speed Leveling"
+          description="Players can level up flyer movement speed. Separate from ground creature speed leveling."
+          value={r.allowFlyerSpeedLeveling}
+          onChange={(v) => set("allowFlyerSpeedLeveling", v)}
+        />
+        <GuidedToggle
+          label="Unlimited Respecs"
+          description="Remove the 24-hour cooldown on Mindwipe Tonic. Players can respec as often as they want."
+          value={r.allowUnlimitedRespecs}
+          onChange={(v) => set("allowUnlimitedRespecs", v)}
+        />
+        <GuidedToggle
+          label="Enhance Skill Gains"
+          description="Boosts per-level stat gains for players — more health, stamina, and damage points per level."
+          value={r.enhanceSkillGains}
+          onChange={(v) => set("enhanceSkillGains", v)}
+        />
+        <RateSlider label="Global Spoiling Time" description="How long food stays fresh. 2× = food lasts twice as long as vanilla." value={r.globalSpoilingTimeMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("globalSpoilingTimeMultiplier", v)} />
+        <RateSlider label="Item Decomposition Time" description="How long dropped bags and items last on the ground." value={r.globalItemDecompMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("globalItemDecompMultiplier", v)} />
+        {isPvE && (
+          <RateSlider label="Corpse Decomposition Time" description="How long player corpses last. More time to retrieve your items." value={r.globalCorpseDecompMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("globalCorpseDecompMultiplier", v)} />
+        )}
+        {isPvP && (
+          <>
+            <GuidedToggle
+              label="Offline Raid Protection (ORP)"
+              description="Protects a tribe's structures and tames from damage while all members are offline."
+              value={r.enableORP}
+              onChange={(v) => set("enableORP", v)}
+            />
+            {r.enableORP && (
+              <RateSlider
+                label="ORP Activation Delay"
+                description="Seconds after the last tribe member logs off before ORP activates. 900 = 15 minutes."
+                value={r.orpInterval}
+                min={60} max={3600} step={60}
+                onChange={(v) => set("orpInterval", v)}
+                formatValue={(v) => `${Math.round(v / 60)} min`}
+              />
+            )}
+          </>
+        )}
+        {isPvE && (
+          <>
+            <GuidedToggle
+              label="Disable Structure Decay"
+              description="Turns off PvE structure decay timers. Players won't lose buildings from inactivity."
+              value={r.disableStructureDecay}
+              onChange={(v) => set("disableStructureDecay", v)}
+            />
+            <GuidedToggle
+              label="Disable Tame Decay"
+              description="Turns off PvE tame unclaiming timers. Dinos won't become claimable from inactivity."
+              value={r.disableDinoDecay}
+              onChange={(v) => set("disableDinoDecay", v)}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -1560,12 +1856,11 @@ function InstallStep({
         XPMultiplier: r.xpMultiplier,
         HarvestAmountMultiplier: r.harvestMultiplier,
         TamingSpeedMultiplier: r.tamingMultiplier,
-        EggHatchSpeedMultiplier: r.breedingSpeedMultiplier,
-        BabyMatureSpeedMultiplier: r.breedingSpeedMultiplier,
         ResourcesRespawnPeriodMultiplier: r.resourceRespawnMultiplier,
         PlayerDamageMultiplier: r.playerDamageMultiplier,
         NightTimeSpeedScale: r.nightSpeedMultiplier,
         OverrideOfficialDifficulty: r.wildDinoMaxLevel / 30,
+        DifficultyOffset: 1.0,
       };
     }
 
@@ -1592,6 +1887,108 @@ function InstallStep({
       serverSettings[k] = String(v);
     }
 
+    const isNamedPreset = !["guided_custom", "full_custom"].includes(data.presetStyle);
+
+    // ── Settings shared across all named presets ──────────────────────────────
+    if (isNamedPreset) {
+      serverSettings.ShowFloatingDamageText = "True";
+      serverSettings.AdminLogging = "True";
+      serverSettings.ForceAllStructureLocking = "True";
+      serverSettings.DinoCountMultiplier = "1.0";
+      serverSettings.MaxTamedDinos = "5000";
+    }
+
+    // ── PvE mode additions ────────────────────────────────────────────────────
+    if (data.gameMode === "pve") {
+      serverSettings.ServerPVE = "True";
+      if (isNamedPreset) {
+        serverSettings.AlwaysAllowStructurePickup = "True";
+        serverSettings.PvEAllowStructuresAtSupplyDrops = "True";
+        serverSettings.AllowCrateSpawnsOnTopOfStructures = "True";
+      }
+    }
+
+    // ── Official preset ───────────────────────────────────────────────────────
+    if (data.presetStyle === "official") {
+      serverSettings.MaxPersonalTamedDinos = data.gameMode === "pvp" ? "300" : "500";
+      serverSettings.NPCNetworkStasisRangeScalePlayerCountStart = "24";
+      serverSettings.NPCNetworkStasisRangeScalePlayerCountEnd = "70";
+      serverSettings.NPCNetworkStasisRangeScalePercentEnd = "0.5";
+      serverSettings.BanListURL = "http://arkdedicated.com/banlist.txt";
+      if (data.gameMode === "pve") {
+        serverSettings.OnlyAutoDestroyCoreStructures = "True";
+        serverSettings.AutoDestroyDecayedDinos = "True";
+      }
+    }
+
+    // ── Casual preset ─────────────────────────────────────────────────────────
+    if (data.presetStyle === "casual") {
+      serverSettings.MaxPersonalTamedDinos = "500";
+      serverSettings.AllowFlyingStaminaRecovery = "True";
+      serverSettings.HarvestHealthMultiplier = "2.0";
+      if (data.gameMode === "pve") {
+        serverSettings.DisableStructureDecayPvE = "True";
+        serverSettings.DisableDinoDecayPvE = "True";
+        serverSettings.AutoDestroyDecayedDinos = "False";
+        serverSettings.GlobalSpoilingTimeMultiplier = "2.0"; // PvE wants 2.0; PvP stays at 1.5 from preset
+      }
+    }
+
+    // ── Boosted preset ────────────────────────────────────────────────────────
+    if (data.presetStyle === "boosted") {
+      // Taming rate differs by mode — PRESET_STYLES has a generic 10× which we override here
+      serverSettings.TamingSpeedMultiplier = data.gameMode === "pvp" ? "15.0" : "25.0";
+      serverSettings.MaxPersonalTamedDinos = "500";
+      serverSettings.AllowFlyingStaminaRecovery = "True";
+      serverSettings.HarvestHealthMultiplier = "2.0";
+      serverSettings.GlobalItemDecompositionTimeMultiplier = data.gameMode === "pve" ? "3.0" : "2.0";
+      if (data.gameMode === "pve") {
+        serverSettings.DisableStructureDecayPvE = "True";
+        serverSettings.DisableDinoDecayPvE = "True";
+        serverSettings.AutoDestroyDecayedDinos = "False";
+        serverSettings.GlobalSpoilingTimeMultiplier = "3.0"; // PvE wants 3.0; PvP stays at 2.0 from preset
+      }
+    }
+
+    // ── Guided custom — all settings applied directly to serverSettings ────────
+    if (data.presetStyle === "guided_custom") {
+      const r = data.guidedRates;
+      serverSettings.HarvestHealthMultiplier          = String(r.harvestHealthMultiplier);
+      serverSettings.PlayerResistanceMultiplier        = String(r.playerResistanceMultiplier);
+      serverSettings.DinoCountMultiplier               = "1.0";
+      serverSettings.DinoDamageMultiplier              = String(r.dinoDamageMultiplier);
+      serverSettings.DinoResistanceMultiplier          = String(r.dinoResistanceMultiplier);
+      serverSettings.TamedDinoDamageMultiplier         = String(r.tamedDinoDamageMultiplier);
+      serverSettings.TamedDinoResistanceMultiplier     = String(r.tamedDinoResistanceMultiplier);
+      serverSettings.StructureDamageMultiplier         = String(r.structureDamageMultiplier);
+      serverSettings.StructureResistanceMultiplier     = String(r.structureResistanceMultiplier);
+      serverSettings.MaxTamedDinos                     = "5000";
+      serverSettings.MaxPersonalTamedDinos             = "500";
+      serverSettings.GlobalSpoilingTimeMultiplier      = String(r.globalSpoilingTimeMultiplier);
+      serverSettings.GlobalItemDecompositionTimeMultiplier = String(r.globalItemDecompMultiplier);
+      serverSettings.AllowFlyingStaminaRecovery        = r.allowFlyingStaminaRecovery ? "True" : "False";
+      serverSettings.ShowFloatingDamageText            = "True";
+      serverSettings.AdminLogging                      = "True";
+      serverSettings.ForceAllStructureLocking          = "True";
+      serverSettings.AutoSavePeriodMinutes             = "15.0";
+      serverSettings.ServerCrosshair                   = "True";
+
+      if (data.gameMode === "pvp") {
+        serverSettings.PreventOfflinePvP         = r.enableORP ? "True" : "False";
+        serverSettings.PreventOfflinePvPInterval = String(r.orpInterval);
+      }
+      if (data.gameMode === "pve") {
+        serverSettings.ServerPVE                          = "True";
+        serverSettings.AlwaysAllowStructurePickup         = "True";
+        serverSettings.PvEAllowStructuresAtSupplyDrops    = "True";
+        serverSettings.AllowCrateSpawnsOnTopOfStructures  = "True";
+        serverSettings.AllowCaveBuildingPvE               = "True";
+        serverSettings.DisableStructureDecayPvE           = r.disableStructureDecay ? "True" : "False";
+        serverSettings.DisableDinoDecayPvE                = r.disableDinoDecay      ? "True" : "False";
+        serverSettings.AutoDestroyDecayedDinos            = r.disableStructureDecay  ? "False" : "True";
+      }
+    }
+
     return {
       SessionSettings: sessionSettings,
       ServerSettings: serverSettings,
@@ -1603,11 +2000,155 @@ function InstallStep({
   /** Build the Game.ini section map from wizard data */
   const buildGameIniJson = (): Record<string, Record<string, string>> => {
     const shooterMode: Record<string, string> = {};
+    const isNamedPreset = !["guided_custom", "full_custom"].includes(data.presetStyle);
+
+    // ── Friendly fire ─────────────────────────────────────────────────────────
     if (data.gameMode === "pve") {
+      shooterMode.bDisableFriendlyFire = "True";
       shooterMode.bPvEDisableFriendlyFire = "True";
-    } else {
-      shooterMode.bDisableFriendlyFire = data.pvpFriendlyFire ? "False" : "True";
+    } else if (!data.pvpFriendlyFire) {
+      shooterMode.bDisableFriendlyFire = "True";
     }
+
+    if (isNamedPreset) {
+      // ── PvP-specific ────────────────────────────────────────────────────────
+      if (data.gameMode === "pvp") {
+        // Repeat-kill respawn penalty (all PvP named presets)
+        shooterMode.bIncreasePvPRespawnInterval = "True";
+        shooterMode.IncreasePvPRespawnIntervalBaseAmount = "60.0";
+        shooterMode.IncreasePvPRespawnIntervalCheckPeriod = "300.0";
+        shooterMode.IncreasePvPRespawnIntervalMultiplier = "2.0";
+      }
+
+      // ── PvE-specific ────────────────────────────────────────────────────────
+      if (data.gameMode === "pve") {
+        shooterMode.bPvEAllowTribeWar = "True";
+      }
+
+      // ── Turret limits (all named presets) ───────────────────────────────────
+      shooterMode.bLimitTurretsInRange = "True";
+      shooterMode.bHardLimitTurretsInRange = "True";
+      shooterMode.LimitTurretsNum = "100";
+      shooterMode.LimitTurretsRange = "10000";
+
+      // ── Official: drop limits ───────────────────────────────────────────────
+      if (data.presetStyle === "official") {
+        shooterMode.LimitNonPlayerDroppedItemsCount = "600";
+        shooterMode.LimitNonPlayerDroppedItemsRange = "1600";
+      }
+
+      // ── Boosted: speed leveling + unlimited respecs ─────────────────────────
+      if (data.presetStyle === "boosted") {
+        shooterMode.bAllowFlyerSpeedLeveling = "True";
+        shooterMode.bAllowSpeedLeveling = "True";
+        shooterMode.bAllowUnlimitedRespecs = "True";
+      }
+
+      // ── PvE casual: unlimited respecs ──────────────────────────────────────
+      if (data.gameMode === "pve" && data.presetStyle === "casual") {
+        shooterMode.bAllowUnlimitedRespecs = "True";
+      }
+
+      // ── PvE boosted: extra quality-of-life ────────────────────────────────
+      if (data.gameMode === "pve" && data.presetStyle === "boosted") {
+        shooterMode.bAllowPlatformSaddleMultiFloors = "True";
+        shooterMode.LayEggIntervalMultiplier = "0.5";
+        shooterMode.FuelConsumptionIntervalMultiplier = "2.0";
+      }
+
+      // ── Breeding by preset + mode ──────────────────────────────────────────
+      const BREEDING: Record<string, Record<string, Record<string, string>>> = {
+        casual: {
+          pvp: {
+            BabyMatureSpeedMultiplier: "5.0",
+            EggHatchSpeedMultiplier: "5.0",
+            BabyFoodConsumptionSpeedMultiplier: "5.0",
+            BabyCuddleIntervalMultiplier: "0.5",
+            BabyCuddleGracePeriodMultiplier: "2.0",
+            MatingIntervalMultiplier: "0.5",
+          },
+          pve: {
+            BabyMatureSpeedMultiplier: "10.0",
+            EggHatchSpeedMultiplier: "10.0",
+            BabyFoodConsumptionSpeedMultiplier: "5.0",
+            BabyCuddleIntervalMultiplier: "0.3",
+            BabyCuddleGracePeriodMultiplier: "2.0",
+            BabyImprintAmountMultiplier: "2.0",
+            MatingIntervalMultiplier: "0.25",
+            MatingSpeedMultiplier: "2.0",
+            GlobalCorpseDecompositionTimeMultiplier: "2.0",
+          },
+        },
+        boosted: {
+          pvp: {
+            BabyMatureSpeedMultiplier: "30.0",
+            EggHatchSpeedMultiplier: "30.0",
+            BabyFoodConsumptionSpeedMultiplier: "1.0",
+            BabyCuddleIntervalMultiplier: "0.1",
+            BabyCuddleGracePeriodMultiplier: "2.0",
+            MatingIntervalMultiplier: "0.1",
+            MatingSpeedMultiplier: "2.0",
+          },
+          pve: {
+            BabyMatureSpeedMultiplier: "50.0",
+            EggHatchSpeedMultiplier: "50.0",
+            BabyFoodConsumptionSpeedMultiplier: "0.5",
+            BabyCuddleIntervalMultiplier: "0.1",
+            BabyCuddleGracePeriodMultiplier: "5.0",
+            BabyImprintAmountMultiplier: "4.0",
+            MatingIntervalMultiplier: "0.05",
+            MatingSpeedMultiplier: "2.0",
+            GlobalCorpseDecompositionTimeMultiplier: "3.0",
+          },
+        },
+      };
+      const breedingEntry = BREEDING[data.presetStyle]?.[data.gameMode];
+      if (breedingEntry) Object.assign(shooterMode, breedingEntry);
+
+    } else if (data.presetStyle === "guided_custom") {
+      const r = data.guidedRates;
+
+      // Friendly fire (already set above for all PvE; guided PvP uses the toggle from page 2)
+      // PvE tribe war
+      if (data.gameMode === "pve") {
+        shooterMode.bPvEAllowTribeWar = "True";
+        shooterMode.GlobalCorpseDecompositionTimeMultiplier = String(r.globalCorpseDecompMultiplier);
+      }
+
+      // Breeding — all written to Game.ini where ASA actually reads them
+      shooterMode.BabyMatureSpeedMultiplier            = String(r.matureSpeedMultiplier);
+      shooterMode.EggHatchSpeedMultiplier              = String(r.hatchSpeedMultiplier);
+      shooterMode.BabyFoodConsumptionSpeedMultiplier   = String(r.foodConsumptionMultiplier);
+      shooterMode.MatingIntervalMultiplier             = String(r.matingIntervalMultiplier);
+      shooterMode.MatingSpeedMultiplier                = String(r.matingSpeedMultiplier);
+      shooterMode.BabyCuddleIntervalMultiplier         = String(r.cuddleIntervalMultiplier);
+      shooterMode.BabyCuddleGracePeriodMultiplier      = String(r.cuddleGraceMultiplier);
+      if (r.imprintAmountMultiplier !== 1.0) {
+        shooterMode.BabyImprintAmountMultiplier = String(r.imprintAmountMultiplier);
+      }
+
+      // Speed leveling / respecs
+      if (r.allowSpeedLeveling)      shooterMode.bAllowSpeedLeveling      = "True";
+      if (r.allowFlyerSpeedLeveling) shooterMode.bAllowFlyerSpeedLeveling = "True";
+      if (r.allowUnlimitedRespecs)   shooterMode.bAllowUnlimitedRespecs   = "True";
+
+      // PvP respawn penalty
+      if (data.gameMode === "pvp" && r.enableRespawnPenalty) {
+        shooterMode.bIncreasePvPRespawnInterval              = "True";
+        shooterMode.IncreasePvPRespawnIntervalBaseAmount     = "60.0";
+        shooterMode.IncreasePvPRespawnIntervalCheckPeriod    = "300.0";
+        shooterMode.IncreasePvPRespawnIntervalMultiplier     = "2.0";
+      }
+
+      // Turret limits
+      if (r.enableTurretLimits) {
+        shooterMode.bLimitTurretsInRange   = "True";
+        shooterMode.bHardLimitTurretsInRange = "True";
+        shooterMode.LimitTurretsNum        = "100";
+        shooterMode.LimitTurretsRange      = "10000";
+      }
+    }
+
     return { "/script/shootergame.shootergamemode": shooterMode };
   };
 
@@ -1876,7 +2417,11 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const canAdvance = (): boolean => {
     if (!currentStepDef) return false;
     switch (currentStepDef.id) {
-      case "basic":    return !!data.name.trim() && !!data.adminPassword.trim() && nameValid;
+      case "basic": {
+        const adminOk = !!data.adminPassword.trim() && data.adminPassword === data.adminPasswordConfirm;
+        const serverOk = !data.serverPassword || data.serverPassword === data.serverPasswordConfirm;
+        return !!data.name.trim() && adminOk && serverOk && nameValid;
+      }
       case "gamemode": return !!data.gameMode;
       case "style":    return !!data.presetStyle;
       default:         return true;
@@ -1903,7 +2448,10 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       case "basic":      return <BasicInfoStep data={data} onChange={onChange} onNameValidated={setNameValid} />;
       case "gamemode":   return <GameModeStep data={data} onChange={onChange} />;
       case "style":      return <StyleStep data={data} onChange={onChange} />;
-      case "guided":     return <GuidedRatesStep data={data} onChange={onChange} />;
+      case "guided_rates":    return <GuidedRatesStep    data={data} onChange={onChange} />;
+      case "guided_breeding": return <GuidedBreedingStep data={data} onChange={onChange} />;
+      case "guided_combat":   return <GuidedCombatStep   data={data} onChange={onChange} />;
+      case "guided_behavior": return <GuidedBehaviorStep data={data} onChange={onChange} />;
       case "full_ini":   return <FullIniStep data={data} onChange={onChange} />;
       case "network":    return <NetworkStep data={data} onChange={onChange} />;
       case "firewall":   return <FirewallStep data={data} />;
