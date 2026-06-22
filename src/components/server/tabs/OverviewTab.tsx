@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Zap,
+  Zap, Settings2, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -461,9 +461,130 @@ function ChartStatTile({
 }
 
 
+// ── ActiveConfigPanel ────────────────────────────────────────────────────────
+
+type ActiveConfig = {
+  gameUserSettings: Record<string, Record<string, string>>;
+  gameIni: Record<string, Record<string, string>>;
+  launchArgs: Record<string, string>;
+};
+
+function gusVal(cfg: ActiveConfig, key: string): string {
+  return cfg.gameUserSettings?.["ServerSettings"]?.[key] ?? "";
+}
+
+function gameVal(cfg: ActiveConfig, key: string): string {
+  return cfg.gameIni?.["/script/shootergame.shootergamemode"]?.[key] ?? "";
+}
+
+function fmtMult(raw: string, def = "1.0"): string {
+  const n = parseFloat(raw || def);
+  return isNaN(n) ? def : `${n}×`;
+}
+
+function ActiveConfigPanel({
+  config,
+  modCount,
+  onNavigateToConfig,
+}: {
+  config: ActiveConfig | null;
+  modCount: number | null;
+  onNavigateToConfig: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  if (!config) return null;
+
+  const pvp = gusVal(config, "ServerPVE") !== "True";
+  const orp = gusVal(config, "PreventOfflinePvP") === "True";
+  const orpGrace = gusVal(config, "PreventOfflinePvPInterval");
+  const battleEye = config.launchArgs?.["NoBattlEye"] !== "true";
+  const harvest   = fmtMult(gusVal(config, "HarvestAmountMultiplier"));
+  const xp        = fmtMult(gusVal(config, "XPMultiplier"));
+  const taming    = fmtMult(gusVal(config, "TamingSpeedMultiplier"));
+  const matureFull = gameVal(config, "BabyMatureSpeedMultiplier");
+  const mature    = fmtMult(matureFull);
+
+  const activeLaunchArgs = Object.entries(config.launchArgs ?? {}).filter(([, v]) => v && v !== "false" && v !== "0");
+
+  const statItems = [
+    { label: "Mode",      value: pvp ? "PvP" : "PvE",      accent: pvp ? "var(--neon-purple)" : "var(--neon-green)" },
+    { label: "ORP",       value: orp ? `On${orpGrace ? ` (${parseInt(orpGrace) / 60 | 0}m grace)` : ""}` : "Off", accent: orp ? "var(--neon-cyan)" : "var(--text-muted)" },
+    { label: "Harvest",   value: harvest,   accent: "var(--text-primary)" },
+    { label: "XP",        value: xp,        accent: "var(--text-primary)" },
+    { label: "Taming",    value: taming,    accent: "var(--text-primary)" },
+    { label: "Baby Mature", value: mature,  accent: "var(--text-primary)" },
+    { label: "Mods",      value: modCount != null ? String(modCount) : "—", accent: "var(--text-primary)" },
+    { label: "BattlEye",  value: battleEye ? "On" : "Off",  accent: battleEye ? "var(--neon-green)" : "var(--text-muted)" },
+  ];
+
+  return (
+    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <Settings2 className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />
+          Active Configuration
+        </span>
+        {open
+          ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+          : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-4">
+          {/* Key stats grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {statItems.map(({ label, value, accent }) => (
+              <div key={label} className="rounded-lg px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+                <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
+                <div className="text-sm font-semibold" style={{ color: accent }}>{value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* CLI args chips */}
+          {activeLaunchArgs.length > 0 && (
+            <div>
+              <div className="text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>Active Launch Args</div>
+              <div className="flex flex-wrap gap-1.5">
+                {activeLaunchArgs.map(([k, v]) => {
+                  const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
+                  const label = param?.flag ?? `-${k}`;
+                  const display = param?.type === "boolean" ? label : `${label}${v}`;
+                  return (
+                    <span
+                      key={k}
+                      className="text-xs font-mono px-2 py-0.5 rounded"
+                      style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+                    >
+                      {display}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={onNavigateToConfig}
+            className="text-xs"
+            style={{ color: "var(--neon-purple)" }}
+          >
+            Configure →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── OverviewTab ───────────────────────────────────────────────────────────────
 
-export function OverviewTab({ server }: Props) {
+export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigateToConfig?: () => void }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
@@ -473,6 +594,7 @@ export function OverviewTab({ server }: Props) {
   const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
 
   const [modCount, setModCount]     = useState<number | null>(null);
+  const [activeConfig, setActiveConfig] = useState<ActiveConfig | null>(null);
   const [lastBackup,  setLastBackup]  = useState<string | null>(null);
   const [nextRestart,   setNextRestart]   = useState<string | null>(null);
   const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
@@ -507,15 +629,23 @@ export function OverviewTab({ server }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [mc, lb, nr, be, autoHours] = await Promise.all([
+      const [mc, lb, nr, be, autoHours, cfgRow] = await Promise.all([
         getServerModCount(server.id),
         getLastBackupTime(server.id),
         getNextScheduledRestart(server.id),
         getHasBackupEnabled(server.id),
         getAppSetting("asa_auto_check_hours"),
+        getServerConfig(server.id),
       ]);
       if (!cancelled) {
         setModCount(mc);
+        if (cfgRow) {
+          setActiveConfig({
+            gameUserSettings: JSON.parse(cfgRow.game_user_settings_json || "{}"),
+            gameIni: JSON.parse(cfgRow.game_ini_json || "{}"),
+            launchArgs: JSON.parse(cfgRow.launch_args_json || "{}"),
+          });
+        }
         setLastBackup(lb);
         setNextRestart(nr);
         setBackupEnabled(be);
@@ -972,6 +1102,21 @@ export function OverviewTab({ server }: Props) {
         </ChartStatTile>
 
       </div>
+
+      {/* ── Active Configuration panel ── */}
+      <ActiveConfigPanel
+        config={activeConfig}
+        modCount={modCount}
+        onNavigateToConfig={() => {
+          if (onNavigateToConfig) {
+            onNavigateToConfig();
+          } else {
+            const url = new URL(window.location.href);
+            url.searchParams.set("tab", "config");
+            router.push(url.pathname + url.search);
+          }
+        }}
+      />
 
       {/* ── Network / install info ── */}
       <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>

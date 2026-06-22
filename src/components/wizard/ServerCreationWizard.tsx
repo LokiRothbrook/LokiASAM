@@ -44,8 +44,10 @@ import { dispatchNotification } from "@/lib/notifications";
 import {
   getAppSetting, createServer, deleteServerRecord, saveServerConfig,
   createSchedule, getClusters, isServerNameTaken, updateServerStatus,
+  addServerMod,
   type ClusterRow,
 } from "@/lib/db";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
@@ -104,6 +106,9 @@ interface WizardData {
   // Mods — lockedModIds are auto-added from map selection and cannot be removed
   modIds: string[];
   lockedModIds: string[];
+  // Names resolved from the mod browser (id → display name). Only populated when
+  // a mod was added via the browser; manually-typed IDs default to "Unknown Mod".
+  modNames: Record<string, string>;
 }
 
 const DEFAULT_GUIDED_RATES: GuidedRates = {
@@ -145,6 +150,7 @@ const DEFAULT_DATA: WizardData = {
   backupRetention: 10,
   modIds: [],
   lockedModIds: [],
+  modNames: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -1313,17 +1319,28 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
   const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
   const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
 
-  // When mod browser adds a mod it fires modAddedCount — re-derive mod IDs from a
-  // "wizard-temp" server ID that the browser page will write into server_mods.
-  // Simpler: we just watch modBrowserJustClosed and re-read nothing (mods are
-  // passed directly via the params.addedModIds list the browser already knows).
-  // For wizard we use a temporary server ID of "wizard-temp".
+  // Listen for mod browser "add" events. ModBrowserEventHandler skips DB writes
+  // for serverId="wizard-temp", so we handle wizard state directly here.
+  useTauriEvent<unknown>("mod://add-to-server", (raw) => {
+    try {
+      const event = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+        serverId: string;
+        modId: string;
+        modName: string;
+        source?: string;
+      };
+      if (event.serverId !== "wizard-temp") return;
+      const id = event.modId?.trim();
+      if (!id || data.modIds.includes(id)) return;
+      onChange({
+        modIds: [...data.modIds, id],
+        modNames: { ...data.modNames, [id]: event.modName?.trim() || "Unknown Mod" },
+      });
+    } catch { /* malformed payload — ignore */ }
+  });
+
   useEffect(() => {
-    if (modBrowserJustClosed) {
-      setModBrowserJustClosed(false);
-      // Reload the mod list from the store params after the browser closes
-      // (mods were added through the standard ModBrowserEventHandler path).
-    }
+    if (modBrowserJustClosed) setModBrowserJustClosed(false);
   }, [modBrowserJustClosed, setModBrowserJustClosed]);
 
   const handleOpenBrowser = async () => {
@@ -1641,6 +1658,19 @@ function InstallStep({
         });
         await updateServerStatus(serverId, "installing", null);
         await saveServerConfig(serverId, "{}", "{}", "{}");
+
+        // Write mods to DB. Map mod is locked; all others are normal.
+        for (const modId of data.modIds) {
+          await addServerMod(
+            serverId,
+            modId,
+            data.modNames[modId] || "Unknown Mod",
+          );
+          if (data.lockedModIds.includes(modId)) {
+            const { setModMapLock } = await import("@/lib/db");
+            await setModMapLock(serverId, modId, true);
+          }
+        }
 
         const scheduleEntries = [
           { enabled: data.autoUpdate,  cron: data.autoUpdateCron,  type: "update" },

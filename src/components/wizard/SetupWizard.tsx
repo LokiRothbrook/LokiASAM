@@ -364,9 +364,12 @@ function ThemeStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Choose Your Theme
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Palette className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Choose Your Theme
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Pick a background preset and accent color. You can change these at any time in Settings.
         </p>
@@ -628,6 +631,7 @@ function BaseDirStep() {
   const [checking, setChecking] = useState(false);
   const [wipeOpen, setWipeOpen] = useState(false);
   const [importChecking, setImportChecking] = useState(false);
+  const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [importError, setImportError] = useState("");
   const [importInfo, setImportInfo] = useState<{
     servers: number; steamcmd: string; proton?: string;
@@ -668,12 +672,19 @@ function BaseDirStep() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Clean up debounce on unmount.
+  useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
+
   const handleChange = (value: string) => {
     setBaseDir(value);
     const sep = value.includes("\\") ? "\\" : "/";
     setBackupDir(value.replace(/[/\\]$/, "") + sep + "Backups");
     setDirResult(null);
     setBaseDirWritable(false);
+    if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);
+    if (value.trim()) {
+      validateDebounceRef.current = setTimeout(() => validateDir(value), 600);
+    }
   };
 
   const pickDir = async () => {
@@ -741,6 +752,19 @@ function BaseDirStep() {
 
   return (
     <div className="space-y-5">
+      {/* Card header */}
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <HardDrive className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            How would you like to set up?
+          </h2>
+        </div>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Start fresh with a new install, or import an existing LokiASAM setup.
+        </p>
+      </div>
+
       {/* Tab selector */}
       <div className="flex gap-2">
         {[
@@ -981,9 +1005,12 @@ function BackupDirStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Where would you like to save backups?
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <FolderOpen className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Where would you like to save backups?
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           This is where Server, INI and other backup 7z archives will be stored.
           We&apos;ve pre-filled this based on your install directory.
@@ -1140,9 +1167,12 @@ function SteamCmdStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          SteamCMD Setup
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Terminal className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            SteamCMD Setup
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           SteamCMD is required to download and update ASA server files from Steam.
         </p>
@@ -1392,9 +1422,12 @@ function ProtonGEStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Proton-GE Setup
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Cpu className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Proton-GE Setup
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           ASA only ships a Windows binary. Proton-GE allows us to run the Windows binary on Linux.
         </p>
@@ -1702,9 +1735,12 @@ function CertStep() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
-          Mod API Certificate
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <ShieldCheck className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Mod API Certificate
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           ARK SA uses the CurseForge API (secured by Amazon TLS) to load mod
           metadata at startup. Installing the Amazon Root CA certificate ensures
@@ -1863,9 +1899,12 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          What notifications would you like?
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Bell className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            What notifications would you like?
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           All channels are optional — you can change these at any time in Settings.
         </p>
@@ -2010,9 +2049,12 @@ function TrayStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          System Tray Behavior
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Layers className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            System Tray Behavior
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Choose what happens when you click the X button on the main window.
         </p>
@@ -2122,9 +2164,12 @@ function AutoUpdateStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Auto-Update Settings
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <RefreshCw className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Auto-Update Settings
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Auto-updates are one of LokiASAM&apos;s core features. Set how often each component checks for new versions — adjustable at any time in Settings.
         </p>
@@ -2697,7 +2742,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       </div>
 
       {/* Main content card */}
-      <div className="relative z-10 flex-1 flex items-stretch justify-center p-6">
+      <div className="relative z-10 flex-1 flex items-stretch justify-center px-6 pb-6 pt-10">
         <div
           className="w-full max-w-2xl flex flex-col min-h-0"
           style={{
