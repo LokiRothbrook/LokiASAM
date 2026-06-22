@@ -25,7 +25,7 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
-  X, BookOpen, ShieldCheck, Trash2, TriangleAlert,
+  X, BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -1855,6 +1855,7 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
     smtpFrom, setSmtpFrom,
     smtpTo, setSmtpTo,
   } = useSetupStore();
+  const [showSmtpPw, setShowSmtpPw] = useState(false);
 
   const [testingDiscord, setTestingDiscord] = useState(false);
   const [testingEmail,   setTestingEmail]   = useState(false);
@@ -2001,10 +2002,17 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Password</Label>
-            <Input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
-              placeholder="••••••••" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-            />
+            <div className="relative">
+              <Input type={showSmtpPw ? "text" : "password"} value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
+                placeholder="••••••••" className="font-mono text-xs pr-8"
+                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              />
+              <button type="button" tabIndex={-1} onClick={() => setShowSmtpPw(v => !v)}
+                className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
+                style={{ color: "var(--text-primary)" }}>
+                {showSmtpPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">

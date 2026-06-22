@@ -24,7 +24,7 @@ import {
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
   Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
-  Shield, Info, Heart, AlertTriangle,
+  Shield, Info, Heart, AlertTriangle, HelpCircle, Eye, EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,7 @@ import {
   LAUNCH_PARAMETERS, NOTIFICATION_EVENTS,
   type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter,
 } from "@/data/game-data";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { dispatchNotification } from "@/lib/notifications";
 import {
   getAppSetting, createServer, deleteServerRecord, saveServerConfig,
@@ -306,6 +307,10 @@ function BasicInfoStep({
   const [nameChecked, setNameChecked] = useState(false);
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [showAdminPw,      setShowAdminPw]      = useState(false);
+  const [showAdminConfirm, setShowAdminConfirm] = useState(false);
+  const [showServerPw,     setShowServerPw]     = useState(false);
+  const [showServerConfirm,setShowServerConfirm]= useState(false);
 
   const selectedMap = getMapById(data.mapId);
 
@@ -524,23 +529,39 @@ function BasicInfoStep({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label style={{ color: "var(--text-primary)" }}>Admin Password <span style={{ color: "var(--neon-red)" }}>*</span></Label>
-                <Input
-                  type="password"
-                  value={data.adminPassword}
-                  onChange={(e) => onChange({ adminPassword: e.target.value })}
-                  placeholder="Required"
-                  style={fieldStyle(!!data.adminPassword, false)}
-                />
+                <div className="relative">
+                  <Input
+                    type={showAdminPw ? "text" : "password"}
+                    value={data.adminPassword}
+                    onChange={(e) => onChange({ adminPassword: e.target.value })}
+                    placeholder="Required"
+                    className="pr-8"
+                    style={fieldStyle(!!data.adminPassword, false)}
+                  />
+                  <button type="button" tabIndex={-1} onClick={() => setShowAdminPw(v => !v)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
+                    style={{ color: "var(--text-primary)" }}>
+                    {showAdminPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label style={{ color: "var(--text-primary)" }}>Confirm Admin Password <span style={{ color: "var(--neon-red)" }}>*</span></Label>
-                <Input
-                  type="password"
-                  value={data.adminPasswordConfirm}
-                  onChange={(e) => onChange({ adminPasswordConfirm: e.target.value })}
-                  placeholder="Re-enter password"
-                  style={fieldStyle(!!data.adminPasswordConfirm, adminMismatch)}
-                />
+                <div className="relative">
+                  <Input
+                    type={showAdminConfirm ? "text" : "password"}
+                    value={data.adminPasswordConfirm}
+                    onChange={(e) => onChange({ adminPasswordConfirm: e.target.value })}
+                    placeholder="Re-enter password"
+                    className="pr-8"
+                    style={fieldStyle(!!data.adminPasswordConfirm, adminMismatch)}
+                  />
+                  <button type="button" tabIndex={-1} onClick={() => setShowAdminConfirm(v => !v)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
+                    style={{ color: "var(--text-primary)" }}>
+                    {showAdminConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
                 {adminMismatch && (
                   <p className="text-xs" style={{ color: "var(--neon-red)" }}>Passwords do not match</p>
                 )}
@@ -551,24 +572,42 @@ function BasicInfoStep({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label style={{ color: "var(--text-primary)" }}>Server Password <span style={{ color: "var(--text-muted)" }}>(optional)</span></Label>
-                <Input
-                  type="password"
-                  value={data.serverPassword}
-                  onChange={(e) => onChange({ serverPassword: e.target.value })}
-                  placeholder="Leave blank for public"
-                  style={fieldStyle(true, false)}
-                />
+                <div className="relative">
+                  <Input
+                    type={showServerPw ? "text" : "password"}
+                    value={data.serverPassword}
+                    onChange={(e) => onChange({ serverPassword: e.target.value })}
+                    placeholder="Leave blank for public"
+                    className="pr-8"
+                    style={fieldStyle(true, false)}
+                  />
+                  <button type="button" tabIndex={-1} onClick={() => setShowServerPw(v => !v)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
+                    style={{ color: "var(--text-primary)" }}>
+                    {showServerPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label style={{ color: "var(--text-primary)" }}>Confirm Server Password</Label>
-                <Input
-                  type="password"
-                  value={data.serverPasswordConfirm}
-                  onChange={(e) => onChange({ serverPasswordConfirm: e.target.value })}
-                  placeholder={data.serverPassword ? "Re-enter password" : "—"}
-                  disabled={!data.serverPassword}
-                  style={fieldStyle(true, serverMismatch)}
-                />
+                <div className="relative">
+                  <Input
+                    type={showServerConfirm ? "text" : "password"}
+                    value={data.serverPasswordConfirm}
+                    onChange={(e) => onChange({ serverPasswordConfirm: e.target.value })}
+                    placeholder={data.serverPassword ? "Re-enter password" : "—"}
+                    disabled={!data.serverPassword}
+                    className="pr-8"
+                    style={fieldStyle(true, serverMismatch)}
+                  />
+                  {data.serverPassword && (
+                    <button type="button" tabIndex={-1} onClick={() => setShowServerConfirm(v => !v)}
+                      className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
+                      style={{ color: "var(--text-primary)" }}>
+                      {showServerConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  )}
+                </div>
                 {serverMismatch && (
                   <p className="text-xs" style={{ color: "var(--neon-red)" }}>Passwords do not match</p>
                 )}
@@ -693,7 +732,7 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
         Pick the rate preset for your <strong style={{ color: "var(--text-primary)" }}>{modeLabel}</strong> server.
         Guided Custom lets you tune rates step-by-step; Full Custom opens the raw INI editor.
       </p>
-      <div className="space-y-2 max-h-90 overflow-y-auto pr-1">
+      <div className="space-y-2 pr-1">
         {PRESET_STYLES.map((style: PresetStyle) => {
           const active = data.presetStyle === style.id;
           return (
@@ -818,7 +857,7 @@ function GuidedRatesStep({ data, onChange }: { data: WizardData; onChange: (patc
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Set the core experience rates. Everything else can be fine-tuned on the next pages or in the Config tab later.
       </p>
-      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+      <div className="space-y-2 pr-1">
         <RateSlider label="XP Multiplier" description="How fast players and tames gain experience." value={r.xpMultiplier} min={0.5} max={20} step={0.5} onChange={(v) => set("xpMultiplier", v)} />
         <RateSlider label="Harvest Amount" description="Resource yield per harvest action." value={r.harvestMultiplier} min={0.5} max={20} step={0.5} onChange={(v) => set("harvestMultiplier", v)} />
         <RateSlider label="Harvest Health" description="How many hits a resource node takes before it depletes. Higher = resources last longer per node." value={r.harvestHealthMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("harvestHealthMultiplier", v)} />
@@ -845,7 +884,7 @@ function GuidedBreedingStep({ data, onChange }: { data: WizardData; onChange: (p
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Tune breeding rates. Food consumption speed is critical — if it's too high relative to mature speed, babies will starve before they grow up.
       </p>
-      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+      <div className="space-y-2 pr-1">
         <RateSlider label="Baby Mature Speed" description="How fast babies grow to adults. 10× = maturation is 10× faster than vanilla." value={r.matureSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("matureSpeedMultiplier", v)} />
         <RateSlider label="Egg Hatch Speed" description="How fast eggs hatch. Can be set independently from mature speed." value={r.hatchSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("hatchSpeedMultiplier", v)} />
 
@@ -894,7 +933,7 @@ function GuidedCombatStep({ data, onChange }: { data: WizardData; onChange: (pat
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Tune combat damage and resistance. 1× is vanilla. All values can be changed from the Config tab later.
       </p>
-      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+      <div className="space-y-2 pr-1">
         <RateSlider label="Player Damage" description="Damage output multiplier for players." value={r.playerDamageMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("playerDamageMultiplier", v)} />
         <RateSlider label="Player Resistance" description="Incoming damage reduction for players. Higher = tankier players." value={r.playerResistanceMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("playerResistanceMultiplier", v)} />
         <RateSlider label="Dino Damage (Wild)" description="Damage output multiplier for wild dinos." value={r.dinoDamageMultiplier} min={0.5} max={5} step={0.1} onChange={(v) => set("dinoDamageMultiplier", v)} />
@@ -935,7 +974,7 @@ function GuidedBehaviorStep({ data, onChange }: { data: WizardData; onChange: (p
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Quality-of-life and server behavior settings. {isPvP ? "ORP protects offline players." : "Decay settings reduce maintenance stress for PvE."}
       </p>
-      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
+      <div className="space-y-2 pr-1">
         <GuidedToggle
           label="Flyer Stamina Recovery"
           description="Flyers recover stamina while the rider is standing on them in-flight (not just when landed)."
@@ -1064,88 +1103,113 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   const readonlyKeys = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort", "MaxPlayers", "ServerAdminPassword"]);
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
-        <p style={{ color: "var(--text-muted)" }}>
-          Server name, passwords, and ports are configured on the previous pages and are excluded here.
-          All settings here will be written to <code>GameUserSettings.ini</code>.
-        </p>
-      </div>
+    <TooltipProvider delayDuration={300}>
+      <div className="space-y-3">
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+          <p style={{ color: "var(--text-muted)" }}>
+            Server name, passwords, and ports are configured on the previous pages and are excluded here.
+            All settings here will be written to <code>GameUserSettings.ini</code>.
+          </p>
+        </div>
 
-      <div className="space-y-2 max-h-95 overflow-y-auto pr-1">
-        {INI_FIELD_GROUPS.map((group) => {
-          const open = expandedGroups.has(group.id);
-          const visibleFields = group.fields.filter(
-            (f) => f.section === "gus" && !readonlyKeys.has(f.key)
-          );
-          if (visibleFields.length === 0) return null;
-          return (
-            <div key={group.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-              <button
-                onClick={() => toggleGroup(group.id)}
-                className="w-full flex items-center justify-between px-4 py-2.5"
-                style={{ background: "rgba(10,10,30,0.7)" }}
-              >
-                <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
-                {open ? <ChevronUp className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /> : <ChevronDown className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />}
-              </button>
-              {open && (
-                <div className="p-3 space-y-2.5" style={{ background: "rgba(5,5,20,0.5)" }}>
-                  {visibleFields.map((field) => {
-                    const val = getValue(field.iniSection, field.key);
-                    return (
-                      <div key={field.key} className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs" style={{ color: "var(--text-primary)" }}>{field.label}</Label>
+        <div className="space-y-2 pr-1">
+          {INI_FIELD_GROUPS.map((group) => {
+            const open = expandedGroups.has(group.id);
+            const visibleFields = group.fields.filter(
+              (f) => f.section === "gus" && !readonlyKeys.has(f.key)
+            );
+            if (visibleFields.length === 0) return null;
+            return (
+              <div key={group.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+                <button
+                  onClick={() => toggleGroup(group.id)}
+                  className="w-full flex items-center justify-between px-4 py-2.5"
+                  style={{ background: "rgba(10,10,30,0.7)" }}
+                >
+                  <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
+                  {open ? <ChevronUp className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /> : <ChevronDown className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />}
+                </button>
+                {open && (
+                  <div className="p-3 space-y-2.5" style={{ background: "rgba(5,5,20,0.5)" }}>
+                    {visibleFields.map((field) => {
+                      const raw = getValue(field.iniSection, field.key);
+                      // Fall back to the field's defaultValue when the config hasn't set this key yet,
+                      // so the slider starts at the documented default rather than 0.
+                      const val = raw !== "" ? raw : field.defaultValue !== undefined ? String(field.defaultValue) : "";
+                      const isBool = field.type === "boolean";
+
+                      const LabelWithTooltip = (
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Label className="text-xs truncate" style={{ color: "var(--text-primary)" }}>{field.label}</Label>
                           {field.description && (
-                            <span className="text-[10px]" style={{ color: "var(--text-subtle)" }}>{field.description}</span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <HelpCircle className="w-3 h-3 shrink-0 cursor-help" style={{ color: "var(--text-subtle)" }} />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs leading-snug">
+                                {field.description}
+                              </TooltipContent>
+                            </Tooltip>
                           )}
                         </div>
-                        {field.type === "boolean" ? (
-                          <button
-                            type="button"
-                            onClick={() => setValue(field.iniSection, field.key, val.toLowerCase() === "true" ? "False" : "True")}
-                            className="shrink-0 flex items-center"
-                            aria-label={val.toLowerCase() === "true" ? "Disable" : "Enable"}
-                          >
-                            {val.toLowerCase() === "true"
-                              ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
-                              : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
-                          </button>
-                        ) : field.type === "number" && field.min !== undefined && field.max !== undefined ? (
-                          <NumberField
-                            value={parseFloat(val) || 0}
-                            onChange={(v) => setValue(field.iniSection, field.key, String(v))}
-                            min={field.min}
-                            max={field.max}
-                            step={field.step}
-                            defaultValue={field.defaultValue}
-                          />
-                        ) : (
-                          <Input
-                            type="text"
-                            value={val}
-                            placeholder={field.placeholder}
-                            onChange={(e) => setValue(field.iniSection, field.key, e.target.value)}
-                            className="h-7 text-xs font-mono"
-                            style={{
-                              background: "rgba(10,10,30,0.8)",
-                              borderColor: "rgba(var(--neon-purple-rgb),0.2)",
-                              color: "var(--text-primary)",
-                            }}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+                      );
+
+                      if (isBool) {
+                        return (
+                          <div key={field.key} className="flex items-center justify-between gap-2">
+                            {LabelWithTooltip}
+                            <button
+                              type="button"
+                              onClick={() => setValue(field.iniSection, field.key, val.toLowerCase() === "true" ? "False" : "True")}
+                              className="shrink-0"
+                              aria-label={val.toLowerCase() === "true" ? "Disable" : "Enable"}
+                            >
+                              {val.toLowerCase() === "true"
+                                ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+                                : <ToggleLeft  className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={field.key} className="space-y-1">
+                          {LabelWithTooltip}
+                          {field.type === "number" && field.min !== undefined && field.max !== undefined ? (
+                            <NumberField
+                              value={parseFloat(val) || 0}
+                              onChange={(v) => setValue(field.iniSection, field.key, String(v))}
+                              min={field.min}
+                              max={field.max}
+                              step={field.step}
+                              defaultValue={field.defaultValue}
+                            />
+                          ) : (
+                            <Input
+                              type="text"
+                              value={val}
+                              placeholder={field.placeholder}
+                              onChange={(e) => setValue(field.iniSection, field.key, e.target.value)}
+                              className="h-7 text-xs font-mono"
+                              style={{
+                                background: "rgba(10,10,30,0.8)",
+                                borderColor: "rgba(var(--neon-purple-rgb),0.2)",
+                                color: "var(--text-primary)",
+                              }}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -1493,7 +1557,7 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
         Configure command-line arguments passed when starting the server. These cannot be set in INI files.
         All settings can be changed later from the server's Config tab.
       </p>
-      <div className="space-y-3 max-h-105 overflow-y-auto pr-1">
+      <div className="space-y-3 pr-1">
         {categories.map((cat) => {
           const params = LAUNCH_PARAMETERS.filter((p: LaunchParameter) => p.category === cat);
           if (params.length === 0) return null;
