@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
   Settings2, X, AlertCircle, ToggleLeft, ToggleRight, Terminal,
-  HelpCircle, Upload, Search, FileText, Clipboard, Wand2,
+  HelpCircle, Upload, Search, FileText, Clipboard, Wand2, Clock, Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,20 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import {
   INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
@@ -143,7 +157,8 @@ function FieldRow({
   }
 
   if (field.type === "number" && field.min !== undefined && field.max !== undefined) {
-    const numVal = parseFloat(value) || 0;
+    const parsed = parseFloat(value);
+    const numVal = isNaN(parsed) ? (field.defaultValue as number ?? 0) : parsed;
     return (
       <div className="py-2 space-y-1">
         <FieldLabel field={field} />
@@ -545,9 +560,139 @@ function PasteIniModal({
 // ---------------------------------------------------------------------------
 
 type CustomSection = {
-  sectionName: string;  // The [SectionName] key in Game.ini
+  sectionName: string;
   rows: { key: string; value: string }[];
 };
+
+type SettingType = "string" | "boolean" | "integer" | "float";
+
+function inferType(value: string): SettingType {
+  if (value === "True" || value === "False") return "boolean";
+  if (/^-?\d+$/.test(value)) return "integer";
+  if (/^-?\d*\.\d+$/.test(value)) return "float";
+  return "string";
+}
+
+function defaultForType(t: SettingType): string {
+  if (t === "boolean") return "False";
+  if (t === "integer") return "0";
+  if (t === "float") return "0.0";
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Dialog for adding a new setting to a mod section
+// ---------------------------------------------------------------------------
+
+function AddSettingDialog({
+  open,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onAdd: (key: string, value: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [type, setType] = useState<SettingType>("string");
+
+  const handleAdd = () => {
+    const k = name.trim();
+    if (!k) return;
+    onAdd(k, defaultForType(type));
+    setName("");
+    setType("string");
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-sm" style={{ background: "var(--bg-card, #0a0a1a)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+        <DialogHeader>
+          <DialogTitle className="text-sm" style={{ color: "var(--text-primary)" }}>Add Setting</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 py-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: "var(--text-subtle)" }}>Setting name</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+              placeholder="e.g. MaxDinos"
+              autoFocus
+              className="h-8 text-xs font-mono"
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: "var(--text-subtle)" }}>Value type</label>
+            <Select value={type} onValueChange={(v) => setType(v as SettingType)}>
+              <SelectTrigger className="h-8 text-xs" style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="string">String</SelectItem>
+                <SelectItem value="boolean">Boolean (True / False)</SelectItem>
+                <SelectItem value="integer">Integer</SelectItem>
+                <SelectItem value="float">Float</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Initial value: <code className="font-mono">{defaultForType(type) || '""'}</code>
+          </p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button size="sm" variant="ghost" onClick={onClose} style={{ color: "var(--text-muted)" }}>Cancel</Button>
+          <Button size="sm" onClick={handleAdd} disabled={!name.trim()} className="btn-neon-purple">Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Type-aware value editor for a single mod setting row
+// ---------------------------------------------------------------------------
+
+function ModSettingValue({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const type = inferType(value);
+
+  if (type === "boolean") {
+    const checked = value === "True";
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(checked ? "False" : "True")}
+        className="shrink-0 flex items-center"
+      >
+        {checked
+          ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+          : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+      </button>
+    );
+  }
+
+  return (
+    <Input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Value"
+      className="h-7 text-xs font-mono flex-1"
+      style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Custom mod sections editor
+// ---------------------------------------------------------------------------
 
 function CustomModSections({
   gameIni,
@@ -556,7 +701,6 @@ function CustomModSections({
   gameIni: Record<string, Record<string, string>>;
   onChange: (updated: Record<string, Record<string, string>>) => void;
 }) {
-  // Only show sections that are NOT standard ARK sections
   const STANDARD_SECTIONS = new Set([
     "/script/shootergame.shootergamemode",
     "ServerSettings",
@@ -574,16 +718,15 @@ function CustomModSections({
 
   const [newSectionName, setNewSectionName] = useState("");
   const [deletingSection, setDeletingSection] = useState<string | null>(null);
+  const [addSettingFor, setAddSettingFor] = useState<number | null>(null);
 
   const commit = (sections: CustomSection[]) => {
     const updated = { ...gameIni };
-    // Remove all existing custom sections
     for (const key of Object.keys(updated)) {
       if (!STANDARD_SECTIONS.has(key.toLowerCase()) && !STANDARD_SECTIONS.has(key)) {
         delete updated[key];
       }
     }
-    // Re-add from editor state
     for (const sec of sections) {
       if (!sec.sectionName.trim()) continue;
       updated[sec.sectionName] = Object.fromEntries(
@@ -596,14 +739,20 @@ function CustomModSections({
   const addSection = () => {
     const name = newSectionName.trim();
     if (!name) return;
-    const updated = [...customSections, { sectionName: name, rows: [{ key: "", value: "" }] }];
+    commit([...customSections, { sectionName: name, rows: [] }]);
     setNewSectionName("");
-    commit(updated);
   };
 
   const deleteSection = (idx: number) => {
     commit(customSections.filter((_, i) => i !== idx));
     setDeletingSection(null);
+  };
+
+  const addRowWithValue = (secIdx: number, key: string, value: string) => {
+    const updated = customSections.map((sec, si) =>
+      si !== secIdx ? sec : { ...sec, rows: [...sec.rows, { key, value }] },
+    );
+    commit(updated);
   };
 
   const updateRow = (secIdx: number, rowIdx: number, field: "key" | "value", val: string) => {
@@ -616,13 +765,6 @@ function CustomModSections({
     commit(updated);
   };
 
-  const addRow = (secIdx: number) => {
-    const updated = customSections.map((sec, si) =>
-      si !== secIdx ? sec : { ...sec, rows: [...sec.rows, { key: "", value: "" }] },
-    );
-    commit(updated);
-  };
-
   const removeRow = (secIdx: number, rowIdx: number) => {
     const updated = customSections.map((sec, si) =>
       si !== secIdx ? sec : { ...sec, rows: sec.rows.filter((_, ri) => ri !== rowIdx) },
@@ -631,96 +773,98 @@ function CustomModSections({
   };
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-      <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,10,30,0.7)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-        <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Custom / Mod Settings (Game.ini)</span>
-        <span className="text-xs" style={{ color: "var(--text-subtle)" }}>New [SectionName] blocks for mods</span>
-      </div>
+    <>
+      {addSettingFor !== null && (
+        <AddSettingDialog
+          open
+          onClose={() => setAddSettingFor(null)}
+          onAdd={(key, value) => addRowWithValue(addSettingFor, key, value)}
+        />
+      )}
 
-      <div className="p-4 space-y-4">
-        {customSections.length === 0 && (
-          <p className="text-xs text-center py-2" style={{ color: "var(--text-subtle)" }}>
-            No custom sections yet. Add one below to configure mod-specific INI settings.
-          </p>
-        )}
-
-        {customSections.map((sec, si) => (
-          <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-            <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.06)" }}>
-              <span className="text-xs font-mono font-semibold" style={{ color: "var(--neon-purple)" }}>[{sec.sectionName}]</span>
-              {deletingSection === sec.sectionName ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: "rgba(255,0,85,0.9)" }}>Delete this section?</span>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(255,0,85,0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "var(--text-muted)" }} onClick={() => setDeletingSection(null)}>No</Button>
-                </div>
-              ) : (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" style={{ color: "var(--text-subtle)" }} onClick={() => setDeletingSection(sec.sectionName)}>
-                  <X className="w-3.5 h-3.5" />
-                </Button>
-              )}
-            </div>
-            <div className="p-3 space-y-1.5">
-              {sec.rows.map((row, ri) => (
-                <div key={ri} className="flex items-center gap-2">
-                  <Input
-                    value={row.key}
-                    onChange={(e) => updateRow(si, ri, "key", e.target.value)}
-                    placeholder="Key"
-                    className="h-7 text-xs font-mono flex-1"
-                    style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
-                  />
-                  <span className="text-xs" style={{ color: "var(--text-subtle)" }}>=</span>
-                  <Input
-                    value={row.value}
-                    onChange={(e) => updateRow(si, ri, "value", e.target.value)}
-                    placeholder="Value"
-                    className="h-7 text-xs font-mono flex-1"
-                    style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
-                  />
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" style={{ color: "var(--text-subtle)" }} onClick={() => removeRow(si, ri)}>
-                    <X className="w-3 h-3" />
-                  </Button>
-                </div>
-              ))}
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 text-xs mt-1"
-                style={{ color: "var(--text-subtle)" }}
-                onClick={() => addRow(si)}
-              >
-                + Add row
-              </Button>
-            </div>
+      <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(180,100,255,0.2)" }}>
+        <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,5,25,0.7)", borderBottom: "1px solid rgba(180,100,255,0.15)" }}>
+          <div>
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Mod Settings</span>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>Custom <code>Game.ini</code> sections for mods — add a section per mod, then add its settings.</p>
           </div>
-        ))}
-
-        {/* Add new section */}
-        <div className="flex items-center gap-2 pt-1">
-          <Input
-            value={newSectionName}
-            onChange={(e) => setNewSectionName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") addSection(); }}
-            placeholder="New section name (e.g. MyMod)"
-            className="h-7 text-xs font-mono flex-1"
-            style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={addSection}
-            disabled={!newSectionName.trim()}
-            style={{ color: "var(--neon-purple)" }}
-          >
-            Add Section
-          </Button>
         </div>
-        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          Custom sections are written directly to <code>Game.ini</code> alongside standard settings.
-        </p>
+
+        <div className="p-4 space-y-4">
+          {customSections.length === 0 && (
+            <p className="text-xs text-center py-4" style={{ color: "var(--text-subtle)" }}>
+              No mod sections yet. Add one below using the mod&apos;s section name (e.g. <code className="font-mono">MyMod</code>).
+            </p>
+          )}
+
+          {customSections.map((sec, si) => (
+            <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(180,100,255,0.18)" }}>
+              <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(180,100,255,0.07)" }}>
+                <span className="text-xs font-mono font-semibold" style={{ color: "rgba(200,130,255,0.9)" }}>[{sec.sectionName}]</span>
+                {deletingSection === sec.sectionName ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs" style={{ color: "rgba(255,0,85,0.9)" }}>Delete section?</span>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(255,0,85,0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "var(--text-muted)" }} onClick={() => setDeletingSection(null)}>No</Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="ghost" className="h-6 w-6 p-0" style={{ color: "var(--text-subtle)" }} onClick={() => setDeletingSection(sec.sectionName)}>
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+              </div>
+
+              <div className="p-3 space-y-2">
+                {sec.rows.length === 0 && (
+                  <p className="text-xs py-1" style={{ color: "var(--text-subtle)" }}>No settings yet — click &quot;Add Setting&quot; below.</p>
+                )}
+                {sec.rows.map((row, ri) => (
+                  <div key={ri} className="flex items-center gap-2">
+                    <span className="text-xs font-mono shrink-0 min-w-0 flex-1 truncate" style={{ color: "var(--text-primary)" }} title={row.key}>{row.key}</span>
+                    <span className="text-xs shrink-0" style={{ color: "var(--text-subtle)" }}>=</span>
+                    <div className="flex-1 min-w-0">
+                      <ModSettingValue value={row.value} onChange={(v) => updateRow(si, ri, "value", v)} />
+                    </div>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" style={{ color: "var(--text-subtle)" }} onClick={() => removeRow(si, ri)}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs mt-1"
+                  style={{ color: "rgba(200,130,255,0.8)", border: "1px dashed rgba(180,100,255,0.3)" }}
+                  onClick={() => setAddSettingFor(si)}
+                >
+                  + Add Setting
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {/* Add new section */}
+          <div className="flex items-center gap-2 pt-1">
+            <Input
+              value={newSectionName}
+              onChange={(e) => setNewSectionName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addSection(); }}
+              placeholder="New section name (e.g. MyMod)"
+              className="h-8 text-xs font-mono flex-1"
+              style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(180,100,255,0.25)", color: "var(--text-primary)" }}
+            />
+            <Button
+              size="sm"
+              onClick={addSection}
+              disabled={!newSectionName.trim()}
+              style={{ background: "rgba(180,100,255,0.15)", color: "rgba(200,130,255,0.9)", border: "1px solid rgba(180,100,255,0.35)" }}
+            >
+              Add Section
+            </Button>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1425,8 +1569,7 @@ export function ConfigTab({ server }: Props) {
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
-  const [rawMode, setRawMode] = useState(false);
-  const [advancedMode, setAdvancedMode] = useState(false);
+  const [activeTab, setActiveTab] = useState<"automation" | "structured" | "mods" | "advanced" | "raw">("structured");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
@@ -1588,7 +1731,7 @@ export function ConfigTab({ server }: Props) {
     setError(null);
     try {
       let toSave = toWrite;
-      if (rawMode && !cfg) {
+      if (activeTab === "raw" && !cfg) {
         toSave = {
           ...toWrite,
           gameUserSettings: rawTextToSections(rawGus),
@@ -1628,15 +1771,13 @@ export function ConfigTab({ server }: Props) {
       setRawGus(configToRawText(config.gameUserSettings as Record<string, Record<string, string>>));
       setRawGame(configToRawText(config.gameIni as Record<string, Record<string, string>>));
     }
-    setRawMode(true);
+    setActiveTab("raw");
   };
 
-  const switchToStructured = () => {
+  const switchFromRaw = () => {
     const gus = rawTextToSections(rawGus);
     const game = rawTextToSections(rawGame);
     if (config) setConfig({ ...config, gameUserSettings: gus, gameIni: game });
-    setRawMode(false);
-    setAdvancedMode(false);
   };
 
   if (loading) {
@@ -1660,18 +1801,36 @@ export function ConfigTab({ server }: Props) {
         {/* Tab selectors */}
         <div className="flex items-center gap-1">
           <button
-            onClick={switchToStructured}
+            onClick={() => setActiveTab("automation")}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={!rawMode && !advancedMode
+            style={activeTab === "automation"
+              ? { background: "rgba(0,200,120,0.1)", color: "rgba(0,200,120,0.9)", border: "1px solid rgba(0,200,120,0.35)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <Clock className="w-3.5 h-3.5" /> Automation
+          </button>
+          <button
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("structured"); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={activeTab === "structured"
               ? { background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
             <LayoutList className="w-3.5 h-3.5" /> Structured
           </button>
           <button
-            onClick={() => { setAdvancedMode(true); setRawMode(false); }}
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("mods"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={advancedMode
+            style={activeTab === "mods"
+              ? { background: "rgba(180,100,255,0.12)", color: "rgba(200,130,255,0.9)", border: "1px solid rgba(180,100,255,0.35)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <Package className="w-3.5 h-3.5" /> Mod Settings
+          </button>
+          <button
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("advanced"); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={activeTab === "advanced"
               ? { background: "rgba(255,165,0,0.1)", color: "rgba(255,165,0,0.9)", border: "1px solid rgba(255,165,0,0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
@@ -1680,7 +1839,7 @@ export function ConfigTab({ server }: Props) {
           <button
             onClick={switchToRaw}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={rawMode
+            style={activeTab === "raw"
               ? { background: "rgba(0,255,255,0.08)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
@@ -1757,8 +1916,18 @@ export function ConfigTab({ server }: Props) {
         </div>
       )}
 
-      {/* ── Structured view — ALL INI groups ──────────────────────────────── */}
-      {!rawMode && config && (
+      {/* ── Automation tab ────────────────────────────────────────────────── */}
+      {activeTab === "automation" && (
+        <div className="flex flex-col gap-4">
+          <EventCard server={server} />
+          <ShutdownSettingsCard server={server} />
+          <RestartSettingsCard server={server} />
+          <UpdateSettingsCard server={server} />
+        </div>
+      )}
+
+      {/* ── Structured view — all INI field groups ────────────────────────── */}
+      {activeTab === "structured" && config && (
         <div className="flex flex-col gap-4">
           {INI_FIELD_GROUPS.map((g, idx) => (
             <SectionGroup
@@ -1771,18 +1940,27 @@ export function ConfigTab({ server }: Props) {
             />
           ))}
           <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />
-          <CustomModSections
-            gameIni={config.gameIni as Record<string, Record<string, string>>}
-            onChange={(updated) => {
-              setConfig({ ...config, gameIni: updated });
-              setIsDirty(true);
-            }}
-          />
         </div>
       )}
 
+      {/* ── Mod Settings tab ─────────────────────────────────────────────── */}
+      {activeTab === "mods" && config && (
+        <CustomModSections
+          gameIni={config.gameIni as Record<string, Record<string, string>>}
+          onChange={(updated) => {
+            setConfig({ ...config, gameIni: updated });
+            setIsDirty(true);
+          }}
+        />
+      )}
+
+      {/* ── Advanced tab ──────────────────────────────────────────────────── */}
+      {activeTab === "advanced" && config && (
+        <AdvancedConfigTab server={server} config={config} onChange={(patch) => { setConfig({ ...config, ...patch }); setIsDirty(true); }} />
+      )}
+
       {/* ── Raw INI editor ────────────────────────────────────────────────── */}
-      {rawMode && (
+      {activeTab === "raw" && (
         <div className="flex flex-col gap-4">
           <div>
             <p className="text-xs font-semibold mb-2" style={{ color: "var(--text-primary)" }}>GameUserSettings.ini</p>
@@ -1808,17 +1986,6 @@ export function ConfigTab({ server }: Props) {
           </div>
         </div>
       )}
-
-      {/* ── Advanced tab ──────────────────────────────────────────────────── */}
-      {advancedMode && config && (
-        <AdvancedConfigTab server={server} config={config} onChange={(patch) => { setConfig({ ...config, ...patch }); setIsDirty(true); }} />
-      )}
-
-      {/* ── Server behaviour cards (always visible) ───────────────────────── */}
-      <EventCard server={server} />
-      <ShutdownSettingsCard server={server} />
-      <RestartSettingsCard server={server} />
-      <UpdateSettingsCard server={server} />
 
       {/* Paste INI modal */}
       {showPasteModal && (
