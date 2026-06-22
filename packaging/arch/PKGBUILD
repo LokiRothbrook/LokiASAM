@@ -1,6 +1,6 @@
 # Maintainer: Arron Ohnemus <lokiaj2017@gmail.com>
 pkgname=lokiasam
-pkgver=0.13.1
+pkgver=0.14.0
 pkgrel=1
 pkgdesc="Loki ARK Survival Ascended Server Manager — a desktop app for managing dedicated ASA servers"
 arch=("x86_64")
