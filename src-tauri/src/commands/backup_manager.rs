@@ -57,7 +57,7 @@ fn map_id_to_path(map_id: &str) -> &'static str {
         "crystalisles"=> "CrystalIsles_WP",
         "amissa"      => "Amissa_WP",
         "svartalfheim"=> "Svartalfheim_WP",
-        "clubark"     => "ClubARK_WP",
+        "clubark"     => "BobsMissions_WP",
         _             => "TheIsland_WP",
     }
 }

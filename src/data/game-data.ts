@@ -231,7 +231,7 @@ export const ARK_MAPS: ArkMap[] = [
   {
     id: "clubark",
     displayName: "Club ARK",
-    mapPath: "ClubARK_WP",
+    mapPath: "BobsMissions_WP",
     isOfficial: false,
     dlcRequired: false,
     released: true,
