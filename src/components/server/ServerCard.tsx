@@ -60,6 +60,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { toast } from "sonner";
 import type { ServerRow } from "@/lib/db";
+import { formatServerVersion } from "@/lib/db";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 interface Props {
   server: ServerRow;
@@ -114,6 +116,7 @@ export function ServerCard({ server }: Props) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
+  const versionCache = useBuildVersionCache();
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const noRetry = useAppStore((s) => !!s.noRetryServerIds[server.id]);
   const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
@@ -202,7 +205,7 @@ export function ServerCard({ server }: Props) {
         setLastBackup(lb);
         setNextRestart(nr);
         setBackupEnabled(be);
-        setAutoCheckEnabled((autoHours ?? "0") !== "0");
+        setAutoCheckEnabled((autoHours ?? "disabled") !== "disabled");
       }
     })();
     return () => { cancelled = true; };
@@ -241,6 +244,7 @@ export function ServerCard({ server }: Props) {
       port: server.port,
       queryPort: server.query_port,
       rconPort: server.rcon_port,
+      rconPassword: server.rcon_password,
       extraArgs,
       modIds: enabledModIds,
     };
@@ -504,15 +508,6 @@ export function ServerCard({ server }: Props) {
                   : `Updating in ${formatCountdown(countdown.remainingSecs)}`
                 : undefined}
             />
-            {hasUpdateAvailable && (
-              <span
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium"
-                style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}
-              >
-                <ArrowUp className="w-2.5 h-2.5" />
-                Update
-              </span>
-            )}
           </div>
           <div
             className="flex items-center gap-1 mt-1 text-xs"
@@ -522,6 +517,12 @@ export function ServerCard({ server }: Props) {
             <span>{mapDisplay}</span>
             <span className="mx-1 opacity-40">·</span>
             <span>:{server.port}</span>
+            {server.installed_build_id && (
+              <>
+                <span className="mx-1 opacity-40">·</span>
+                <span className="font-mono">{formatServerVersion(server.installed_build_id, versionCache)}</span>
+              </>
+            )}
           </div>
         </div>
         <ServerActionMenu server={server} />

@@ -513,7 +513,7 @@ pub async fn execute_tick(app: &AppHandle) {
         }
 
         // ── Server backup ──────────────────────────────────────────────────
-        if server_active {
+        let server_outcome: Option<Result<String, String>> = if server_active {
             if let Some(cfg) = server_cfg {
                 match create_server_backup_inner(
                     app,
@@ -530,33 +530,22 @@ pub async fn execute_tick(app: &AppHandle) {
                 ).await {
                     Ok(rec) => {
                         handle_backup_record(&conn, &rec, &cfg, "server", None);
-                        let size = fmt_size(rec.file_size_bytes);
-                        crate::commands::notifications::dispatch_notification(
-                            app, "backup_completed", Some(&server.id), &server.name,
-                            "Backup Complete", &format!("Scheduled server backup completed ({size})"), "success",
-                        ).await;
-                        let _ = app.emit(
-                            &format!("backup://completed/{}", server.id),
-                            serde_json::json!({ "serverId": server.id }),
-                        );
+                        Some(Ok(fmt_size(rec.file_size_bytes)))
                     }
                     Err(e) => {
                         eprintln!("[backup_manager] Server backup failed for {}: {e}", server.name);
-                        crate::commands::notifications::dispatch_notification(
-                            app, "backup_failed", Some(&server.id), &server.name,
-                            "Backup Failed", &format!("Scheduled server backup failed: {e}"), "error",
-                        ).await;
-                        let _ = app.emit(
-                            &format!("backup://completed/{}", server.id),
-                            serde_json::json!({ "serverId": server.id, "error": e }),
-                        );
+                        Some(Err(e))
                     }
                 }
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
         // ── Player backup ──────────────────────────────────────────────────
-        if player_active {
+        let player_outcome: Option<Result<usize, String>> = if player_active {
             if let Some(cfg) = player_cfg {
                 match backup_all_players_inner(
                     app,
@@ -574,22 +563,100 @@ pub async fn execute_tick(app: &AppHandle) {
                             let eos_id = rec.player_eosid.as_deref();
                             handle_backup_record(&conn, rec, &cfg, "player", eos_id);
                         }
-                        if count > 0 {
-                            crate::commands::notifications::dispatch_notification(
-                                app, "backup_completed", Some(&server.id), &server.name,
-                                "Backup Complete", &format!("Scheduled player backups completed ({count} players)"), "success",
-                            ).await;
-                        }
+                        Some(Ok(count))
                     }
                     Err(e) => {
                         eprintln!("[backup_manager] Player backup failed for {}: {e}", server.name);
-                        crate::commands::notifications::dispatch_notification(
-                            app, "backup_failed", Some(&server.id), &server.name,
-                            "Backup Failed", &format!("Scheduled player backup failed: {e}"), "error",
-                        ).await;
+                        Some(Err(e))
                     }
                 }
+            } else {
+                None
             }
+        } else {
+            None
+        };
+
+        // ── Consolidated notification ──────────────────────────────────────
+        // One notification per server per tick regardless of how many backup
+        // types ran. Titles are specific when only one type ran; generic when
+        // both ran so the body can carry the combined detail.
+        let notification: Option<(&str, &str, String, &str)> = match (&server_outcome, &player_outcome) {
+            // Both ran — both succeeded
+            (Some(Ok(size)), Some(Ok(count))) if *count > 0 => Some((
+                "backup_completed", "Backup Complete",
+                format!("Server backup: {size} · {count} players backed up"),
+                "success",
+            )),
+            // Both ran — server ok, players ran but 0 profiles found
+            (Some(Ok(size)), Some(Ok(_))) => Some((
+                "backup_completed", "Server Backup Complete",
+                format!("Scheduled server backup completed ({size})"),
+                "success",
+            )),
+            // Both ran — server ok, players failed
+            (Some(Ok(size)), Some(Err(pe))) => Some((
+                "backup_failed", "Backup Partially Failed",
+                format!("Server backup complete ({size}) · Player backup failed: {pe}"),
+                "error",
+            )),
+            // Both ran — server failed, players ok
+            (Some(Err(se)), Some(Ok(count))) if *count > 0 => Some((
+                "backup_failed", "Backup Partially Failed",
+                format!("Server backup failed: {se} · {count} player backups complete"),
+                "error",
+            )),
+            // Both ran — server failed, 0 players
+            (Some(Err(se)), Some(Ok(_))) => Some((
+                "backup_failed", "Server Backup Failed",
+                format!("Scheduled server backup failed: {se}"),
+                "error",
+            )),
+            // Both ran — both failed
+            (Some(Err(se)), Some(Err(pe))) => Some((
+                "backup_failed", "Backup Failed",
+                format!("Server backup failed: {se} · Player backup failed: {pe}"),
+                "error",
+            )),
+            // Server only
+            (Some(Ok(size)), None) => Some((
+                "backup_completed", "Server Backup Complete",
+                format!("Scheduled server backup completed ({size})"),
+                "success",
+            )),
+            (Some(Err(se)), None) => Some((
+                "backup_failed", "Server Backup Failed",
+                format!("Scheduled server backup failed: {se}"),
+                "error",
+            )),
+            // Player only
+            (None, Some(Ok(count))) if *count > 0 => Some((
+                "backup_completed", "Player Backup Complete",
+                format!("Scheduled player backups completed ({count} players)"),
+                "success",
+            )),
+            (None, Some(Err(pe))) => Some((
+                "backup_failed", "Player Backup Failed",
+                format!("Scheduled player backup failed: {pe}"),
+                "error",
+            )),
+            // Player only with 0 profiles, or nothing ran
+            _ => None,
+        };
+
+        if let Some((event_type, title, body, severity)) = notification {
+            crate::commands::notifications::dispatch_notification(
+                app, event_type, Some(&server.id), &server.name,
+                title, &body, severity,
+            ).await;
+        }
+
+        // Single UI-refresh event whenever any backup was attempted for this server.
+        if server_outcome.is_some() || player_outcome.is_some() {
+            let _ = app.emit(
+                &format!("backup://completed/{}", server.id),
+                serde_json::json!({ "serverId": server.id }),
+            );
         }
     }
 }

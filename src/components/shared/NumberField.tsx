@@ -55,6 +55,16 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
     return Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100));
   }
 
+  // Radix UI slider nudges the thumb inward at the edges so it stays within the
+  // track bounds. The offset is thumbRadius × (1 - rawPct/50), where thumbRadius
+  // is half of size-3 (12 px). We apply the same correction to our markers so
+  // they align with the actual thumb position.
+  function markerLeft(rawPct: number): string {
+    const thumbRadius = 6; // size-3 = 12 px diameter
+    const offset = thumbRadius * (1 - rawPct / 50);
+    return `calc(${rawPct}% + ${offset.toFixed(2)}px)`;
+  }
+
   const showZeroMark = min < 0 || (min === 0 && max > 0);
   const zeroPct = pct(0);
   const defaultPct = defaultValue !== undefined ? pct(defaultValue) : null;
@@ -68,7 +78,7 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
           {showZeroMark && zeroPct >= 0 && zeroPct <= 100 && (
             <div
               className="absolute flex flex-col items-center"
-              style={{ left: `${zeroPct}%`, transform: "translateX(-50%)" }}
+              style={{ left: markerLeft(zeroPct), transform: "translateX(-50%)" }}
             >
               <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>0</span>
               <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.25)" }} />
@@ -77,9 +87,9 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
           {defaultPct !== null && defaultPct >= 0 && defaultPct <= 100 && (
             <div
               className="absolute flex flex-col items-center"
-              style={{ left: `${defaultPct}%`, transform: "translateX(-50%)" }}
+              style={{ left: markerLeft(defaultPct), transform: "translateX(-50%)" }}
             >
-              <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(var(--neon-purple-rgb),0.7)" }}>def</span>
+              <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(var(--neon-purple-rgb),0.7)" }}>default</span>
               <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(var(--neon-purple-rgb),0.6)" }} />
             </div>
           )}

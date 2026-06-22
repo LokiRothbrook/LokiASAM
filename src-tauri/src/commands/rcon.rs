@@ -393,78 +393,94 @@ pub async fn rcon_connect(
         error: None,
     });
 
-    let stream = timeout(
-        Duration::from_secs(5),
-        TcpStream::connect(format!("{host}:{port}")),
-    )
-    .await
-    .map_err(|_| "RCON connection timed out".to_string())?
-    .map_err(|e| format!("RCON connect failed: {e}"))?;
+    // Run the full connect+auth sequence in an inner block so every failure
+    // path falls through to a single "disconnected" emit below.
+    let result: Result<(), String> = async {
+        let stream = timeout(
+            Duration::from_secs(5),
+            TcpStream::connect(format!("{host}:{port}")),
+        )
+        .await
+        .map_err(|_| "RCON connection timed out".to_string())?
+        .map_err(|e| format!("RCON connect failed: {e}"))?;
 
-    let _ = stream.set_nodelay(true);
-    let mut conn = RconConn { stream, next_id: 1 };
+        let _ = stream.set_nodelay(true);
+        let mut conn = RconConn { stream, next_id: 1 };
 
-    let auth_id = conn.next_id;
-    conn.next_id += 1;
-    conn.send_packet(auth_id, RCON_AUTH, &password).await?;
+        let auth_id = conn.next_id;
+        conn.next_id += 1;
+        conn.send_packet(auth_id, RCON_AUTH, &password).await?;
 
-    let mut authenticated = false;
-    for _ in 0..3 {
-        let result = timeout(Duration::from_secs(5), conn.recv_packet())
-            .await
-            .map_err(|_| "RCON auth timed out — no response from server".to_string())?;
-        let (resp_id, resp_type, _body) = result?;
-        if resp_type == RCON_AUTH_RESPONSE {
-            if resp_id == -1 {
-                return Err("RCON authentication failed — wrong password".into());
-            }
-            if resp_id == auth_id {
-                authenticated = true;
-                break;
+        let mut authenticated = false;
+        for _ in 0..3 {
+            let result = timeout(Duration::from_secs(5), conn.recv_packet())
+                .await
+                .map_err(|_| "RCON auth timed out — no response from server".to_string())?;
+            let (resp_id, resp_type, _body) = result?;
+            if resp_type == RCON_AUTH_RESPONSE {
+                if resp_id == -1 {
+                    return Err("RCON authentication failed — wrong password".into());
+                }
+                if resp_id == auth_id {
+                    authenticated = true;
+                    break;
+                }
             }
         }
-    }
 
-    if !authenticated {
-        return Err("RCON authentication failed — unexpected response sequence".into());
-    }
-
-    let conn_id = pool.alloc_conn_id();
-    let (tx, rx) = mpsc::channel::<RconCmd>(32);
-    pool.cmd_channels.lock().await.insert(server_id.clone(), (tx.clone(), conn_id));
-
-    // Spawn the manager task — it owns the connection from here on.
-    let app_clone = app.clone();
-    let sid = server_id.clone();
-    let h = host.clone();
-    tauri::async_runtime::spawn(async move {
-        run_rcon_manager(sid, conn_id, conn, rx, app_clone, h, port).await;
-    });
-
-    emit_log(&app, &server_id, RconLogLine {
-        timestamp_ms: now_ms(),
-        text: format!("Connected to RCON at {host}:{port}"),
-        kind: "system".into(),
-    }).await;
-
-    emit_status(&app, RconStatusPayload {
-        server_id: server_id.clone(),
-        status: "connected".into(),
-        host: Some(host),
-        port: Some(port),
-        error: None,
-    });
-
-    // Seed the player cache asynchronously — the event will update the frontend.
-    let tx_seed = tx.clone();
-    tauri::async_runtime::spawn(async move {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        if tx_seed.send(RconCmd::GetPlayers { response_tx: resp_tx }).await.is_ok() {
-            let _ = resp_rx.await;
+        if !authenticated {
+            return Err("RCON authentication failed — unexpected response sequence".into());
         }
-    });
 
-    Ok(())
+        let conn_id = pool.alloc_conn_id();
+        let (tx, rx) = mpsc::channel::<RconCmd>(32);
+        pool.cmd_channels.lock().await.insert(server_id.clone(), (tx.clone(), conn_id));
+
+        // Spawn the manager task — it owns the connection from here on.
+        let app_clone = app.clone();
+        let sid = server_id.clone();
+        let h = host.clone();
+        tauri::async_runtime::spawn(async move {
+            run_rcon_manager(sid, conn_id, conn, rx, app_clone, h, port).await;
+        });
+
+        emit_log(&app, &server_id, RconLogLine {
+            timestamp_ms: now_ms(),
+            text: format!("Connected to RCON at {host}:{port}"),
+            kind: "system".into(),
+        }).await;
+
+        emit_status(&app, RconStatusPayload {
+            server_id: server_id.clone(),
+            status: "connected".into(),
+            host: Some(host.clone()),
+            port: Some(port),
+            error: None,
+        });
+
+        // Seed the player cache asynchronously — the event will update the frontend.
+        let tx_seed = tx.clone();
+        tauri::async_runtime::spawn(async move {
+            let (resp_tx, resp_rx) = oneshot::channel();
+            if tx_seed.send(RconCmd::GetPlayers { response_tx: resp_tx }).await.is_ok() {
+                let _ = resp_rx.await;
+            }
+        });
+
+        Ok(())
+    }.await;
+
+    if let Err(ref e) = result {
+        emit_status(&app, RconStatusPayload {
+            server_id,
+            status: "disconnected".into(),
+            host: Some(host),
+            port: Some(port),
+            error: Some(e.clone()),
+        });
+    }
+
+    result
 }
 
 /// Send an RCON command through the manager task queue.

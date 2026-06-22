@@ -25,19 +25,23 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
-  X, BookOpen, ShieldCheck,
+  X, BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
 import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
-import { setAppSetting, initDb } from "@/lib/db";
+import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir, tempDir } from "@tauri-apps/api/path";
@@ -128,6 +132,155 @@ function DirValidationRow({ result }: { result: DirCheckResult }) {
 }
 
 // ---------------------------------------------------------------------------
+// WipeLokiAsamDialog
+// ---------------------------------------------------------------------------
+
+interface WipeLokiAsamDialogProps {
+  open: boolean;
+  path: string;
+  onClose: () => void;
+  onWiped: () => void;
+}
+
+function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialogProps) {
+  const [fullWipe, setFullWipe] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [wiping, setWiping] = useState(false);
+
+  // When the outer dialog closes, reset state.
+  useEffect(() => {
+    if (!open) { setFullWipe(false); setConfirmOpen(false); setWiping(false); }
+  }, [open]);
+
+  const handleFullWipeToggle = () => {
+    if (!fullWipe) {
+      // Require the secondary confirmation before checking the box.
+      setConfirmOpen(true);
+    } else {
+      setFullWipe(false);
+    }
+  };
+
+  const handleConfirmFullWipe = () => {
+    setConfirmOpen(false);
+    setFullWipe(true);
+  };
+
+  const handleWipe = async () => {
+    setWiping(true);
+    try {
+      await tauriCmd.wipeLokiAsamDir(path, fullWipe);
+      toast.success(fullWipe ? "Directory wiped — ready for a clean install." : "LokiASAM data removed — ready for a clean install.");
+      onWiped();
+      onClose();
+    } catch (e) {
+      toast.error("Failed to delete files", { description: String(e) });
+    } finally {
+      setWiping(false);
+    }
+  };
+
+  return (
+    <>
+      {/* Main delete dialog */}
+      <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+        <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "rgba(14,16,24,0.98)", border: "1px solid rgba(255,60,60,0.3)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
+              <Trash2 className="w-4 h-4" /> Delete LokiASAM Data
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm" style={{ color: "var(--text-muted)" }}>
+            <p>
+              This will remove the existing LokiASAM installation from <span className="font-mono text-xs break-all" style={{ color: "var(--text-primary)" }}>{path}</span>.
+            </p>
+
+            {/* Base case — always deleted */}
+            <div className="rounded-lg p-3 space-y-1" style={{ background: "rgba(255,60,60,0.08)", border: "1px solid rgba(255,60,60,0.2)" }}>
+              <p className="font-semibold text-xs uppercase tracking-wide" style={{ color: "#ff3c3c" }}>Will be deleted</p>
+              <p className="text-xs">The <span className="font-mono">lokiasam/</span> subfolder — database, config, and logs. Server game files are kept.</p>
+            </div>
+
+            {/* Full wipe toggle */}
+            <label
+              className="flex items-start gap-3 rounded-lg p-3 cursor-pointer transition-colors"
+              style={{
+                background: fullWipe ? "rgba(255,60,60,0.12)" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${fullWipe ? "rgba(255,60,60,0.4)" : "rgba(255,255,255,0.08)"}`,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={fullWipe}
+                onChange={handleFullWipeToggle}
+                className="mt-0.5 shrink-0 accent-red-500"
+              />
+              <div className="space-y-0.5">
+                <p className="font-semibold text-xs" style={{ color: fullWipe ? "#ff3c3c" : "var(--text-primary)" }}>
+                  Also delete server files, backups, and all other content
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Permanently removes everything inside this folder — including downloaded game files which may total hundreds of GB. Cannot be undone.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={onClose} disabled={wiping}
+              style={{ borderColor: "rgba(255,255,255,0.15)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button onClick={handleWipe} disabled={wiping}
+              style={{ background: "rgba(255,60,60,0.15)", borderColor: "rgba(255,60,60,0.5)", color: "#ff3c3c" }}>
+              {wiping
+                ? <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Deleting…</>
+                : fullWipe ? <><Trash2 className="w-3 h-3 mr-1.5" /> Delete Everything</> : <><Trash2 className="w-3 h-3 mr-1.5" /> Delete LokiASAM Data</>
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Nested confirmation for full wipe */}
+      <Dialog open={confirmOpen} onOpenChange={(v) => { if (!v) setConfirmOpen(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-sm" style={{ background: "rgba(14,16,24,0.98)", border: "1px solid rgba(255,60,60,0.5)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
+              <TriangleAlert className="w-4 h-4" /> Complete Data Loss Warning
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3 text-sm">
+            <p style={{ color: "var(--text-muted)" }}>
+              This will permanently delete <strong style={{ color: "var(--text-primary)" }}>everything</strong> inside:
+            </p>
+            <p className="font-mono text-xs break-all rounded px-2 py-1.5" style={{ background: "rgba(255,60,60,0.1)", color: "#ff3c3c" }}>
+              {path}
+            </p>
+            <p style={{ color: "var(--text-muted)" }}>
+              All old LokiASAM data, server configurations, downloaded game files, and backups will be gone permanently. This cannot be undone.
+            </p>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}
+              style={{ borderColor: "rgba(255,255,255,0.15)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmFullWipe}
+              style={{ background: "rgba(255,60,60,0.2)", borderColor: "rgba(255,60,60,0.6)", color: "#ff3c3c" }}>
+              <TriangleAlert className="w-3 h-3 mr-1.5" /> Yes, Delete Everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sub-components per step
 // ---------------------------------------------------------------------------
 
@@ -162,8 +315,8 @@ function WelcomeStep() {
 
       <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
         {[
-          { label: "Server Management", desc: "Start, stop & monitor" },
-          { label: "Auto Scheduling",   desc: "Backups & restarts" },
+          { label: "Server Management", desc: "Start, Stop & Monitor" },
+          { label: "Auto Scheduling",   desc: "Backups & Restarts" },
           { label: "Mod Browser",       desc: "CurseForge integration" },
         ].map((feat) => (
           <div
@@ -211,9 +364,12 @@ function ThemeStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Choose Your Theme
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Palette className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Choose Your Theme
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Pick a background preset and accent color. You can change these at any time in Settings.
         </p>
@@ -240,7 +396,7 @@ function ThemeStep() {
                 }}
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "00ffff"}` }} />
+                  <div className="w-3 h-3 rounded-full" style={{ background: `#${p === "neon" ? "bf00ff" : p === "abyss" ? "4080ff" : p === "toxic" ? "00ff88" : "4080ff"}` }} />
                   <span className="text-sm font-semibold" style={{ color: selected ? "var(--neon-purple)" : "#fff" }}>
                     {preset.label}
                     {selected && <span className="ml-2 text-[10px] font-normal px-1 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)" }}>Active</span>}
@@ -473,7 +629,9 @@ function BaseDirStep() {
   } = useSetupStore();
   const [dirResult, setDirResult] = useState<DirCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
+  const [wipeOpen, setWipeOpen] = useState(false);
   const [importChecking, setImportChecking] = useState(false);
+  const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [importError, setImportError] = useState("");
   const [importInfo, setImportInfo] = useState<{
     servers: number; steamcmd: string; proton?: string;
@@ -489,7 +647,7 @@ function BaseDirStep() {
       setDirResult(result);
       setBaseDirWritable(result.writable);
     } catch {
-      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory." };
+      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
       setDirResult(fallback);
       setBaseDirWritable(false);
     } finally {
@@ -514,12 +672,19 @@ function BaseDirStep() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Clean up debounce on unmount.
+  useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
+
   const handleChange = (value: string) => {
     setBaseDir(value);
     const sep = value.includes("\\") ? "\\" : "/";
     setBackupDir(value.replace(/[/\\]$/, "") + sep + "Backups");
     setDirResult(null);
     setBaseDirWritable(false);
+    if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);
+    if (value.trim()) {
+      validateDebounceRef.current = setTimeout(() => validateDir(value), 600);
+    }
   };
 
   const pickDir = async () => {
@@ -587,6 +752,19 @@ function BaseDirStep() {
 
   return (
     <div className="space-y-5">
+      {/* Card header */}
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <HardDrive className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            How would you like to set up?
+          </h2>
+        </div>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Start fresh with a new install, or import an existing LokiASAM setup.
+        </p>
+      </div>
+
       {/* Tab selector */}
       <div className="flex gap-2">
         {[
@@ -617,7 +795,7 @@ function BaseDirStep() {
               Where would you like to install LokiASAM?
             </h2>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              This is where your ASA server files will be installed. Choose a drive with at least 20 GB of free space.
+              This is where your ASA server files will be installed. Choose a drive with at least 40 GB of free space.
             </p>
           </div>
 
@@ -650,8 +828,60 @@ function BaseDirStep() {
             )}
             {dirResult && <DirValidationRow result={dirResult} />}
           </div>
+
+          {/* ── LokiASAM already installed here ── */}
+          {dirResult?.hasLokiasam && (
+            <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.35)" }}>
+              <div className="flex items-start gap-2">
+                <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffaa00" }} />
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold" style={{ color: "#ffaa00" }}>LokiASAM is already installed here</p>
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Continuing will overwrite your database — all server configurations, schedules, and settings will be permanently lost.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => { setImportMode(true); setImportError(""); }}
+                  className="gap-1.5 h-7 text-xs"
+                  style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+                >
+                  <MonitorDown className="w-3 h-3" /> Switch to Import
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setWipeOpen(true)}
+                  className="gap-1.5 h-7 text-xs"
+                  style={{ color: "#ff3c3c", border: "1px solid rgba(255,60,60,0.3)" }}
+                >
+                  <Trash2 className="w-3 h-3" /> Delete LokiASAM Data
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Directory has other content (not LokiASAM) ── */}
+          {dirResult?.writable && !dirResult.hasLokiasam && !dirResult.isNew && !dirResult.isEmpty && (
+            <div className="rounded-lg p-3 flex items-start gap-2" style={{ background: "rgba(255,136,0,0.06)", border: "1px solid rgba(255,136,0,0.25)" }}>
+              <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffaa00" }} />
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                This directory is not empty. Server files will be installed alongside existing content.
+              </p>
+            </div>
+          )}
         </>
       )}
+
+      {/* Wipe dialog */}
+      <WipeLokiAsamDialog
+        open={wipeOpen}
+        path={baseDir}
+        onClose={() => setWipeOpen(false)}
+        onWiped={() => validateDir(baseDir)}
+      />
 
       {/* ── Import Previous Install ── */}
       {importMode && (
@@ -741,7 +971,7 @@ function BackupDirStep() {
       setDirResult(result);
       setBackupDirWritable(result.writable);
     } catch {
-      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory." };
+      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
       setDirResult(fallback);
       setBackupDirWritable(false);
     } finally {
@@ -775,9 +1005,12 @@ function BackupDirStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Where would you like to save backups?
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <FolderOpen className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Where would you like to save backups?
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           This is where Server, INI and other backup 7z archives will be stored.
           We&apos;ve pre-filled this based on your install directory.
@@ -934,9 +1167,12 @@ function SteamCmdStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          SteamCMD Setup
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Terminal className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            SteamCMD Setup
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           SteamCMD is required to download and update ASA server files from Steam.
         </p>
@@ -1186,9 +1422,12 @@ function ProtonGEStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Proton-GE Setup
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Cpu className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Proton-GE Setup
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           ASA only ships a Windows binary. Proton-GE allows us to run the Windows binary on Linux.
         </p>
@@ -1496,9 +1735,12 @@ function CertStep() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
-          Mod API Certificate
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <ShieldCheck className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Mod API Certificate
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           ARK SA uses the CurseForge API (secured by Amazon TLS) to load mod
           metadata at startup. Installing the Amazon Root CA certificate ensures
@@ -1602,7 +1844,7 @@ function CertStep() {
   );
 }
 
-function NotificationsStep() {
+function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record<string, string[]>) => void }) {
   const {
     discordWebhook, setDiscordWebhook,
     smtpHost, setSmtpHost,
@@ -1613,6 +1855,7 @@ function NotificationsStep() {
     smtpFrom, setSmtpFrom,
     smtpTo, setSmtpTo,
   } = useSetupStore();
+  const [showSmtpPw, setShowSmtpPw] = useState(false);
 
   const [testingDiscord, setTestingDiscord] = useState(false);
   const [testingEmail,   setTestingEmail]   = useState(false);
@@ -1657,9 +1900,12 @@ function NotificationsStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          What notifications would you like?
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Bell className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            What notifications would you like?
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           All channels are optional — you can change these at any time in Settings.
         </p>
@@ -1756,10 +2002,17 @@ function NotificationsStep() {
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Password</Label>
-            <Input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
-              placeholder="••••••••" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-            />
+            <div className="relative">
+              <Input type={showSmtpPw ? "text" : "password"} value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
+                placeholder="••••••••" className="font-mono text-xs pr-8"
+                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              />
+              <button type="button" tabIndex={-1} onClick={() => setShowSmtpPw(v => !v)}
+                className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
+                style={{ color: "var(--text-primary)" }}>
+                {showSmtpPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -1792,7 +2045,7 @@ function NotificationsStep() {
             Choose which events trigger each channel. Configure credentials above to unlock Discord and SMTP columns.
           </p>
         </div>
-        <NotificationMatrix />
+        <NotificationMatrix onChange={onMatrixChange} />
       </div>
     </div>
   );
@@ -1804,9 +2057,12 @@ function TrayStep() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          System Tray Behavior
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <Layers className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            System Tray Behavior
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Choose what happens when you click the X button on the main window.
         </p>
@@ -1839,7 +2095,7 @@ function TrayStep() {
           >
             <div className="flex items-center gap-2 mb-1">
               <div
-                className="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 flex items-center justify-center"
+                className="w-3.5 h-3.5 rounded-full border-2 shrink-0 flex items-center justify-center"
                 style={{ borderColor: closeToTray === value ? "var(--neon-purple)" : "rgba(var(--neon-purple-rgb),0.3)" }}
               >
                 {closeToTray === value && (
@@ -1876,7 +2132,7 @@ function TrayStep() {
         >
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             <span className="font-semibold" style={{ color: "#ffa500" }}>Desktop notifications: </span>
-            OS desktop notifications (the pop-up alerts from your system) only appear when LokiASAM is minimized to the system tray. While the window is open or the app is fully closed, notifications are shown as in-app toasts instead.
+            OS desktop notifications (the pop-up alerts from your system) may only appear when LokiASAM is minimized to the system tray. This is dependent on your desktop environment and its notification settings, not LokiASAM itself.
           </p>
         </div>
       </div>
@@ -1892,29 +2148,36 @@ function AutoUpdateStep() {
   const {
     asaAutoCheckHours, setAsaAutoCheckHours,
     appUpdateCheckMode, setAppUpdateCheckMode,
-    protonAutoCheckEnabled, setProtonAutoCheckEnabled,
+    protonCheckMode, setProtonCheckMode,
   } = useSetupStore();
 
   const asaIntervals = [
-    { value: "0",  label: "Disabled" },
-    { value: "1",  label: "Hourly" },
-    { value: "6",  label: "Every 6h" },
-    { value: "12", label: "Every 12h" },
-    { value: "24", label: "Daily" },
+    { value: "disabled",       label: "Disabled" },
+    { value: "startup",        label: "On Startup" },
+    { value: "startup_hourly", label: "On Startup + Hourly" },
   ];
 
   const appModes = [
-    { value: "startup",  label: "On Startup" },
-    { value: "periodic", label: "Every Hour" },
     { value: "off",      label: "Disabled" },
+    { value: "startup",  label: "On Startup" },
+    { value: "periodic", label: "On Startup + Hourly" },
+  ];
+
+  const protonModes = [
+    { value: "disabled",       label: "Disabled" },
+    { value: "startup",        label: "On Startup" },
+    { value: "startup_hourly", label: "On Startup + Hourly" },
   ];
 
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl font-bold mb-1 text-glow-purple" style={{ color: "var(--neon-purple)" }}>
-          Auto-Update Settings
-        </h2>
+        <div className="flex items-center gap-2 mb-1">
+          <RefreshCw className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Auto-Update Settings
+          </h2>
+        </div>
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Auto-updates are one of LokiASAM&apos;s core features. Set how often each component checks for new versions — adjustable at any time in Settings.
         </p>
@@ -1929,12 +2192,12 @@ function AutoUpdateStep() {
             Checks Steam for new ARK server builds and flags any servers that need updating. Updates are never applied automatically — you stay in control.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex gap-2">
           {asaIntervals.map(({ value, label }) => (
             <button
               key={value}
               onClick={() => setAsaAutoCheckHours(value)}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+              className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
               style={{
                 background: asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
                 border: `1px solid ${asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
@@ -1979,14 +2242,30 @@ function AutoUpdateStep() {
 
       {/* Proton-GE (Linux only) */}
       {IS_LINUX && (
-        <div className="rounded-xl px-4 py-3"
+        <div className="rounded-xl p-4 space-y-3"
           style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-          <ToggleRow
-            label="Proton-GE Daily Auto-Check"
-            description="Check GitHub once per day for new GE-Proton releases. A notification appears when a new version is available."
-            value={protonAutoCheckEnabled}
-            onChange={setProtonAutoCheckEnabled}
-          />
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Proton-GE Updates</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Check GitHub for new GE-Proton releases. A notification appears when a new version is available.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            {protonModes.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setProtonCheckMode(value)}
+                className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{
+                  background: protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                  border: `1px solid ${protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                  color: protonCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -2214,7 +2493,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     discordWebhook,
     smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTls, smtpFrom, smtpTo,
     closeToTray,
-    asaAutoCheckHours, appUpdateCheckMode, protonAutoCheckEnabled,
+    asaAutoCheckHours, appUpdateCheckMode, protonCheckMode,
     isLoading,
     importMode, importValid, importDir,
   } = useSetupStore();
@@ -2223,6 +2502,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [saveError, setSaveError] = useState("");
   const [appVersion, setAppVersion] = useState("...");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  // Stores the wizard's notification matrix state as the user toggles checkboxes.
+  // Kept in a ref (not state) so navigating away from the notifications step
+  // doesn't lose the values when the step component unmounts and clears its ref.
+  const matrixEventsRef = useRef<Record<string, string[]> | null>(null);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
@@ -2326,26 +2609,48 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           const prefix = baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix";
           await setAppSetting("proton_prefix_path", prefix);
         }
-        if (discordWebhook) await setAppSetting("discord_webhook", discordWebhook);
+        // Save Discord webhook as a notification_configs entry if provided
+        if (discordWebhook) {
+          await saveNotificationConfig({
+            id: crypto.randomUUID(), serverId: null, channel: "discord",
+            enabled: true,
+            configJson: JSON.stringify({ webhookUrl: discordWebhook }),
+            eventsJson: JSON.stringify(Object.values(NOTIFICATION_EVENTS)),
+          });
+        }
 
-        // SMTP (only if host is set)
+        // Save SMTP config as a notification_configs entry if host is set
         if (smtpHost) {
-          await setAppSetting("smtp_host",     smtpHost);
-          await setAppSetting("smtp_port",     smtpPort);
-          await setAppSetting("smtp_username", smtpUsername);
-          await setAppSetting("smtp_password", smtpPassword);
-          await setAppSetting("smtp_use_tls",  String(smtpUseTls));
-          await setAppSetting("smtp_from",     smtpFrom);
-          await setAppSetting("smtp_to",       smtpTo);
+          await saveNotificationConfig({
+            id: crypto.randomUUID(), serverId: null, channel: "email",
+            enabled: true,
+            configJson: JSON.stringify({
+              host: smtpHost, port: smtpPort,
+              username: smtpUsername, password: smtpPassword,
+              fromAddress: smtpFrom, toAddress: smtpTo,
+              useTls: smtpUseTls,
+            }),
+            eventsJson: JSON.stringify(Object.values(NOTIFICATION_EVENTS)),
+          });
+        }
+
+        // Save notification matrix channel event preferences.
+        // matrixEventsRef is populated by the onChange callback in NotificationsStep;
+        // if the user never touched the matrix it stays null and we skip
+        // (channels will fall back to their default all-events-on behaviour).
+        if (matrixEventsRef.current) {
+          for (const [channel, events] of Object.entries(matrixEventsRef.current)) {
+            await saveGlobalChannelEvents(channel, events);
+          }
         }
 
         // Tray preference
         await setAppSetting("close_to_tray", String(closeToTray));
 
         // Auto-update preferences
-        await setAppSetting("asa_auto_check_hours",   asaAutoCheckHours);
-        await setAppSetting("app_update_check_mode",  appUpdateCheckMode);
-        if (IS_LINUX) await setAppSetting("proton_ge_auto_check", String(protonAutoCheckEnabled));
+        await setAppSetting("asa_auto_check_hours",  asaAutoCheckHours);
+        await setAppSetting("app_update_check_mode", appUpdateCheckMode);
+        if (IS_LINUX) await setAppSetting("proton_ge_check_mode", protonCheckMode);
 
         // Theme
         await setAppSetting("theme_preset", themePreset);
@@ -2383,7 +2688,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
         <CertStep key="cert" />,
-        <NotificationsStep key="notifications" />,
+        <NotificationsStep key="notifications" onMatrixChange={(e) => { matrixEventsRef.current = e; }} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,
@@ -2395,7 +2700,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <BackupDirStep key="backupdir" />,
         <SteamCmdStep key="steamcmd" />,
         <CertStep key="cert" />,
-        <NotificationsStep key="notifications" />,
+        <NotificationsStep key="notifications" onMatrixChange={(e) => { matrixEventsRef.current = e; }} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,
         <CompleteStep key="complete" onComplete={handleComplete} />,
@@ -2403,7 +2708,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col"
+      className="fixed inset-0 z-50 flex flex-col overflow-y-auto"
       style={{ background: "var(--background)" }}
     >
       {/* Background texture */}
@@ -2445,21 +2750,19 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       </div>
 
       {/* Main content card */}
-      <div className="relative z-10 flex-1 flex items-center justify-center p-6">
+      <div className="relative z-10 flex-1 flex items-stretch justify-center px-6 pb-6 pt-10">
         <div
-          className="w-full max-w-2xl flex flex-col"
+          className="w-full max-w-2xl flex flex-col min-h-0"
           style={{
             background: "var(--glass-bg)",
             border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
             borderRadius: "1rem",
             backdropFilter: "blur(12px)",
             boxShadow: "0 0 60px rgba(var(--neon-purple-rgb),0.1)",
-            maxHeight: "calc(100vh - 160px)",
-            minHeight: "420px",
           }}
         >
           <div className="p-8 flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div ref={scrollAreaRef} className="flex-1 min-h-0 overflow-y-auto pr-2">
+            <div ref={scrollAreaRef} className="flex-1 min-h-0 overflow-y-auto -ml-8 pl-8 pr-2">
               <AnimatePresence mode="wait" custom={direction}>
                 <motion.div
                   key={step}

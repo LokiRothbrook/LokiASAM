@@ -6,10 +6,11 @@
  * update_available column in the DB and optionally fires notifications.
  */
 
-import { getServers, getAppSetting, setServerUpdateAvailable } from "@/lib/db";
+import { getServers, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { useAppStore } from "@/store/useAppStore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,38 @@ export interface UpdateCheckSummary {
   newlyAvailable: string[];
   /** All servers currently having an update available (newly + previously flagged). */
   allWithUpdates: ServerUpdateInfo[];
+}
+
+// ── ASA cache update (shared across dashboard, settings, scheduler) ───────────
+
+/**
+ * Run a full ASA cache update/check via SteamCMD.  Sets the global
+ * `asaCacheUpdateInProgress` flag in Zustand so the TopBar spinner shows.
+ *
+ * Returns the new build ID string, or null on error.
+ */
+export async function runAsaCacheUpdate(): Promise<string | null> {
+  const { setAsaCacheUpdateInProgress } = useAppStore.getState();
+  setAsaCacheUpdateInProgress(true);
+  try {
+    const [baseDir, steamcmdPath] = await Promise.all([
+      getAppSetting("base_dir"),
+      getAppSetting("steamcmd_path"),
+    ]);
+    if (!baseDir || !steamcmdPath) return null;
+    const sep = baseDir.includes("\\") ? "\\" : "/";
+    const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+    const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
+    const now = new Date().toISOString();
+    await Promise.all([
+      setAppSetting("asa_cached_build_id", newBuild),
+      setAppSetting("asa_latest_build_id", newBuild),
+      setAppSetting("asa_last_checked", now),
+    ]);
+    return newBuild;
+  } finally {
+    setAsaCacheUpdateInProgress(false);
+  }
 }
 
 // ── Per-server update check ───────────────────────────────────────────────────
@@ -55,6 +88,12 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
         const installed = await tauriCmd.getInstalledBuildId(server.install_path);
         const isOutdated = !!installed && installed !== cachedBuildId;
         const wasAlreadyFlagged = server.update_available === 1;
+
+        // Persist installed_build_id to DB for display (handles existing servers
+        // that pre-date the build version cache feature)
+        if (installed && server.installed_build_id !== installed) {
+          await setServerInstalledBuild(server.id, installed).catch(() => null);
+        }
 
         await setServerUpdateAvailable(server.id, isOutdated);
 

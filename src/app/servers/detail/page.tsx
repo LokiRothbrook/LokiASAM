@@ -17,13 +17,14 @@ import { LogsTab } from "@/components/server/tabs/LogsTab";
 import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
-import { getServer } from "@/lib/db";
+import { getServer, formatServerVersion } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useQueryClient } from "@tanstack/react-query";
 import { updateServerStatus } from "@/lib/db";
 import type { ServerRow } from "@/lib/db";
 import type { ServerStatus } from "@/lib/tauri-commands";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 const TABS = [
   { value: "overview",   label: "Overview",   icon: LayoutDashboard },
@@ -55,6 +56,7 @@ export default function ServerDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [activeTab, setActiveTab] = useState<TabValue>(tabParam);
+  const versionCache = useBuildVersionCache();
 
   // ── Load server row ──────────────────────────────────────────────────────
   const reload = async () => {
@@ -125,10 +127,7 @@ export default function ServerDetailPage() {
   const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   return (
-    // When the RCON tab is active the root div fills main's content area exactly
-    // so the log scrolls internally without creating a page-level scrollbar.
-    // Other tabs keep normal flow (gap-6, no height constraint).
-    <div className={`flex flex-col gap-6${(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? " h-full overflow-hidden" : ""}`}>
+    <div className="flex flex-col h-full overflow-hidden gap-6">
       {/* ── Header ── */}
       <div className="flex items-start gap-3 shrink-0">
         <Button
@@ -153,8 +152,14 @@ export default function ServerDetailPage() {
             <ServerStatusBadge status={server.status} large />
           </div>
           <p className="text-sm mt-0.5" style={{ color: "var(--text-muted)" }}>
-            {mapDisplay} · Port {server.port} · RCON {server.rcon_port} · ID{" "}
-            <span className="font-mono">{server.id.slice(0, 8)}</span>
+            {mapDisplay} · Port {server.port} · RCON {server.rcon_port}
+            {server.installed_build_id && (
+              <>
+                {" "}·{" "}
+                <span className="font-mono">{formatServerVersion(server.installed_build_id, versionCache)}</span>
+              </>
+            )}
+            {" "}· ID <span className="font-mono">{server.id.slice(0, 8)}</span>
           </p>
         </div>
       </div>
@@ -192,13 +197,13 @@ export default function ServerDetailPage() {
 
       {/* ── Tab content ── */}
       {(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? (
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-hidden">
           {activeTab === "rcon" && <RconTab  server={server} />}
           {activeTab === "logs" && <LogsTab  server={server} />}
           {activeTab === "mods" && <ModsTab  server={server} />}
         </div>
       ) : (
-        <div className="mt-2">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {activeTab === "overview"   && <OverviewTab   server={server} />}
           {activeTab === "config"     && <ConfigTab     server={server} />}
           {activeTab === "backups"    && <BackupsTab    server={server} />}

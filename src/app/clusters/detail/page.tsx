@@ -31,11 +31,13 @@ import {
   getServers,
   setServerCluster,
   getAppSetting,
+  formatServerVersion,
   type ClusterRow,
   type ServerRow,
 } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { ServerStatusBadge } from "@/components/server/ServerStatusBadge";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 // ---------------------------------------------------------------------------
 // Add Server Dialog
@@ -151,6 +153,7 @@ interface MemberRowProps {
 function MemberRow({ server, onRemove }: MemberRowProps) {
   const router = useRouter();
   const map = ARK_MAPS.find((m) => m.id === server.map_id);
+  const versionCache = useBuildVersionCache();
 
   return (
     <div
@@ -166,6 +169,9 @@ function MemberRow({ server, onRemove }: MemberRowProps) {
         </div>
         <p className="text-xs mt-0.5 truncate" style={{ color: "var(--text-muted)" }}>
           {map?.displayName ?? server.map_id} · :{server.port}
+          {server.installed_build_id && (
+            <> · <span className="font-mono">{formatServerVersion(server.installed_build_id, versionCache)}</span></>
+          )}
         </p>
       </div>
 

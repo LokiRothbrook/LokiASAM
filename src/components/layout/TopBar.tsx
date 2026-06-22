@@ -1,19 +1,47 @@
 "use client";
 
 import { NotificationBell } from "@/components/layout/NotificationBell";
-import { Server, Activity, Users } from "lucide-react";
+import { Server, Activity, Users, RefreshCw, Cpu, MemoryStick } from "lucide-react";
 import { useServers } from "@/hooks/useServers";
+import { useAppStore } from "@/store/useAppStore";
 
 export function TopBar() {
   const { data: servers = [] } = useServers();
+  const asaCacheUpdateInProgress = useAppStore((s) => s.asaCacheUpdateInProgress);
+  const statsLiveBuffers = useAppStore((s) => s.statsLiveBuffers);
 
   const total   = servers.length;
   const running = servers.filter((s) => s.status === "running").length;
 
+  // Aggregate CPU, RAM, and players from the live buffer across all active servers.
+  let totalPlayers: number | null = null;
+  let totalCpu: number | null = null;
+  let totalRamMb: number | null = null;
+
+  const activeStatuses = new Set(["running", "starting"]);
+  for (const server of servers) {
+    if (!activeStatuses.has(server.status)) continue;
+    const buf = statsLiveBuffers[server.id];
+    if (!buf || buf.length === 0) continue;
+    const latest = buf[buf.length - 1];
+    if (latest.players !== null) totalPlayers = (totalPlayers ?? 0) + latest.players;
+    if (latest.cpu    !== null) totalCpu     = (totalCpu    ?? 0) + latest.cpu;
+    if (latest.mem    !== null) totalRamMb   = (totalRamMb  ?? 0) + latest.mem;
+  }
+
+  const cpuDisplay = totalCpu !== null ? `${totalCpu.toFixed(1)}%` : "—";
+  const ramDisplay = totalRamMb !== null
+    ? totalRamMb >= 1024
+      ? `${(totalRamMb / 1024).toFixed(1)} GB`
+      : `${Math.round(totalRamMb)} MB`
+    : "—";
+
   const stats = [
-    { icon: Server,   label: "Servers", value: total,   color: "var(--text-muted)" },
-    { icon: Activity, label: "Running", value: running, color: running > 0 ? "var(--neon-green)" : "var(--text-muted)" },
-    { icon: Users,    label: "Players", value: "—",     color: "var(--text-muted)" },
+    { icon: Server,       label: "Servers", value: total,                                     color: "var(--text-muted)" },
+    { icon: Activity,     label: "Running", value: running,                                    color: running > 0 ? "var(--neon-green)" : "var(--text-muted)" },
+    { icon: Users,        label: "Players", value: totalPlayers !== null ? totalPlayers : "—", color: totalPlayers !== null && totalPlayers > 0 ? "var(--neon-cyan)" : "var(--text-muted)" },
+    { icon: Cpu,          label: "CPU",     value: cpuDisplay,                                 color: totalCpu !== null ? "var(--neon-purple)" : "var(--text-muted)" },
+    { icon: MemoryStick,  label: "RAM",     value: ramDisplay,                                 color: totalRamMb !== null ? "var(--neon-purple)" : "var(--text-muted)" },
   ];
 
   return (
@@ -38,6 +66,15 @@ export function TopBar() {
             </span>
           </div>
         ))}
+
+        {asaCacheUpdateInProgress && (
+          <div className="flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--neon-purple)" }} />
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Checking ASA updates…
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

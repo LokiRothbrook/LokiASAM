@@ -20,7 +20,6 @@ import {
   type UpdateAutomation,
 } from "@/lib/db";
 import { getAppSetting, setAppSetting } from "@/lib/db";
-import { tauriCmd } from "@/lib/tauri-commands";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import type { ServerRow } from "@/lib/db";
 
@@ -350,7 +349,7 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
         ? JSON.stringify({ message: addMsg })
         : JSON.stringify(config);
       const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
-      const newId = await tauriCmd.createSchedule({ serverId, scheduleType: type, cronExpression: cron, configJson });
+      const newId = crypto.randomUUID();
       const input: CreateScheduleInput = { id: newId, serverId, scheduleType: type, cronExpression: cron, enabled: true, configJson };
       await createSchedule(input);
       await updateScheduleConfig(newId, cron, configJson, nextIso);
@@ -366,7 +365,6 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
   }
 
   async function handleDelete(id: string) {
-    await tauriCmd.deleteSchedule(id);
     await deleteScheduleRecord(id);
     onRefresh();
     syncSchedulesToRust();
@@ -374,7 +372,6 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 
   async function handleToggle(row: ScheduleRow) {
     const newVal = !(row.enabled === 1);
-    await tauriCmd.toggleSchedule(row.id, newVal);
     await updateScheduleEnabled(row.id, newVal);
     onRefresh();
     syncSchedulesToRust();
@@ -615,7 +612,6 @@ function BackupTypeSection({
 
       // Delete any extra rows left over from the old per-tier format
       for (const row of allExisting.slice(1)) {
-        await tauriCmd.deleteSchedule(row.id);
         await deleteScheduleRecord(row.id);
       }
 
@@ -623,7 +619,7 @@ function BackupTypeSection({
         await updateScheduleConfig(primary.id, cron, configJson, nextIso);
         if (anyEnabled !== (primary.enabled === 1)) await updateScheduleEnabled(primary.id, anyEnabled);
       } else if (anyEnabled) {
-        const newId = await tauriCmd.createSchedule({ serverId, scheduleType, cronExpression: cron, configJson });
+        const newId = crypto.randomUUID();
         await createSchedule({ id: newId, serverId, scheduleType, cronExpression: cron, enabled: true, configJson });
         await updateScheduleConfig(newId, cron, configJson, nextIso);
       }
@@ -721,7 +717,7 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
         await updateScheduleConfig(existing.id, cron, configJson, nextIso);
         if (enabled !== (existing.enabled === 1)) await updateScheduleEnabled(existing.id, enabled);
       } else if (enabled) {
-        const newId = await tauriCmd.createSchedule({ serverId, scheduleType: "backup_full", cronExpression: cron, configJson });
+        const newId = crypto.randomUUID();
         await createSchedule({ id: newId, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson });
         await updateScheduleConfig(newId, cron, configJson, nextIso);
       }
@@ -1154,7 +1150,7 @@ export function AutomationTab({ server }: Props) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pr-6">
       <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-xs"
         style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", color: "var(--text-muted)" }}>
         <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />

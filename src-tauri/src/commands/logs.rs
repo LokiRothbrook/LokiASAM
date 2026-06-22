@@ -50,17 +50,6 @@ pub struct ChatLogInfo {
     pub full_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LogStats {
-    pub shootergame_archive_count: u32,
-    pub shootergame_total_bytes: u64,
-    pub chat_log_count: u32,
-    pub chat_total_bytes: u64,
-    pub crash_count: u32,
-    pub storage_root: String,
-}
-
 // ---------------------------------------------------------------------------
 // Watch commands
 // ---------------------------------------------------------------------------
@@ -552,39 +541,6 @@ pub async fn cleanup_logs(
     Ok(deleted)
 }
 
-/// Get log storage statistics for a server.
-#[tauri::command]
-pub async fn get_log_stats(
-    app: tauri::AppHandle,
-    server_id: String,
-) -> Result<LogStats, String> {
-    let root = LogManagerState::server_logs_dir(&app, &server_id);
-    let storage_root = root
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let sg_dir = root.as_ref().map(|d| d.join("shootergame"));
-    let chat_dir = root.as_ref().map(|d| d.join("chat"));
-    let crash_dir = root.as_ref().map(|d| {
-        // crashes live in the install dir, but we reference them from here
-        d.clone()
-    });
-    let _ = crash_dir; // placeholder until we store crashes centrally
-
-    let (sg_count, sg_bytes) = count_dir(sg_dir.as_deref()).await;
-    let (chat_count, chat_bytes) = count_dir(chat_dir.as_deref()).await;
-
-    Ok(LogStats {
-        shootergame_archive_count: sg_count,
-        shootergame_total_bytes: sg_bytes,
-        chat_log_count: chat_count,
-        chat_total_bytes: chat_bytes,
-        crash_count: 0, // populated by list_crashes on demand
-        storage_root,
-    })
-}
-
 /// Return the path to the central logs storage root (for display in UI).
 #[tauri::command]
 pub fn get_log_storage_root(app: tauri::AppHandle) -> String {
@@ -594,29 +550,6 @@ pub fn get_log_storage_root(app: tauri::AppHandle) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-async fn count_dir(dir: Option<&std::path::Path>) -> (u32, u64) {
-    let dir = match dir {
-        Some(d) if d.exists() => d,
-        _ => return (0, 0),
-    };
-    let mut count = 0u32;
-    let mut bytes = 0u64;
-    if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
-        while let Ok(Some(entry)) = rd.next_entry().await {
-            if let Ok(meta) = entry.metadata().await {
-                if meta.is_file() {
-                    count += 1;
-                    bytes += meta.len();
-                }
-            }
-        }
-    }
-    (count, bytes)
-}
-
 /// Extract the timestamp string from a filename like `ShooterGame_2026-06-08_14-30-00.log`.
 fn extract_timestamp_from_filename(name: &str) -> String {
     // ShooterGame_YYYY-MM-DD_HH-MM-SS.log

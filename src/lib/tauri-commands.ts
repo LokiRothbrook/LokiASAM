@@ -78,6 +78,8 @@ export interface StartServerParams {
   queryPort: number;
   /** NOT passed on CLI — used internally by Rust for RCON readiness polling. */
   rconPort: number;
+  /** NOT passed on CLI — used internally by Rust for graceful shutdown (saveworld/doexit). */
+  rconPassword: string;
   /** Additional CLI-only flags like ["-NoBattlEye", "-ForceRespawnDinos"]. */
   extraArgs: string[];
   /** CurseForge mod IDs to pass as -mods=id1,id2,... on startup. */
@@ -162,15 +164,6 @@ export interface ChatLogInfo {
   date: string;
   sizeBytes: number;
   fullPath: string;
-}
-
-export interface LogStats {
-  shootergameArchiveCount: number;
-  shootergameTotalBytes: number;
-  chatLogCount: number;
-  chatTotalBytes: number;
-  crashCount: number;
-  storageRoot: string;
 }
 
 /** Emitted on rcon://status/{id} and rcon://status-any when connection state changes. */
@@ -265,19 +258,18 @@ export interface DirCheckResult {
   writable: boolean;
   freeBytes: number;
   error: string | null;
+  /** Target path does not exist yet and will be created on install. */
+  isNew: boolean;
+  /** A LokiASAM database was found inside the target path (existing install). */
+  hasLokiasam: boolean;
+  /** Target path exists but contains no files or subdirectories. */
+  isEmpty: boolean;
 }
 
 export interface MigrateProgress {
   phase: string;
   message: string;
   percent: number;
-}
-
-export interface ScheduleConfig {
-  serverId: string;
-  scheduleType: string;
-  cronExpression: string;
-  configJson: string;
 }
 
 /** One fully-hydrated schedule entry sent to Rust via sync_schedules. */
@@ -409,6 +401,10 @@ export const tauriCmd = {
   /** Inspect an existing folder: checks for the server exe and parses INI files. */
   detectServerInstall: (installPath: string) =>
     invoke<DetectedServerConfig>("detect_server_install", { installPath }),
+  /** Fetch game version for a build ID from the Steam News API and store it.
+   *  Returns the version string (e.g. "49.23") or null if unavailable. */
+  fetchBuildVersion: (buildId: string) =>
+    invoke<string | null>("fetch_build_version", { buildId }),
 
   // RCON — connection
   rconConnect: (serverId: string, host: string, port: number, password: string) =>
@@ -504,8 +500,6 @@ export const tauriCmd = {
   // Log maintenance
   cleanupLogs: (serverId: string, olderThanDays: number) =>
     invoke<number>("cleanup_logs", { serverId, olderThanDays }),
-  getLogStats: (serverId: string) =>
-    invoke<LogStats>("get_log_stats", { serverId }),
   getLogStorageRoot: () =>
     invoke<string>("get_log_storage_root"),
 
@@ -632,6 +626,7 @@ export const tauriCmd = {
    */
   checkDir: (path: string) => invoke<DirCheckResult>("check_dir", { path }),
   checkFileExists: (path: string) => invoke<boolean>("check_file_exists", { path }),
+  wipeLokiAsamDir: (path: string, fullWipe: boolean) => invoke<void>("wipe_lokiasam_dir", { path, fullWipe }),
   /** Recursively delete a directory. Idempotent — returns Ok if path doesn't exist. */
   deleteDirectory: (path: string) => invoke<void>("delete_directory", { path }),
   /**
@@ -696,10 +691,6 @@ export const tauriCmd = {
     invoke<void>("remove_server_from_cluster", { serverId }),
 
   // Scheduler
-  createSchedule: (config: ScheduleConfig) => invoke<string>("create_schedule", { config }),
-  deleteSchedule: (scheduleId: string) => invoke<void>("delete_schedule", { scheduleId }),
-  toggleSchedule: (scheduleId: string, enabled: boolean) =>
-    invoke<void>("toggle_schedule", { scheduleId, enabled }),
   /** Atomically replace all active schedule entries in the Rust scheduler. */
   syncSchedules: (entries: ScheduleEntry[]) =>
     invoke<void>("sync_schedules", { entries }),

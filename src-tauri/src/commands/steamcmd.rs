@@ -8,7 +8,7 @@ use super::utils::{build_steamcmd_cmd, copy_dir_recursive, emit_line, stream_pro
 const ASA_SERVER_APP_ID: &str = "2430930";
 
 /// Relative path to the appmanifest ACF inside a Steam install directory.
-const ACF_REL_PATH: &str = "steamapps/appmanifest_2430930.acf";
+pub const ACF_REL_PATH: &str = "steamapps/appmanifest_2430930.acf";
 
 // ---------------------------------------------------------------------------
 // ACF / INI helpers
@@ -496,6 +496,13 @@ pub async fn install_server(
             .map_err(|e| format!("Failed to copy server files: {e}"))?;
 
         emit_line(&app_handle, &channel, "stdout", "Server installation complete.")?;
+
+        // Record installed build ID and trigger internet version fetch
+        let acf = Path::new(&install_path).join(ACF_REL_PATH);
+        if let Some(build_id) = read_acf_build_id(&acf) {
+            crate::commands::build_version::record_install(&app_handle, &server_id, &build_id);
+        }
+
         Ok(())
     }.await;
 
@@ -540,6 +547,13 @@ pub async fn update_server(
             .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
         emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
+
+        // Record installed build ID and trigger internet version fetch
+        let acf = Path::new(&install_path).join(ACF_REL_PATH);
+        if let Some(build_id) = read_acf_build_id(&acf) {
+            crate::commands::build_version::record_install(&app_handle, &server_id, &build_id);
+        }
+
         Ok(())
     }.await;
 
@@ -659,6 +673,12 @@ pub async fn update_cache(
     let build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());
 
     emit_line(&app_handle, &channel, "stdout", &format!("Cache updated to build {build_id}."))?;
+
+    // Trigger internet version fetch for this build in the background
+    if build_id != "0" {
+        crate::commands::build_version::maybe_fetch_internet(&app_handle, &build_id);
+    }
+
     Ok(build_id)
 }
 
@@ -684,6 +704,12 @@ pub async fn apply_cache_to_server(
         .await
         .map_err(|e| format!("Sync task panicked: {e}"))?
         .map_err(|e| format!("Failed to sync server files: {e}"))?;
+
+    // Record updated build ID for version tracking
+    let acf = std::path::Path::new(&install_path).join(ACF_REL_PATH);
+    if let Some(build_id) = read_acf_build_id(&acf) {
+        crate::commands::build_version::record_install(&app_handle, &server_id, &build_id);
+    }
 
     emit_line(&app_handle, &channel, "stdout", "Server update applied.")?;
     Ok(())

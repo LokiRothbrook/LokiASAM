@@ -255,7 +255,14 @@ pub fn run() {
 
                 loop {
                     crate::commands::backup_manager::execute_tick(&backup_tick_handle).await;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                    // Re-anchor to the next wall-clock hour boundary after each
+                    // tick so backup execution time does not cause cumulative drift.
+                    let now_secs = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let secs_until_next_hour = 3600 - (now_secs % 3600);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(secs_until_next_hour)).await;
                 }
             });
 
@@ -450,6 +457,8 @@ pub fn run() {
             commands::steamcmd::update_cache,
             commands::steamcmd::apply_cache_to_server,
             commands::steamcmd::detect_server_install,
+            // Build version cache
+            commands::build_version::fetch_build_version,
             // RCON
             commands::rcon::rcon_connect,
             commands::rcon::rcon_send,
@@ -475,7 +484,6 @@ pub fn run() {
             commands::logs::list_chat_logs,
             commands::logs::read_chat_log,
             commands::logs::cleanup_logs,
-            commands::logs::get_log_stats,
             commands::logs::get_log_storage_root,
             // Config / INI
             commands::config::read_server_config,
@@ -513,6 +521,7 @@ pub fn run() {
             commands::system::get_install_method,
             commands::system::check_dir,
             commands::system::check_file_exists,
+            commands::system::wipe_lokiasam_dir,
             commands::system::delete_directory,
             commands::system::move_base_dir,
             commands::system::abort_operation,
@@ -541,9 +550,6 @@ pub fn run() {
             commands::cluster::add_server_to_cluster,
             commands::cluster::remove_server_from_cluster,
             // Scheduler
-            commands::scheduler::create_schedule,
-            commands::scheduler::delete_schedule,
-            commands::scheduler::toggle_schedule,
             commands::scheduler::sync_schedules,
         ])
         .run(tauri::generate_context!())

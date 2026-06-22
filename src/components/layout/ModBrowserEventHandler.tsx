@@ -42,6 +42,13 @@ export function ModBrowserEventHandler() {
         source?: string;
       };
 
+      // Wizard uses a fake "wizard-temp" server ID since no DB record exists yet.
+      // The wizard's ModsStep listens for this event directly and updates its own state.
+      if (data.serverId === "wizard-temp") {
+        incrementModAddedCount();
+        return;
+      }
+
       // For browser-sourced adds, only save if it matches the open browser session.
       if (data.source !== "verify" && modBrowserParams) {
         if (data.serverId !== modBrowserParams.serverId) return;

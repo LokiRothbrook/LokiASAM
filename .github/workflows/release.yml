@@ -66,43 +66,45 @@ jobs:
           releaseBody: |
             ## LokiASAM ${{ github.ref_name }} — Public Beta
 
-            LokiASAM is a desktop application for managing Ark Survival Ascended dedicated servers on Linux and Windows.
+            LokiASAM is a desktop application for managing ARK: Survival Ascended dedicated servers on Linux and Windows.
 
-            ### What's new in v0.12.0
+            ### What's new in ${{ github.ref_name }}
 
-            **Firewall management**
-            LokiASAM can now detect your system firewall (UFW, firewalld, iptables on Linux; Windows Defender Firewall on Windows) and open the required ports for each server with a single elevation prompt. A dedicated Firewall step in the server creation wizard checks port status and offers to fix missing rules before you ever try to start. A non-blocking warning notification is shown at startup if a rule is missing. You can also check and repair rules for all servers at any time from Settings → Tools → Firewall Rules. When deleting a server, you're offered the option to clean up firewall rules for ports that no longer have any server behind them.
+            **Server Creation Wizard — major overhaul**
+            The Guided Custom section has been reworked from a single slider page into four dedicated steps: **Core Rates**, **Breeding**, **Combat**, and **Server QoL**. Each step covers the relevant settings with sliders, toggles, and contextual help. The Breeding page includes a live warning when food consumption is set higher than mature speed — a common misconfiguration that causes baby dinos to starve before they fully mature.
 
-            **Amazon Root CA certificate install**
-            Servers with mods can fail to start with a CurseForge API TLS error when the Amazon Root CA 1 certificate is missing from the Wine/Windows cert store. The setup wizard now includes a certificate install step that fixes this automatically. The same action is available under Settings → Tools → Amazon Root CA for reinstallation at any time.
+            **Preset config fixes**
+            The Official, Casual, and Boosted presets now correctly apply all `GameUserSettings.ini` and `Game.ini` values per game mode, matching the documented target settings for each style.
 
-            **CurseForge API auto-retry**
-            When a server exits immediately after logging the CurseForge "serverUnreachable" error, LokiASAM now automatically retries the launch up to three times before declaring start-failed. This handles the common case where the CurseForge API is briefly rate-limiting or slow at startup. If all three attempts fail, a detailed notification explains the cause and suggests next steps.
+            **Full Customize INI — tooltip descriptions**
+            Every field in the Full Customize INI section now has a `?` icon that shows a description tooltip on hover, making it easier to understand what each setting does without leaving the wizard.
 
-            **Expanded backup system**
-            Backups now support three types: full server backups, player save backups (per player EOS ID), and INI config backups. Player backups can be restored individually. The backup tab and scheduler have been updated to reflect the new options.
+            **INI field defaults**
+            Fields that are not explicitly set by the selected preset now show their documented game default value instead of `0`.
 
-            **Logs page**
-            A dedicated Logs page is now accessible from the sidebar. It provides four views: Live (tail of the current ShooterGame.log), Archive (past session logs), Crashes (crash dump files), and Chat (chat log history). Logs are automatically archived when a server stops or crashes so previous sessions are always accessible. Old logs are cleaned up automatically based on retention settings.
+            **Map list correction**
+            Genesis Part 1 has been removed from the available map list — it is not yet released for ARK: Survival Ascended.
 
-            **Auto-start on launch**
-            Each server now has an auto-start toggle. Servers marked for auto-start will be queued and started sequentially when the app launches, one at a time to avoid overloading the host.
+            **Slider improvements**
+            The default value marker on all sliders has been relabelled from `def` to `default` and its alignment has been corrected to match the actual thumb position at all values.
 
-            **Quick Start Guide**
-            A `?` button in the sidebar opens the Quick Start Guide from anywhere in the app. The guide now includes a slide covering port forwarding and VPN services for players connecting from outside your home network. Clicking "Quick Start Guide" on the setup wizard completion screen takes you directly to the dashboard with the guide already open.
+            **Password visibility toggles**
+            All password inputs now have an eye icon to reveal or hide the entered text — admin password, server password, their confirm fields, and the SMTP password in the setup wizard.
 
-            **Updated application icons**
-            New icon set with improved clarity at all sizes. Linux builds include adaptive launcher icons.
+            **Live chat log**
+            The chat panel now updates in real time via Tauri events. No manual refresh is needed.
 
-            ### Improvements
+            **Cleaner server restart**
+            Server restarts now use RCON `saveworld` followed by `doexit` for a clean, save-first shutdown instead of a raw process signal.
 
-            - **Setup wizard** — auto-update settings are now configured during first-time setup. The wizard completion screen includes a Quick Start Guide button that opens the tour on the dashboard.
-            - **Server creation wizard** — added a Firewall step and a port forwarding info card in the Network step.
-            - **Logs tab** — the per-server Logs tab now loads the last session's log on open, even when the server is stopped. Logs are archived automatically on server state changes.
-            - **Mods tab** — added a note reminding users that a server restart is required for mod changes to take effect.
-            - **Sidebar** — Logs and Backups are now top-level navigation items. Tooltip backgrounds and contrast improved across all nav items.
-            - **Theme** — updated built-in theme presets and accent colours for improved consistency.
-            - **Settings** — Tools section now includes rows for certificate install/reinstall and firewall rule check/repair.
+            **Notification system improvements**
+            Notification matrix state management has been reworked and event wiring fixed. Auto-update notification options have been reworked.
+
+            **Setup wizard additions**
+            Directory wipe functionality added. Build version is now tracked and displayed in the wizard footer.
+
+            **Backup & scheduling fixes**
+            Backup scheduling accuracy improved. Schedule filtering logic corrected.
 
             ### Installation
 
@@ -114,12 +116,9 @@ jobs:
             | `.deb` | Yes | Installs via `dpkg`, prompts for your password |
             | `.rpm` | Yes | Installs via `rpm`, prompts for your password |
 
-            ```bash
-            chmod +x LokiASAM_0.12.0_amd64.AppImage
-            ./LokiASAM_0.12.0_amd64.AppImage
-            ```
+            > **Arch / CachyOS / Manjaro:** AppImage does not work reliably on rolling-release distros. Build from source using `./install.sh` instead — see the [README](https://github.com/LokiRothbrook/LokiASAM#arch-linux--cachyos--manjaro) for instructions.
 
-            **Windows:** Download and run `LokiASAM_0.12.0_x64-setup.exe` from the assets below.
+            **Windows:** Download and run the `_x64-setup.exe` installer from the assets below.
 
             ### Notes
             - This is a public beta — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.

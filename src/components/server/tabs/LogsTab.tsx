@@ -10,8 +10,9 @@ import { Input } from "@/components/ui/input";
 import { tauriCmd } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 import type {
-  ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo,
+  ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo, RconLogLine,
 } from "@/lib/tauri-commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
   getKnownPlayers, getPlayerKnownIps, getPlayerConnectionHistory, getPossibleAlts,
   type PlayerConnectionRow,
@@ -506,7 +507,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-6">
         {loading ? (
           <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
         ) : totalFiles === 0 ? (
@@ -661,7 +662,7 @@ function CrashesPanel({ server }: { server: ServerRow }) {
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
         {loading ? (
           <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
         ) : crashes.length === 0 ? (
@@ -733,6 +734,19 @@ function ChatPanel({ server }: { server: ServerRow }) {
     if (chatLogs.length > 0 && !selected) openFile(chatLogs[0]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatLogs]);
+
+  // Live-append incoming chat lines so the panel updates without manual refresh.
+  const todayFilename = `chat_${new Date().toISOString().slice(0, 10)}.log`;
+  useTauriEvent<RconLogLine>(`rcon://log/${server.id}`, (line) => {
+    if (line.kind !== "chat") return;
+    if (selected?.filename === todayFilename) {
+      // Append to the currently-visible file content.
+      setLines((prev) => [...prev, line.text]);
+    } else if (!chatLogs.some((cl) => cl.filename === todayFilename)) {
+      // Today's file just appeared for the first time — refresh the list so it shows.
+      load();
+    }
+  });
 
   const visibleLines = search
     ? lines.filter((l) => l.toLowerCase().includes(search.toLowerCase()))

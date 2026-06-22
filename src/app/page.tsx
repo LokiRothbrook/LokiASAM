@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  Plus, Server, Activity, PowerOff, Power, RefreshCw, Upload,
+  Plus, Server, Activity, RefreshCw, Upload,
   ArrowUp, Loader2, CheckCircle2, AlertTriangle, LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
 import { getAppSetting, setAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
-import { runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
 import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -27,6 +27,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { toast } from "sonner";
+import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
+import { formatServerVersion } from "@/lib/db";
+import { getVersion } from "@tauri-apps/api/app";
 
 // ---------------------------------------------------------------------------
 // UpdateStatusChip — Check for Updates button + post-check dialogs
@@ -80,24 +83,12 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) {
+      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
+      const newBuild = await runAsaCacheUpdate();
+      if (!newBuild) {
         toast.error("Base directory or SteamCMD not configured.");
         return;
       }
-      const sep      = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
-      const newBuild = await tauriCmd.updateCache("check", cacheDir, steamcmdPath);
-      const now      = new Date().toISOString();
-      await Promise.all([
-        setAppSetting("asa_cached_build_id", newBuild),
-        setAppSetting("asa_latest_build_id", newBuild),
-        setAppSetting("asa_last_checked",    now),
-      ]);
       // Manual check: silent mode suppresses per-server toasts; we show dialog.
       const summary = await runPerServerUpdateCheck(true);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -185,6 +176,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const anyRunning = updates.some((s) => s.status === "running");
   const anyStarting = updates.some((s) => s.status === "starting");
+  const versionCache = useBuildVersionCache();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -210,8 +202,8 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
               <div>
                 <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
                 {s.installedBuild !== "unknown" && (
-                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
-                    {s.installedBuild} → {s.cachedBuild}
+                  <span className="text-xs ml-2 font-mono" style={{ color: "var(--text-muted)" }}>
+                    {formatServerVersion(s.installedBuild, versionCache)} → {formatServerVersion(s.cachedBuild, versionCache)}
                   </span>
                 )}
               </div>
@@ -302,6 +294,7 @@ interface UpdateAllDialogProps {
 function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }: UpdateAllDialogProps) {
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const anyRunning = updates.some((s) => s.status === "running");
+  const versionCache = useBuildVersionCache();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -326,8 +319,8 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
               <div>
                 <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
                 {s.installedBuild !== "unknown" && (
-                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
-                    {s.installedBuild} → {s.cachedBuild}
+                  <span className="text-xs ml-2 font-mono" style={{ color: "var(--text-muted)" }}>
+                    {formatServerVersion(s.installedBuild, versionCache)} → {formatServerVersion(s.cachedBuild, versionCache)}
                   </span>
                 )}
               </div>
@@ -409,15 +402,18 @@ export default function DashboardPage() {
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard, enqueueStartup } = useAppStore();
   const [showImport, setShowImport]               = useState(false);
+  const [appVersion, setAppVersion]               = useState("");
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
   const [showUpdateAllDialog, setShowUpdateAllDialog] = useState(false);
   const [showUpdatesFoundDialog, setShowUpdatesFoundDialog] = useState(false);
   const [pendingUpdates, setPendingUpdates]        = useState<ServerUpdateInfo[]>([]);
   const [updatingAll, setUpdatingAll]              = useState(false);
   const queryClient = useQueryClient();
 
-  const total   = servers.length;
-  const running = servers.filter((s) => s.status === "running").length;
-  const stopped = total - running;
+  const total = servers.length;
 
   // Build the ServerUpdateInfo list from the live servers data.
   const serversWithUpdates: ServerUpdateInfo[] = servers
@@ -496,9 +492,9 @@ export default function DashboardPage() {
   }, [servers, updatingAll, queryClient, enqueueStartup]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* ── Page header ── */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
+      <div className="flex items-start justify-between flex-wrap gap-3 shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <LayoutDashboard className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -514,14 +510,16 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <UpdateStatusChip
-            servers={servers}
-            onUpdateAllClick={() => setShowUpdateAllDialog(true)}
-            onUpdatesFound={(updates) => {
-              setPendingUpdates(updates);
-              setShowUpdatesFoundDialog(true);
-            }}
-          />
+          {servers.length > 0 && (
+            <UpdateStatusChip
+              servers={servers}
+              onUpdateAllClick={() => setShowUpdateAllDialog(true)}
+              onUpdatesFound={(updates) => {
+                setPendingUpdates(updates);
+                setShowUpdatesFoundDialog(true);
+              }}
+            />
+          )}
           <Button
             variant="outline"
             onClick={() => setShowImport(true)}
@@ -543,22 +541,16 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Global stats bar ── */}
-      {total > 0 && (
+      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
+      {/* ── Needs Attention warning — only shown when servers are in a bad state ── */}
+      {total > 0 && servers.some((s) => s.status === "crashed" || s.status === "error") && (
         <div className="flex flex-wrap gap-3">
-          <StatCard label="Total Servers" value={total} icon={Server}   color="var(--neon-purple)" />
-          <StatCard label="Running"       value={running} icon={Power}  color="var(--neon-green)"
-            sub={running === total ? "all online" : undefined} />
-          <StatCard label="Stopped"       value={stopped} icon={PowerOff}
-            color={stopped > 0 ? "var(--text-muted)" : "var(--neon-green)"} />
-          {servers.some((s) => s.status === "crashed" || s.status === "error") && (
-            <StatCard
-              label="Needs Attention"
-              value={servers.filter((s) => s.status === "crashed" || s.status === "error").length}
-              icon={Activity}
-              color="var(--neon-red)"
-            />
-          )}
+          <StatCard
+            label="Needs Attention"
+            value={servers.filter((s) => s.status === "crashed" || s.status === "error").length}
+            icon={Activity}
+            color="var(--neon-red)"
+          />
         </div>
       )}
 
@@ -642,6 +634,14 @@ export default function DashboardPage() {
         updates={pendingUpdates}
         onUpdateAll={runUpdateAll}
       />
+      </div>
+
+      {/* Branding footer */}
+      <div className="shrink-0 text-center pb-1">
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          LokiASAM{appVersion ? ` v${appVersion}` : ""} · lokisoft.xyz
+        </p>
+      </div>
     </div>
   );
 }

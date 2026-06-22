@@ -1,24 +1,14 @@
 use crate::state::{scheduler::SchedulerState, AppState};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{sleep, Duration};
-use uuid::Uuid;
 
 use super::server::{inner_start_server, inner_stop_server, StartServerParams};
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ScheduleConfig {
-    pub server_id: String,
-    pub schedule_type: String,
-    pub cron_expression: String,
-    pub config_json: String,
-}
 
 /// Emitted as the payload of `scheduler://fired` so the frontend can update
 /// SQLite (last_run / next_run) and requeue the entry via sync_schedules.
@@ -38,25 +28,6 @@ pub struct SchedulerFiredPayload {
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
-
-/// Generate and return a UUID for a new schedule.
-/// All schedule persistence is handled by the frontend via SQLite (db.ts).
-#[tauri::command]
-pub async fn create_schedule(_config: ScheduleConfig) -> Result<String, String> {
-    Ok(Uuid::new_v4().to_string())
-}
-
-/// No-op — the frontend removes the schedule record from SQLite, then calls sync_schedules.
-#[tauri::command]
-pub async fn delete_schedule(_schedule_id: String) -> Result<(), String> {
-    Ok(())
-}
-
-/// No-op — the frontend updates the enabled flag in SQLite, then calls sync_schedules.
-#[tauri::command]
-pub async fn toggle_schedule(_schedule_id: String, _enabled: bool) -> Result<(), String> {
-    Ok(())
-}
 
 /// Atomically replace all active schedule entries.
 ///
@@ -226,6 +197,11 @@ async fn fire_global_update_check(
     let new_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
         .unwrap_or_else(|| old_build.clone());
 
+    // Trigger internet version fetch for a newly-downloaded build
+    if new_build != "0" {
+        crate::commands::build_version::maybe_fetch_internet(app, &new_build);
+    }
+
     let _ = app.emit(
         crate::events::ASA_UPDATE_CHECK,
         serde_json::json!({
@@ -331,6 +307,13 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     .map_err(|e| format!("Sync task panicked: {e}"))?
     .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
+    // Record updated build ID and trigger internet version fetch
+    let acf = std::path::Path::new(&entry.install_path)
+        .join(crate::commands::steamcmd::ACF_REL_PATH);
+    if let Some(build_id) = crate::commands::steamcmd::read_acf_build_id(&acf) {
+        crate::commands::build_version::record_install(app, &entry.server_id, &build_id);
+    }
+
     let _ = app.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
         "updateApplied": true,
         "serverId": entry.server_id,
@@ -354,6 +337,7 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
         port: entry.port,
         query_port: entry.query_port,
         rcon_port: entry.rcon_port,
+        rcon_password: entry.rcon_password.clone(),
         extra_args: entry.extra_args.clone(),
         mod_ids: entry.mod_ids.clone(),
         proton_path: entry.proton_path.clone(),

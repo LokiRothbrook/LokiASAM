@@ -4,15 +4,29 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
   Settings2, X, AlertCircle, ToggleLeft, ToggleRight, Terminal,
+  HelpCircle, Upload, Search, FileText, Clipboard, Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
-import { INI_FIELD_GROUPS, LAUNCH_PARAMETERS, type IniFieldDef, type LaunchParameter } from "@/data/game-data";
+import {
+  INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
+  buildPresetConfig,
+  type IniFieldDef, type LaunchParameter,
+} from "@/data/game-data";
 import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
+import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 
 interface Props {
   server: ServerRow;
@@ -81,6 +95,25 @@ function rawTextToSections(text: string): Record<string, Record<string, string>>
 // Field row
 // ---------------------------------------------------------------------------
 
+function FieldLabel({ field }: { field: IniFieldDef }) {
+  return (
+    <span className="flex items-center gap-1 min-w-0">
+      <span className="text-sm" style={{ color: "var(--text-primary)" }}>{field.label}</span>
+      <span className="text-xs font-mono shrink-0" style={{ color: "var(--text-muted)" }}>{field.key}</span>
+      {field.description && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <HelpCircle className="w-3 h-3 shrink-0 cursor-help" style={{ color: "var(--text-subtle)" }} />
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs leading-snug">
+            {field.description}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
+
 function FieldRow({
   field,
   value,
@@ -93,16 +126,8 @@ function FieldRow({
   if (field.type === "boolean") {
     const checked = value === "True" || value === "true" || value === "1";
     return (
-      <div className="flex items-center justify-between py-2">
-        <div>
-          <Label className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }} title={`[${field.iniSection}] ${field.key}`}>
-            {field.label}
-            <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>{field.key}</span>
-          </Label>
-          {field.description && (
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
-          )}
-        </div>
+      <div className="flex items-center justify-between py-2 gap-2">
+        <FieldLabel field={field} />
         <button
           type="button"
           onClick={() => onChange(checked ? "False" : "True")}
@@ -121,15 +146,7 @@ function FieldRow({
     const numVal = parseFloat(value) || 0;
     return (
       <div className="py-2 space-y-1">
-        <div className="flex items-center justify-between gap-2">
-          <Label className="text-sm" style={{ color: "var(--text-primary)" }} title={`[${field.iniSection}] ${field.key}`}>
-            {field.label}
-            <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>{field.key}</span>
-          </Label>
-        </div>
-        {field.description && (
-          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
-        )}
+        <FieldLabel field={field} />
         <NumberField
           value={numVal}
           onChange={(v) => onChange(String(v))}
@@ -145,13 +162,7 @@ function FieldRow({
   return (
     <div className="flex items-center justify-between py-2 gap-4">
       <div className="shrink-0 w-52">
-        <Label className="text-sm" style={{ color: "var(--text-primary)" }} title={`[${field.iniSection}] ${field.key}`}>
-          {field.label}
-          <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>{field.key}</span>
-        </Label>
-        {field.description && (
-          <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>{field.description}</p>
-        )}
+        <FieldLabel field={field} />
       </div>
       <Input
         type="text"
@@ -322,7 +333,10 @@ function FullIniModal({
   onClose: () => void;
 }) {
   const [local, setLocal] = useState<ServerConfigJson>(config);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["rates", "breeding"]));
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+
+  const q = search.trim().toLowerCase();
 
   const toggleGroup = (id: string) =>
     setExpandedGroups((prev) => {
@@ -360,26 +374,43 @@ function FullIniModal({
           </Button>
         </div>
 
-        <div className="px-3 py-2 shrink-0" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+        <div className="px-3 py-2 shrink-0 space-y-2" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
           <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
             <AlertCircle className="w-3 h-3" style={{ color: "var(--neon-purple)" }} />
             Server name, passwords, and ports are managed on the overview page and are excluded here.
             Changes take effect on the next server restart.
           </p>
+          {/* Search */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-subtle)" }} />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search settings…"
+              className="h-8 pl-8 text-xs"
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
         </div>
 
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
           {INI_FIELD_GROUPS.map((group) => {
-            const visibleFields = group.fields.filter(
-              (f) => f.section === "gus" && !OVERVIEW_KEYS.has(f.key)
-            );
+            let visibleFields = group.fields.filter((f) => !OVERVIEW_KEYS.has(f.key));
+            if (q) {
+              visibleFields = visibleFields.filter(
+                (f) =>
+                  f.label.toLowerCase().includes(q) ||
+                  f.key.toLowerCase().includes(q) ||
+                  (f.description?.toLowerCase().includes(q) ?? false),
+              );
+            }
             if (visibleFields.length === 0) return null;
-            const open = expandedGroups.has(group.id);
+            const open = q ? true : expandedGroups.has(group.id);
             return (
               <div key={group.id} className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
                 <button
-                  onClick={() => toggleGroup(group.id)}
+                  onClick={() => { if (!q) toggleGroup(group.id); }}
                   className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
                   style={{ background: "rgba(10,10,30,0.7)" }}
                 >
@@ -414,6 +445,444 @@ function FullIniModal({
             style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             <Save className="w-3.5 h-3.5 mr-1.5" /> Apply Changes
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Paste INI Modal
+// ---------------------------------------------------------------------------
+
+function PasteIniModal({
+  onApply,
+  onClose,
+}: {
+  onApply: (gus: Record<string, Record<string, string>>, game: Record<string, Record<string, string>>) => void;
+  onClose: () => void;
+}) {
+  const [gusText, setGusText] = useState("");
+  const [gameText, setGameText] = useState("");
+
+  const handleApply = () => {
+    onApply(rawTextToSections(gusText), rawTextToSections(gameText));
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+    >
+      <div
+        className="w-full max-w-2xl mx-4 flex flex-col rounded-2xl overflow-hidden"
+        style={{
+          background: "rgba(8,8,25,0.98)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
+          boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
+          maxHeight: "90vh",
+        }}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+          <div className="flex items-center gap-2">
+            <Clipboard className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Paste INI Text</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0" style={{ color: "var(--text-muted)" }}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>GameUserSettings.ini</Label>
+            <textarea
+              className="w-full font-mono text-xs rounded-lg p-3 resize-y"
+              rows={10}
+              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
+              placeholder="Paste GameUserSettings.ini content here…"
+              value={gusText}
+              onChange={(e) => setGusText(e.target.value)}
+              spellCheck={false}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Game.ini</Label>
+            <textarea
+              className="w-full font-mono text-xs rounded-lg p-3 resize-y"
+              rows={6}
+              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
+              placeholder="Paste Game.ini content here… (optional)"
+              value={gameText}
+              onChange={(e) => setGameText(e.target.value)}
+              spellCheck={false}
+            />
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Parsed settings will be merged into the current config. Existing values not present in the pasted text will be kept.
+            Click <strong>Apply</strong> to preview changes, then save to write to disk.
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+          <Button variant="ghost" onClick={onClose} size="sm" style={{ color: "var(--text-muted)" }}>Cancel</Button>
+          <Button
+            onClick={handleApply}
+            size="sm"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+          >
+            Apply
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Custom mod sections editor
+// ---------------------------------------------------------------------------
+
+type CustomSection = {
+  sectionName: string;  // The [SectionName] key in Game.ini
+  rows: { key: string; value: string }[];
+};
+
+function CustomModSections({
+  gameIni,
+  onChange,
+}: {
+  gameIni: Record<string, Record<string, string>>;
+  onChange: (updated: Record<string, Record<string, string>>) => void;
+}) {
+  // Only show sections that are NOT standard ARK sections
+  const STANDARD_SECTIONS = new Set([
+    "/script/shootergame.shootergamemode",
+    "ServerSettings",
+    "SessionSettings",
+    "MessageOfTheDay",
+    "Ragnarok",
+  ]);
+
+  const customSections: CustomSection[] = Object.entries(gameIni)
+    .filter(([name]) => !STANDARD_SECTIONS.has(name.toLowerCase()) && !STANDARD_SECTIONS.has(name))
+    .map(([name, kvs]) => ({
+      sectionName: name,
+      rows: Object.entries(kvs).map(([key, value]) => ({ key, value })),
+    }));
+
+  const [newSectionName, setNewSectionName] = useState("");
+  const [deletingSection, setDeletingSection] = useState<string | null>(null);
+
+  const commit = (sections: CustomSection[]) => {
+    const updated = { ...gameIni };
+    // Remove all existing custom sections
+    for (const key of Object.keys(updated)) {
+      if (!STANDARD_SECTIONS.has(key.toLowerCase()) && !STANDARD_SECTIONS.has(key)) {
+        delete updated[key];
+      }
+    }
+    // Re-add from editor state
+    for (const sec of sections) {
+      if (!sec.sectionName.trim()) continue;
+      updated[sec.sectionName] = Object.fromEntries(
+        sec.rows.filter((r) => r.key.trim()).map((r) => [r.key, r.value]),
+      );
+    }
+    onChange(updated);
+  };
+
+  const addSection = () => {
+    const name = newSectionName.trim();
+    if (!name) return;
+    const updated = [...customSections, { sectionName: name, rows: [{ key: "", value: "" }] }];
+    setNewSectionName("");
+    commit(updated);
+  };
+
+  const deleteSection = (idx: number) => {
+    commit(customSections.filter((_, i) => i !== idx));
+    setDeletingSection(null);
+  };
+
+  const updateRow = (secIdx: number, rowIdx: number, field: "key" | "value", val: string) => {
+    const updated = customSections.map((sec, si) =>
+      si !== secIdx ? sec : {
+        ...sec,
+        rows: sec.rows.map((row, ri) => ri !== rowIdx ? row : { ...row, [field]: val }),
+      },
+    );
+    commit(updated);
+  };
+
+  const addRow = (secIdx: number) => {
+    const updated = customSections.map((sec, si) =>
+      si !== secIdx ? sec : { ...sec, rows: [...sec.rows, { key: "", value: "" }] },
+    );
+    commit(updated);
+  };
+
+  const removeRow = (secIdx: number, rowIdx: number) => {
+    const updated = customSections.map((sec, si) =>
+      si !== secIdx ? sec : { ...sec, rows: sec.rows.filter((_, ri) => ri !== rowIdx) },
+    );
+    commit(updated);
+  };
+
+  return (
+    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+      <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,10,30,0.7)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Custom / Mod Settings (Game.ini)</span>
+        <span className="text-xs" style={{ color: "var(--text-subtle)" }}>New [SectionName] blocks for mods</span>
+      </div>
+
+      <div className="p-4 space-y-4">
+        {customSections.length === 0 && (
+          <p className="text-xs text-center py-2" style={{ color: "var(--text-subtle)" }}>
+            No custom sections yet. Add one below to configure mod-specific INI settings.
+          </p>
+        )}
+
+        {customSections.map((sec, si) => (
+          <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+            <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.06)" }}>
+              <span className="text-xs font-mono font-semibold" style={{ color: "var(--neon-purple)" }}>[{sec.sectionName}]</span>
+              {deletingSection === sec.sectionName ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs" style={{ color: "rgba(255,0,85,0.9)" }}>Delete this section?</span>
+                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(255,0,85,0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
+                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "var(--text-muted)" }} onClick={() => setDeletingSection(null)}>No</Button>
+                </div>
+              ) : (
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" style={{ color: "var(--text-subtle)" }} onClick={() => setDeletingSection(sec.sectionName)}>
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </div>
+            <div className="p-3 space-y-1.5">
+              {sec.rows.map((row, ri) => (
+                <div key={ri} className="flex items-center gap-2">
+                  <Input
+                    value={row.key}
+                    onChange={(e) => updateRow(si, ri, "key", e.target.value)}
+                    placeholder="Key"
+                    className="h-7 text-xs font-mono flex-1"
+                    style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
+                  />
+                  <span className="text-xs" style={{ color: "var(--text-subtle)" }}>=</span>
+                  <Input
+                    value={row.value}
+                    onChange={(e) => updateRow(si, ri, "value", e.target.value)}
+                    placeholder="Value"
+                    className="h-7 text-xs font-mono flex-1"
+                    style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
+                  />
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" style={{ color: "var(--text-subtle)" }} onClick={() => removeRow(si, ri)}>
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 text-xs mt-1"
+                style={{ color: "var(--text-subtle)" }}
+                onClick={() => addRow(si)}
+              >
+                + Add row
+              </Button>
+            </div>
+          </div>
+        ))}
+
+        {/* Add new section */}
+        <div className="flex items-center gap-2 pt-1">
+          <Input
+            value={newSectionName}
+            onChange={(e) => setNewSectionName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addSection(); }}
+            placeholder="New section name (e.g. MyMod)"
+            className="h-7 text-xs font-mono flex-1"
+            style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={addSection}
+            disabled={!newSectionName.trim()}
+            style={{ color: "var(--neon-purple)" }}
+          >
+            Add Section
+          </Button>
+        </div>
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          Custom sections are written directly to <code>Game.ini</code> alongside standard settings.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Quick Setup modal — re-apply a preset to current config
+// ---------------------------------------------------------------------------
+
+type ApplyMode = "overlay" | "replace";
+
+function QuickSetupModal({
+  onApply,
+  onClose,
+}: {
+  onApply: (gus: Record<string, Record<string, string>>, game: Record<string, Record<string, string>>, mode: ApplyMode) => void;
+  onClose: () => void;
+}) {
+  const [selectedMode, setSelectedMode] = useState<"pvp" | "pve">("pve");
+  const [selectedStyle, setSelectedStyle] = useState<string>("casual");
+  const [applyMode, setApplyMode] = useState<ApplyMode>("overlay");
+
+  const filteredStyles = PRESET_STYLES.filter((s) => !["guided_custom", "full_custom"].includes(s.id));
+
+  const handleApply = () => {
+    const presetGus = buildPresetConfig(selectedMode, selectedStyle);
+    // Keys that belong to a separate section or are managed elsewhere — never overwrite from a preset
+    const skipKeys = new Set([
+      "MaxPlayers", "SessionName", "ServerPassword", "ServerAdminPassword",
+      "Port", "QueryPort", "RCONPort", "RCONEnabled",
+    ]);
+    const gusSection: Record<string, string> = {};
+    for (const [k, v] of Object.entries(presetGus)) {
+      if (skipKeys.has(k) || v === undefined || v === null) continue;
+      gusSection[k] = String(v);
+    }
+    const gameSection: Record<string, string> = {};
+    const style = PRESET_STYLES.find((s) => s.id === selectedStyle);
+    if (style?.gameIni) {
+      for (const [k, v] of Object.entries(style.gameIni)) {
+        if (v !== undefined && v !== null) gameSection[k] = String(v);
+      }
+    }
+    // Apply GameMode Game.ini overrides too
+    const mode = GAME_MODES.find((m) => m.id === selectedMode);
+    if ((mode as unknown as { gameIni?: Record<string, unknown> })?.gameIni) {
+      const mi = (mode as unknown as { gameIni: Record<string, unknown> }).gameIni;
+      for (const [k, v] of Object.entries(mi)) {
+        if (v !== undefined && v !== null) gameSection[k] = String(v);
+      }
+    }
+    onApply(
+      { ServerSettings: gusSection },
+      { "/script/shootergame.shootergamemode": gameSection },
+      applyMode,
+    );
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+    >
+      <div
+        className="w-full max-w-xl mx-4 flex flex-col rounded-2xl overflow-hidden"
+        style={{
+          background: "rgba(8,8,25,0.98)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
+          boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
+        }}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+          <div className="flex items-center gap-2">
+            <Wand2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Quick Setup</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0" style={{ color: "var(--text-muted)" }}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Game mode */}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>Game Mode</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {GAME_MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setSelectedMode(m.id)}
+                  className="rounded-lg px-4 py-3 text-left transition-all"
+                  style={{
+                    background: selectedMode === m.id ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${selectedMode === m.id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(255,255,255,0.08)"}`,
+                    color: selectedMode === m.id ? "var(--neon-purple)" : "var(--text-primary)",
+                  }}
+                >
+                  <div className="text-sm font-semibold">{m.displayName}</div>
+                  <div className="text-xs mt-0.5 opacity-70">{m.description.split(".")[0]}.</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Style */}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>Style</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {filteredStyles.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setSelectedStyle(s.id)}
+                  className="rounded-lg px-3 py-2.5 text-left transition-all"
+                  style={{
+                    background: selectedStyle === s.id ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${selectedStyle === s.id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(255,255,255,0.08)"}`,
+                    color: selectedStyle === s.id ? "var(--neon-purple)" : "var(--text-primary)",
+                  }}
+                >
+                  <div className="text-sm font-semibold">{s.displayName}</div>
+                  <div className="text-xs mt-0.5 opacity-60 line-clamp-2">{s.description.split(".")[0]}.</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Apply mode */}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>How to Apply</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { id: "overlay" as ApplyMode, label: "Overlay", desc: "Write preset values on top of current settings. Other settings are kept." },
+                { id: "replace" as ApplyMode, label: "Replace", desc: "Clear current settings first, then apply the full preset from scratch." },
+              ] as const).map(({ id, label, desc }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setApplyMode(id)}
+                  className="rounded-lg px-3 py-2.5 text-left transition-all"
+                  style={{
+                    background: applyMode === id ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${applyMode === id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(255,255,255,0.08)"}`,
+                    color: applyMode === id ? "var(--neon-purple)" : "var(--text-primary)",
+                  }}
+                >
+                  <div className="text-sm font-semibold">{label}</div>
+                  <div className="text-xs mt-0.5 opacity-60">{desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+          <Button variant="ghost" onClick={onClose} size="sm" style={{ color: "var(--text-muted)" }}>Cancel</Button>
+          <Button
+            onClick={handleApply}
+            size="sm"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+          >
+            <Wand2 className="w-3.5 h-3.5 mr-1.5" /> Apply Preset
           </Button>
         </div>
       </div>
@@ -728,8 +1197,11 @@ export function ConfigTab({ server }: Props) {
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showFullModal, setShowFullModal] = useState(false);
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const [showQuickSetup, setShowQuickSetup] = useState(false);
 
   // Load from DB on mount — reflects what we last saved, not what the server may have overwritten
   const loadFromDb = useCallback(async () => {
@@ -752,6 +1224,7 @@ export function ConfigTab({ server }: Props) {
         setRawGus("");
         setRawGame("");
       }
+      setIsDirty(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -770,6 +1243,7 @@ export function ConfigTab({ server }: Props) {
       setConfig(cfg);
       setRawGus(configToRawText(cfg.gameUserSettings as Record<string, Record<string, string>>));
       setRawGame(configToRawText(cfg.gameIni as Record<string, Record<string, string>>));
+      setIsDirty(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -780,11 +1254,77 @@ export function ConfigTab({ server }: Props) {
   const handleFieldChange = (field: IniFieldDef, value: string) => {
     if (!config) return;
     setConfig(setIniValue(config, field.section, field.iniSection, field.key, value));
+    setIsDirty(true);
   };
 
   const handleLaunchArgChange = (key: string, val: string) => {
     if (!config) return;
     setConfig({ ...config, launchArgs: { ...(config.launchArgs as Record<string, string> ?? {}), [key]: val } });
+    setIsDirty(true);
+  };
+
+  const handleImportFile = async () => {
+    try {
+      const selected = await openFilePicker({
+        title: "Select INI File",
+        filters: [{ name: "INI Files", extensions: ["ini"] }],
+        multiple: false,
+      });
+      if (!selected || typeof selected !== "string") return;
+      const text = await readTextFile(selected);
+      const sections = rawTextToSections(text);
+      if (!config) return;
+      // Determine which file was picked by looking at key section names
+      const isGus = Object.keys(sections).some((s) =>
+        ["ServerSettings", "SessionSettings", "MessageOfTheDay", "Ragnarok"].includes(s),
+      );
+      const isGame = Object.keys(sections).some((s) =>
+        s.toLowerCase().includes("shootergame"),
+      );
+      setConfig((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          ...(isGus ? { gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...sections } } : {}),
+          ...(isGame ? { gameIni: { ...(prev.gameIni as Record<string, Record<string, string>>), ...sections } } : {}),
+          ...(!isGus && !isGame ? { gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...sections } } : {}),
+        };
+      });
+      setIsDirty(true);
+      toast.success("INI file imported — review changes and save to apply.");
+    } catch (e) {
+      toast.error(`Failed to import file: ${e}`);
+    }
+  };
+
+  const handlePasteApply = (
+    gus: Record<string, Record<string, string>>,
+    game: Record<string, Record<string, string>>,
+  ) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      gameUserSettings: { ...(config.gameUserSettings as Record<string, Record<string, string>>), ...gus },
+      gameIni: { ...(config.gameIni as Record<string, Record<string, string>>), ...game },
+    });
+    setIsDirty(true);
+    toast.success("INI text applied — review changes and save to apply.");
+  };
+
+  const handleQuickSetupApply = (
+    gus: Record<string, Record<string, string>>,
+    game: Record<string, Record<string, string>>,
+    mode: "overlay" | "replace",
+  ) => {
+    if (!config) return;
+    const base = mode === "replace" ? { gameUserSettings: {}, gameIni: config.gameIni, launchArgs: config.launchArgs } : config;
+    setConfig({
+      ...base,
+      gameUserSettings: { ...(base.gameUserSettings as Record<string, Record<string, string>>), ...gus },
+      gameIni: { ...(base.gameIni as Record<string, Record<string, string>>), ...game },
+    });
+    setIsDirty(true);
+    toast.success(`Preset applied (${mode}). Review changes and save.`);
   };
 
   // Save to disk AND update DB so our settings survive server restarts
@@ -814,6 +1354,7 @@ export function ConfigTab({ server }: Props) {
         JSON.stringify(toSave.gameIni),
         JSON.stringify(toSave.launchArgs ?? {}),
       );
+      setIsDirty(false);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
 
@@ -859,7 +1400,8 @@ export function ConfigTab({ server }: Props) {
   const quickGroups = INI_FIELD_GROUPS.filter((g) => QUICK_EDIT_GROUP_IDS.includes(g.id));
 
   return (
-    <div className="flex flex-col gap-4">
+    <TooltipProvider delayDuration={300}>
+    <div className="flex flex-col gap-4 pr-6">
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
@@ -870,40 +1412,79 @@ export function ConfigTab({ server }: Props) {
             <Code className="w-3.5 h-3.5 mr-1.5" /> Raw INI
           </Button>
           {!rawMode && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowFullModal(true)}
-              disabled={!config}
-              style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
-            >
-              <Settings2 className="w-3.5 h-3.5 mr-1.5" /> Full INI Editor
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowFullModal(true)}
+                disabled={!config}
+                style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
+              >
+                <Settings2 className="w-3.5 h-3.5 mr-1.5" /> Full INI Editor
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowQuickSetup(true)}
+                disabled={!config}
+                style={{ color: "var(--text-muted)" }}
+              >
+                <Wand2 className="w-3.5 h-3.5 mr-1.5" /> Quick Setup
+              </Button>
+            </>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={readFromIni}
-            disabled={readingIni}
-            title="Overwrite UI with the current GameUserSettings.ini on disk"
-            style={{ color: "var(--text-muted)" }}
-          >
-            {readingIni
-              ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-              : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
-            Read from INI
-          </Button>
-          <Button
-            size="sm"
-            className={savedFlash ? "btn-neon-green" : "btn-neon-purple"}
-            onClick={() => handleSave()}
-            disabled={saving || !config}
-          >
-            <Save className="w-3.5 h-3.5 mr-1.5" />
-            {saving ? "Saving…" : savedFlash ? "Saved!" : "Save"}
-          </Button>
+          {isDirty && (
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(255,140,0,0.12)", color: "rgba(255,140,0,0.9)", border: "1px solid rgba(255,140,0,0.3)" }}>
+              Unsaved changes
+            </span>
+          )}
+          {/* Import dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!config}
+                style={{ color: "var(--text-muted)" }}
+              >
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+                Import
+                <ChevronDown className="w-3 h-3 ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="text-xs">
+              <DropdownMenuItem onClick={readFromIni} disabled={readingIni}>
+                <RefreshCw className={`w-3.5 h-3.5 mr-2 ${readingIni ? "animate-spin" : ""}`} />
+                Reload from disk
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleImportFile}>
+                <FileText className="w-3.5 h-3.5 mr-2" />
+                Pick INI file…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowPasteModal(true)}>
+                <Clipboard className="w-3.5 h-3.5 mr-2" />
+                Paste INI text…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="sm"
+                className={savedFlash ? "btn-neon-green" : "btn-neon-purple"}
+                onClick={() => handleSave()}
+                disabled={saving || !config || !isDirty}
+              >
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {saving ? "Saving…" : savedFlash ? "Saved!" : "Save"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {isDirty ? "Save and create a config backup" : "No changes to save"}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -927,6 +1508,13 @@ export function ConfigTab({ server }: Props) {
             />
           ))}
           <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />
+          <CustomModSections
+            gameIni={config.gameIni as Record<string, Record<string, string>>}
+            onChange={(updated) => {
+              setConfig({ ...config, gameIni: updated });
+              setIsDirty(true);
+            }}
+          />
           <p className="text-xs text-center" style={{ color: "var(--text-subtle)" }}>
             Click <strong style={{ color: "var(--neon-purple)" }}>Full INI Editor</strong> in the toolbar to access all server settings.
           </p>
@@ -943,7 +1531,7 @@ export function ConfigTab({ server }: Props) {
               rows={20}
               style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGus}
-              onChange={(e) => setRawGus(e.target.value)}
+              onChange={(e) => { setRawGus(e.target.value); setIsDirty(true); }}
               spellCheck={false}
             />
           </div>
@@ -954,7 +1542,7 @@ export function ConfigTab({ server }: Props) {
               rows={10}
               style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
               value={rawGame}
-              onChange={(e) => setRawGame(e.target.value)}
+              onChange={(e) => { setRawGame(e.target.value); setIsDirty(true); }}
               spellCheck={false}
             />
           </div>
@@ -974,6 +1562,23 @@ export function ConfigTab({ server }: Props) {
           onClose={() => setShowFullModal(false)}
         />
       )}
+
+      {/* Paste INI modal */}
+      {showPasteModal && (
+        <PasteIniModal
+          onApply={handlePasteApply}
+          onClose={() => setShowPasteModal(false)}
+        />
+      )}
+
+      {/* Quick Setup modal */}
+      {showQuickSetup && (
+        <QuickSetupModal
+          onApply={handleQuickSetupApply}
+          onClose={() => setShowQuickSetup(false)}
+        />
+      )}
     </div>
+    </TooltipProvider>
   );
 }
