@@ -518,8 +518,8 @@ export const tauriCmd = {
   /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
   createServerBackup: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string, tier = "",
-  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier }),
+    mapId: string, backupDir: string, triggeredBy: string, tier = "", saveFolderName?: string,
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier, saveFolderName: saveFolderName ?? null }),
 
   /** Player backup: 7z a single .arkprofile file. */
   createPlayerBackup: (
@@ -530,8 +530,8 @@ export const tauriCmd = {
   /** Back up every .arkprofile in SavedArks/{mapPath}/ in one call. */
   backupAllPlayers: (
     serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+    mapId: string, backupDir: string, triggeredBy: string, saveFolderName?: string,
+  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, saveFolderName: saveFolderName ?? null }),
 
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
   createIniBackup: (serverId: string, installPath: string, backupDir: string) =>

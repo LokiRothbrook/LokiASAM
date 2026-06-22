@@ -22,7 +22,7 @@ import {
   buildPresetConfig, ARK_EVENTS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -1268,11 +1268,165 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// AdvancedConfigTab
+// ---------------------------------------------------------------------------
+
+const THREAD_OPTIONS = [
+  { value: "", label: "Default (let ARK decide)" },
+  { value: "OneThread", label: "OneThread — single CPU thread" },
+  { value: "ForceUsePerfThreads", label: "ForceUsePerfThreads — maximize perf threads" },
+  { value: "NoPerfThreads", label: "NoPerfThreads — disable perf threads" },
+];
+
+function AdvancedConfigTab({
+  server,
+  config,
+  onChange,
+}: {
+  server: ServerRow;
+  config: ServerConfigJson;
+  onChange: (patch: Partial<ServerConfigJson>) => void;
+}) {
+  const [memLimit, setMemLimit] = useState(server.memory_limit_gb != null ? String(server.memory_limit_gb) : "");
+  const [savingMem, setSavingMem] = useState(false);
+
+  const launchArgs = config.launchArgs as Record<string, string>;
+
+  const setArg = (key: string, value: string) => {
+    onChange({ launchArgs: { ...launchArgs, [key]: value } });
+  };
+
+  const currentThread = THREAD_OPTIONS.find((o) => o.value && launchArgs[o.value] === "true")?.value ?? "";
+
+  const handleThreadChange = (val: string) => {
+    const next = { ...launchArgs };
+    for (const o of THREAD_OPTIONS) { if (o.value) delete next[o.value]; }
+    if (val) next[val] = "true";
+    onChange({ launchArgs: next });
+  };
+
+  const handleSaveMemLimit = async () => {
+    setSavingMem(true);
+    try {
+      const n = parseFloat(memLimit);
+      await updateServerMemoryLimit(server.id, isNaN(n) || n <= 0 ? null : n);
+      toast.success("Memory limit saved");
+    } catch (e) { toast.error(`Failed: ${e}`); }
+    finally { setSavingMem(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Thread options */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Thread Options</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Undocumented by Wildcard. Leave at Default unless you have a specific reason to change.
+        </p>
+        <select
+          value={currentThread}
+          onChange={(e) => handleThreadChange(e.target.value)}
+          className="w-full text-xs rounded-lg px-2 py-1.5"
+          style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+        >
+          {THREAD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+
+      {/* Platform */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Platform</h3>
+        <div className="flex items-center justify-between px-1 py-2 rounded-lg" style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.15)" }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>All Platforms (Crossplay)</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Pass <code>-AllPlatforms</code> — allow PC, Xbox, PlayStation, and other platforms to join.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setArg("AllPlatforms", launchArgs["AllPlatforms"] === "true" ? "false" : "true")}
+            className="shrink-0 flex items-center"
+          >
+            {launchArgs["AllPlatforms"] === "true"
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+          </button>
+        </div>
+      </div>
+
+      {/* Custom CLI */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Custom Launch Arguments</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Appended verbatim to the launch command. Useful for undocumented or mod-specific flags.
+        </p>
+        <Input
+          value={launchArgs["_customCli"] ?? ""}
+          onChange={(e) => setArg("_customCli", e.target.value)}
+          placeholder="-SomeFlag -AnotherFlag=value"
+          className="font-mono text-xs"
+          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+        />
+      </div>
+
+      {/* Memory limit */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Memory Limit Restart</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Automatically restart the server if RAM usage exceeds this threshold. Leave blank to disable.
+        </p>
+        <div className="flex gap-2 items-center">
+          <Input
+            value={memLimit}
+            onChange={(e) => setMemLimit(e.target.value)}
+            placeholder="e.g. 12"
+            type="number"
+            min={1}
+            step={0.5}
+            className="w-32 text-xs"
+            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          />
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>GB</span>
+          <Button size="sm" variant="outline" onClick={handleSaveMemLimit} disabled={savingMem}
+            style={{ borderColor: "rgba(255,165,0,0.4)", color: "rgba(255,165,0,0.9)", background: "rgba(255,165,0,0.06)" }}>
+            {savingMem ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Network settings */}
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Advanced Network</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          For multi-NIC setups, VPN-based DDoS protection, or port forwarding edge cases. Leave blank if not needed.
+        </p>
+        {[
+          { key: "ServerIP", label: "Server IP (-ServerIP=)", placeholder: "e.g. 1.2.3.4 — public IP for DDoS protection VPN" },
+          { key: "MultiHome", label: "MultiHome IP (-MULTIHOME=)", placeholder: "e.g. 192.168.1.100 — internal NIC IP" },
+          { key: "UDPSocketPort", label: "UDP Socket Port (-UDPSocketPort=)", placeholder: "Experimental — leave blank (undocumented)" },
+        ].map(({ key, label, placeholder }) => (
+          <div key={key}>
+            <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>{label}</label>
+            <Input
+              value={launchArgs[key] ?? ""}
+              onChange={(e) => setArg(key, e.target.value)}
+              placeholder={placeholder}
+              className="text-xs font-mono"
+              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ConfigTab({ server }: Props) {
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
   const [rawMode, setRawMode] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
@@ -1482,6 +1636,7 @@ export function ConfigTab({ server }: Props) {
     const game = rawTextToSections(rawGame);
     if (config) setConfig({ ...config, gameUserSettings: gus, gameIni: game });
     setRawMode(false);
+    setAdvancedMode(false);
   };
 
   if (loading) {
@@ -1507,11 +1662,20 @@ export function ConfigTab({ server }: Props) {
           <button
             onClick={switchToStructured}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={!rawMode
+            style={!rawMode && !advancedMode
               ? { background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
             <LayoutList className="w-3.5 h-3.5" /> Structured
+          </button>
+          <button
+            onClick={() => { setAdvancedMode(true); setRawMode(false); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={advancedMode
+              ? { background: "rgba(255,165,0,0.1)", color: "rgba(255,165,0,0.9)", border: "1px solid rgba(255,165,0,0.35)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <Settings2 className="w-3.5 h-3.5" /> Advanced
           </button>
           <button
             onClick={switchToRaw}
@@ -1522,16 +1686,14 @@ export function ConfigTab({ server }: Props) {
           >
             <Code className="w-3.5 h-3.5" /> Raw INI
           </button>
-          {!rawMode && (
-            <button
-              onClick={() => setShowQuickSetup(true)}
-              disabled={!config}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-              style={{ color: "var(--text-subtle)", border: "1px solid transparent" }}
-            >
-              <Wand2 className="w-3.5 h-3.5" /> Quick Setup
-            </button>
-          )}
+          <button
+            onClick={() => setShowQuickSetup(true)}
+            disabled={!config}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={{ color: "var(--text-subtle)", border: "1px solid transparent" }}
+          >
+            <Wand2 className="w-3.5 h-3.5" /> Quick Setup
+          </button>
         </div>
 
         {/* Right: dirty badge + import + save */}
@@ -1645,6 +1807,11 @@ export function ConfigTab({ server }: Props) {
             />
           </div>
         </div>
+      )}
+
+      {/* ── Advanced tab ──────────────────────────────────────────────────── */}
+      {advancedMode && config && (
+        <AdvancedConfigTab server={server} config={config} onChange={(patch) => { setConfig({ ...config, ...patch }); setIsDirty(true); }} />
       )}
 
       {/* ── Server behaviour cards (always visible) ───────────────────────── */}

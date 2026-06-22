@@ -5,7 +5,7 @@ import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
   AlertTriangle, ChevronDown, ChevronUp,
-  ArrowUp, Clock, Zap,
+  ArrowUp, Clock, Zap, Skull, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { getNextCronDate } from "@/components/shared/CronBuilder";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
-  setServerUpdateAutomation,
+  setServerUpdateAutomation, updateBackupBroadcastMessage,
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
@@ -27,7 +27,7 @@ import type { ServerRow } from "@/lib/db";
 // Types
 // ---------------------------------------------------------------------------
 
-type ScheduleType = "restart" | "broadcast";
+type ScheduleType = "restart" | "broadcast" | "wipe_dinos";
 type AddMode = "minutes" | "hours" | "daily";
 
 interface RestartConfig {
@@ -1118,12 +1118,60 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
 }
 
 // ---------------------------------------------------------------------------
+// BackupBroadcastCard
+// ---------------------------------------------------------------------------
+
+function BackupBroadcastCard({ server }: { server: ServerRow }) {
+  const [message, setMessage] = useState(server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
+  const [saving, setSaving] = useState(false);
+  const dirty = message !== (server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateBackupBroadcastMessage(server.id, message);
+      toast.success("Backup message saved");
+    } catch (e) {
+      toast.error(`Failed to save: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+      <div className="flex items-center gap-2">
+        <MessageSquare className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Pre-Backup In-Game Message</h3>
+      </div>
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Broadcast this message via RCON before each scheduled backup or world save begins.
+      </p>
+      <div className="flex gap-2">
+        <Input
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Backup message…"
+          className="flex-1 text-xs"
+          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+        />
+        <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={handleSave}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}>
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CARD_DEFS
 // ---------------------------------------------------------------------------
 
 const CARD_DEFS: { type: ScheduleType; icon: React.ElementType; title: string; description: string }[] = [
-  { type: "restart",   icon: RotateCcw, title: "Auto-Restart",           description: "Gracefully restart the server on a schedule with optional in-game warnings." },
-  { type: "broadcast", icon: Megaphone, title: "Scheduled Chat Message", description: "Send a recurring global chat message to all online players via RCON." },
+  { type: "restart",    icon: RotateCcw, title: "Auto-Restart",           description: "Gracefully restart the server on a schedule with optional in-game warnings." },
+  { type: "wipe_dinos", icon: Skull,     title: "Wild Dino Wipe",         description: "Send a chat warning then destroy all wild dinos via RCON on a schedule." },
+  { type: "broadcast",  icon: Megaphone, title: "Scheduled Chat Message", description: "Send a recurring global chat message to all online players via RCON." },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1183,6 +1231,7 @@ export function AutomationTab({ server }: Props) {
         <div className="space-y-3">
           <UpdateAutomationCard server={server} />
           <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
+          <BackupBroadcastCard server={server} />
           {CARD_DEFS.map((def) => (
             <ScheduleCard
               key={def.type}

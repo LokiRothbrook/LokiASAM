@@ -1360,6 +1360,22 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           <Loader2 className="w-3 h-3 animate-spin" /> Checking port availability…
         </p>
       )}
+      {/* All Platforms toggle */}
+      <div className="flex items-center justify-between px-1 py-2 rounded-lg"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        <div>
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>All Platforms (Crossplay)</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow PC, Xbox, PlayStation, and other platforms to join via <code>-AllPlatforms</code>.</p>
+        </div>
+        <button type="button"
+          onClick={() => onChange({ launchArgs: { ...data.launchArgs, AllPlatforms: data.launchArgs?.AllPlatforms === "true" ? "false" : "true" } })}
+          className="shrink-0 flex items-center">
+          {data.launchArgs?.AllPlatforms === "true"
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
+      </div>
+
       <div
         className="flex gap-2.5 rounded-lg px-3 py-2.5"
         style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}

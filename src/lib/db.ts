@@ -489,6 +489,10 @@ async function runMigrations(db: Database): Promise<void> {
   try {
     await db.execute("ALTER TABLE servers ADD COLUMN active_event TEXT");
   } catch { /* already exists */ }
+
+  // ── Migration 018: memory limit restart + backup broadcast message ─────────
+  try { await db.execute("ALTER TABLE servers ADD COLUMN memory_limit_gb REAL"); } catch { /* exists */ }
+  try { await db.execute("ALTER TABLE servers ADD COLUMN backup_broadcast_message TEXT NOT NULL DEFAULT 'Server backup in progress — lag may occur.'"); } catch { /* exists */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +532,8 @@ export interface ServerRow {
   installed_build_id: string | null; // populated by Rust on install/update
   save_folder_name: string;          // subfolder name for -SaveDirectoryOverride; empty = no override
   active_event: string | null;       // ARK event id (e.g. "FearEvolved"); null = no active event
+  memory_limit_gb: number | null;    // restart server if RAM exceeds this; null = disabled
+  backup_broadcast_message: string;  // RCON broadcast sent before each scheduled backup
   created_at: string;
   updated_at: string;
 }
@@ -859,6 +865,22 @@ export async function setServerActiveEvent(id: string, eventId: string | null): 
   await db.execute(
     "UPDATE servers SET active_event = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [eventId ?? null, id]
+  );
+}
+
+export async function updateServerMemoryLimit(id: string, limitGb: number | null): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET memory_limit_gb = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [limitGb ?? null, id]
+  );
+}
+
+export async function updateBackupBroadcastMessage(id: string, message: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET backup_broadcast_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [message, id]
   );
 }
 

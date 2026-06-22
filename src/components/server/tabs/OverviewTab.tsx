@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Zap, Settings2, ChevronDown, ChevronRight,
+  Zap, Settings2, Terminal, Skull, CheckCircle2, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,7 @@ import {
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
   pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
+import { buildLaunchCommandPreview } from "@/lib/server-utils";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
@@ -41,6 +42,7 @@ import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-da
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { isLinux } from "@/lib/server-utils";
 
 interface Props {
   server: ServerRow;
@@ -485,14 +487,14 @@ function fmtMult(raw: string, def = "1.0"): string {
 function ActiveConfigPanel({
   config,
   modCount,
+  launchCommand,
   onNavigateToConfig,
 }: {
   config: ActiveConfig | null;
   modCount: number | null;
+  launchCommand: string;
   onNavigateToConfig: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-
   if (!config) return null;
 
   const pvp = gusVal(config, "ServerPVE") !== "True";
@@ -504,8 +506,6 @@ function ActiveConfigPanel({
   const taming    = fmtMult(gusVal(config, "TamingSpeedMultiplier"));
   const matureFull = gameVal(config, "BabyMatureSpeedMultiplier");
   const mature    = fmtMult(matureFull);
-
-  const activeLaunchArgs = Object.entries(config.launchArgs ?? {}).filter(([, v]) => v && v !== "false" && v !== "0");
 
   const statItems = [
     { label: "Mode",      value: pvp ? "PvP" : "PvE",      accent: pvp ? "var(--neon-purple)" : "var(--neon-green)" },
@@ -519,63 +519,38 @@ function ActiveConfigPanel({
   ];
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-      <button
-        type="button"
-        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
-        onClick={() => setOpen((v) => !v)}
-      >
+    <div className="glass-card rounded-xl p-4 space-y-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+      <div className="flex items-center justify-between">
         <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
           <Settings2 className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />
           Active Configuration
         </span>
-        {open
-          ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-          : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
-      </button>
+        <button onClick={onNavigateToConfig} className="text-xs px-3 py-1 rounded-md"
+          style={{ background: "rgba(var(--neon-purple-rgb),0.08)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          Configure →
+        </button>
+      </div>
 
-      {open && (
-        <div className="px-4 pb-4 space-y-4">
-          {/* Key stats grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {statItems.map(({ label, value, accent }) => (
-              <div key={label} className="rounded-lg px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
-                <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
-                <div className="text-sm font-semibold" style={{ color: accent }}>{value}</div>
-              </div>
-            ))}
+      {/* Key stats grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {statItems.map(({ label, value, accent }) => (
+          <div key={label} className="rounded-lg px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+            <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
+            <div className="text-sm font-semibold" style={{ color: accent }}>{value}</div>
           </div>
+        ))}
+      </div>
 
-          {/* CLI args chips */}
-          {activeLaunchArgs.length > 0 && (
-            <div>
-              <div className="text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>Active Launch Args</div>
-              <div className="flex flex-wrap gap-1.5">
-                {activeLaunchArgs.map(([k, v]) => {
-                  const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-                  const label = param?.flag ?? `-${k}`;
-                  const display = param?.type === "boolean" ? label : `${label}${v}`;
-                  return (
-                    <span
-                      key={k}
-                      className="text-xs font-mono px-2 py-0.5 rounded"
-                      style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-                    >
-                      {display}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <button
-            onClick={onNavigateToConfig}
-            className="text-xs"
-            style={{ color: "var(--neon-purple)" }}
-          >
-            Configure →
-          </button>
+      {/* Launch command */}
+      {launchCommand && (
+        <div>
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Terminal className="w-3 h-3" style={{ color: "var(--text-muted)" }} />
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Launch Command</span>
+          </div>
+          <div className="rounded-lg px-3 py-2 overflow-x-auto" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+            <code className="text-xs font-mono whitespace-pre-wrap break-all" style={{ color: "var(--neon-cyan)" }}>{launchCommand}</code>
+          </div>
         </div>
       )}
     </div>
@@ -607,6 +582,9 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [wiping, setWiping] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
+  const [launchCommand, setLaunchCommand] = useState("");
+  const [wipingDinos, setWipingDinos] = useState(false);
+  const [validating, setValidating] = useState(false);
 
   // Per-tile timeframe selectors
   const [playersTf, setPlayersTf] = useState<Timeframe>("Live");
@@ -618,7 +596,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const isStarting    = server.status === "starting";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
   const isStartFailed = server.status === "start-failed";
-  const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
+  // isLinux imported from server-utils
 
   // Keep the uptime counter ticking while the server is active.
   const [, setTick] = useState(0);
@@ -642,11 +620,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       if (!cancelled) {
         setModCount(mc);
         if (cfgRow) {
+          const launchArgs = JSON.parse(cfgRow.launch_args_json || "{}");
           setActiveConfig({
             gameUserSettings: JSON.parse(cfgRow.game_user_settings_json || "{}"),
             gameIni: JSON.parse(cfgRow.game_ini_json || "{}"),
-            launchArgs: JSON.parse(cfgRow.launch_args_json || "{}"),
+            launchArgs,
           });
+          // Build launch command preview (async, non-blocking)
+          buildLaunchCommandPreview(server, launchArgs).then(setLaunchCommand).catch(() => {});
         }
         setLastBackup(lb);
         setNextRestart(nr);
@@ -1122,6 +1103,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       <ActiveConfigPanel
         config={activeConfig}
         modCount={modCount}
+        launchCommand={launchCommand}
         onNavigateToConfig={() => {
           if (onNavigateToConfig) {
             onNavigateToConfig();
@@ -1150,31 +1132,40 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           ))}
         </div>
 
-        <div className="mt-4 pt-3 flex items-center gap-6 flex-wrap" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-          {server.installed_build_id && (
-            <div className="min-w-0">
-              <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>Installed Version</div>
-              <div className="font-mono text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
-                {formatServerVersion(server.installed_build_id, versionCache)}
-              </div>
-            </div>
-          )}
-          <div className="min-w-0">
-            <div className="text-xs mb-0.5" style={{ color: "var(--text-muted)" }}>Server UUID</div>
-            <div className="font-mono text-xs" style={{ color: "var(--text-primary)", opacity: 0.7 }}>{server.id}</div>
-          </div>
+        <div className="mt-4 pt-3 flex items-center gap-3 flex-wrap" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
           <button
-            className="flex items-center gap-1.5 ml-auto shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
-            style={{
-              background: "rgba(var(--neon-purple-rgb),0.06)",
-              border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
-              color: "var(--text-muted)",
-            }}
+            className="flex items-center gap-1.5 shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-muted)" }}
             onClick={() => tauriCmd.openFolder(server.install_path).catch(() => null)}
             title="Open install folder"
           >
             <FolderOpen className="w-3.5 h-3.5 shrink-0" />
             Open Install Folder
+          </button>
+          <button
+            className="flex items-center gap-1.5 shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
+            disabled={validating || isRunning}
+            title={isRunning ? "Stop the server before validating" : "Verify game files via SteamCMD"}
+            style={{ background: "rgba(0,255,255,0.06)", border: "1px solid rgba(0,255,255,0.2)", color: validating ? "var(--text-muted)" : "var(--neon-cyan)", opacity: isRunning ? 0.5 : 1 }}
+            onClick={async () => {
+              setValidating(true);
+              try {
+                const [steamcmdPath, baseDir] = await Promise.all([
+                  getAppSetting("steamcmd_path"),
+                  getAppSetting("base_dir"),
+                ]);
+                if (!steamcmdPath) { toast.error("SteamCMD path not configured"); return; }
+                if (!baseDir) { toast.error("Base directory not configured"); return; }
+                const sep = isLinux ? "/" : "\\";
+                const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+                await tauriCmd.validateServerFiles(server.id, server.install_path, cacheDir, steamcmdPath);
+                toast.success("Game files verified");
+              } catch (e) { toast.error(`Validation failed: ${e}`); }
+              finally { setValidating(false); }
+            }}
+          >
+            {validating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5 shrink-0" />}
+            Verify Files
           </button>
         </div>
       </div>
@@ -1209,6 +1200,36 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           </div>
         )}
       </div>
+
+      {/* ── Wild Dino Wipe ── */}
+      {isRunning && (
+        <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-cyan-rgb, 0,255,255),0.15)" }}>
+          <div className="flex items-center gap-2">
+            <Skull className="w-4 h-4" style={{ color: "var(--neon-cyan)" }} />
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Wild Dino Wipe</h3>
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Broadcasts a warning in chat then destroys all wild dinos. Expect lag for a few seconds.
+          </p>
+          <button
+            onClick={async () => {
+              setWipingDinos(true);
+              try {
+                await tauriCmd.rconSend(server.id, "ServerChat Wild dinos are being wiped — expect some lag!");
+                await tauriCmd.rconSend(server.id, "destroywilddinos");
+                toast.success("Wild dinos wiped");
+              } catch (e) { toast.error(`Wipe failed: ${e}`); }
+              finally { setWipingDinos(false); }
+            }}
+            disabled={wipingDinos}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
+            style={{ background: "rgba(0,255,255,0.08)", border: "1px solid rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}
+          >
+            {wipingDinos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Skull className="w-3.5 h-3.5" />}
+            Wipe Wild Dinos
+          </button>
+        </div>
+      )}
 
       {/* ── Wipe Saves card ── */}
       {!isRunning && (

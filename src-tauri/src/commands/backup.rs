@@ -217,6 +217,22 @@ pub async fn rcon_save_world(pool: &RconPool, server_id: &str) -> Result<(), Str
     }
 }
 
+/// Send an RCON ServerChat broadcast (fire-and-forget — never blocks the caller).
+pub async fn rcon_broadcast(pool: &RconPool, server_id: &str, message: &str) {
+    let tx = {
+        let guard = pool.cmd_channels.lock().await;
+        guard.get(server_id).filter(|(tx, _)| !tx.is_closed()).map(|(tx, _)| tx.clone())
+    };
+    let Some(tx) = tx else { return; };
+    let (resp_tx, _resp_rx) = oneshot::channel();
+    let _ = tx.send(RconCmd::Execute {
+        command:      format!("ServerChat {message}"),
+        suppress_cmd: false,
+        suppress_resp: true,
+        response_tx:  resp_tx,
+    }).await;
+}
+
 /// Write `files` into a 7z archive at `dest_path`.
 /// `root` is stripped from each file path to produce the archive entry name.
 /// Emits progress events keyed on `server_id`.
@@ -365,9 +381,14 @@ pub async fn create_server_backup(
     backup_dir: String,
     triggered_by: String,
     tier: String,
+    save_folder_name: Option<String>,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
-    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool, false).await;
+    // Use save_folder_name as the save dir when set (new symlink-based layout)
+    let effective_map_path = save_folder_name
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| map_path.clone());
+    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &effective_map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool, false).await;
     if let Ok(ref rec) = result {
         let size = fmt_size(rec.file_size_bytes);
         crate::commands::notifications::dispatch_notification(
@@ -563,8 +584,12 @@ pub async fn backup_all_players(
     map_id: String,
     backup_dir: String,
     triggered_by: String,
+    save_folder_name: Option<String>,
 ) -> Result<Vec<BackupRecord>, String> {
-    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by).await;
+    let effective_map_path = save_folder_name
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| map_path.clone());
+    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &effective_map_path, &map_id, &backup_dir, &triggered_by).await;
     if let Ok(ref recs) = result {
         let count = recs.len();
         if count > 0 {
