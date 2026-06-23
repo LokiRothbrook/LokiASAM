@@ -658,28 +658,43 @@ pub async fn update_cache(
     server_id: String,
     cache_dir: String,
     steamcmd_path: String,
+    state: tauri::State<'_, crate::state::AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
+    let abort = state.register_abort(&server_id);
 
-    emit_line(&app_handle, &channel, "stdout", "Updating server cache from Steam…")?;
-    tokio::fs::create_dir_all(&cache_dir)
-        .await
-        .map_err(|e| format!("Failed to create cache directory: {e}"))?;
+    let result: Result<String, String> = async {
+        emit_line(&app_handle, &channel, "stdout", "Updating server cache from Steam…")?;
+        tokio::fs::create_dir_all(&cache_dir)
+            .await
+            .map_err(|e| format!("Failed to create cache directory: {e}"))?;
 
-    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel, None).await?;
+        steamcmd_app_update(
+            &app_handle,
+            &steamcmd_path,
+            &cache_dir,
+            false,
+            &channel,
+            Some(std::sync::Arc::clone(&abort)),
+        )
+        .await?;
 
-    let acf_path = Path::new(&cache_dir).join(ACF_REL_PATH);
-    let build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());
+        let acf_path = Path::new(&cache_dir).join(ACF_REL_PATH);
+        let build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());
 
-    emit_line(&app_handle, &channel, "stdout", &format!("Cache updated to build {build_id}."))?;
+        emit_line(&app_handle, &channel, "stdout", &format!("Cache updated to build {build_id}."))?;
 
-    // Trigger internet version fetch for this build in the background
-    if build_id != "0" {
-        crate::commands::build_version::maybe_fetch_internet(&app_handle, &build_id);
+        if build_id != "0" {
+            crate::commands::build_version::maybe_fetch_internet(&app_handle, &build_id);
+        }
+
+        Ok(build_id)
     }
+    .await;
 
-    Ok(build_id)
+    state.clear_abort(&server_id);
+    result
 }
 
 /// Copy the shared cache to a specific server directory without re-running SteamCMD.

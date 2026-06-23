@@ -127,7 +127,7 @@ export function DisableContextMenu() {
       style={{
         top: menu.y,
         left: menu.x,
-        background: "rgba(8,8,25,0.96)",
+        background: "var(--popover)",
         border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
         backdropFilter: "blur(16px)",
         boxShadow: "0 4px 20px rgba(0,0,0,0.6), 0 0 10px rgba(var(--neon-purple-rgb),0.08)",

@@ -87,7 +87,7 @@ export function CommandOutputPanel({
   canceled = false,
   clearBufferOnClose = false,
 }: CommandOutputPanelProps) {
-  const [lines, setLines] = useState<OutputLine[]>(() => _buffers.get(eventChannel) ?? []);
+  const [lines, setLines] = useState<OutputLine[]>(() => [...(_buffers.get(eventChannel) ?? [])]);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [copied, setCopied] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);

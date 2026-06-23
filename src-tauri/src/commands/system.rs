@@ -873,6 +873,14 @@ pub fn get_install_method() -> &'static str {
     "binary"
 }
 
+/// Returns the IDs of all currently active background operations.
+/// An operation is active from `register_abort` until `clear_abort` is called.
+#[tauri::command]
+pub fn get_running_ops(state: tauri::State<'_, crate::state::AppState>) -> Vec<String> {
+    state.abort_flags.lock().unwrap().keys().cloned().collect()
+}
+
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppImageIntegrationStatus {

@@ -33,13 +33,16 @@ export interface UpdateCheckSummary {
 
 /**
  * Run a full ASA cache update/check via SteamCMD.  Sets the global
- * `asaCacheUpdateInProgress` flag in Zustand so the TopBar spinner shows.
+ * `asaCacheOpLabel` in Zustand so the TopBar spinner shows the right label.
  *
+ * @param topBarLabel - Label shown in TopBar during the op (defaults to "Checking ASA updates…")
  * Returns the new build ID string, or null on error.
  */
-export async function runAsaCacheUpdate(): Promise<string | null> {
-  const { setAsaCacheUpdateInProgress } = useAppStore.getState();
-  setAsaCacheUpdateInProgress(true);
+export async function runAsaCacheUpdate(
+  topBarLabel = "Checking ASA updates…"
+): Promise<string | null> {
+  const { setAsaCacheOpLabel } = useAppStore.getState();
+  setAsaCacheOpLabel(topBarLabel);
   try {
     const [baseDir, steamcmdPath] = await Promise.all([
       getAppSetting("base_dir"),
@@ -57,7 +60,7 @@ export async function runAsaCacheUpdate(): Promise<string | null> {
     ]);
     return newBuild;
   } finally {
-    setAsaCacheUpdateInProgress(false);
+    setAsaCacheOpLabel(null);
   }
 }
 

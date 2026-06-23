@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Folder, Terminal, Info, Archive, Copy,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ import { useAutostart } from "@/hooks/useAutostart";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { tempDir } from "@tauri-apps/api/path";
 import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgress, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
 import { getServerFirewallPorts } from "@/lib/firewall-utils";
@@ -44,6 +45,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { useAppStore } from "@/store/useAppStore";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -428,17 +430,27 @@ interface ToolPathFieldProps {
   validateFn: (path: string) => Promise<boolean>;
   validLabel?: string;
   invalidLabel?: string;
+  /** When provided and validation fails, show a dialog offering to install
+   *  rather than a toast. The callback receives the typed path as targetDir
+   *  and should return the final installed path to save. */
+  onInstallOffer?: (targetDir: string) => Promise<string>;
+  installOfferTitle?: string;
+  installOfferBody?: string;
 }
 
 function ToolPathField({
   label, settingKey, placeholder, hint,
   pickDirectory = false, validateFn,
   validLabel = "Valid", invalidLabel = "Validation failed — check the path.",
+  onInstallOffer, installOfferTitle = "Not Found", installOfferBody,
 }: ToolPathFieldProps) {
   const [value, setValue] = useState("");
   const [original, setOriginal] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [valid, setValid] = useState<boolean | null>(null);
+  const [showInstallDialog, setShowInstallDialog] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   useEffect(() => {
     getAppSetting(settingKey).then((v) => { const val = v ?? ""; setValue(val); setOriginal(val); });
@@ -461,14 +473,41 @@ function ToolPathField({
         await setAppSetting(settingKey, value.trim());
         setOriginal(value.trim());
         toast.success(`${label} saved.`);
+      } else if (onInstallOffer) {
+        setInstallError(null);
+        setShowInstallDialog(true);
       } else {
         toast.error(invalidLabel);
       }
     } catch (e) {
-      setValid(false);
-      toast.error(`Verification failed: ${e}`);
+      if (onInstallOffer) {
+        setInstallError(null);
+        setShowInstallDialog(true);
+      } else {
+        setValid(false);
+        toast.error(`Verification failed: ${e}`);
+      }
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const handleInstall = async () => {
+    if (!onInstallOffer) return;
+    setInstalling(true);
+    setInstallError(null);
+    try {
+      const newPath = await onInstallOffer(value.trim());
+      await setAppSetting(settingKey, newPath);
+      setValue(newPath);
+      setOriginal(newPath);
+      setValid(true);
+      setShowInstallDialog(false);
+      toast.success(`${label} installed successfully.`);
+    } catch (e) {
+      setInstallError(String(e));
+    } finally {
+      setInstalling(false);
     }
   };
 
@@ -499,7 +538,47 @@ function ToolPathField({
         </Button>
       </div>
       {valid === true  && <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-green)" }}><CheckCircle2 className="w-3 h-3" /> {validLabel}</p>}
-      {valid === false && !verifying && <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}><AlertCircle className="w-3 h-3" /> {invalidLabel}</p>}
+      {valid === false && !verifying && !onInstallOffer && <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}><AlertCircle className="w-3 h-3" /> {invalidLabel}</p>}
+
+      {onInstallOffer && (
+        <Dialog open={showInstallDialog} onOpenChange={(v) => { if (!installing) setShowInstallDialog(v); }}>
+          <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)" }}>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+                <AlertCircle className="w-5 h-5" /> {installOfferTitle}
+              </DialogTitle>
+              <DialogDescription className="space-y-2 pt-1">
+                {installOfferBody && <span className="block">{installOfferBody}</span>}
+                <span className="block font-mono text-xs break-all" style={{ color: "var(--text-muted)" }}>{value}</span>
+              </DialogDescription>
+            </DialogHeader>
+            {installError && (
+              <p className="text-xs px-1" style={{ color: "var(--neon-red)" }}>{installError}</p>
+            )}
+            <DialogFooter className="flex-col gap-2 sm:flex-col">
+              <Button
+                variant="outline"
+                onClick={handleInstall}
+                disabled={installing}
+                className="w-full gap-2 hover:bg-(--surface-elevated)"
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+              >
+                {installing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                {installing ? "Installing…" : "Install Here"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowInstallDialog(false)}
+                disabled={installing}
+                className="w-full hover:bg-(--surface-elevated)"
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}
+              >
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -764,7 +843,8 @@ const AUTO_CHECK_OPTIONS = [
   { value: "startup_hourly", label: "On startup + hourly" },
 ];
 
-function ServerUpdatesSection() {
+function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void }) {
+  const asaCacheOpLabel = useAppStore((s) => s.asaCacheOpLabel);
   const [checking, setChecking]       = useState(false);
   const [cachedBuild, setCached]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
@@ -916,14 +996,26 @@ function ServerUpdatesSection() {
         </div>
       </div>
       <div className="flex items-center gap-3 flex-wrap">
-        <Button onClick={handleCheck} disabled={checking || hasCacheInstalled === false} size="sm" className="gap-1.5"
-          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
-          {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-          Check for ASA Server Update
+        <Button
+          onClick={!cachedBuild ? onPreDownload : handleCheck}
+          disabled={checking || !!asaCacheOpLabel}
+          size="sm" className="gap-1.5"
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+        >
+          {checking || asaCacheOpLabel
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : !cachedBuild
+              ? <Download className="w-3 h-3" />
+              : <RefreshCw className="w-3 h-3" />}
+          {asaCacheOpLabel
+            ? asaCacheOpLabel.replace("…", "")
+            : !cachedBuild
+              ? "Pre-Download Server Cache"
+              : "Check for ASA Server Update"}
         </Button>
-        {hasCacheInstalled === false && (
+        {!cachedBuild && !asaCacheOpLabel && (
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            No server cache installed yet — install a server first.
+            No server files cached yet — this will download them via SteamCMD.
           </span>
         )}
       </div>
@@ -987,11 +1079,18 @@ const APP_UPDATE_MODE_OPTIONS = [
 ];
 
 function AppUpdateSection() {
-  const [mode, setMode]      = useState("startup");
-  const [checking, setCheck] = useState(false);
+  const [mode, setMode]           = useState("startup");
+  const [checking, setChecking]   = useState(false);
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [installMethod, setInstallMethod]   = useState("binary");
+  const [updateResult, setUpdateResult] = useState<{ version: string; body?: string | null; available: boolean } | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installDone, setInstallDone] = useState(false);
 
   useEffect(() => {
     getAppSetting("app_update_check_mode").then((v) => setMode(v ?? "startup"));
+    getVersion().then(setCurrentVersion).catch(() => {});
+    invoke<string>("get_install_method").then(setInstallMethod).catch(() => {});
   }, []);
 
   const handleModeChange = async (value: string) => {
@@ -1000,34 +1099,37 @@ function AppUpdateSection() {
   };
 
   const handleCheckNow = async () => {
-    setCheck(true);
+    setChecking(true);
+    setUpdateResult(null);
     try {
       const update = await check();
       if (!update) {
+        setUpdateResult({ version: currentVersion, available: false });
         toast.success("LokiASAM is up to date.");
       } else {
-        const toastId = `app-update-${update.version}`;
-        const firstLine = (update.body ?? "").split("\n").find((l) => l.trim()) ?? "";
-        const description = firstLine.length > 120 ? firstLine.slice(0, 120) + "…" : firstLine || "A new version is ready to install.";
-        toast.info(`LokiASAM ${update.version} is available`, {
-          id: toastId, description, duration: Infinity,
-          action: {
-            label: "Download & Install",
-            onClick: async () => {
-              toast.dismiss(toastId);
-              const loadingId = toast.loading("Downloading update…");
-              try {
-                await update.downloadAndInstall();
-                toast.dismiss(loadingId);
-                toast.success("Update installed. Restart LokiASAM to apply it.", { duration: Infinity });
-              } catch (e) { toast.dismiss(loadingId); toast.error(`Update failed: ${e}`); }
-            },
-          },
-          cancel: { label: "Later", onClick: () => {} },
-        });
+        setUpdateResult({ version: update.version, body: update.body, available: true });
+        toast.info(`LokiASAM ${update.version} is available.`);
       }
     } catch (e) { toast.error(`Update check failed: ${e}`); }
-    finally { setCheck(false); }
+    finally { setChecking(false); }
+  };
+
+  const handleInstall = async () => {
+    setChecking(true);
+    try {
+      const update = await check();
+      if (!update) { toast.info("No update available."); return; }
+      setInstalling(true);
+      const loadingId = toast.loading("Downloading update…");
+      try {
+        await update.downloadAndInstall();
+        toast.dismiss(loadingId);
+        toast.success("Update installed. Restart LokiASAM to apply it.", { duration: Infinity });
+        setInstallDone(true);
+      } catch (e) { toast.dismiss(loadingId); toast.error(`Update failed: ${e}`); }
+      finally { setInstalling(false); }
+    } catch (e) { toast.error(`Update check failed: ${e}`); }
+    finally { setChecking(false); }
   };
 
   return (
@@ -1035,11 +1137,55 @@ function AppUpdateSection() {
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
         Automatic update checks for LokiASAM itself. When an update is found, a notification appears with a Download &amp; Install button.
       </p>
-      <Button onClick={handleCheckNow} disabled={checking} size="sm" className="gap-1.5"
-        style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
-        {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        Check for LokiASAM Update
-      </Button>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={handleCheckNow} disabled={checking || installing} size="sm" className="gap-1.5"
+          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
+          {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+          Check for LokiASAM Update
+        </Button>
+
+        {updateResult?.available && installMethod !== "pkgbuild" && (
+          <Button onClick={handleInstall} disabled={checking || installing || installDone} size="sm" className="gap-1.5"
+            style={{
+              background: installDone ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${installDone ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
+              color: installDone ? "var(--neon-green)" : "var(--neon-purple)",
+            }}>
+            {installing ? <Loader2 className="w-3 h-3 animate-spin" /> : installDone ? <CheckCircle2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+            {installDone ? "Update Complete" : "Download & Install"}
+          </Button>
+        )}
+      </div>
+
+      {updateResult && (
+        <div className="rounded-lg p-3 space-y-2"
+          style={{
+            background: updateResult.available ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(0,255,136,0.06)",
+            border: `1px solid ${updateResult.available ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(0,255,136,0.25)"}`,
+          }}>
+          {currentVersion && (
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <span style={{ color: "var(--text-muted)" }}>Current:</span>
+              <span className="font-mono" style={{ color: "var(--foreground)" }}>{currentVersion}</span>
+              <span style={{ color: "var(--text-muted)" }}>→</span>
+              <span className="font-mono" style={{ color: "var(--neon-purple)" }}>{updateResult.version}</span>
+            </div>
+          )}
+          {updateResult.available ? (
+            installMethod === "pkgbuild" ? (
+              <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
+                Manual update required — run <span className="font-mono">makepkg -si</span> in your LokiASAM folder to update.
+              </p>
+            ) : (
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>A newer version is available.</p>
+            )
+          ) : (
+            <p className="text-xs" style={{ color: "var(--neon-green)" }}>You are on the latest version.</p>
+          )}
+        </div>
+      )}
+
       <Separator style={{ background: "var(--border)" }} />
       <div className="space-y-2">
         <Label style={{ color: "var(--text-primary)" }}>Check Frequency</Label>
@@ -1061,6 +1207,187 @@ function AppUpdateSection() {
 }
 
 // ---------------------------------------------------------------------------
+// ASA Server Cache row — Install / Reinstall / Verify the shared server cache
+// ---------------------------------------------------------------------------
+
+// Persists the active operation type across navigation (component remounts)
+let _asaCacheActiveOp: "install" | "reinstall" | "verify" = "install";
+
+const CACHE_OP_LABELS: Record<string, string> = {
+  install:   "Installing ASA cache…",
+  reinstall: "Reinstalling ASA cache…",
+  verify:    "Verifying ASA cache…",
+};
+
+function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoStart?: boolean; onAutoStartConsumed?: () => void }) {
+  const [cachedBuild, setCachedBuild] = useState("");
+  const [baseDir, setBaseDir]         = useState("");
+  const [phase, setPhase]             = useState<"idle" | "running" | "done" | "error">("idle");
+  const [operation, setOperation]     = useState<"install" | "reinstall" | "verify">("install");
+  const [autoStartPending, setAutoStartPending] = useState(false);
+  // True only when we reconnected to an op that was already running (navigation case).
+  // When runCacheOp starts the op directly, it manages phase itself — no polling needed.
+  const reconnectedRef = useRef(false);
+  const containerRef   = useRef<HTMLDivElement>(null);
+
+  const getCacheDir = useCallback((dir: string) => {
+    if (!dir) return "";
+    const sep = dir.includes("\\") ? "\\" : "/";
+    return `${dir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+  }, []);
+
+  const runCacheOp = useCallback(async (op: "install" | "reinstall" | "verify") => {
+    if (!baseDir) { toast.error("Base directory not configured."); return; }
+    reconnectedRef.current = false; // Direct mode: runCacheOp manages phase
+    _asaCacheActiveOp = op;
+    setOperation(op);
+    setPhase("running");
+    try {
+      if (op === "reinstall") {
+        await tauriCmd.deleteDirectory(getCacheDir(baseDir)).catch(() => {});
+        await setAppSetting("asa_cached_build_id", "");
+      }
+      const newBuild = await runAsaCacheUpdate(CACHE_OP_LABELS[op]);
+      if (newBuild) {
+        setCachedBuild(newBuild);
+        setPhase("done");
+        const label = op === "reinstall" ? "reinstalled" : op === "install" ? "installed" : "verified";
+        toast.success(`Server cache ${label} (build ${newBuild}).`);
+      } else {
+        setPhase("error");
+      }
+    } catch (e) {
+      if (!String(e).includes("Aborted")) toast.error(`Cache ${op} failed: ${e}`);
+      setPhase("error");
+    }
+  }, [baseDir, getCacheDir]);
+
+  const load = useCallback(async () => {
+    const [build, dir] = await Promise.all([
+      getAppSetting("asa_cached_build_id"),
+      getAppSetting("base_dir"),
+    ]);
+    setCachedBuild(build ?? "");
+    setBaseDir(dir ?? "");
+    return dir ?? "";
+  }, []);
+
+  // On mount: check if a cache operation is already running in the background
+  // (e.g. user navigated away and came back). Restore running state if so.
+  useEffect(() => {
+    if (autoStart) {
+      onAutoStartConsumed?.();
+      setAutoStartPending(true);
+    }
+    load().then((dir) => {
+      if (autoStart && dir) return; // autoStartPending will drive the start via the effect below
+      tauriCmd.getRunningOps().then((ops) => {
+        if (ops.includes("check")) {
+          reconnectedRef.current = true;
+          setOperation(_asaCacheActiveOp);
+          setPhase("running");
+        }
+      }).catch(() => {});
+    });
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // After an auto-start navigation: once baseDir is loaded, scroll into view and start install.
+  useEffect(() => {
+    if (!autoStartPending || !baseDir) return;
+    setAutoStartPending(false);
+    containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    runCacheOp("install");
+  }, [autoStartPending, baseDir, runCacheOp]);
+
+  // Poll for completion — only when we reconnected to a background op.
+  // When runCacheOp started the op directly, it awaits the result itself.
+  useEffect(() => {
+    if (phase !== "running" || !reconnectedRef.current) return;
+    const interval = setInterval(async () => {
+      try {
+        const ops = await tauriCmd.getRunningOps();
+        if (!ops.includes("check")) {
+          clearInterval(interval);
+          reconnectedRef.current = false;
+          // Brief delay so the JS side of runAsaCacheUpdate() can finish saving
+          // asa_cached_build_id before we read it.
+          await new Promise((r) => setTimeout(r, 400));
+          const build = await getAppSetting("asa_cached_build_id");
+          setCachedBuild(build ?? "");
+          setPhase(build ? "done" : "error");
+        }
+      } catch { /* ignore poll errors */ }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  const hasCache = !!cachedBuild;
+  const busy = phase === "running";
+
+  return (
+    <div ref={containerRef} className="space-y-3">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            ARK: Survival Ascended Server
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            {hasCache ? (
+              <>Shared cache build: <span className="font-mono" style={{ color: "var(--neon-purple)" }}>{cachedBuild}</span></>
+            ) : (
+              "Shared server cache not yet downloaded."
+            )}
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: "var(--text-subtle)" }}>
+            This is the shared cache used by all server instances, not an individual server install.
+          </p>
+        </div>
+        <div className="flex gap-2 shrink-0 flex-wrap">
+          {busy && (
+            <Button onClick={() => tauriCmd.abortOperation("check")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <StopCircle className="w-3 h-3" /> Abort
+            </Button>
+          )}
+          {hasCache && (
+            <Button onClick={() => runCacheOp("verify")} disabled={busy} size="sm" className="gap-1.5 h-7 text-xs"
+              style={{
+                background: phase === "done" && operation === "verify" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+                border: `1px solid ${phase === "done" && operation === "verify" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+                color: phase === "done" && operation === "verify" ? "var(--neon-green)" : "var(--neon-purple)",
+              }}>
+              {busy && operation === "verify" ? <Loader2 className="w-3 h-3 animate-spin" /> : phase === "done" && operation === "verify" ? <CheckCircle2 className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+              {phase === "done" && operation === "verify" ? "Verified" : "Verify"}
+            </Button>
+          )}
+          <Button onClick={() => runCacheOp(hasCache ? "reinstall" : "install")} disabled={busy} size="sm" className="gap-1.5 h-7 text-xs"
+            style={{
+              background: phase === "done" && operation !== "verify" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+              border: `1px solid ${phase === "done" && operation !== "verify" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+              color: phase === "done" && operation !== "verify" ? "var(--neon-green)" : "var(--neon-purple)",
+            }}>
+            {busy && operation !== "verify"
+              ? <Loader2 className="w-3 h-3 animate-spin" />
+              : phase === "done" && operation !== "verify"
+                ? <CheckCircle2 className="w-3 h-3" />
+                : hasCache ? <RefreshCw className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+            {phase === "done" && operation !== "verify" ? "Done" : hasCache ? "Reinstall ASA Server Cache" : "Install ASA Server Cache"}
+          </Button>
+        </div>
+      </div>
+      {(busy || phase === "done") && (
+        <CommandOutputPanel
+          eventChannel="steamcmd://output/check"
+          label="ASA Server Cache"
+          completed={phase === "done"}
+          bodyClassName="h-40"
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SteamCMD reinstall row (shown inline under the SteamCMD path field)
 // ---------------------------------------------------------------------------
 
@@ -1069,14 +1396,16 @@ function SteamcmdReinstallRow() {
   const [done, setDone]                 = useState(false);
 
   const handleReinstall = async () => {
-    const baseDir = await getAppSetting("base_dir");
-    if (!baseDir) { toast.error("Base directory not configured."); return; }
-    const sep = baseDir.includes("\\") ? "\\" : "/";
-    const targetDir = `${baseDir.replace(/[/\\]$/, "")}${sep}steamcmd`;
+    const currentPath = await getAppSetting("steamcmd_path");
+    if (!currentPath) { toast.error("SteamCMD path not configured."); return; }
+    // Reinstall to the same directory the current executable lives in
+    const targetDir = currentPath.replace(/[/\\][^/\\]+$/, "");
     setReinstalling(true); setDone(false);
     try {
       await tauriCmd.installSteamcmd(targetDir);
-      const newPath = targetDir + (navigator.userAgent.includes("Windows") ? "\\steamcmd.exe" : "/steamcmd.sh");
+      const sep = targetDir.includes("\\") ? "\\" : "/";
+      const exe = navigator.userAgent.includes("Windows") ? "steamcmd.exe" : "steamcmd.sh";
+      const newPath = `${targetDir}${sep}${exe}`;
       await setAppSetting("steamcmd_path", newPath);
       setDone(true);
       toast.success("SteamCMD reinstalled successfully.");
@@ -1113,12 +1442,170 @@ function SteamcmdReinstallRow() {
 }
 
 // ---------------------------------------------------------------------------
+// Proton-GE install/reinstall row (managed installs only, Linux only)
+// ---------------------------------------------------------------------------
+
+function ProtonGeInstallRow() {
+  const [protonPath, setProtonPath]           = useState("");
+  const [isManaged, setIsManaged]             = useState(false);
+  const [phase, setPhase]                     = useState<"idle" | "running" | "done" | "error">("idle");
+  const [isReinstall, setIsReinstall]         = useState(false);
+  const [showManagedConfirm, setShowManagedConfirm] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      getAppSetting("proton_path"),
+      getAppSetting("proton_ge_managed"),
+    ]).then(([p, managed]) => {
+      setProtonPath(p ?? "");
+      setIsManaged(managed === "true");
+    });
+  }, []);
+
+  const handleConfirmManaged = async () => {
+    await setAppSetting("proton_ge_managed", "true");
+    setIsManaged(true);
+    setShowManagedConfirm(false);
+    toast.success("LokiASAM will now manage Proton-GE updates.");
+  };
+
+  const hasInstall = !!protonPath;
+  const busy = phase === "running";
+
+  const handleRun = async (reinstall: boolean) => {
+    const baseDir = await getAppSetting("base_dir");
+    if (!baseDir) { toast.error("Base directory not configured."); return; }
+    const sep = baseDir.includes("\\") ? "\\" : "/";
+    // Reinstall: go back to the same parent directory we deleted from.
+    // Fresh install: fall back to the managed default location.
+    const targetDir = protonPath
+      ? protonPath.replace(/[/\\][^/\\]+$/, "")
+      : `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}proton`;
+    setIsReinstall(reinstall);
+    setPhase("running");
+    try {
+      if (reinstall && protonPath) {
+        await tauriCmd.deleteDirectory(protonPath).catch(() => {});
+      }
+      const newPath = await tauriCmd.downloadProtonGe(targetDir);
+      await setAppSetting("proton_path", newPath);
+      setProtonPath(newPath);
+      setPhase("done");
+      toast.success(`Proton-GE ${reinstall ? "reinstalled" : "installed"} successfully.`);
+    } catch (e) {
+      if (!String(e).includes("Aborted")) toast.error(`Proton-GE ${reinstall ? "reinstall" : "install"} failed: ${e}`);
+      setPhase("error");
+    }
+  };
+
+  if (!isManaged) {
+    return (
+      <div className="space-y-3 pt-1">
+        <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
+          style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
+          <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
+          <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
+            Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
+          </p>
+        </div>
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            onClick={() => setShowManagedConfirm(true)}
+            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+          >
+            <TriangleAlert className="w-4 h-4" />
+            Allow LokiASAM to Manage This Proton Install
+          </Button>
+        </div>
+        <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
+          <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+                <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
+              </DialogTitle>
+              <DialogDescription className="space-y-2 pt-1">
+                <span className="block">
+                  Switching to managed mode gives LokiASAM full control over your Proton-GE installation — it may download new versions and replace the current one.
+                </span>
+                <span className="block font-medium" style={{ color: "var(--neon-red)" }}>
+                  If this Proton-GE was installed by Steam, Lutris, or another tool, LokiASAM may overwrite it and break other applications that depend on it.
+                </span>
+                <span className="block">
+                  For the safest experience, let LokiASAM download and install its own dedicated copy of Proton-GE instead.
+                </span>
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex-col gap-2 sm:flex-col">
+              <Button variant="outline"
+                className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+                style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+                onClick={handleConfirmManaged}>
+                Allow Management
+              </Button>
+              <Button variant="outline" onClick={() => setShowManagedConfirm(false)}
+                className="w-full hover:bg-(--surface-elevated)"
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 pt-1">
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {hasInstall
+            ? "Re-download and replace the managed Proton-GE installation."
+            : "Download and install Proton-GE to the managed location."}
+        </p>
+        <div className="flex gap-2 shrink-0">
+          {busy && (
+            <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <StopCircle className="w-3 h-3" /> Abort
+            </Button>
+          )}
+          <Button onClick={() => handleRun(hasInstall)} disabled={busy} size="sm" className="gap-1.5 h-7 text-xs"
+            style={{
+              background: phase === "done" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+              border: `1px solid ${phase === "done" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+              color: phase === "done" ? "var(--neon-green)" : "var(--neon-purple)",
+            }}>
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : phase === "done" ? <CheckCircle2 className="w-3 h-3" /> : hasInstall ? <RefreshCw className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+            {phase === "done" ? "Done" : hasInstall ? "Reinstall Proton-GE" : "Install Proton-GE"}
+          </Button>
+        </div>
+      </div>
+      {(busy || phase === "done") && (
+        <CommandOutputPanel eventChannel="proton://output/download" label="Proton-GE" completed={phase === "done"} bodyClassName="h-40" />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Amazon Root CA certificate install row
 // ---------------------------------------------------------------------------
 
 function CertInstallRow() {
-  const [phase, setPhase] = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
-  const [error, setError] = useState("");
+  const [phase, setPhase]       = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
+  const [error, setError]       = useState("");
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const protonPath  = IS_LINUX ? (await getAppSetting("proton_path"))        ?? undefined : undefined;
+      const prefixPath  = IS_LINUX ? (await getAppSetting("proton_prefix_path")) ?? undefined : undefined;
+      const installed = await tauriCmd.checkAmazonRootCaInstalled(protonPath, prefixPath).catch(() => false);
+      setIsInstalled(installed);
+    })();
+  }, []);
 
   const handleInstall = async () => {
     setError("");
@@ -1140,6 +1627,7 @@ function CertInstallRow() {
         : undefined);
       await tauriCmd.installAmazonRootCa(certPath, protonPath, resolvedPrefix);
       setPhase("done");
+      setIsInstalled(true);
       toast.success("Amazon Root CA 1 installed successfully.");
     } catch (e) {
       setError(String(e));
@@ -1181,7 +1669,7 @@ function CertInstallRow() {
             ? (phase === "downloading" ? "Downloading…" : "Installing…")
             : phase === "done"
               ? "Installed"
-              : "Install / Reinstall"}
+              : isInstalled ? "Reinstall Certs" : "Install Certs"}
         </Button>
       </div>
       {phase === "error" && (
@@ -1279,7 +1767,7 @@ function FirewallRepairRow() {
             : allGood
               ? <CheckCircle2 className="w-3 h-3" />
               : <ShieldCheck className="w-3 h-3" />}
-          {phase === "checking" ? "Checking…" : allGood ? "All Good" : "Check & Repair"}
+          {phase === "checking" ? "Checking…" : allGood ? "All Good" : "Check & Repair Firewall"}
         </Button>
       </div>
 
@@ -1340,13 +1828,14 @@ function FirewallRepairRow() {
 // ---------------------------------------------------------------------------
 
 function ProtonGeUpdateSection() {
-  const [protonPath, setProtonPath]       = useState("");
-  const [isManaged, setIsManaged]         = useState(false);
-  const [checking, setChecking]           = useState(false);
-  const [updateInfo, setUpdateInfo]       = useState<ProtonUpdateInfo | null>(null);
-  const [downloading, setDownloading]     = useState(false);
-  const [downloadDone, setDownloadDone]   = useState(false);
-  const [checkMode, setCheckMode]         = useState("startup_hourly");
+  const [protonPath, setProtonPath]         = useState("");
+  const [isManaged, setIsManaged]           = useState(false);
+  const [checking, setChecking]             = useState(false);
+  const [updateInfo, setUpdateInfo]         = useState<ProtonUpdateInfo | null>(null);
+  const [downloading, setDownloading]       = useState(false);
+  const [downloadDone, setDownloadDone]     = useState(false);
+  const [checkMode, setCheckMode]           = useState("disabled");
+  const [showManagedConfirm, setShowManagedConfirm] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -1356,7 +1845,7 @@ function ProtonGeUpdateSection() {
     ]).then(([p, managed, mode]) => {
       setProtonPath(p ?? "");
       setIsManaged(managed === "true");
-      setCheckMode(mode ?? "startup_hourly");
+      setCheckMode(mode ?? "disabled");
     });
   }, []);
 
@@ -1366,15 +1855,18 @@ function ProtonGeUpdateSection() {
     try {
       const info = await tauriCmd.checkProtonGeUpdate(protonPath);
       setUpdateInfo(info);
+      if (info.updateAvailable) {
+        toast.info(`Proton-GE ${info.latestVersion} is available.`);
+      } else {
+        toast.success("Proton-GE is up to date.");
+      }
     } catch (e) { toast.error(`Failed to check for updates: ${e}`); }
     finally { setChecking(false); }
   };
 
   const handleDownload = async () => {
-    const baseDir = await getAppSetting("base_dir");
-    if (!baseDir) { toast.error("Base directory not configured."); return; }
-    const sep = baseDir.includes("\\") ? "\\" : "/";
-    const targetDir = `${baseDir.replace(/[/\\]$/, "")}${sep}proton`;
+    if (!protonPath) { toast.error("Proton-GE path not configured."); return; }
+    const targetDir = protonPath.replace(/[/\\][^/\\]+$/, "");
     setDownloading(true); setDownloadDone(false);
     try {
       const newPath = await tauriCmd.downloadProtonGe(targetDir);
@@ -1389,9 +1881,10 @@ function ProtonGeUpdateSection() {
     finally { setDownloading(false); }
   };
 
-  const handleTakeOwnership = async () => {
+  const handleConfirmManaged = async () => {
     await setAppSetting("proton_ge_managed", "true");
     setIsManaged(true);
+    setShowManagedConfirm(false);
     toast.success("LokiASAM will now manage Proton-GE updates.");
   };
 
@@ -1424,18 +1917,25 @@ function ProtonGeUpdateSection() {
         </div>
       )}
 
-      {/* External path notice */}
-      {looksExternal && !isManaged && (
-        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
-          <div className="flex items-start gap-2">
-            <Link className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
+      {/* Unmanaged notice — shown whenever isManaged is false */}
+      {!isManaged && (
+        <div className="space-y-3">
+          <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
+            style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
+            <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
             <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
-              This Proton-GE path is outside LokiASAM's managed directory. Automatic updates are suppressed.
+              Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
+              {looksExternal && " The current path is outside LokiASAM's managed directory."}
             </p>
           </div>
-          <Button onClick={handleTakeOwnership} size="sm" className="gap-1.5 h-7 text-xs"
-            style={{ background: "rgba(255,136,0,0.12)", border: "1px solid rgba(255,136,0,0.35)", color: "var(--neon-orange)" }}>
-            Allow LokiASAM to Manage
+          <Button
+            variant="outline"
+            onClick={() => setShowManagedConfirm(true)}
+            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+          >
+            <TriangleAlert className="w-4 h-4" />
+            Allow LokiASAM to Manage This Proton Install
           </Button>
         </div>
       )}
@@ -1469,10 +1969,10 @@ function ProtonGeUpdateSection() {
 
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
-        <Button onClick={handleCheckUpdate} disabled={checking || downloading} size="sm" className="gap-1.5"
+        <Button onClick={handleCheckUpdate} disabled={checking || downloading || !isManaged} size="sm" className="gap-1.5"
           style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-          Check for Update
+          Check for Proton-GE Update
         </Button>
 
         {(updateInfo?.updateAvailable || (!protonPath && updateInfo)) && (isManaged || !looksExternal) && (
@@ -1496,7 +1996,7 @@ function ProtonGeUpdateSection() {
       </div>
 
       {/* Auto-check mode */}
-      <div className="space-y-2">
+      <div className="space-y-2" style={{ opacity: isManaged ? 1 : 0.4, pointerEvents: isManaged ? "auto" : "none" }}>
         <Label style={{ color: "var(--text-primary)" }}>Auto-Check Frequency</Label>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           Automatically check GitHub for new GE-Proton releases.
@@ -1518,6 +2018,41 @@ function ProtonGeUpdateSection() {
           ))}
         </div>
       </div>
+
+      {/* Managed confirmation dialog */}
+      <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+              <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
+            </DialogTitle>
+            <DialogDescription className="space-y-2 pt-1">
+              <span className="block">
+                Switching to managed mode gives LokiASAM full control over your Proton-GE installation — it may download new versions and replace the current one.
+              </span>
+              <span className="block font-medium" style={{ color: "var(--neon-red)" }}>
+                If this Proton-GE was installed by Steam, Lutris, or another tool, LokiASAM may overwrite it and break other applications that depend on it.
+              </span>
+              <span className="block">
+                For the safest experience, let LokiASAM download and install its own dedicated copy of Proton-GE instead.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button variant="outline"
+              className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+              onClick={handleConfirmManaged}>
+              Allow Management
+            </Button>
+            <Button variant="outline" onClick={() => setShowManagedConfirm(false)}
+              className="w-full hover:bg-(--surface-elevated)"
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Download output */}
       {(downloading || downloadDone) && (
@@ -1770,53 +2305,59 @@ function AppImageIntegrationSection() {
   };
 
   return (
-    <div className="space-y-4">
-      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Adds LokiASAM to your desktop application launcher so you can find, launch, and pin it
-        without navigating to the AppImage file each time. Writes a <code>.desktop</code> file and
-        icon to <code>~/.local/share/</code> only — no files are placed outside that folder.
-        Removing it restores the system to its original state.
-      </p>
-      {status.isInstalled ? (
-        <div className="space-y-2">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <span className="text-sm flex items-center gap-2" style={{ color: "var(--neon-green)" }}>
-            <CheckCircle2 className="w-4 h-4" />
-            Installed in application menu
-          </span>
+    <Section
+      icon={Layers}
+      title="Application Menu Integration"
+      description="Install LokiASAM into your desktop launcher."
+    >
+      <div className="space-y-4">
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Adds LokiASAM to your desktop application launcher so you can find, launch, and pin it
+          without navigating to the AppImage file each time. Writes a <code>.desktop</code> file and
+          icon to <code>~/.local/share/</code> only — no files are placed outside that folder.
+          Removing it restores the system to its original state.
+        </p>
+        {status.isInstalled ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <span className="text-sm flex items-center gap-2" style={{ color: "var(--neon-green)" }}>
+                <CheckCircle2 className="w-4 h-4" />
+                Installed in application menu
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleUninstall}
+                disabled={working}
+                className="gap-1.5"
+                style={{ borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+              >
+                {working
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <StopCircle className="w-3.5 h-3.5" />}
+                Remove from Menu
+              </Button>
+            </div>
+            <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+              If the icon doesn't appear in your launcher, log out and back in (or reboot).
+            </p>
+          </div>
+        ) : (
           <Button
             size="sm"
-            variant="outline"
-            onClick={handleUninstall}
+            onClick={handleInstall}
             disabled={working}
-            className="gap-1.5"
-            style={{ borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+            className="gap-2"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             {working
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <StopCircle className="w-3.5 h-3.5" />}
-            Remove from Menu
+              : <Download className="w-3.5 h-3.5" />}
+            Install to Application Menu
           </Button>
-        </div>
-        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          If the icon doesn't appear in your launcher, log out and back in (or reboot).
-        </p>
-        </div>
-      ) : (
-        <Button
-          size="sm"
-          onClick={handleInstall}
-          disabled={working}
-          className="gap-2"
-          style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
-        >
-          {working
-            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            : <Download className="w-3.5 h-3.5" />}
-          Install to Application Menu
-        </Button>
-      )}
-    </div>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -1897,16 +2438,16 @@ function StartupSection() {
       <div className="flex items-start justify-between gap-6 flex-wrap">
         <div className="space-y-1.5 flex-1 min-w-0">
           <Label className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
-            Downed Servers on Launch
+            Relaunch Previously Running Servers
           </Label>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            When the app starts and detects servers that were running during the previous session but
-            are now offline, LokiASAM can prompt you to restart them, restart them automatically,
-            or do nothing.
+            When the app starts, if servers were running during the last session but are now
+            offline (e.g. after a power loss or system reboot), LokiASAM can prompt you to
+            restart them, restart them automatically, or do nothing.
           </p>
           {pref === "never" && (
             <p className="text-xs mt-1" style={{ color: "#ffa500" }}>
-              The downed-servers dialog is suppressed. Change this setting back to{" "}
+              The restart prompt is suppressed. Change this setting back to{" "}
               <strong>Ask each time</strong> to re-enable it.
             </p>
           )}
@@ -1949,6 +2490,21 @@ type TabId = typeof TABS[number]["id"];
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("general");
   const [matrixRefreshKey, setMatrixRefreshKey] = useState(0);
+  const [autoStartCache, setAutoStartCache] = useState(false);
+  const scrollContainerRef  = useRef<HTMLDivElement>(null);
+  const skipScrollToTopRef  = useRef(false);
+
+  // Reset scroll position on tab change, unless the tab switch came from the
+  // pre-download button (which scrolls to the cache row instead).
+  useEffect(() => {
+    if (skipScrollToTopRef.current) {
+      skipScrollToTopRef.current = false;
+      return;
+    }
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [activeTab]);
 
   return (
     <div className="h-full overflow-hidden flex flex-col gap-6">
@@ -1971,7 +2527,7 @@ export default function SettingsPage() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { if (tab.id !== activeTab) setActiveTab(tab.id); }}
               className="px-3 py-1.5 text-sm rounded-lg transition-all cursor-pointer"
               style={{
                 color: active ? "var(--neon-purple)" : "var(--text-muted)",
@@ -1987,7 +2543,7 @@ export default function SettingsPage() {
         })}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto pr-6">
+      <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto pr-6">
       {/* General tab */}
       {activeTab === "general" && (
         <div className="flex flex-col gap-6">
@@ -2001,11 +2557,23 @@ export default function SettingsPage() {
           <BackupSettingsSection />
 
           <Section icon={Terminal} title="Tools" description="Paths to SteamCMD and (on Linux) Proton-GE.">
+            <AsaServerCacheRow autoStart={autoStartCache} onAutoStartConsumed={() => setAutoStartCache(false)} />
+            <Separator style={{ background: "var(--border)" }} />
             <ToolPathField
               label="SteamCMD Path" settingKey="steamcmd_path" placeholder="/path/to/steamcmd"
               hint="Path to the steamcmd executable. Used for all server installs and updates."
               validateFn={(p) => tauriCmd.validateSteamcmd(p)}
-              validLabel="SteamCMD is valid" invalidLabel="SteamCMD not found at this path — check the path."
+              validLabel="SteamCMD is valid"
+              onInstallOffer={async (typedPath) => {
+                const isExe = /[/\\](steamcmd\.sh|steamcmd\.exe)$/i.test(typedPath);
+                const targetDir = isExe ? typedPath.replace(/[/\\][^/\\]+$/, "") : typedPath;
+                await tauriCmd.installSteamcmd(targetDir);
+                const sep = targetDir.includes("\\") ? "\\" : "/";
+                const exe = navigator.userAgent.includes("Windows") ? "steamcmd.exe" : "steamcmd.sh";
+                return `${targetDir}${sep}${exe}`;
+              }}
+              installOfferTitle="SteamCMD Not Found"
+              installOfferBody="No SteamCMD executable was found at this path. Would you like to install it here?"
             />
             <SteamcmdReinstallRow />
             {IS_LINUX && (
@@ -2016,8 +2584,16 @@ export default function SettingsPage() {
                   placeholder="/path/to/GE-Proton9-x"
                   hint="Proton-GE installation used to run the Windows ASA server binary on Linux."
                   pickDirectory validateFn={(p) => tauriCmd.validateProtonPath(p)}
-                  validLabel="Proton-GE is valid" invalidLabel="Not a valid Proton-GE directory — check the path."
+                  validLabel="Proton-GE is valid"
+                  onInstallOffer={async (targetDir) => {
+                    const newPath = await tauriCmd.downloadProtonGe(targetDir);
+                    await setAppSetting("proton_ge_managed", "true");
+                    return newPath;
+                  }}
+                  installOfferTitle="Proton-GE Not Found"
+                  installOfferBody="No Proton-GE installation was found at this path. Would you like to install it here?"
                 />
+                <ProtonGeInstallRow />
               </>
             )}
             <Separator style={{ background: "var(--border)" }} />
@@ -2034,19 +2610,11 @@ export default function SettingsPage() {
             <CloseToTraySection />
           </Section>
 
-          <Section icon={Power} title="Startup" description="Behaviour when the app starts and detects servers that went offline.">
+          <Section icon={Power} title="Startup" description="What to do when previously running servers are found offline on launch.">
             <StartupSection />
           </Section>
 
-          {IS_LINUX && (
-            <Section
-              icon={Layers}
-              title="Application Menu Integration"
-              description="Install LokiASAM into your desktop launcher (AppImage only)."
-            >
-              <AppImageIntegrationSection />
-            </Section>
-          )}
+          {IS_LINUX && <AppImageIntegrationSection />}
         </div>
       )}
 
@@ -2054,7 +2622,7 @@ export default function SettingsPage() {
       {activeTab === "updates" && (
         <div className="flex flex-col gap-6">
           <Section icon={Server} title="ASA Server Updates" description="Check for ARK: Survival Ascended dedicated server updates via the Steam API.">
-            <ServerUpdatesSection />
+            <ServerUpdatesSection onPreDownload={() => { skipScrollToTopRef.current = true; setAutoStartCache(true); setActiveTab("general"); }} />
           </Section>
           <Section icon={Download} title="LokiASAM App Updates" description="Check for and install updates to LokiASAM itself.">
             <AppUpdateSection />

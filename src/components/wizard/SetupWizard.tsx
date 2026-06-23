@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
@@ -720,8 +720,8 @@ function ImportVerifyPanel({
               Install Now
             </Button>
             {installingSteamcmd && (
-              <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
-                style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="outline" className="gap-1 h-7 text-xs bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}>
                 <StopCircle className="w-3 h-3" /> Cancel Install
               </Button>
             )}
@@ -1702,7 +1702,7 @@ function SteamCmdStep() {
                 boxShadow: steamcmdMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
               }}
             >
-              <p className="text-sm font-semibold" style={{ color: steamcmdMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
+              <p className="text-sm font-semibold" style={{ color: steamcmdMode === mode ? "var(--neon-purple)" : "var(--text-muted)" }}>
                 {label}
               </p>
               <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
@@ -1734,8 +1734,8 @@ function SteamCmdStep() {
           {isLoading && outputChannel !== null && (
             <Button
               onClick={async () => { await tauriCmd.abortOperation("steamcmd_install"); }}
-              size="sm" variant="ghost" className="w-full gap-1.5"
-              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              size="sm" variant="outline" className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}>
               <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           )}
@@ -1834,6 +1834,7 @@ function ProtonGEStep() {
   const [attempt, setAttempt] = useState(0);
   const [canceled, setCanceled] = useState(false);
   const [manuallyAddedPaths, setManuallyAddedPaths] = useState<Set<string>>(new Set());
+  const [showManagedConfirm, setShowManagedConfirm] = useState(false);
   const detectedListRef = useRef<HTMLDivElement>(null);
 
   const scan = useCallback(async () => {
@@ -1984,11 +1985,16 @@ function ProtonGEStep() {
               key={mode}
               onClick={() => {
                 if (!isTabLocked) {
-                  setProtonMode(mode);
-                  setProtonPath("");
-                  setProtonValidated(false);
-                  setError("");
-                  setShowDownload(false);
+                  if (mode === "managed" && protonMode === "existing") {
+                    // Warn before handing control to LokiASAM
+                    setShowManagedConfirm(true);
+                  } else {
+                    setProtonMode(mode);
+                    setProtonPath("");
+                    setProtonValidated(false);
+                    setError("");
+                    setShowDownload(false);
+                  }
                 }
               }}
               disabled={isTabLocked}
@@ -1999,7 +2005,7 @@ function ProtonGEStep() {
                 boxShadow: protonMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
               }}
             >
-              <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
+              <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-muted)" }}>
                 {label}
               </p>
               <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
@@ -2033,8 +2039,8 @@ function ProtonGEStep() {
           {isLoading && showDownload && (
             <Button
               onClick={async () => { await tauriCmd.abortOperation("proton_download"); }}
-              size="sm" variant="ghost" className="w-full gap-1.5"
-              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              size="sm" variant="outline" className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}>
               <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           )}
@@ -2163,6 +2169,49 @@ function ProtonGEStep() {
           <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
         </p>
       )}
+
+      {/* Managed-mode risk confirmation */}
+      <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-md"
+          style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+              <AlertCircle className="w-5 h-5" /> Switch to Managed Mode?
+            </DialogTitle>
+            <DialogDescription className="space-y-2 pt-1">
+              <span className="block">
+                LokiASAM will take full control of downloading and updating Proton-GE into its own managed directory.
+              </span>
+              <span className="block font-medium" style={{ color: "var(--text-primary)" }}>
+                If your current Proton-GE installation is managed by Steam, Lutris, or another tool, LokiASAM may overwrite or conflict with it.
+              </span>
+              <span className="block">
+                Only switch to managed if this is a standalone Proton-GE install you want LokiASAM to fully control.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowManagedConfirm(false)}
+              className="hover:bg-(--surface-elevated)"
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
+              Keep Unmanaged
+            </Button>
+            <Button variant="outline"
+              className="gap-2 bg-[rgba(255,136,0,0.12)]! hover:bg-[rgba(255,136,0,0.25)]!"
+              style={{ borderColor: "rgba(255,136,0,0.4)", color: "var(--neon-orange)" }}
+              onClick={() => {
+                setShowManagedConfirm(false);
+                setProtonMode("managed");
+                setProtonPath("");
+                setProtonValidated(false);
+                setError("");
+                setShowDownload(false);
+              }}>
+              Switch to Managed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -2377,19 +2426,6 @@ function CertStep() {
             {phase === "error" ? "Retry Installation" : "Install Certificate"}
           </Button>
 
-          {!certSkipped && (
-            <Button
-              onClick={handleSkip}
-              variant="outline"
-              disabled={phase === "downloading" || phase === "installing"}
-              style={{
-                border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
-                color: "var(--text-muted)",
-              }}
-            >
-              Skip
-            </Button>
-          )}
         </div>
       )}
     </div>
@@ -2729,7 +2765,22 @@ function AutoUpdateStep() {
     asaAutoCheckHours, setAsaAutoCheckHours,
     appUpdateCheckMode, setAppUpdateCheckMode,
     protonCheckMode, setProtonCheckMode,
+    protonMode, setProtonMode,
+    setStep,
   } = useSetupStore();
+
+  const [showManagedConfirm, setShowManagedConfirm] = useState(false);
+
+  // Keep proton check mode in sync with the managed/unmanaged choice
+  useEffect(() => {
+    if (!IS_LINUX) return;
+    if (protonMode === "existing") {
+      setProtonCheckMode("disabled");
+    } else if (protonMode === "managed" && protonCheckMode === "disabled") {
+      setProtonCheckMode("startup");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [protonMode]);
 
   const asaIntervals = [
     { value: "disabled",       label: "Disabled" },
@@ -2830,22 +2881,84 @@ function AutoUpdateStep() {
               Check GitHub for new GE-Proton releases. A notification appears when a new version is available.
             </p>
           </div>
-          <div className="flex gap-2">
-            {protonModes.map(({ value, label }) => (
-              <button
-                key={value}
-                onClick={() => setProtonCheckMode(value)}
-                className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{
-                  background: protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "var(--surface-elevated)",
-                  border: `1px solid ${protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
-                  color: protonCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
-                }}
+          {protonMode === "existing" ? (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
+                style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
+                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
+                <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
+                  Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => setShowManagedConfirm(true)}
+                className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+                style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
               >
-                {label}
-              </button>
-            ))}
-          </div>
+                <TriangleAlert className="w-4 h-4" />
+                Allow LokiASAM to Manage This Proton Install
+              </Button>
+
+              <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
+                <DialogContent showCloseButton={false} className="max-w-lg"
+                  style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+                      <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
+                    </DialogTitle>
+                    <DialogDescription className="space-y-2 pt-1">
+                      <span className="block">
+                        Switching to managed mode gives LokiASAM full control over your Proton-GE installation — it may download new versions and replace the current one.
+                      </span>
+                      <span className="block font-medium" style={{ color: "var(--neon-red)" }}>
+                        If this Proton-GE was installed by Steam, Lutris, or another tool, LokiASAM may overwrite it and break other applications that depend on it.
+                      </span>
+                      <span className="block">
+                        For the safest experience, go back and let LokiASAM download and install its own dedicated copy of Proton-GE instead.
+                      </span>
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter className="flex-col gap-2 sm:flex-col">
+                    <Button variant="outline"
+                      onClick={() => { setShowManagedConfirm(false); setStep(5); }}
+                      className="w-full gap-1.5 hover:bg-(--surface-elevated)"
+                      style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
+                      Go Back to Proton-GE Setup
+                    </Button>
+                    <Button variant="outline"
+                      className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+                      style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+                      onClick={() => { setProtonMode("managed"); setShowManagedConfirm(false); }}>
+                      Allow Management
+                    </Button>
+                    <Button variant="outline" onClick={() => setShowManagedConfirm(false)}
+                      className="w-full hover:bg-(--surface-elevated)"
+                      style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
+                      Cancel
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              {protonModes.map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => setProtonCheckMode(value)}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  style={{
+                    background: protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "var(--surface-elevated)",
+                    border: `1px solid ${protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                    color: protonCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -3067,7 +3180,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     steamcmdPath, steamcmdValidated,
     themePreset, themeAccent,
     protonPath, protonValidated, protonMode,
-    certInstalled, certSkipped,
+    certInstalled, certSkipped, setCertSkipped,
     setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
     setProtonPath, setProtonValidated,
     discordWebhook,
@@ -3116,10 +3229,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       case 2: return baseDirWritable;
       case 3: return backupDirWritable;
       case 4: return steamcmdValidated;
-      // step 5: Proton-GE (Linux) | Cert (Windows)
-      case 5: return IS_LINUX ? protonValidated : (certInstalled || certSkipped);
-      // step 6: Cert (Linux) | Notifications (Windows)
-      case 6: return IS_LINUX ? (certInstalled || certSkipped) : true;
+      // step 5: Proton-GE (Linux) | Cert (Windows) — cert always advances (Next becomes Skip)
+      case 5: return IS_LINUX ? protonValidated : true;
+      // step 6: Cert (Linux) | Notifications (Windows) — cert always advances
+      case 6: return true;
       case 7: return true;  // notifications (Linux) / tray (Windows)
       case 8: return true;  // tray (Linux) / updates (Windows)
       case 9: return true;  // updates (Linux)
@@ -3279,6 +3392,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         setSaving(false);
       }
     } else {
+      // Leaving the cert step without installing — mark as skipped
+      const certStepIdx = IS_LINUX ? 6 : 5;
+      if (step === certStepIdx && !certInstalled) {
+        setCertSkipped(true);
+      }
       setDirection(1);
       nextStep();
     }
@@ -3406,11 +3524,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                   <div />
                 ) : (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     onClick={handlePrev}
                     disabled={isLoading}
-                    className="gap-2"
-                    style={{ color: "var(--text-muted)" }}
+                    className="gap-2 hover:bg-(--surface-elevated)"
+                    style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}
                   >
                     <ArrowLeft className="w-4 h-4" /> Back
                   </Button>
@@ -3423,19 +3541,18 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 {/* Hide the default Next button when import mode is showing its own button */}
                 {!(step === 2 && importMode && importValid) && (
                   <Button
+                    variant="outline"
                     onClick={handleNext}
                     disabled={!canAdvance() || isLoading || saving}
-                    className="gap-2"
-                    style={{
-                      background: canAdvance() && !isLoading ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.05)",
-                      border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
-                      color: canAdvance() && !isLoading ? "var(--neon-purple)" : "var(--text-muted)",
-                    }}
+                    className="gap-2 bg-[rgba(var(--neon-purple-rgb),0.15)]! hover:bg-[rgba(var(--neon-purple-rgb),0.28)]!"
+                    style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
                   >
                     {saving ? (
                       <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
                     ) : step === TOTAL_STEPS - 2 ? (
                       <>Finish <CheckCircle2 className="w-4 h-4" /></>
+                    ) : (IS_LINUX ? step === 6 : step === 5) && !certInstalled ? (
+                      <>Skip <ArrowRight className="w-4 h-4" /></>
                     ) : (
                       <>Next <ArrowRight className="w-4 h-4" /></>
                     )}
@@ -3445,14 +3562,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 {/* Import mode: show an Import button in place of Next */}
                 {step === 2 && importMode && importValid && (
                   <Button
+                    variant="outline"
                     onClick={handleNext}
                     disabled={saving}
-                    className="gap-2"
-                    style={{
-                      background: "rgba(0,255,136,0.12)",
-                      border: "1px solid rgba(0,255,136,0.4)",
-                      color: "var(--neon-green)",
-                    }}
+                    className="gap-2 bg-[rgba(0,255,136,0.12)]! hover:bg-[rgba(0,255,136,0.22)]!"
+                    style={{ borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
                   >
                     {saving ? (
                       <><Loader2 className="w-4 h-4 animate-spin" /> Importing…</>

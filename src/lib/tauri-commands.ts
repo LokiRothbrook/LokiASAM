@@ -664,6 +664,8 @@ export const tauriCmd = {
    * Known keys: "steamcmd_install", "proton_download", "server_{serverId}".
    */
   abortOperation: (opId: string) => invoke<void>("abort_operation", { opId }),
+  /** Returns the IDs of all currently active background operations. */
+  getRunningOps: () => invoke<string[]>("get_running_ops"),
   /**
    * Move the base directory from oldDir to newDir.
    * Tries an atomic rename first; falls back to copy+delete for cross-volume moves.

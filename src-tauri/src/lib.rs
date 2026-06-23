@@ -577,6 +577,7 @@ pub fn run() {
             commands::system::install_appimage_integration,
             commands::system::uninstall_appimage_integration,
             commands::system::get_install_method,
+            commands::system::get_running_ops,
             commands::system::check_dir,
             commands::system::check_file_exists,
             commands::system::wipe_lokiasam_dir,

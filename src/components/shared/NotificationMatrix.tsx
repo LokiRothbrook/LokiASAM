@@ -14,7 +14,7 @@
 
 import { useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { toast } from "sonner";
-import { Loader2, Bell, Monitor, MessageSquare, Mail } from "lucide-react";
+import { Loader2, AppWindow, Bell, Monitor, MessageSquare, Mail } from "lucide-react";
 import {
   getNotificationConfigs,
   saveGlobalChannelEvents,
@@ -36,7 +36,7 @@ interface ChannelDef {
 }
 
 const CHANNELS: ChannelDef[] = [
-  { id: "in_app",  label: "In-App",  Icon: Bell,          description: "Toast popup inside LokiASAM" },
+  { id: "in_app",  label: "In-App",  Icon: AppWindow,     description: "Toast popup inside LokiASAM" },
   { id: "bell",    label: "Bell",    Icon: Bell,          description: "Show as unread in the bell badge and popup" },
   { id: "desktop", label: "Desktop", Icon: Monitor,       description: "OS system notification" },
   { id: "discord", label: "Discord", Icon: MessageSquare, description: "Discord webhook" },
@@ -49,7 +49,7 @@ const ALL_EVENTS = Object.values(NOTIFICATION_EVENTS) as NotificationEventType[]
 const CHANNEL_DEFAULTS: Record<ChannelId, NotificationEventType[]> = {
   in_app:  ALL_EVENTS,
   bell:    ALL_EVENTS,
-  desktop: ["server_started", "server_crashed", "update_available", "update_started", "update_failed", "backup_completed", "backup_failed"],
+  desktop: [],
   discord: ALL_EVENTS,
   email:   ALL_EVENTS,
 };
@@ -172,6 +172,23 @@ function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
     }
   }, [channelEvents, onChange, onSaved]);
 
+  const handleToggleAll = useCallback((channel: ChannelId) => {
+    const allOn = ALL_EVENTS.every((e) => channelEvents[channel].has(e));
+    const newSet = allOn ? new Set<NotificationEventType>() : new Set(ALL_EVENTS);
+    const nextEvents = { ...channelEvents, [channel]: newSet };
+    setChannelEvents(nextEvents);
+
+    if (onChange) {
+      onChange(Object.fromEntries(
+        Object.entries(nextEvents).map(([ch, set]) => [ch, [...set]])
+      ));
+    } else {
+      saveGlobalChannelEvents(channel, [...newSet])
+        .then(() => onSaved?.())
+        .catch((err) => toast.error("Failed to save notification settings", { description: String(err) }));
+    }
+  }, [channelEvents, onChange, onSaved]);
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-6 text-sm" style={{ color: "var(--text-muted)" }}>
@@ -197,6 +214,8 @@ function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
               const disabled =
                 (ch.id === "discord" && !discordConfigured) ||
                 (ch.id === "email"   && !emailConfigured);
+              const allOn  = ALL_EVENTS.every((e) => channelEvents[ch.id].has(e));
+              const someOn = !allOn && ALL_EVENTS.some((e) => channelEvents[ch.id].has(e));
               return (
                 <th
                   key={ch.id}
@@ -207,10 +226,20 @@ function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
                   <div className="flex flex-col items-center gap-1">
                     <Icon className="w-3.5 h-3.5" />
                     <span>{ch.label}</span>
-                    {disabled && (
+                    {disabled ? (
                       <span className="font-normal text-[9px]" style={{ color: "var(--text-subtle)" }}>
                         (not configured)
                       </span>
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={allOn}
+                        ref={(el) => { if (el) el.indeterminate = someOn; }}
+                        onChange={() => handleToggleAll(ch.id)}
+                        className="w-3 h-3 mt-0.5"
+                        style={{ accentColor: "var(--neon-purple)", cursor: "pointer" }}
+                        title={allOn ? `Disable all ${ch.label} notifications` : `Enable all ${ch.label} notifications`}
+                      />
                     )}
                   </div>
                 </th>
