@@ -657,6 +657,8 @@ export const tauriCmd = {
   wipeLokiAsamDir: (path: string, fullWipe: boolean) => invoke<void>("wipe_lokiasam_dir", { path, fullWipe }),
   /** Recursively delete a directory. Idempotent — returns Ok if path doesn't exist. */
   deleteDirectory: (path: string) => invoke<void>("delete_directory", { path }),
+  /** Remap all paths in the database from old_base_dir to new_base_dir during import. */
+  remapImportPaths: (dbPath: string, oldBaseDir: string, newBaseDir: string) => invoke<void>("remap_import_paths", { dbPath, oldBaseDir, newBaseDir }),
   /**
    * Request cancellation of a running operation by key.
    * Known keys: "steamcmd_install", "proton_download", "server_{serverId}".

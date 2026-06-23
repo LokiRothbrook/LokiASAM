@@ -221,6 +221,18 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
 
+      // Ensure both save symlinks/junctions are in place before launching
+      const baseDir = await getAppSetting("base_dir").catch(() => null);
+      if (baseDir) {
+        const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+        await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+          console.warn("createSaveLink failed on start:", e);
+        });
+        await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed on start:", e);
+        });
+      }
+
       await warnIfFirewallMissing(server);
       const params = await buildStartParams(server);
       const pid = await tauriCmd.startServer(params);

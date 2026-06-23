@@ -25,7 +25,7 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
-  X, BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff,
+  X, BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff, Shield,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -38,7 +38,8 @@ import {
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
 import { useAppStore } from "@/store/useAppStore";
-import { tauriCmd, type DirCheckResult, type ProtonEntry } from "@/lib/tauri-commands";
+import { tauriCmd, type DirCheckResult, type ProtonEntry, type FirewallStatus, type PortDef } from "@/lib/tauri-commands";
+import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -468,14 +469,40 @@ function ImportVerifyPanel({
   info,
   importDir,
 }: {
-  info: { servers: number; steamcmd: string; proton?: string; steamcmdMissing?: boolean; protonMissing?: boolean };
+  info: {
+    servers: number;
+    steamcmd: string;
+    proton?: string;
+    protonPrefix?: string;
+    steamcmdMissing?: boolean;
+    protonMissing?: boolean;
+    allServersPorts?: Array<{
+      serverId: string;
+      serverName: string;
+      gamePort: number;
+      queryPort: number;
+      rconPort: number;
+    }>;
+  };
   importDir: string;
 }) {
-  const { setSteamcmdPath, setSteamcmdValidated, setProtonPath, setProtonValidated } = useSetupStore();
+  const { setSteamcmdPath, setSteamcmdValidated, setProtonPath, setProtonValidated, protonPath } = useSetupStore();
   const [installingSteamcmd, setInstallingSteamcmd] = useState(false);
   const [steamcmdDone, setSteamcmdDone]             = useState(false);
   const [installingProton, setInstallingProton]     = useState(false);
   const [protonDone, setProtonDone]                 = useState(false);
+
+  // Mod Certs
+  const [certPhase, setCertPhase] = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
+  const [certError, setCertError] = useState("");
+  const [certSkipped, setCertSkipped] = useState(false);
+
+  // Firewall
+  const [fwPhase, setFwPhase] = useState<"idle" | "checking" | "ready" | "opening" | "done" | "error">("idle");
+  const [fwStatus, setFwStatus] = useState<FirewallStatus | null>(null);
+  const [fwError, setFwError] = useState("");
+  const [fwSkipped, setFwSkipped] = useState(false);
+  const [showFwDialog, setShowFwDialog] = useState(false);
 
   const handleInstallSteamcmd = async () => {
     const sep = importDir.includes("\\") ? "\\" : "/";
@@ -527,6 +554,146 @@ function ImportVerifyPanel({
       }
     } catch {/* */}
   };
+
+  const handleInstallCerts = async () => {
+    setCertError("");
+    try {
+      const tmp = await tempDir();
+      setCertPhase("downloading");
+      const certPath = await tauriCmd.downloadAmazonRootCa(tmp);
+
+      setCertPhase("installing");
+      if (IS_LINUX && !protonPath && !info.proton) {
+        throw new Error("Proton-GE path not found. Please ensure Proton-GE is validated first.");
+      }
+      // Use protonPath from setup store if user just selected proton, otherwise use info.proton
+      const resolvedProtonPath = protonPath || info.proton;
+      const proton = IS_LINUX && resolvedProtonPath ? resolvedProtonPath : undefined;
+      const prefix = IS_LINUX && info.protonPrefix ? info.protonPrefix : undefined;
+      await tauriCmd.installAmazonRootCa(certPath, proton, prefix);
+      setCertPhase("done");
+    } catch (e) {
+      if (!String(e).includes("Aborted")) {
+        setCertError(String(e));
+        setCertPhase("error");
+      }
+    }
+  };
+
+  const handleSkipCerts = () => {
+    setCertSkipped(true);
+  };
+
+  const handleCheckFirewall = async () => {
+    setFwError("");
+    setFwPhase("checking");
+    try {
+      if (!info.allServersPorts || info.allServersPorts.length === 0) {
+        setFwStatus({ firewallType: "none", active: false, ports: [] });
+        setFwPhase("done");
+        return;
+      }
+
+      const allPorts: PortDef[] = [];
+      const seen = new Set<string>();
+      for (const srv of info.allServersPorts) {
+        for (const p of [
+          { port: srv.gamePort, protocol: "udp" as const },
+          { port: srv.queryPort, protocol: "udp" as const },
+          { port: srv.rconPort, protocol: "tcp" as const },
+        ]) {
+          const key = `${p.port}/${p.protocol}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            allPorts.push(p);
+          }
+        }
+      }
+
+      if (allPorts.length === 0) {
+        setFwStatus({ firewallType: "none", active: false, ports: [] });
+        setFwPhase("done");
+        return;
+      }
+
+      const result = await tauriCmd.checkFirewallPorts(allPorts);
+      setFwStatus(result);
+      const allCovered = !result.active || result.ports.every((p) => p.covered);
+      setFwPhase(allCovered ? "done" : "ready");
+    } catch (e) {
+      setFwError(String(e));
+      setFwPhase("error");
+    }
+  };
+
+  const handleOpenFirewallPorts = async () => {
+    if (!fwStatus) return;
+    setFwPhase("opening");
+    try {
+      const allPorts = fwStatus.ports.map((p) => ({
+        port: p.port,
+        protocol: p.protocol as "tcp" | "udp",
+      }));
+      const proton = IS_LINUX && protonDone ? protonPath : undefined;
+      await tauriCmd.addFirewallRules(allPorts, proton);
+
+      const updated = await tauriCmd.checkFirewallPorts(allPorts);
+      setFwStatus(updated);
+      setFwPhase("done");
+      setShowFwDialog(false);
+    } catch (e) {
+      setFwError(String(e));
+      setFwPhase("error");
+    }
+  };
+
+  const handleSkipFirewall = () => {
+    setFwSkipped(true);
+  };
+
+  // Auto-check firewall when servers data loads (doesn't require Proton-GE for checking)
+  useEffect(() => {
+    if (
+      fwPhase === "idle" &&
+      info.allServersPorts &&
+      info.allServersPorts.length > 0
+    ) {
+      handleCheckFirewall();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info.allServersPorts]);
+
+  // Auto-validate found tools
+  useEffect(() => {
+    if (info && !info.steamcmdMissing && !steamcmdDone) {
+      setSteamcmdDone(true);
+    }
+    if (info && !IS_LINUX && !info.steamcmdMissing && !protonDone) {
+      setProtonDone(true);
+    }
+    if (info && IS_LINUX && !info.protonMissing && !protonDone) {
+      setProtonDone(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info?.steamcmdMissing, info?.protonMissing]);
+
+  // Check if cert is already installed
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!IS_LINUX || !info.proton || !info.protonPrefix) return;
+        const proton = info.proton;
+        const prefix = info.protonPrefix;
+        const installed = await tauriCmd.checkAmazonRootCaInstalled(proton, prefix);
+        if (installed) {
+          setCertPhase("done");
+        }
+      } catch {
+        // If check fails, leave as idle so user can manually install
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [protonDone, info?.proton, info?.protonPrefix]);
 
   const allGood = !info.steamcmdMissing || steamcmdDone;
   const protonAllGood = !info.protonMissing || protonDone;
@@ -611,9 +778,262 @@ function ImportVerifyPanel({
         </p>
       ) : null}
 
+      {/* Mod Certs row */}
+      <div className="pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.1)" }}>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>Amazon Mod API Cert</p>
+          {certPhase === "done" && <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />}
+          {(certPhase === "downloading" || certPhase === "installing") && (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--text-muted)" }} />
+          )}
+        </div>
+
+        {certPhase === "idle" && !certSkipped && (
+          <div className="space-y-2">
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                onClick={handleInstallCerts}
+                disabled={!allGood || !protonAllGood}
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+                style={{
+                  background: !allGood || !protonAllGood ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(var(--neon-purple-rgb),0.12)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+                  color: !allGood || !protonAllGood ? "rgba(var(--neon-purple-rgb),0.5)" : "var(--neon-purple)",
+                }}
+              >
+                <ShieldCheck className="w-3 h-3" /> Install Cert
+              </Button>
+            </div>
+            <p className="text-xs" style={{ color: !allGood || !protonAllGood ? "var(--text-subtle)" : "var(--text-muted)" }}>
+              {!allGood || !protonAllGood ? "SteamCMD and Proton-GE must be ready first." : "Install later in Settings if needed."}
+            </p>
+          </div>
+        )}
+
+        {(certPhase === "downloading" || certPhase === "installing") && (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {certPhase === "downloading" ? "Downloading…" : "Installing…"}
+          </p>
+        )}
+
+        {certPhase === "done" && (
+          <p className="text-xs" style={{ color: "var(--neon-green)" }}>✓ Installed</p>
+        )}
+
+        {certPhase === "error" && (
+          <div className="text-xs space-y-1">
+            <p style={{ color: "var(--neon-red)" }}>Installation failed</p>
+            <p style={{ color: "var(--text-muted)" }}>{certError}</p>
+            <Button
+              onClick={handleInstallCerts}
+              size="sm"
+              className="gap-1.5 h-7 text-xs mt-2"
+              style={{
+                background: "rgba(var(--neon-purple-rgb),0.12)",
+                border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+                color: "var(--neon-purple)",
+              }}
+            >
+              <ShieldCheck className="w-3 h-3" /> Retry
+            </Button>
+          </div>
+        )}
+
+        {certSkipped && certPhase !== "done" && (
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Skipped — can be installed later in Settings.
+          </p>
+        )}
+      </div>
+
+      {/* Firewall row */}
+      <div className="pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.1)" }}>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>Firewall Ports</p>
+            {fwPhase === "done" && <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />}
+            {(fwPhase === "checking" || fwPhase === "opening") && (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--text-muted)" }} />
+            )}
+          </div>
+
+          {fwPhase === "checking" && (
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>Checking firewall…</p>
+          )}
+
+          {fwStatus && !fwStatus.active && (fwPhase === "done" || fwPhase === "ready") && (
+            <p className="text-xs" style={{ color: "var(--neon-green)" }}>✓ No active firewall detected.</p>
+          )}
+
+          {fwStatus && fwStatus.active && (fwPhase === "ready" || fwPhase === "done") && (
+            <div className="space-y-2">
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {fwPhase === "done"
+                  ? "✓ All ports covered."
+                  : `${fwStatus.ports.filter((p) => !p.covered).length} port(s) need opening.`}
+              </p>
+              {fwPhase === "ready" && fwStatus.ports.filter((p) => !p.covered).length > 0 && (
+                <Button
+                  onClick={() => setShowFwDialog(true)}
+                  disabled={!allGood || !protonAllGood}
+                  size="sm"
+                  className="gap-1.5 h-7 text-xs"
+                  style={{
+                    background: !allGood || !protonAllGood ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(var(--neon-purple-rgb),0.12)",
+                    border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+                    color: !allGood || !protonAllGood ? "rgba(var(--neon-purple-rgb),0.5)" : "var(--neon-purple)",
+                  }}
+                >
+                  <Shield className="w-3 h-3" /> Open Missing Ports
+                </Button>
+              )}
+              {fwPhase === "ready" && fwStatus.ports.filter((p) => !p.covered).length === 0 && (
+                <Button
+                  onClick={() => setFwPhase("done")}
+                  size="sm"
+                  className="gap-1.5 h-7 text-xs"
+                  style={{
+                    background: "rgba(0,255,136,0.08)",
+                    border: "1px solid rgba(0,255,136,0.4)",
+                    color: "var(--neon-green)",
+                  }}
+                >
+                  <CheckCircle2 className="w-3 h-3" /> All Ports Open
+                </Button>
+              )}
+            </div>
+          )}
+
+          {fwPhase === "error" && (
+            <div className="text-xs space-y-1">
+              <p style={{ color: "var(--neon-red)" }}>Check failed</p>
+              <p style={{ color: "var(--text-muted)" }}>{fwError}</p>
+              <Button
+                onClick={handleCheckFirewall}
+                size="sm"
+                className="gap-1.5 h-7 text-xs mt-2"
+                style={{
+                  background: "rgba(var(--neon-purple-rgb),0.12)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.35)",
+                  color: "var(--neon-purple)",
+                }}
+              >
+                <Shield className="w-3 h-3" /> Retry Check
+              </Button>
+            </div>
+          )}
+
+          {fwSkipped && fwPhase !== "done" && (
+            <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+              Skipped — configure firewall manually if needed.
+            </p>
+          )}
+
+        </div>
+
+      {/* Firewall Dialog */}
+      <Dialog open={showFwDialog} onOpenChange={setShowFwDialog}>
+        <DialogContent
+          showCloseButton={false}
+          className="max-w-lg"
+          style={{
+            background: "rgba(14,16,24,0.98)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Shield className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+              Open Firewall Ports
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 max-h-96 overflow-y-auto">
+            {info.allServersPorts?.map((srv) => {
+              const srvPortDefs = [
+                { port: srv.gamePort, protocol: "udp" as const, label: "Game Port" },
+                { port: srv.queryPort, protocol: "udp" as const, label: "Query Port" },
+                { port: srv.rconPort, protocol: "tcp" as const, label: "RCON Port" },
+              ];
+
+              const srvStatus = srvPortDefs
+                .map((pd) => ({
+                  ...pd,
+                  status: fwStatus?.ports.find(
+                    (p) => p.port === pd.port && p.protocol === pd.protocol
+                  ),
+                }))
+                .filter((x) => x.status);
+
+              if (srvStatus.length === 0) return null;
+
+              return (
+                <div key={srv.serverId} className="space-y-2">
+                  <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                    {srv.serverName}
+                  </p>
+                  <div className="space-y-1 pl-3">
+                    {srvStatus.map((pd) => (
+                      <div
+                        key={`${pd.port}-${pd.protocol}`}
+                        className="flex items-center gap-2 text-xs"
+                      >
+                        {pd.status?.covered ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-green)" }} />
+                        ) : (
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-red)" }} />
+                        )}
+                        <span style={{ color: "var(--text-primary)" }}>
+                          {pd.port}/{pd.protocol.toUpperCase()}
+                        </span>
+                        <span style={{ color: "var(--text-muted)" }}>
+                          ({pd.label})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowFwDialog(false)}
+              style={{
+                borderColor: "rgba(255,255,255,0.15)",
+                color: "var(--text-muted)",
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleOpenFirewallPorts}
+              disabled={fwPhase === "opening"}
+              style={{
+                background: "rgba(var(--neon-purple-rgb),0.15)",
+                border: "1px solid rgba(var(--neon-purple-rgb),0.5)",
+                color: "var(--neon-purple)",
+              }}
+            >
+              {fwPhase === "opening" ? (
+                <>
+                  <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Opening…
+                </>
+              ) : (
+                <>
+                  <Shield className="w-3 h-3 mr-1.5" /> Open Ports
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {allGood && protonAllGood && (
         <p className="text-xs mt-1" style={{ color: "var(--neon-green)" }}>
-          ✓ Click &quot;Import &amp; Finish&quot; below to continue.
+          ✓ SteamCMD and {IS_LINUX ? "Proton-GE are " : "is "} ready. Mod certs and firewall are optional. Click &quot;Import &amp; Finish&quot; below to continue.
         </p>
       )}
     </div>
@@ -635,8 +1055,19 @@ function BaseDirStep() {
   const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [importError, setImportError] = useState("");
   const [importInfo, setImportInfo] = useState<{
-    servers: number; steamcmd: string; proton?: string;
-    steamcmdMissing?: boolean; protonMissing?: boolean;
+    servers: number;
+    steamcmd: string;
+    proton?: string;
+    protonPrefix?: string;
+    steamcmdMissing?: boolean;
+    protonMissing?: boolean;
+    allServersPorts?: Array<{
+      serverId: string;
+      serverName: string;
+      gamePort: number;
+      queryPort: number;
+      rconPort: number;
+    }>;
   } | null>(null);
 
   const validateDir = useCallback(async (path: string) => {
@@ -728,16 +1159,71 @@ function BaseDirStep() {
         getSetting("steamcmd_path"),
         getSetting("proton_path"),
       ]);
-      const [steamcmdExists, protonExists] = await Promise.all([
-        steamcmdPath ? tauriCmd.checkFileExists(steamcmdPath) : Promise.resolve(false),
-        protonPath   ? tauriCmd.checkFileExists(protonPath)   : Promise.resolve(false),
-      ]);
+
+      // Check if stored paths exist; if not, check fallback locations in the importing folder
+      let resolvedSteamcmdPath = steamcmdPath;
+      let resolvedProtonPath = protonPath;
+      let steamcmdExists = steamcmdPath ? await tauriCmd.checkFileExists(steamcmdPath) : false;
+      let protonExists = protonPath ? await tauriCmd.checkFileExists(protonPath) : false;
+
+      // If steamcmd not found at stored location, check fallback
+      if (!steamcmdExists) {
+        const isWindows = typeof window !== "undefined" && navigator.userAgent.includes("Windows");
+        const fallbackSteamcmd = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "steamcmd" + sep + (isWindows ? "steamcmd.exe" : "steamcmd.sh");
+        if (await tauriCmd.checkFileExists(fallbackSteamcmd)) {
+          resolvedSteamcmdPath = fallbackSteamcmd;
+          steamcmdExists = true;
+        }
+      }
+
+      // If proton not found at stored location, check fallback directory (only on Linux)
+      if (!protonExists && typeof window !== "undefined" && !navigator.userAgent.includes("Windows")) {
+        const fallbackDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton";
+        if (await tauriCmd.checkFileExists(fallbackDir)) {
+          // Look specifically inside lokiasam/proton/ for GE-Proton* subdirectories
+          // and verify each has a valid proton executable
+          try {
+            const found = await tauriCmd.scanForProton(importDir);
+            // Filter to only those inside the fallback directory
+            const localProtons = found.filter(p => p.path.startsWith(fallbackDir));
+            if (localProtons.length > 0) {
+              // Validate the first found Proton to ensure it's complete (has proton executable)
+              const isValid = await tauriCmd.validateProtonPath(localProtons[0].path);
+              if (isValid) {
+                resolvedProtonPath = localProtons[0].path;
+                protonExists = true;
+              }
+            }
+          } catch {
+            // If scanning fails, proton stays not found
+          }
+        }
+      }
+
+      // During import: ALWAYS compute prefix from importDir, ignore stored protonPrefixPath
+      // Proton can be external, but prefix is always local to this installation
+      let resolvedPrefix: string | undefined;
+      if (typeof window !== "undefined" && !navigator.userAgent.includes("Windows")) {
+        resolvedPrefix = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix";
+      }
+
+      // Build all servers' port data for firewall checking
+      const allServersPorts = servers.map((srv) => ({
+        serverId: srv.id,
+        serverName: srv.name,
+        gamePort: srv.port,
+        queryPort: srv.query_port,
+        rconPort: srv.rcon_port,
+      }));
+
       setImportInfo({
         servers: servers.length,
-        steamcmd: steamcmdPath ?? "(not set)",
-        proton: protonPath ?? undefined,
-        steamcmdMissing: !steamcmdPath || !steamcmdExists,
-        protonMissing: typeof window !== "undefined" && !navigator.userAgent.includes("Windows") && (!protonPath || !protonExists),
+        steamcmd: resolvedSteamcmdPath ?? "(not set)",
+        proton: resolvedProtonPath ?? undefined,
+        protonPrefix: resolvedPrefix ?? undefined,
+        steamcmdMissing: !resolvedSteamcmdPath || !steamcmdExists,
+        protonMissing: typeof window !== "undefined" && !navigator.userAgent.includes("Windows") && (!resolvedProtonPath || !protonExists),
+        allServersPorts,
       });
       setImportValid(true);
     } catch (e) {
@@ -845,7 +1331,7 @@ function BaseDirStep() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  onClick={() => { setImportMode(true); setImportError(""); }}
+                  onClick={() => { setImportMode(true); setImportDir(baseDir); setImportError(""); }}
                   className="gap-1.5 h-7 text-xs"
                   style={{ background: "rgba(var(--neon-purple-rgb),0.12)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
                 >
@@ -962,6 +1448,7 @@ function BackupDirStep() {
   const { backupDir, setBackupDir, setBackupDirWritable } = useSetupStore();
   const [dirResult, setDirResult] = useState<DirCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
+  const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const validateDir = useCallback(async (path: string) => {
     if (!path.trim()) return;
@@ -985,10 +1472,16 @@ function BackupDirStep() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
+
   const handleChange = (value: string) => {
     setBackupDir(value);
     setDirResult(null);
     setBackupDirWritable(false);
+    if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);
+    if (value.trim()) {
+      validateDebounceRef.current = setTimeout(() => validateDir(value), 600);
+    }
   };
 
   const pickDir = async () => {
@@ -1118,15 +1611,18 @@ function SteamCmdStep() {
         setSteamcmdValidated(true);
       } else {
         setError("SteamCMD validation failed. Check output above for details.");
+        setSteamcmdValidated(false);
       }
     } catch (err) {
       const msg = String(err);
       if (msg === "Aborted") {
         setCanceled(true);
+        setSteamcmdValidated(false);
         // Clean up any partial steamcmd files
         tauriCmd.deleteDirectory(autoSteamcmdTarget).catch(() => {});
       } else {
         setError(msg);
+        setSteamcmdValidated(false);
       }
     } finally {
       setLoading(false);
@@ -1136,7 +1632,6 @@ function SteamCmdStep() {
   const handleManualValidate = async () => {
     if (!steamcmdPath) { setError("Enter the path to your SteamCMD executable."); return; }
     setError("");
-    setSteamcmdValidated(false);
     setLoading(true, "Validating SteamCMD...");
     setOutputChannel("validate");
     try {
@@ -1145,9 +1640,11 @@ function SteamCmdStep() {
         setSteamcmdValidated(true);
       } else {
         setError("SteamCMD validation failed. Make sure the path is correct.");
+        setSteamcmdValidated(false);
       }
     } catch (err) {
       setError(String(err));
+      setSteamcmdValidated(false);
     } finally {
       setLoading(false);
     }
@@ -1183,24 +1680,35 @@ function SteamCmdStep() {
         {[
           { mode: "auto" as const, label: "Auto-Download", desc: `Download into ${autoSteamcmdTarget}` },
           { mode: "manual" as const, label: "I have SteamCMD", desc: "Point to an existing install" },
-        ].map(({ mode, label, desc }) => (
-          <button
-            key={mode}
-            onClick={() => { if (!isLoading && !steamcmdValidated) { setSteamcmdMode(mode); setSteamcmdValidated(false); setError(""); } }}
-            disabled={isLoading || steamcmdValidated}
-            className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              background: steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
-              boxShadow: steamcmdMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
-            }}
-          >
-            <p className="text-sm font-semibold" style={{ color: steamcmdMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
-              {label}
-            </p>
-            <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
-          </button>
-        ))}
+        ].map(({ mode, label, desc }) => {
+          // Lock tabs only in auto mode (downloading or validated). Manual mode is always switchable.
+          const isTabLocked = (isLoading || steamcmdValidated) && steamcmdMode === "auto";
+          return (
+            <button
+              key={mode}
+              onClick={() => {
+                if (!isTabLocked) {
+                  setSteamcmdMode(mode);
+                  setSteamcmdValidated(false);
+                  setError("");
+                  setOutputChannel(null);
+                }
+              }}
+              disabled={isTabLocked}
+              className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                boxShadow: steamcmdMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
+              }}
+            >
+              <p className="text-sm font-semibold" style={{ color: steamcmdMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
+                {label}
+              </p>
+              <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
+            </button>
+          );
+        })}
       </div>
 
       {steamcmdMode === "auto" && (
@@ -1317,16 +1825,23 @@ function ProtonGEStep() {
   const [protonPhase, setProtonPhase] = useState<"downloading" | "extracting">("downloading");
   const [attempt, setAttempt] = useState(0);
   const [canceled, setCanceled] = useState(false);
+  const [manuallyAddedPaths, setManuallyAddedPaths] = useState<Set<string>>(new Set());
+  const detectedListRef = useRef<HTMLDivElement>(null);
 
   const scan = useCallback(async () => {
     setScanning(true);
     try {
       const results = await tauriCmd.scanForProton(baseDir);
-      setFound(results);
+      // Preserve manually added paths during rescan
+      const preserved = results.filter(e => !manuallyAddedPaths.has(e.path));
+      const manual = Array.from(manuallyAddedPaths)
+        .map(path => found.find(e => e.path === path))
+        .filter((e): e is ProtonEntry => e !== undefined);
+      setFound([...preserved, ...manual]);
     } catch { /* ignore */ } finally {
       setScanning(false);
     }
-  }, [baseDir]);
+  }, [baseDir, manuallyAddedPaths, found]);
 
   useEffect(() => {
     if (protonMode === "existing") scan();
@@ -1335,20 +1850,26 @@ function ProtonGEStep() {
   const handleSelectDetected = async (entry: ProtonEntry) => {
     if (validating) return;
     setError("");
-    setProtonValidated(false);
     setProtonPath("");
     setValidating(entry.path);
     try {
       const ok = await tauriCmd.validateProtonPath(entry.path);
       if (ok) {
         setProtonPath(entry.path);
-        setProtonValidated(true);
         setProtonVersion(entry.version);
+        setProtonValidated(true);
+        // Auto-scroll to show the selected item
+        setTimeout(() => {
+          const selected = detectedListRef.current?.querySelector('[data-selected="true"]');
+          selected?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }, 50);
       } else {
         setError(`${entry.version} does not appear to be a valid Proton-GE installation.`);
+        setProtonValidated(false);
       }
     } catch (e) {
       setError(String(e));
+      setProtonValidated(false);
     } finally {
       setValidating(null);
     }
@@ -1382,6 +1903,7 @@ function ProtonGEStep() {
         setCanceled(true);
       } else {
         setError(msg);
+        setProtonValidated(false);
       }
     } finally {
       setLoading(false);
@@ -1393,7 +1915,6 @@ function ProtonGEStep() {
   const handleManualValidate = async () => {
     if (!manualPath.trim()) { setError("Enter the path to your Proton-GE directory."); return; }
     setError("");
-    setProtonValidated(false);
     setProtonPath("");
     const path = manualPath.trim();
     const versionName = path.split("/").pop() || path;
@@ -1402,13 +1923,22 @@ function ProtonGEStep() {
       if (ok) {
         const newEntry: ProtonEntry = { path, version: versionName };
         setFound(prev => [...prev.filter(e => e.path !== path), newEntry]);
+        setManuallyAddedPaths(prev => new Set([...prev, path]));
         setProtonPath(path);
-        setProtonValidated(true);
         setProtonVersion(versionName);
+        setProtonValidated(true);
+        // Auto-scroll to the newly added entry
+        setTimeout(() => {
+          detectedListRef.current?.scrollTo({ top: detectedListRef.current.scrollHeight, behavior: "smooth" });
+        }, 100);
       } else {
         setError("Validation failed — check the path contains a `proton` script and `files/bin/wine64`.");
+        setProtonValidated(false);
       }
-    } catch (e) { setError(String(e)); }
+    } catch (e) {
+      setError(String(e));
+      setProtonValidated(false);
+    }
   };
 
   const pickDir = async () => {
@@ -1438,24 +1968,36 @@ function ProtonGEStep() {
         {([
           { mode: "managed" as const, label: "Managed by LokiASAM", desc: `Download & update automatically into ${managedTarget}` },
           { mode: "existing" as const, label: "Use existing installation", desc: "Point to a Proton-GE you already have" },
-        ]).map(({ mode, label, desc }) => (
-          <button
-            key={mode}
-            onClick={() => { if (!isLoading && !protonValidated) { setProtonMode(mode); setError(""); } }}
-            disabled={isLoading || protonValidated}
-            className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              background: protonMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
-              border: `1px solid ${protonMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
-              boxShadow: protonMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
-            }}
-          >
-            <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
-              {label}
-            </p>
-            <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
-          </button>
-        ))}
+        ]).map(({ mode, label, desc }) => {
+          // Only lock tabs in managed mode when downloading/validated. Existing mode is always switchable.
+          const isTabLocked = (isLoading || protonValidated) && protonMode === "managed";
+          return (
+            <button
+              key={mode}
+              onClick={() => {
+                if (!isTabLocked) {
+                  setProtonMode(mode);
+                  setProtonPath("");
+                  setProtonValidated(false);
+                  setError("");
+                  setShowDownload(false);
+                }
+              }}
+              disabled={isTabLocked}
+              className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: protonMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                border: `1px solid ${protonMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                boxShadow: protonMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
+              }}
+            >
+              <p className="text-sm font-semibold" style={{ color: protonMode === mode ? "var(--neon-purple)" : "var(--text-primary)" }}>
+                {label}
+              </p>
+              <p className="text-xs mt-1 font-mono" style={{ color: "var(--text-muted)" }}>{desc}</p>
+            </button>
+          );
+        })}
       </div>
 
       {protonMode === "managed" && (
@@ -1534,13 +2076,14 @@ function ProtonGEStep() {
                 No Proton-GE installations detected. Enter a path manually below or switch to Managed mode.
               </p>
             ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+              <div ref={detectedListRef} className="space-y-1.5 max-h-96 overflow-y-auto">
                 {found.map((entry) => {
                   const isValidating = validating === entry.path;
-                  const isSelected = protonValidated && protonPath === entry.path;
+                  const isSelected = protonPath === entry.path;
                   return (
                     <button
                       key={entry.path}
+                      data-selected={isSelected}
                       onClick={() => handleSelectDetected(entry)}
                       disabled={!!validating}
                       className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all disabled:opacity-60"
@@ -2582,22 +3125,56 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       await tauriCmd.writeBootstrap(importDir);
 
       const sep = importDir.includes("\\") ? "\\" : "/";
-      const dbPath = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "lokiasam.db";
+      const normalizedImportDir = importDir.replace(/[/\\]$/, "");
+      const dbPath = normalizedImportDir + sep + "lokiasam" + sep + "lokiasam.db";
       const { initDb: _init, getAppSetting: getSetting } = await import("@/lib/db");
       await _init(dbPath);
+
+      // Get the old base_dir before remapping paths
+      const oldBaseDir = await getSetting("base_dir");
+
+      // Remap all paths in the database if they differ from the import location
+      if (oldBaseDir && oldBaseDir.trim() !== normalizedImportDir) {
+        console.log(`Remapping paths: ${oldBaseDir} → ${normalizedImportDir}`);
+        try {
+          await tauriCmd.remapImportPaths(dbPath, oldBaseDir, normalizedImportDir);
+          console.log("Path remapping completed successfully");
+        } catch (remapErr) {
+          console.error("Path remapping failed:", remapErr);
+          throw new Error(`Failed to remap import paths: ${remapErr}`);
+        }
+      } else {
+        console.log("Import directory matches stored base_dir, no remapping needed");
+      }
+
+      // Update tool paths if they were detected/installed during import
+      const newSteamcmdPath = steamcmdPath;
+      const newProtonPath = IS_LINUX ? protonPath : undefined;
+      if (newSteamcmdPath) {
+        console.log(`Updating steamcmd_path to ${newSteamcmdPath}`);
+        await setAppSetting("steamcmd_path", newSteamcmdPath);
+      }
+      if (IS_LINUX && newProtonPath) {
+        console.log(`Updating proton_path to ${newProtonPath}`);
+        await setAppSetting("proton_path", newProtonPath);
+        const prefix = normalizedImportDir + sep + "lokiasam" + sep + "proton" + sep + "prefix";
+        await setAppSetting("proton_prefix_path", prefix);
+      }
+
       await setAppSetting("setup_complete", "true");
 
-      // Read actual paths from the imported DB so the Complete step shows correct info
-      const [storedBase, storedBackup, storedScmd, storedProton] = await Promise.all([
+      // Read updated paths from the remapped DB so the Complete step shows correct info
+      const [updatedBase, updatedBackup, updatedScmd, updatedProton] = await Promise.all([
         getSetting("base_dir"),
         getSetting("backup_dir"),
         getSetting("steamcmd_path"),
         getSetting("proton_path"),
       ]);
-      if (storedBase)   setBaseDir(storedBase);
-      if (storedBackup) setBackupDir(storedBackup);
-      if (storedScmd)   { setSteamcmdPath(storedScmd);   setSteamcmdValidated(true); }
-      if (storedProton) { setProtonPath(storedProton);   setProtonValidated(true); }
+      console.log(`Final paths - base: ${updatedBase}, backup: ${updatedBackup}`);
+      if (updatedBase)   setBaseDir(updatedBase);
+      if (updatedBackup) setBackupDir(updatedBackup);
+      if (updatedScmd)   { setSteamcmdPath(updatedScmd);   setSteamcmdValidated(true); }
+      if (updatedProton) { setProtonPath(updatedProton);   setProtonValidated(true); }
 
       setDirection(1);
       setStep(TOTAL_STEPS - 1);

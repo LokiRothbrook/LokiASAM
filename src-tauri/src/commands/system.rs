@@ -981,3 +981,66 @@ pub fn uninstall_appimage_integration() -> Result<(), String> {
 
     Ok(())
 }
+
+/// Remap all paths in the database from old_base_dir to new_base_dir during import.
+/// Updates: app_settings (base_dir, backup_dir, steamcmd_path, proton_path, proton_prefix_path),
+/// servers (install_path), and backups (file_path).
+#[tauri::command]
+pub async fn remap_import_paths(
+    db_path: String,
+    old_base_dir: String,
+    new_base_dir: String,
+) -> Result<(), String> {
+    use rusqlite::Connection;
+
+    // Normalize paths (remove trailing slashes)
+    let old_base = old_base_dir.trim_end_matches('/').trim_end_matches('\\');
+    let new_base = new_base_dir.trim_end_matches('/').trim_end_matches('\\');
+
+    let conn = Connection::open(&db_path)
+        .map_err(|e| format!("Failed to open database '{}': {}", db_path, e))?;
+
+    // Update app_settings paths
+    let settings_to_update = vec![
+        "base_dir",
+        "backup_dir",
+        "steamcmd_path",
+        "proton_path",
+        "proton_prefix_path",
+    ];
+
+    for setting_key in settings_to_update {
+        let old_value: Option<String> = conn.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [setting_key],
+            |row| row.get(0),
+        ).ok();
+
+        if let Some(val) = old_value {
+            if val.contains(old_base) {
+                let new_value = val.replace(old_base, new_base);
+                conn.execute(
+                    "UPDATE app_settings SET value = ?1, updated_at = CURRENT_TIMESTAMP WHERE key = ?2",
+                    rusqlite::params![new_value, setting_key],
+                )
+                .map_err(|e| format!("Failed to update app_settings '{}': {}", setting_key, e))?;
+            }
+        }
+    }
+
+    // Update servers.install_path using simple REPLACE
+    conn.execute(
+        "UPDATE servers SET install_path = REPLACE(install_path, ?1, ?2)",
+        rusqlite::params![old_base, new_base],
+    )
+    .map_err(|e| format!("Failed to update server install_path: {}", e))?;
+
+    // Update backups.file_path using simple REPLACE
+    conn.execute(
+        "UPDATE backups SET file_path = REPLACE(file_path, ?1, ?2)",
+        rusqlite::params![old_base, new_base],
+    )
+    .map_err(|e| format!("Failed to update backup file_path: {}", e))?;
+
+    Ok(())
+}

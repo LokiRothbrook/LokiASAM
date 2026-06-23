@@ -135,7 +135,7 @@ const initialState = {
   closeToTray: true,
   asaAutoCheckHours: "startup",
   appUpdateCheckMode: "startup",
-  protonCheckMode: "startup_hourly",
+  protonCheckMode: "startup",
   themePreset: "storm",
   themeAccent: "blue",
   isLoading: false,

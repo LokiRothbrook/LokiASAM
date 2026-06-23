@@ -549,6 +549,7 @@ pub fn run() {
             commands::backup::backup_all_players,
             commands::backup::create_ini_backup,
             commands::backup::create_save_link,
+            commands::backup::create_mods_saves_link,
             commands::backup::wipe_server_saves,
             commands::backup::import_server_saves,
             commands::backup::create_full_backup,
@@ -592,6 +593,7 @@ pub fn run() {
             commands::system::read_bootstrap,
             commands::system::write_bootstrap,
             commands::system::open_folder,
+            commands::system::remap_import_paths,
             // Proton-GE (Linux)
             commands::proton::scan_for_proton,
             commands::proton::validate_proton_path,
