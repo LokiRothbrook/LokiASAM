@@ -62,7 +62,7 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
         value={selectedId}
         onChange={(e) => setSelectedId(e.target.value)}
         className="w-full text-xs rounded-lg px-2 py-1.5"
-        style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
       >
         <option value="">Select a server…</option>
         {servers.map((s) => (

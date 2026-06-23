@@ -439,7 +439,7 @@ function BasicInfoStep({
           onBlur={(e) => checkName(e.target.value)}
           placeholder="My ASA Server"
           style={{
-            background: "rgba(10,10,30,0.8)",
+            background: "var(--surface)",
             borderColor: nameError ? "var(--neon-red)" : "rgba(var(--neon-purple-rgb),0.3)",
             color: "var(--text-primary)",
           }}
@@ -469,7 +469,7 @@ function BasicInfoStep({
             onClick={() => setMapMenuOpen((v) => !v)}
             className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left"
             style={{
-              background: "rgba(10,10,30,0.8)",
+              background: "var(--surface)",
               border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
               color: "var(--text-primary)",
             }}
@@ -557,7 +557,7 @@ function BasicInfoStep({
         const adminMismatch = !!data.adminPasswordConfirm && data.adminPassword !== data.adminPasswordConfirm;
         const serverMismatch = !!data.serverPasswordConfirm && data.serverPassword !== data.serverPasswordConfirm;
         const fieldStyle = (hasValue: boolean, mismatch: boolean) => ({
-          background: "rgba(10,10,30,0.8)",
+          background: "var(--surface)",
           borderColor: mismatch ? "var(--neon-red)" : !hasValue ? "rgba(255,0,85,0.5)" : "rgba(var(--neon-purple-rgb),0.3)",
           color: "var(--text-primary)",
         });
@@ -677,7 +677,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
               onClick={() => onChange({ gameMode: mode.id })}
               className="rounded-xl p-5 text-left transition-all flex flex-col gap-3"
               style={{
-                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
                 border: `1px solid ${active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
                 boxShadow: active ? "0 0 24px rgba(var(--neon-purple-rgb),0.1)" : "none",
               }}
@@ -779,7 +779,7 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
               onClick={() => onChange({ presetStyle: style.id as WizardData["presetStyle"] })}
               className="w-full rounded-lg p-4 text-left transition-all"
               style={{
-                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
                 border: `1px solid ${active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
                 boxShadow: active ? "0 0 16px rgba(var(--neon-purple-rgb),0.1)" : "none",
               }}
@@ -1231,7 +1231,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                               onChange={(e) => setValue(field.iniSection, field.key, e.target.value)}
                               className="h-7 text-xs font-mono"
                               style={{
-                                background: "rgba(10,10,30,0.8)",
+                                background: "var(--surface)",
                                 borderColor: "rgba(var(--neon-purple-rgb),0.2)",
                                 color: "var(--text-primary)",
                               }}
@@ -1280,7 +1280,7 @@ function PortField({
         onBlur={() => onBlur(fieldKey, value)}
         className="font-mono"
         style={{
-          background: "rgba(10,10,30,0.8)",
+          background: "var(--surface)",
           borderColor: conflict ? "rgba(255,140,0,0.6)" : status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
           color: "var(--text-primary)",
         }}
@@ -1663,7 +1663,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
               onClick={() => handleSelectCluster(cluster.id)}
               className="w-full rounded-lg p-3 text-left transition-all"
               style={{
-                background: data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                background: data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
                 border: `1px solid ${data.clusterId === cluster.id ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
               }}
             >
@@ -1681,7 +1681,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                 onKeyDown={(e) => e.key === "Enter" && handleCreateCluster()}
                 placeholder="Cluster name"
                 className="text-sm"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
               <Button
                 size="sm" variant="outline"
@@ -1728,7 +1728,7 @@ function CronSelect({ value, onChange }: { value: string; onChange: (v: string) 
       value={CRON_OPTIONS.find((o) => o.value === value) ? value : "custom"}
       onChange={(e) => onChange(e.target.value === "custom" ? value : e.target.value)}
       className="w-full text-xs rounded px-2 py-1.5 font-mono"
-      style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)", outline: "none" }}
+      style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)", outline: "none" }}
     >
       {CRON_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       <option value="custom">Custom…</option>
@@ -1863,7 +1863,7 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
                         placeholder={String(p.defaultValue) || "(empty = disabled)"}
                         onChange={(e) => setArg(p.key, e.target.value)}
                         className="h-7 text-xs font-mono"
-                        style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+                        style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
                       />
                     </div>
                   );
@@ -2028,7 +2028,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
           onChange={(e) => onChange({ backupBroadcastMessage: e.target.value })}
           placeholder="Backup in progress — lag may occur."
           className="text-xs"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
         />
       </div>
 
@@ -2214,7 +2214,7 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
             value={copyFromId}
             onChange={(e) => setCopyFromId(e.target.value)}
             className="flex-1 text-xs rounded-lg px-2 py-1.5"
-            style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+            style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
           >
             <option value="">Copy mods from existing server…</option>
             {existingServers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -2244,7 +2244,7 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
           onKeyDown={(e) => e.key === "Enter" && addMod()}
           placeholder="CurseForge mod ID (e.g. 928793)"
           className="font-mono text-sm"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
         />
         <Button
           onClick={addMod}

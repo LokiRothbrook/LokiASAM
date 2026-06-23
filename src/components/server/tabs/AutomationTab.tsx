@@ -1153,7 +1153,7 @@ function BackupBroadcastCard({ server }: { server: ServerRow }) {
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Backup message…"
           className="flex-1 text-xs"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
         />
         <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={handleSave}
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}>

@@ -5,7 +5,7 @@ import {
   Folder, Terminal, Info, Archive, Copy,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck,
+  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -239,7 +239,7 @@ function BaseDirMigrationSection() {
           Root folder for all server installs. To relocate, enter a new path and click Verify & Move.
         </p>
         <Input value={currentDir} readOnly className="font-mono text-sm"
-          style={{ background: "rgba(5,5,20,0.8)", borderColor: "var(--border)", color: "var(--text-muted)", cursor: "default" }}
+          style={{ background: "var(--surface)", borderColor: "var(--border)", color: "var(--text-muted)", cursor: "default" }}
         />
       </div>
 
@@ -1914,11 +1914,11 @@ function StartupSection() {
         <Select value={pref} onValueChange={(v) => handleChange(v as AutoRestartPref)}>
           <SelectTrigger
             className="w-44 shrink-0"
-            style={{ borderColor: "var(--border)", background: "rgba(255,255,255,0.04)", color: "var(--text-primary)" }}
+            style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--text-primary)" }}
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent style={{ background: "rgba(10,10,30,0.97)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}>
+          <SelectContent style={{ background: "var(--popover)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}>
             <SelectItem value="ask">Ask each time</SelectItem>
             <SelectItem value="auto">Auto-restart</SelectItem>
             <SelectItem value="never">Do nothing</SelectItem>
@@ -1953,7 +1953,10 @@ export default function SettingsPage() {
   return (
     <div className="h-full overflow-hidden flex flex-col gap-6">
       <div className="shrink-0">
-        <h1 className="text-2xl font-bold" style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}>Settings</h1>
+        <div className="flex items-center gap-3">
+          <Settings className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
+          <h1 className="text-2xl font-bold" style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}>Settings</h1>
+        </div>
         <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>Global application configuration.</p>
       </div>
 

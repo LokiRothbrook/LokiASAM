@@ -222,7 +222,7 @@ function NotificationsContent() {
   return (
     <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3 shrink-0">
+      <div className="flex items-start justify-between flex-wrap gap-3 shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <Bell className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -241,12 +241,11 @@ function NotificationsContent() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs gap-1.5"
-              style={{ color: "var(--neon-red, #f87171)", border: "1px solid rgba(255,0,85,0.3)" }}
+              variant="outline"
+              className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
               Delete…
             </Button>
           </DropdownMenuTrigger>
@@ -331,16 +330,18 @@ function NotificationsContent() {
       {/* List */}
       <div className="flex-1 min-h-0 overflow-y-auto pr-6">
       {filtered.length === 0 ? (
-        <div
-          className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-xl"
-          style={{ border: "1px solid var(--border)" }}
-        >
-          <Bell className="w-10 h-10" style={{ color: "var(--text-subtle)" }} />
+        <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
+          <div
+            className="flex items-center justify-center w-16 h-16 rounded-full"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+          >
+            <Bell className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+          </div>
           <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+            <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
               {notifications.length === 0 ? "No notifications yet" : "No matching notifications"}
-            </p>
-            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+            </h2>
+            <p className="text-sm mt-1 max-w-sm" style={{ color: "var(--text-muted)" }}>
               {notifications.length === 0
                 ? "Events like server starts, stops, crashes, and backups will appear here."
                 : "Try adjusting your filters."}

@@ -62,24 +62,27 @@ export default function ModMapsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full p-6 gap-6 overflow-y-auto">
+    <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Map className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
-          <div>
-            <h1 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Mod Maps</h1>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Add community mod maps so they appear in the server map dropdown.
-            </p>
+      <div className="flex items-start justify-between shrink-0">
+        <div>
+          <div className="flex items-center gap-3">
+            <Map className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <h1 className="text-2xl font-bold" style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}>
+              Mod Maps
+            </h1>
           </div>
+          <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
+            Add community mod maps so they appear in the server map dropdown.
+          </p>
         </div>
         <Button
-          size="sm"
+          variant="outline"
           onClick={() => setShowAdd((v) => !v)}
-          style={{ background: "rgba(var(--neon-purple-rgb),0.12)", borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
+          className="gap-2"
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
         >
-          <Plus className="w-3.5 h-3.5 mr-1.5" />
+          <Plus className="w-4 h-4" />
           Add Map
         </Button>
       </div>
@@ -98,7 +101,7 @@ export default function ModMapsPage() {
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="e.g. Fjordur Reborn"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
             </div>
             <div className="space-y-1.5">
@@ -107,7 +110,7 @@ export default function ModMapsPage() {
                 value={modId}
                 onChange={(e) => setModId(e.target.value)}
                 placeholder="e.g. 965379"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
             </div>
             <div className="space-y-1.5">
@@ -116,7 +119,7 @@ export default function ModMapsPage() {
                 value={mapPath}
                 onChange={(e) => setMapPath(e.target.value)}
                 placeholder="e.g. MyMap_WP"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
               <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
                 The exact map path string passed at server launch (e.g. <span className="font-mono">TheIsland_WP</span>).
@@ -124,7 +127,7 @@ export default function ModMapsPage() {
             </div>
           </div>
           <div className="flex gap-2 justify-end">
-            <Button size="sm" variant="outline" onClick={() => setShowAdd(false)} disabled={saving}>Cancel</Button>
+            <Button size="sm" variant="outline" onClick={() => setShowAdd(false)} disabled={saving} style={{ color: "var(--text-primary)" }}>Cancel</Button>
             <Button
               size="sm" onClick={handleAdd} disabled={saving || !displayName.trim() || !modId.trim() || !mapPath.trim()}
               style={{ background: "rgba(var(--neon-purple-rgb),0.15)", borderColor: "rgba(var(--neon-purple-rgb),0.5)", color: "var(--neon-purple)" }}
@@ -171,14 +174,27 @@ export default function ModMapsPage() {
         {loading ? (
           <div className="h-12 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
         ) : customMaps.length === 0 ? (
-          <div
-            className="glass-card rounded-xl px-4 py-6 text-center"
-            style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
-          >
-            <p className="text-sm" style={{ color: "var(--text-muted)" }}>No custom maps added yet.</p>
-            <p className="text-xs mt-1" style={{ color: "var(--text-subtle)" }}>
-              Use the <strong style={{ color: "var(--neon-purple)" }}>Add Map</strong> button above to register a community mod map.
-            </p>
+          <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
+            <div
+              className="flex items-center justify-center w-16 h-16 rounded-full"
+              style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+            >
+              <Map className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>No custom maps yet</h2>
+              <p className="text-sm mt-1 max-w-sm" style={{ color: "var(--text-muted)" }}>
+                Register a community mod map so it appears in the server map dropdown.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setShowAdd(true)}
+              className="mt-2 gap-2"
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+            >
+              <Plus className="w-4 h-4" /> Add Map
+            </Button>
           </div>
         ) : (
           <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>

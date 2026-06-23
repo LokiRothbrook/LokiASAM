@@ -186,7 +186,7 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
     <>
       {/* Main delete dialog */}
       <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-        <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "rgba(14,16,24,0.98)", border: "1px solid rgba(255,60,60,0.3)" }}>
+        <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "var(--popover)", border: "1px solid rgba(255,60,60,0.3)" }}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
               <Trash2 className="w-4 h-4" /> Delete LokiASAM Data
@@ -247,7 +247,7 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
 
       {/* Nested confirmation for full wipe */}
       <Dialog open={confirmOpen} onOpenChange={(v) => { if (!v) setConfirmOpen(false); }}>
-        <DialogContent showCloseButton={false} className="max-w-sm" style={{ background: "rgba(14,16,24,0.98)", border: "1px solid rgba(255,60,60,0.5)" }}>
+        <DialogContent showCloseButton={false} className="max-w-sm" style={{ background: "var(--popover)", border: "1px solid rgba(255,60,60,0.5)" }}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
               <TriangleAlert className="w-4 h-4" /> Complete Data Loss Warning
@@ -937,7 +937,7 @@ function ImportVerifyPanel({
           showCloseButton={false}
           className="max-w-lg"
           style={{
-            background: "rgba(14,16,24,0.98)",
+            background: "var(--popover)",
             border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
           }}
         >
@@ -1263,7 +1263,7 @@ function BaseDirStep() {
             onClick={() => { setImportMode(key); setImportError(""); }}
             className="flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all"
             style={{
-              background: importMode === key ? "rgba(var(--neon-purple-rgb),0.12)" : "rgba(10,10,30,0.5)",
+              background: importMode === key ? "rgba(var(--neon-purple-rgb),0.12)" : "var(--surface)",
               border: `1px solid ${importMode === key ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
               color: importMode === key ? "var(--neon-purple)" : "var(--text-muted)",
             }}
@@ -1296,7 +1296,7 @@ function BaseDirStep() {
                 onBlur={() => validateDir(baseDir)}
                 placeholder="/home/user/LokiASAM"
                 className="flex-1 font-mono text-sm"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor, color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor, color: "var(--text-primary)" }}
               />
               <Button
                 onClick={pickDir}
@@ -1392,7 +1392,7 @@ function BaseDirStep() {
                 placeholder="/home/user/LokiASAM"
                 className="flex-1 font-mono text-sm"
                 style={{
-                  background: "rgba(10,10,30,0.8)",
+                  background: "var(--surface)",
                   borderColor: importValid ? "rgba(0,255,136,0.5)" : importDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                   color: "var(--text-primary)",
                 }}
@@ -1521,7 +1521,7 @@ function BackupDirStep() {
             onBlur={() => validateDir(backupDir)}
             placeholder="/home/user/LokiASAM/Backups"
             className="flex-1 font-mono text-sm"
-            style={{ background: "rgba(10,10,30,0.8)", borderColor, color: "var(--text-primary)" }}
+            style={{ background: "var(--surface)", borderColor, color: "var(--text-primary)" }}
           />
           <Button
             onClick={pickDir}
@@ -1697,7 +1697,7 @@ function SteamCmdStep() {
               disabled={isTabLocked}
               className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
-                background: steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                background: steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
                 border: `1px solid ${steamcmdMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 boxShadow: steamcmdMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
               }}
@@ -1744,6 +1744,14 @@ function SteamCmdStep() {
 
       {steamcmdMode === "manual" && (
         <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs" style={{ color: "var(--text-primary)" }}>
+              Path to SteamCMD executable
+            </Label>
+            <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+              Enter the full path to your existing <span className="font-mono">steamcmd.sh</span> (Linux) or <span className="font-mono">steamcmd.exe</span> (Windows).
+            </p>
+          </div>
           <div className="flex gap-2">
             <Input
               value={steamcmdPath}
@@ -1751,7 +1759,7 @@ function SteamCmdStep() {
               placeholder="/path/to/steamcmd.sh"
               className="flex-1 font-mono text-sm"
               style={{
-                background: "rgba(10,10,30,0.8)",
+                background: "var(--surface)",
                 borderColor: steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                 color: "var(--text-primary)",
               }}
@@ -1986,7 +1994,7 @@ function ProtonGEStep() {
               disabled={isTabLocked}
               className="rounded-lg p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
-                background: protonMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                background: protonMode === mode ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
                 border: `1px solid ${protonMode === mode ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 boxShadow: protonMode === mode ? "0 0 16px rgba(var(--neon-purple-rgb),0.15)" : "none",
               }}
@@ -2088,7 +2096,7 @@ function ProtonGEStep() {
                       disabled={!!validating}
                       className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all disabled:opacity-60"
                       style={{
-                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
                         border: `1px solid ${isSelected ? "rgba(0,255,136,0.4)" : isValidating ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                       }}
                     >
@@ -2125,7 +2133,7 @@ function ProtonGEStep() {
                 onChange={(e) => setManualPath(e.target.value)}
                 placeholder="/home/user/.steam/root/compatibilitytools.d/GE-Proton9-27"
                 className="flex-1 font-mono text-sm"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
               />
               <Button
                 onClick={pickDir}
@@ -2458,12 +2466,12 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
       {/* Discord webhook */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div className="flex items-center justify-between">
           <Label htmlFor="discord-webhook" style={{ color: "var(--text-primary)" }}>
             Discord Webhook
-            <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>(optional)</span>
+            <span className="ml-2 text-xs font-normal" style={{ color: "var(--text-muted)" }}>(optional)</span>
           </Label>
           {discordWebhook.trim() && (
             <Button
@@ -2486,7 +2494,7 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
           placeholder="https://discord.com/api/webhooks/..."
           className="font-mono text-sm"
           style={{
-            background: "rgba(10,10,30,0.8)",
+            background: "var(--surface)",
             borderColor: discordWebhook ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
             color: "var(--text-primary)",
           }}
@@ -2499,7 +2507,7 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
       {/* Email / SMTP */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -2525,14 +2533,14 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>SMTP Host</Label>
             <Input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)}
               placeholder="smtp.example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Port</Label>
             <Input value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)}
               placeholder="587" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -2541,7 +2549,7 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Username</Label>
             <Input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)}
               placeholder="user@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
@@ -2549,7 +2557,7 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
             <div className="relative">
               <Input type={showSmtpPw ? "text" : "password"} value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)}
                 placeholder="••••••••" className="font-mono text-xs pr-8"
-                style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+                style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
               />
               <button type="button" tabIndex={-1} onClick={() => setShowSmtpPw(v => !v)}
                 className="absolute inset-y-0 right-0 flex items-center pr-2.5 opacity-50 hover:opacity-90 transition-opacity"
@@ -2564,14 +2572,14 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>From Address</Label>
             <Input value={smtpFrom} onChange={(e) => setSmtpFrom(e.target.value)}
               placeholder="noreply@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-xs" style={{ color: "var(--text-muted)" }}>To Address</Label>
             <Input value={smtpTo} onChange={(e) => setSmtpTo(e.target.value)}
               placeholder="admin@example.com" className="font-mono text-xs"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
             />
           </div>
         </div>
@@ -2581,10 +2589,13 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
       {/* Notification event matrix */}
       <div
         className="rounded-lg p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         <div>
-          <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Notification Events</p>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+            Notification Events
+            <span className="ml-2 text-xs font-normal" style={{ color: "var(--text-muted)" }}>(optional)</span>
+          </p>
           <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
             Choose which events trigger each channel. Configure credentials above to unlock Discord and SMTP columns.
           </p>
@@ -2633,7 +2644,7 @@ function TrayStep() {
             onClick={() => setCloseToTray(value)}
             className="w-full text-left rounded-lg p-4 transition-all"
             style={{
-              background: closeToTray === value ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(10,10,30,0.5)",
+              background: closeToTray === value ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
               border: `1px solid ${closeToTray === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
               boxShadow: closeToTray === value ? "0 0 16px rgba(var(--neon-purple-rgb),0.12)" : "none",
             }}
@@ -2754,7 +2765,7 @@ function AutoUpdateStep() {
 
       {/* ASA Server Updates */}
       <div className="rounded-xl p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>ASA Server Updates</p>
           <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
@@ -2768,7 +2779,7 @@ function AutoUpdateStep() {
               onClick={() => setAsaAutoCheckHours(value)}
               className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
               style={{
-                background: asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                background: asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.15)" : "var(--surface-elevated)",
                 border: `1px solid ${asaAutoCheckHours === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 color: asaAutoCheckHours === value ? "var(--neon-purple)" : "var(--text-muted)",
               }}
@@ -2784,7 +2795,7 @@ function AutoUpdateStep() {
 
       {/* LokiASAM App Updates */}
       <div className="rounded-xl p-4 space-y-3"
-        style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>LokiASAM App Updates</p>
           <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
@@ -2798,7 +2809,7 @@ function AutoUpdateStep() {
               onClick={() => setAppUpdateCheckMode(value)}
               className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
               style={{
-                background: appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                background: appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "var(--surface-elevated)",
                 border: `1px solid ${appUpdateCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 color: appUpdateCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
               }}
@@ -2812,7 +2823,7 @@ function AutoUpdateStep() {
       {/* Proton-GE (Linux only) */}
       {IS_LINUX && (
         <div className="rounded-xl p-4 space-y-3"
-          style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+          style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
           <div>
             <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Proton-GE Updates</p>
             <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
@@ -2826,7 +2837,7 @@ function AutoUpdateStep() {
                 onClick={() => setProtonCheckMode(value)}
                 className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
                 style={{
-                  background: protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "rgba(10,10,30,0.5)",
+                  background: protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.15)" : "var(--surface-elevated)",
                   border: `1px solid ${protonCheckMode === value ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                   color: protonCheckMode === value ? "var(--neon-purple)" : "var(--text-muted)",
                 }}
@@ -2977,7 +2988,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
           <div
             key={label}
             className="rounded-lg px-4 py-3 flex items-center justify-between gap-4"
-            style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+            style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
           >
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
             <span className="text-xs font-mono truncate max-w-xs" style={{ color: "var(--text-primary)" }}>{value || "—"}</span>

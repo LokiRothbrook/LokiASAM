@@ -607,7 +607,7 @@ function AddSettingDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-sm" style={{ background: "var(--bg-card, #0a0a1a)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+      <DialogContent className="max-w-sm" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
         <DialogHeader>
           <DialogTitle className="text-sm" style={{ color: "var(--text-primary)" }}>Add Setting</DialogTitle>
         </DialogHeader>
@@ -1472,7 +1472,7 @@ function AdvancedConfigTab({
           value={currentThread}
           onChange={(e) => handleThreadChange(e.target.value)}
           className="w-full text-xs rounded-lg px-2 py-1.5"
-          style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
         >
           {THREAD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -1509,7 +1509,7 @@ function AdvancedConfigTab({
           onChange={(e) => setArg("_customCli", e.target.value)}
           placeholder="-SomeFlag -AnotherFlag=value"
           className="font-mono text-xs"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
         />
       </div>
 
@@ -1528,7 +1528,7 @@ function AdvancedConfigTab({
             min={1}
             step={0.5}
             className="w-32 text-xs"
-            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+            style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
           />
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>GB</span>
           <Button size="sm" variant="outline" onClick={handleSaveMemLimit} disabled={savingMem}
@@ -1556,7 +1556,7 @@ function AdvancedConfigTab({
               onChange={(e) => setArg(key, e.target.value)}
               placeholder={placeholder}
               className="text-xs font-mono"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
             />
           </div>
         ))}
@@ -1971,7 +1971,7 @@ export function ConfigTab({ server }: Props) {
               )}
             </div>
             <Select value={server.map_id} onValueChange={handleMapChange} disabled={server.status !== "stopped"}>
-              <SelectTrigger style={{ background: "rgba(10,10,30,0.6)", borderColor: "rgba(var(--neon-cyan-rgb),0.3)" }}>
+              <SelectTrigger style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-cyan-rgb),0.3)" }}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -2069,7 +2069,7 @@ export function ConfigTab({ server }: Props) {
               value={copyFromServerId}
               onChange={(e) => setCopyFromServerId(e.target.value)}
               className="w-full text-xs rounded-lg px-2 py-1.5"
-              style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
             >
               <option value="">Select a server…</option>
               {otherServers.map((s) => (

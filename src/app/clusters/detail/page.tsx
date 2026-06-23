@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useCallback } from "react";
+import { Suspense, useState, useCallback, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -38,6 +38,7 @@ import {
 import { ARK_MAPS } from "@/data/game-data";
 import { ServerStatusBadge } from "@/components/server/ServerStatusBadge";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // ---------------------------------------------------------------------------
 // Add Server Dialog
@@ -121,17 +122,21 @@ function AddServerDialog({ cluster, open, onClose, onAdded }: AddServerDialogPro
         )}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={busy}
+            className="hover:bg-(--surface-elevated)"
+            style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}
+          >
             Cancel
           </Button>
           <Button
+            variant="outline"
             onClick={handleAdd}
             disabled={busy || !selectedId || eligible.length === 0}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
+            className="gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             {busy ? "Adding…" : "Add Server"}
           </Button>
@@ -233,9 +238,14 @@ function ClusterDetailContent() {
     queryClient.invalidateQueries({ queryKey: ["servers"] });
   }, [queryClient, id]);
 
-  const baseDir = cluster?.cluster_dir_override
-    ? null
-    : null; // shown as note
+  const [baseDir, setBaseDir] = useState("");
+  useEffect(() => {
+    getAppSetting("base_dir").then((v) => setBaseDir(v ?? ""));
+  }, []);
+
+  const resolvedClusterDir = cluster
+    ? (cluster.cluster_dir_override?.trim() || `${baseDir}/clusters/${cluster.id}`)
+    : "";
 
   async function handleRemove(server: ServerRow) {
     setRemoving(true);
@@ -289,37 +299,48 @@ function ClusterDetailContent() {
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => router.push("/clusters")}
-          style={{ color: "var(--text-muted)" }}
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </Button>
-        <div className="flex items-center gap-3">
-          <div
-            className="flex items-center justify-center w-10 h-10 rounded-lg"
-            style={{
-              background: "rgba(var(--neon-purple-rgb),0.1)",
-              border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
-            }}
+      <div className="flex items-start justify-between shrink-0">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => router.push("/clusters")}
+            style={{ color: "var(--text-muted)" }}
           >
-            <Network className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
-          </div>
-          <div>
-            <h1
-              className="text-2xl font-bold"
-              style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
+          <div className="flex items-center gap-3">
+            <div
+              className="flex items-center justify-center w-10 h-10 rounded-lg"
+              style={{
+                background: "rgba(var(--neon-purple-rgb),0.1)",
+                border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+              }}
             >
-              {cluster.name}
-            </h1>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-              {members.length} member server{members.length !== 1 ? "s" : ""}
-            </p>
+              <Network className="w-5 h-5" style={{ color: "var(--neon-purple)" }} />
+            </div>
+            <div>
+              <h1
+                className="text-2xl font-bold"
+                style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+              >
+                {cluster.name}
+              </h1>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                {members.length} server{members.length !== 1 ? "s" : ""} in cluster
+              </p>
+            </div>
           </div>
         </div>
+        <Button
+          variant="outline"
+          onClick={() => setShowAdd(true)}
+          className="gap-2"
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+        >
+          <UserPlus className="w-4 h-4" />
+          Add Server
+        </Button>
       </div>
 
       {/* Cluster Info Card */}
@@ -327,43 +348,65 @@ function ClusterDetailContent() {
         className="glass-card p-5 rounded-xl flex flex-col gap-3"
         style={{ border: "1px solid var(--border)" }}
       >
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>
           Cluster Settings
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>Cluster ID</p>
+            <p className="text-xs" style={{ color: "var(--text-primary)" }}>Cluster ID</p>
             <div className="flex items-center gap-2 mt-1">
               <code
                 className="text-xs font-mono px-2 py-1 rounded"
                 style={{
                   background: "rgba(0,0,0,0.3)",
-                  color: "var(--neon-cyan)",
+                  color: "var(--neon-purple)",
                   border: "1px solid rgba(var(--neon-purple-rgb),0.15)",
                 }}
               >
                 {cluster.id}
               </code>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="w-6 h-6"
-                onClick={() => copyToClipboard(cluster.id)}
-                title="Copy cluster ID"
-              >
-                <Copy className="w-3 h-3" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="w-6 h-6"
+                    onClick={() => copyToClipboard(cluster.id)}
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <Copy className="w-3 h-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">Copy cluster ID</TooltipContent>
+              </Tooltip>
             </div>
           </div>
           <div>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>Cluster Directory</p>
-            <p
-              className="text-xs font-mono mt-1 truncate"
-              style={{ color: cluster.cluster_dir_override ? "var(--text-primary)" : "var(--text-subtle)" }}
-              title={cluster.cluster_dir_override ?? undefined}
-            >
-              {cluster.cluster_dir_override ?? "Auto (base_dir/clusters/" + cluster.id.slice(0, 8) + "…)"}
-            </p>
+            <p className="text-xs" style={{ color: "var(--text-primary)" }}>Cluster Directory</p>
+            <div className="flex items-center gap-1.5 mt-1">
+              <p
+                className="text-xs font-mono truncate"
+                style={{ color: "var(--neon-purple)" }}
+                title={resolvedClusterDir}
+              >
+                {resolvedClusterDir || "…"}
+              </p>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="w-6 h-6 shrink-0"
+                    onClick={() => tauriCmd.openFolder(resolvedClusterDir)}
+                    disabled={!resolvedClusterDir}
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <Folder className="w-3 h-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">Open cluster folder</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
         </div>
         <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
@@ -373,27 +416,11 @@ function ClusterDetailContent() {
         </p>
       </div>
 
-      {/* Member Servers */}
+      {/* Servers in Cluster */}
       <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-            Member Servers
-          </h2>
-          <Button
-            size="sm"
-            onClick={() => setShowAdd(true)}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-              height: "1.75rem",
-              fontSize: "0.75rem",
-            }}
-          >
-            <UserPlus className="w-3 h-3 mr-1.5" />
-            Add Server
-          </Button>
-        </div>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--neon-purple)" }}>
+          Servers in Cluster
+        </h2>
 
         {loadingMembers ? (
           <div className="flex flex-col gap-2">
@@ -415,15 +442,12 @@ function ClusterDetailContent() {
               No servers in this cluster yet.
             </p>
             <Button
-              size="sm"
+              variant="outline"
               onClick={() => setShowAdd(true)}
-              style={{
-                background: "transparent",
-                border: "1px solid var(--neon-purple)",
-                color: "var(--neon-purple)",
-              }}
+              className="gap-2"
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
             >
-              <UserPlus className="w-3.5 h-3.5 mr-1.5" />
+              <UserPlus className="w-4 h-4" />
               Add First Server
             </Button>
           </div>
@@ -470,20 +494,20 @@ function ClusterDetailContent() {
           </p>
           <DialogFooter>
             <Button
-              variant="ghost"
+              variant="outline"
               onClick={() => setRemoveTarget(null)}
               disabled={removing}
+              className="hover:bg-(--surface-elevated)"
+              style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}
             >
               Cancel
             </Button>
             <Button
+              variant="outline"
               onClick={() => removeTarget && handleRemove(removeTarget)}
               disabled={removing}
-              style={{
-                background: "transparent",
-                border: "1px solid var(--neon-red)",
-                color: "var(--neon-red)",
-              }}
+              className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
             >
               {removing ? "Removing…" : "Remove"}
             </Button>

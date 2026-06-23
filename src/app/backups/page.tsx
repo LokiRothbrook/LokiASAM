@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Archive, ChevronDown } from "lucide-react";
+import { Archive, ChevronDown, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useAppStore } from "@/store/useAppStore";
 import { useServers } from "@/hooks/useServers";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { ServerStatusBadge } from "@/components/server/ServerStatusBadge";
@@ -12,6 +14,7 @@ export default function BackupsPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { data: servers = [], isLoading } = useServers();
+  const { setShowNewServerWizard } = useAppStore();
 
   const [selectedId, setSelectedId] = useState<string>(
     searchParams.get("server") ?? ""
@@ -37,17 +40,22 @@ export default function BackupsPage() {
   return (
     <div className="h-full overflow-hidden flex flex-col gap-4">
       {/* Page header */}
-      <div className="flex items-center gap-3 shrink-0">
-        <Archive
-          className="w-6 h-6 shrink-0"
-          style={{ color: "var(--neon-purple)" }}
-        />
-        <h1
-          className="text-2xl font-bold"
-          style={{ color: "var(--neon-purple)", textShadow: "0 0 12px rgba(var(--neon-purple-rgb),0.4)" }}
-        >
-          Backups
-        </h1>
+      <div className="shrink-0">
+        <div className="flex items-center gap-3">
+          <Archive
+            className="w-6 h-6 shrink-0"
+            style={{ color: "var(--neon-purple)" }}
+          />
+          <h1
+            className="text-2xl font-bold"
+            style={{ color: "var(--neon-purple)", textShadow: "var(--glow-purple)" }}
+          >
+            Backups
+          </h1>
+        </div>
+        <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
+          Browse and restore saved backups for your ARK servers.
+        </p>
       </div>
 
       {/* Server selector */}
@@ -106,17 +114,27 @@ export default function BackupsPage() {
           <BackupsTab server={selectedServer} />
         </div>
       ) : !isLoading && servers.length === 0 ? (
-        <div
-          className="glass-card rounded-2xl p-16 flex flex-col items-center gap-4 shrink-0"
-          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
-        >
-          <Archive className="w-10 h-10" style={{ color: "var(--text-muted)" }} />
-          <p className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
-            No servers yet
-          </p>
-          <p className="text-sm text-center" style={{ color: "var(--text-muted)" }}>
-            Add a server from the Dashboard to start using backups.
-          </p>
+        <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
+          <div
+            className="flex items-center justify-center w-16 h-16 rounded-full"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+          >
+            <Archive className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>No servers yet</h2>
+            <p className="text-sm mt-1 max-w-sm" style={{ color: "var(--text-muted)" }}>
+              Create a server to start managing backups.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => setShowNewServerWizard(true)}
+            className="mt-2 gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+          >
+            <Plus className="w-4 h-4" /> Create Server
+          </Button>
         </div>
       ) : null}
     </div>

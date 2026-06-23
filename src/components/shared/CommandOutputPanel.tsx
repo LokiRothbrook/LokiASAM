@@ -195,7 +195,7 @@ export function CommandOutputPanel({
       {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-2 border-b"
-        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "rgba(10,10,30,0.8)" }}
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "var(--surface-elevated)" }}
       >
         <div className="flex items-center gap-2">
           <Terminal className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />

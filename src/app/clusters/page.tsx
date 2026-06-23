@@ -84,7 +84,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
 
         <div className="flex flex-col gap-4 py-2">
           <div className="flex flex-col gap-1.5">
-            <Label style={{ color: "var(--text-muted)" }}>Cluster Name</Label>
+            <Label style={{ color: "var(--text-primary)" }}>Cluster Name</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -94,7 +94,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label style={{ color: "var(--text-muted)" }}>
+            <Label style={{ color: "var(--text-primary)" }}>
               Custom Cluster Directory{" "}
               <span style={{ color: "var(--text-subtle)", fontWeight: 400 }}>
                 (optional)
@@ -114,17 +114,15 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy} className="hover:bg-(--surface-elevated)" style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}>
             Cancel
           </Button>
           <Button
+            variant="outline"
             onClick={handleCreate}
             disabled={busy || !name.trim()}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
+            className="gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             {busy ? "Creating…" : "Create Cluster"}
           </Button>
@@ -235,17 +233,21 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
         </div>
 
         <DialogFooter className="mt-2">
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={busy}
+            className="hover:bg-(--surface-elevated)"
+            style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}
+          >
             Cancel
           </Button>
           <Button
+            variant="outline"
             onClick={handleDelete}
             disabled={busy}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-red)",
-              color: "var(--neon-red)",
-            }}
+            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
           >
             {busy ? "Deleting…" : "Delete Cluster"}
           </Button>
@@ -269,7 +271,7 @@ function ClusterCard({ cluster, onDelete }: ClusterCardProps) {
 
   return (
     <div
-      className="glass-card flex flex-col gap-4 p-5 cursor-pointer transition-all duration-200 hover:border-[var(--neon-purple)]"
+      className="glass-card flex flex-col gap-4 p-5 cursor-pointer transition-all duration-200 hover:border-(--neon-purple)"
       onClick={() => router.push(`/clusters/detail?id=${cluster.id}`)}
       style={{
         border: "1px solid var(--border)",
@@ -306,7 +308,7 @@ function ClusterCard({ cluster, onDelete }: ClusterCardProps) {
               e.stopPropagation();
               onDelete(cluster);
             }}
-            style={{ color: "var(--text-muted)" }}
+            style={{ color: "var(--neon-red)" }}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </Button>
@@ -359,7 +361,7 @@ export default function ClustersPage() {
   return (
     <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between shrink-0">
+      <div className="flex items-start justify-between shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <Network className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -375,14 +377,12 @@ export default function ClustersPage() {
           </p>
         </div>
         <Button
+          variant="outline"
           onClick={() => setShowNew(true)}
-          style={{
-            background: "transparent",
-            border: "1px solid var(--neon-purple)",
-            color: "var(--neon-purple)",
-          }}
+          className="gap-2"
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
         >
-          <Plus className="w-4 h-4 mr-2" />
+          <Plus className="w-4 h-4" />
           New Cluster
         </Button>
       </div>
@@ -396,30 +396,26 @@ export default function ClustersPage() {
           ))}
         </div>
       ) : clusters.length === 0 ? (
-        <div
-          className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center"
-          style={{ border: "1px solid var(--border)", borderRadius: "0.75rem" }}
-        >
-          <Network className="w-10 h-10" style={{ color: "var(--text-subtle)" }} />
+        <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
+          <div
+            className="flex items-center justify-center w-16 h-16 rounded-full"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+          >
+            <Network className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+          </div>
           <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
-              No clusters yet
-            </p>
-            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+            <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>No clusters yet</h2>
+            <p className="text-sm mt-1 max-w-sm" style={{ color: "var(--text-muted)" }}>
               Create a cluster to enable cross-ARK travel between servers.
             </p>
           </div>
           <Button
+            variant="outline"
             onClick={() => setShowNew(true)}
-            size="sm"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
+            className="mt-2 gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Create First Cluster
+            <Plus className="w-4 h-4" /> New Cluster
           </Button>
         </div>
       ) : (

@@ -167,7 +167,7 @@ function ChartTooltip({
     <div
       className="rounded-lg px-3 py-2 text-xs"
       style={{
-        background: "rgba(10,10,30,0.95)",
+        background: "var(--popover)",
         border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
         color: "var(--text-primary)",
       }}
@@ -1398,7 +1398,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
               </p>
             ) : (
               <Select value={importSourceId} onValueChange={setImportSourceId}>
-                <SelectTrigger style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}>
+                <SelectTrigger style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}>
                   <SelectValue placeholder="Select source server…" />
                 </SelectTrigger>
                 <SelectContent>
