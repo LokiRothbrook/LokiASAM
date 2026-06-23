@@ -493,6 +493,15 @@ async function runMigrations(db: Database): Promise<void> {
   // ── Migration 018: memory limit restart + backup broadcast message ─────────
   try { await db.execute("ALTER TABLE servers ADD COLUMN memory_limit_gb REAL"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE servers ADD COLUMN backup_broadcast_message TEXT NOT NULL DEFAULT 'Server backup in progress — lag may occur.'"); } catch { /* exists */ }
+
+  // ── Migration 019: user-defined custom mod maps ──────────────────────────
+  await db.execute(`CREATE TABLE IF NOT EXISTS custom_maps (
+    id          TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    mod_id       TEXT NOT NULL,
+    map_path     TEXT NOT NULL,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +539,7 @@ export interface ServerRow {
   update_cancel_message: string;
   auto_start: number;                // 0 | 1 — always start on app launch
   installed_build_id: string | null; // populated by Rust on install/update
-  save_folder_name: string;          // subfolder name for -SaveDirectoryOverride; empty = no override
+  save_folder_name: string;          // legacy column — no longer used; kept for schema compatibility
   active_event: string | null;       // ARK event id (e.g. "FearEvolved"); null = no active event
   memory_limit_gb: number | null;    // restart server if RAM exceeds this; null = disabled
   backup_broadcast_message: string;  // RCON broadcast sent before each scheduled backup
@@ -2076,4 +2085,41 @@ export function formatServerVersion(
   const entry = versionCache.get(installedBuildId);
   if (entry?.game_version) return `V${entry.game_version} (${installedBuildId})`;
   return `Build ${installedBuildId}`;
+}
+
+// ---------------------------------------------------------------------------
+// custom_maps
+// ---------------------------------------------------------------------------
+
+export interface CustomMapRow {
+  id: string;
+  display_name: string;
+  mod_id: string;
+  map_path: string;
+  created_at: string;
+}
+
+export async function getCustomMaps(): Promise<CustomMapRow[]> {
+  const db = await getDb();
+  return db.select<CustomMapRow[]>(
+    "SELECT id, display_name, mod_id, map_path, created_at FROM custom_maps ORDER BY created_at ASC"
+  );
+}
+
+export async function insertCustomMap(
+  id: string,
+  displayName: string,
+  modId: string,
+  mapPath: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO custom_maps (id, display_name, mod_id, map_path) VALUES (?, ?, ?, ?)",
+    [id, displayName, modId, mapPath],
+  );
+}
+
+export async function deleteCustomMap(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM custom_maps WHERE id = ?", [id]);
 }

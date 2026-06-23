@@ -10,6 +10,7 @@ import {
   Network,
   ScrollText,
   Archive,
+  Map,
   Bell,
   Settings,
   HelpCircle,
@@ -30,6 +31,7 @@ const TOP_NAV: NavItem[] = [
   { href: "/clusters", icon: Network,         label: "Clusters" },
   { href: "/logs",     icon: ScrollText,      label: "Logs" },
   { href: "/backups",  icon: Archive,         label: "Backups" },
+  { href: "/mod-maps", icon: Map,             label: "Mod Maps" },
 ];
 
 const BOTTOM_NAV: NavItem[] = [

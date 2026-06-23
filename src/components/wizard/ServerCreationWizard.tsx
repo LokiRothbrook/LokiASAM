@@ -34,6 +34,7 @@ import { Slider } from "@/components/ui/slider";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { NumberField } from "@/components/shared/NumberField";
 import { LokiIcon } from "@/components/shared/LokiIcon";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import {
   getReleasedMaps, getOfficialMaps, getModMaps, getMapById,
   GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS, buildPresetConfig,
@@ -134,8 +135,6 @@ interface WizardData {
   rconPort: number;
   // Cluster
   clusterId: string;
-  // Save directory
-  saveFolderName: string;
   // Automation — restart
   autoRestart: boolean;
   autoRestartCron: string;
@@ -223,7 +222,6 @@ const DEFAULT_DATA: WizardData = {
   queryPort: 27015,
   rconPort: 27020,
   clusterId: "",
-  saveFolderName: "",
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
   serverBackupTiers: {
@@ -329,8 +327,9 @@ function BasicInfoStep({
   onChange: (patch: Partial<WizardData>) => void;
   onNameValidated: (valid: boolean) => void;
 }) {
-  const officialMaps = getOfficialMaps();
-  const modMaps      = getModMaps();
+  const allMaps      = useAllMaps();
+  const officialMaps = allMaps.filter((m) => m.released && !m.isMod);
+  const modMaps      = allMaps.filter((m) => m.released && m.isMod);
   const [nameError, setNameError] = useState("");
   const [checkingName, setCheckingName] = useState(false);
   const [nameChecked, setNameChecked] = useState(false);
@@ -341,7 +340,7 @@ function BasicInfoStep({
   const [showServerPw,     setShowServerPw]     = useState(false);
   const [showServerConfirm,setShowServerConfirm]= useState(false);
 
-  const selectedMap = getMapById(data.mapId);
+  const selectedMap = allMaps.find((m) => m.id === data.mapId);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -379,14 +378,6 @@ function BasicInfoStep({
   const handleMapSelect = (map: ArkMap) => {
     const patch: Partial<WizardData> = { mapId: map.id };
 
-    // Auto-update save folder name if it hasn't been manually edited
-    // (still empty or still equal to the old map's display name)
-    const prevMap = getMapById(data.mapId);
-    const prevDefaultName = prevMap?.displayName ?? "";
-    if (!data.saveFolderName || data.saveFolderName === prevDefaultName) {
-      patch.saveFolderName = map.displayName;
-    }
-
     if (map.isMod && map.requiredModId) {
       // Auto-add the required mod and lock it
       const newModIds = data.modIds.includes(map.requiredModId)
@@ -395,8 +386,8 @@ function BasicInfoStep({
       patch.modIds = newModIds;
       patch.lockedModIds = [map.requiredModId];
     } else {
-      if (prevMap?.isMod && prevMap.requiredModId) {
-        patch.modIds = data.modIds.filter((id) => id !== prevMap.requiredModId);
+      if (selectedMap?.isMod && selectedMap.requiredModId) {
+        patch.modIds = data.modIds.filter((id) => id !== selectedMap.requiredModId);
         patch.lockedModIds = [];
       } else {
         patch.lockedModIds = [];
@@ -541,18 +532,14 @@ function BasicInfoStep({
         )}
       </div>
 
-      {/* Save Folder Name */}
-      <div className="space-y-1.5">
-        <Label style={{ color: "var(--text-primary)" }}>Save Folder Name</Label>
-        <Input
-          value={data.saveFolderName}
-          onChange={(e) => onChange({ saveFolderName: e.target.value })}
-          placeholder={selectedMap?.displayName ?? "e.g. TheIsland"}
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
-        />
-        <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-          Save files for this server will be stored in <span className="font-mono" style={{ color: "var(--neon-cyan)" }}>Saves/{data.saveFolderName || (selectedMap?.displayName ?? "…")}/</span> inside your base directory.
-          Use a unique name if you run two servers on the same map.
+      {/* Custom mod maps hint */}
+      <div
+        className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+        style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        <p style={{ color: "var(--text-muted)" }}>
+          Don&apos;t see your mod map? Add it first from the{" "}
+          <strong style={{ color: "var(--neon-purple)" }}>Mod Maps</strong> page (sidebar), then come back and it will appear in the list above.
         </p>
       </div>
 
@@ -2118,6 +2105,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 // ---------------------------------------------------------------------------
 
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const allMaps = useAllMaps();
   const [input, setInput] = useState("");
   const [existingServers, setExistingServers] = useState<import("@/lib/db").ServerRow[]>([]);
   const [copyFromId, setCopyFromId] = useState("");
@@ -2188,7 +2176,7 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
     onChange({ modIds: data.modIds.filter((m) => m !== id) });
   };
 
-  const selectedMap = getMapById(data.mapId);
+  const selectedMap = allMaps.find((m) => m.id === data.mapId);
 
   return (
     <div className="space-y-5">
@@ -2331,6 +2319,7 @@ function InstallStep({
   onStatusChange: (status: string) => void;
   onCleanupReady: (fn: () => Promise<void>) => void;
 }) {
+  const allMaps = useAllMaps();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<"idle" | "installing" | "done" | "error">("idle");
   const [canceled, setCanceled] = useState(false);
@@ -2341,7 +2330,6 @@ function InstallStep({
   const steamcmdPathRef = useRef("");
   const cacheDirRef = useRef("");
   const baseDirRef = useRef("");
-  const saveFolderNameRef = useRef("");
   const terminalRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const backgroundRef = useRef(false);
@@ -2360,7 +2348,7 @@ function InstallStep({
     return () => ro.disconnect();
   }, [scrollToBottom]);
 
-  const selectedMap = getMapById(data.mapId);
+  const selectedMap = allMaps.find((m) => m.id === data.mapId);
   const presetLabel = (() => {
     const modeLabel = data.gameMode === "pvp" ? "PvP" : "PvE";
     const styleLabel = PRESET_STYLES.find((s) => s.id === data.presetStyle)?.displayName ?? data.presetStyle;
@@ -2373,7 +2361,6 @@ function InstallStep({
     { label: "Mode / Style", value: presetLabel },
     { label: "Max Players",  value: String(data.maxPlayers) },
     { label: "Ports",        value: `${data.port} / ${data.queryPort} / ${data.rconPort}` },
-    { label: "Save Folder",      value: data.saveFolderName || getMapById(data.mapId)?.displayName || data.mapId },
     { label: "Auto-Restart",     value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
     { label: "Server Backups",   value: WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.serverBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
     { label: "Player Backups",   value: WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.playerBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
@@ -2734,12 +2721,7 @@ function InstallStep({
           ? data.presetStyle
           : `${data.gameMode}_${data.presetStyle}`;
 
-        // Resolve the effective save folder name (fall back to map display name)
-        const effectiveSaveFolderName = data.saveFolderName.trim()
-          || getMapById(data.mapId)?.displayName
-          || data.mapId;
         baseDirRef.current = baseDir;
-        saveFolderNameRef.current = effectiveSaveFolderName;
 
         await createServer({
           id: serverId,
@@ -2755,7 +2737,6 @@ function InstallStep({
           adminPassword: data.adminPassword,
           clusterId: data.clusterId || undefined,
           presetId,
-          saveFolderName: effectiveSaveFolderName,
         });
         await updateServerStatus(serverId, "installing", null);
         await saveServerConfig(serverId, "{}", "{}", "{}");
@@ -2864,9 +2845,9 @@ function InstallStep({
       await saveServerConfig(serverId, JSON.stringify(gusJson), JSON.stringify(gameIniJson), JSON.stringify(data.launchArgs));
       await updateServerStatus(serverId, "stopped", null);
 
-      // Create symlink/junction so -SaveDirectoryOverride writes to the managed Saves folder
-      if (saveFolderNameRef.current && baseDirRef.current) {
-        await tauriCmd.createSaveLink(installPath, saveFolderNameRef.current, baseDirRef.current).catch((e) => {
+      // Create SavedArks symlink/junction pointing to managed Saves/{serverId}/SavedArks/
+      if (baseDirRef.current) {
+        await tauriCmd.createSaveLink(installPath, serverId, baseDirRef.current).catch((e) => {
           console.warn("createSaveLink failed (non-fatal):", e);
         });
       }

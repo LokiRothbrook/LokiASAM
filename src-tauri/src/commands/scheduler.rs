@@ -349,7 +349,6 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
         mod_ids: entry.mod_ids.clone(),
         proton_path: entry.proton_path.clone(),
         prefix_path: entry.prefix_path.clone(),
-        alt_save_directory_name: None,
     }
 }
 

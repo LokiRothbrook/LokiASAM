@@ -387,10 +387,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         _ => return,
     };
 
-    let base_map_path = map_id_to_path(&server.map_id);
-    let map_path = server.save_folder_name.as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(base_map_path);
+    let map_path = map_id_to_path(&server.map_id);
 
     // Create the archive (eos_id used as player_name for the filename).
     let rec = match create_player_backup_inner(
@@ -482,6 +479,8 @@ pub async fn execute_tick(app: &AppHandle) {
         }
     };
 
+    let base_dir = db::get_app_setting(&conn, "base_dir").unwrap_or_default();
+
     let servers = db::get_servers(&conn);
     let pool = app.state::<RconPool>();
 
@@ -491,10 +490,7 @@ pub async fn execute_tick(app: &AppHandle) {
         }
 
         let schedules = db::get_server_schedules(&conn, &server.id);
-        let base_map_path = map_id_to_path(&server.map_id);
-        let map_path = server.save_folder_name.as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(base_map_path);
+        let map_path = map_id_to_path(&server.map_id);
 
         // Parse both schedule configs up front so we can decide whether a
         // world save is needed before starting either backup.
@@ -539,6 +535,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     "",      // tier assigned after tier computation
                     &pool,
                     true,    // world save already done above
+                    &base_dir,
                 ).await {
                     Ok(rec) => {
                         handle_backup_record(&conn, &rec, &cfg, "server", None);

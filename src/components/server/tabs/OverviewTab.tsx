@@ -28,7 +28,7 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount,
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
-  pruneManualBackups, setServerAutoStart,
+  pruneManualBackups, setServerAutoStart, getServers,
 } from "@/lib/db";
 import { buildLaunchCommandPreview, buildStartParams, isLinux } from "@/lib/server-utils";
 import { applyUpdateToServer } from "@/lib/update-utils";
@@ -38,7 +38,7 @@ import type { ServerRow } from "@/lib/db";
 import { formatServerVersion } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
-import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getMapById } from "@/data/game-data";
 import { setServerActiveEvent } from "@/lib/db";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
@@ -590,6 +590,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [applyingUpdate, setApplyingUpdate] = useState(false);
   const [wipeConfirm, setWipeConfirm] = useState<"map" | "players" | "full" | null>(null);
   const [wiping, setWiping] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importSourceId, setImportSourceId] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importServers, setImportServers] = useState<ServerRow[]>([]);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const [launchCommand, setLaunchCommand] = useState("");
@@ -817,6 +821,9 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       router.push("/");
       tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath)
+        .then(() => tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+          console.warn("createSaveLink failed after reinstall:", e);
+        }))
         .then(() => updateServerStatus(server.id, "stopped", null))
         .catch(() => updateServerStatus(server.id, "install_failed", null))
         .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
@@ -827,14 +834,39 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
 
   const handleWipe = async (tier: "map" | "players" | "full") => {
     setWiping(true);
+    const mapPath = getMapById(server.map_id)?.mapPath ?? server.map_id;
     try {
-      await tauriCmd.wipeServerSaves(server.install_path, server.save_folder_name ?? "", tier);
+      await tauriCmd.wipeServerSaves(server.install_path, mapPath, tier);
       setWipeConfirm(null);
       toast.success(`Save wipe complete (${tier})`);
     } catch (e) {
       toast.error(`Save wipe failed: ${e}`);
     } finally {
       setWiping(false);
+    }
+  };
+
+  const openImportDialog = async () => {
+    const all = await getServers();
+    setImportServers(all.filter((s) => s.id !== server.id && s.status === "stopped"));
+    setImportSourceId("");
+    setShowImport(true);
+  };
+
+  const handleImport = async () => {
+    if (!importSourceId) return;
+    setImporting(true);
+    try {
+      const baseDir = await getAppSetting("base_dir");
+      if (!baseDir) throw new Error("Base directory not configured");
+      const mapPath = getMapById(server.map_id)?.mapPath ?? server.map_id;
+      await tauriCmd.importServerSaves(importSourceId, server.id, baseDir, mapPath);
+      setShowImport(false);
+      toast.success("Save data imported successfully");
+    } catch (e) {
+      toast.error(`Import failed: ${e}`);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -987,10 +1019,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           <Button
             size="sm" variant="outline" disabled={isTransitioning}
             onClick={async () => {
-              const backupDir = await getAppSetting("backup_dir");
+              const [backupDir, baseDir] = await Promise.all([getAppSetting("backup_dir"), getAppSetting("base_dir")]);
               if (!backupDir) return;
               const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
-              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual", "", server.save_folder_name || undefined)
+              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual", "", baseDir ?? "")
                 .then(async (record: BackupRecord) => {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,
@@ -1317,6 +1349,71 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           )}
         </div>
       )}
+
+      {/* ── Import Saves card ── */}
+      {!isRunning && (
+        <div
+          className="glass-card rounded-xl p-4 space-y-3"
+          style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
+        >
+          <div className="flex items-center gap-2">
+            <Save className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Import Saves</h3>
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Copy the current map&apos;s save data from another stopped server into this one. Existing saves will be replaced.
+          </p>
+          <button
+            onClick={openImportDialog}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.08)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)" }}
+          >
+            Import from Another Server…
+          </button>
+        </div>
+      )}
+
+      {/* ── Import Saves dialog ── */}
+      <Dialog open={showImport} onOpenChange={(v) => !v && setShowImport(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Import Save Data</DialogTitle>
+            <DialogDescription>
+              Select a stopped server to copy its <strong>{getMapById(server.map_id)?.mapPath ?? server.map_id}</strong> save
+              folder into <strong>{server.name}</strong>. Only stopped servers with the same map are shown.
+              Existing saves will be overwritten.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-1">
+            {importServers.length === 0 ? (
+              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                No other stopped servers found. Stop the source server before importing.
+              </p>
+            ) : (
+              <Select value={importSourceId} onValueChange={setImportSourceId}>
+                <SelectTrigger style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}>
+                  <SelectValue placeholder="Select source server…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {importServers.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <DialogFooter className="gap-2 mt-2">
+            <Button variant="outline" onClick={() => setShowImport(false)} disabled={importing}>Cancel</Button>
+            <Button
+              disabled={importing || !importSourceId}
+              onClick={handleImport}
+              style={{ background: "rgba(var(--neon-purple-rgb),0.15)", borderColor: "rgba(var(--neon-purple-rgb),0.5)", color: "var(--neon-purple)" }}
+            >
+              {importing ? <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Importing…</> : "Import Saves"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Update confirmation dialog ── */}
       <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>

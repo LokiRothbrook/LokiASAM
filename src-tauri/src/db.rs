@@ -78,14 +78,13 @@ pub struct ServerRow {
     pub name: String,
     pub map_id: String,
     pub install_path: String,
-    pub save_folder_name: Option<String>,
     pub backup_broadcast_message: Option<String>,
     pub memory_limit_gb: Option<f64>,
 }
 
 pub fn get_server(conn: &Connection, server_id: &str) -> Option<ServerRow> {
     conn.query_row(
-        "SELECT id, name, map_id, install_path, save_folder_name, backup_broadcast_message, memory_limit_gb FROM servers WHERE id = ?1",
+        "SELECT id, name, map_id, install_path, backup_broadcast_message, memory_limit_gb FROM servers WHERE id = ?1",
         [server_id],
         |row| {
             Ok(ServerRow {
@@ -93,9 +92,8 @@ pub fn get_server(conn: &Connection, server_id: &str) -> Option<ServerRow> {
                 name:                     row.get(1)?,
                 map_id:                   row.get(2)?,
                 install_path:             row.get(3)?,
-                save_folder_name:         row.get(4)?,
-                backup_broadcast_message: row.get(5)?,
-                memory_limit_gb:          row.get(6)?,
+                backup_broadcast_message: row.get(4)?,
+                memory_limit_gb:          row.get(5)?,
             })
         },
     )
@@ -104,7 +102,7 @@ pub fn get_server(conn: &Connection, server_id: &str) -> Option<ServerRow> {
 
 pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
     let mut stmt = match conn.prepare(
-        "SELECT id, name, map_id, install_path, save_folder_name, backup_broadcast_message, memory_limit_gb FROM servers",
+        "SELECT id, name, map_id, install_path, backup_broadcast_message, memory_limit_gb FROM servers",
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -118,9 +116,8 @@ pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
             name:                     row.get(1)?,
             map_id:                   row.get(2)?,
             install_path:             row.get(3)?,
-            save_folder_name:         row.get(4)?,
-            backup_broadcast_message: row.get(5)?,
-            memory_limit_gb:          row.get(6)?,
+            backup_broadcast_message: row.get(4)?,
+            memory_limit_gb:          row.get(5)?,
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())

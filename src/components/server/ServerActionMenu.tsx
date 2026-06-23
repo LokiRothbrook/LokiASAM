@@ -139,7 +139,7 @@ function DeleteDialog({
       const bsd = bsDir ?? "";
       setBackupDir(bd);
       setBaseDir(bsd);
-      return tauriCmd.getServerDiskUsage(server.id, bd, bsd, server.save_folder_name ?? "");
+      return tauriCmd.getServerDiskUsage(server.id, bd, bsd);
     }).then((usage) => {
       setDiskUsage(usage);
     }).catch(() => {});
@@ -161,7 +161,6 @@ function DeleteDialog({
         server.install_path,
         backupDir,
         baseDir,
-        server.save_folder_name ?? "",
         deleteFiles,
         deleteBackups,
         deleteLogs,
@@ -180,8 +179,6 @@ function DeleteDialog({
   const exclusivePortList = exclusivePorts
     .map((p) => `${p.port}/${p.protocol.toUpperCase()}`)
     .join(", ");
-
-  const hasSaveFolder = !!(server.save_folder_name);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -217,15 +214,13 @@ function DeleteDialog({
             onToggle={() => setDeleteLogs((v) => !v)}
             color="var(--neon-red)"
           />
-          {hasSaveFolder && (
-            <DeleteToggleRow
-              label={`Delete map saves${diskUsage && diskUsage.saveBytes > 0 ? ` (${formatBytes(diskUsage.saveBytes)})` : diskUsage ? " (none)" : ""}`}
-              sublabel={baseDir ? `${baseDir}/Saves/${server.save_folder_name}/` : "Saves directory"}
-              enabled={deleteSaves}
-              onToggle={() => setDeleteSaves((v) => !v)}
-              color="var(--neon-red)"
-            />
-          )}
+          <DeleteToggleRow
+            label={`Delete map saves${diskUsage && diskUsage.saveBytes > 0 ? ` (${formatBytes(diskUsage.saveBytes)})` : diskUsage ? " (none)" : ""}`}
+            sublabel={baseDir ? `${baseDir}/Saves/${server.id}/` : "Saves directory"}
+            enabled={deleteSaves}
+            onToggle={() => setDeleteSaves((v) => !v)}
+            color="var(--neon-red)"
+          />
           {exclusivePorts.length > 0 && (
             <DeleteToggleRow
               label={`Remove firewall rules for ${exclusivePortList}`}

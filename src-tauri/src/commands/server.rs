@@ -116,9 +116,6 @@ pub struct StartServerParams {
     pub proton_path: Option<String>,
     /// Linux only: WINEPREFIX path where Proton creates its fake C: drive.
     pub prefix_path: Option<String>,
-    /// When set, appended as ?AltSaveDirectoryName= in the map query string.
-    /// ASA reads this from the URL and saves to SavedArks/{name} instead of SavedArks/{mapPath}.
-    pub alt_save_directory_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,16 +238,11 @@ async fn inner_start_server_with_state(
     // Passwords, RCON, MaxPlayers, and all gameplay settings are read by the
     // server from GameUserSettings.ini — they must NOT be duplicated on the CLI
     // or they will override INI values on every restart.
-    let alt_save = params.alt_save_directory_name.as_deref()
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("?AltSaveDirectoryName={s}"))
-        .unwrap_or_default();
     let query_string = format!(
-        "{}?listen?Port={}?QueryPort={}{}",
+        "{}?listen?Port={}?QueryPort={}",
         params.map_path,
         params.port,
         params.query_port,
-        alt_save,
     );
 
     // Build the platform-specific Command.
@@ -954,7 +946,6 @@ pub async fn scan_running_servers(
                     mod_ids:      vec![],
                     proton_path:  None,
                     prefix_path:  None,
-                    alt_save_directory_name: None,
                 };
                 registry.insert(
                     entry.server_id.clone(),
@@ -1103,7 +1094,6 @@ pub async fn get_server_disk_usage(
     server_id: String,
     backup_dir: String,
     base_dir: String,
-    save_folder_name: String,
 ) -> Result<serde_json::Value, String> {
     fn dir_size(path: &std::path::Path) -> u64 {
         if !path.exists() { return 0; }
@@ -1136,8 +1126,8 @@ pub async fn get_server_disk_usage(
         p.map(|d| dir_size(&d)).unwrap_or(0)
     };
 
-    let save_bytes = if !base_dir.is_empty() && !save_folder_name.is_empty() {
-        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&save_folder_name);
+    let save_bytes = if !base_dir.is_empty() {
+        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&server_id).join("SavedArks");
         dir_size(&p)
     } else {
         0
@@ -1162,7 +1152,6 @@ pub async fn delete_server(
     install_path: String,
     backup_dir: String,
     base_dir: String,
-    save_folder_name: String,
     delete_files: bool,
     delete_backups: bool,
     delete_logs: bool,
@@ -1209,8 +1198,8 @@ pub async fn delete_server(
         }
     }
 
-    if delete_saves && !base_dir.is_empty() && !save_folder_name.is_empty() {
-        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&save_folder_name);
+    if delete_saves && !base_dir.is_empty() {
+        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&server_id);
         if p.exists() {
             std::fs::remove_dir_all(&p)
                 .map_err(|e| format!("Failed to delete save data: {e}"))?;

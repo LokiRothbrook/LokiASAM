@@ -347,12 +347,13 @@ pub async fn cleanup_ark_own_backups(
 // Server backup (SavedArks + SaveGames → .7z)
 // ---------------------------------------------------------------------------
 
-/// Inner implementation for server backup — callable from both the Tauri command
-/// and the Rust backup_manager tick handler (which cannot use State<'_> wrappers).
+/// Inner implementation callable from both the Tauri command and the Rust
+/// backup_manager tick handler (which cannot use State<'_> wrappers).
 ///
-/// `skip_world_save`: pass `true` when the caller has already issued SaveWorld
-/// (e.g. the scheduler tick that consolidates the save across backup types).
-/// Pass `false` for manual/UI-triggered backups so they save on their own.
+/// `skip_world_save`: pass `true` when the caller has already issued SaveWorld.
+/// `base_dir`: when non-empty, resolves the canonical save path
+///   `{base_dir}/Saves/{server_id}/SavedArks/{map_path}` instead of following
+///   the SavedArks symlink inside the install directory.
 pub async fn create_server_backup_inner(
     app: &AppHandle,
     server_id: &str,
@@ -365,8 +366,9 @@ pub async fn create_server_backup_inner(
     tier: &str,
     pool: &RconPool,
     skip_world_save: bool,
+    base_dir: &str,
 ) -> Result<BackupRecord, String> {
-    create_server_backup_impl(app, server_id, server_name, install_path, map_path, map_id, backup_dir, triggered_by, tier, pool, skip_world_save).await
+    create_server_backup_impl(app, server_id, server_name, install_path, map_path, map_id, backup_dir, triggered_by, tier, pool, skip_world_save, base_dir).await
 }
 
 /// Tauri command: exposed to the frontend for manual/UI-triggered backups.
@@ -381,14 +383,10 @@ pub async fn create_server_backup(
     backup_dir: String,
     triggered_by: String,
     tier: String,
-    save_folder_name: Option<String>,
+    base_dir: String,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
-    // Use save_folder_name as the save dir when set (new symlink-based layout)
-    let effective_map_path = save_folder_name
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| map_path.clone());
-    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &effective_map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool, false).await;
+    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool, false, &base_dir).await;
     if let Ok(ref rec) = result {
         let size = fmt_size(rec.file_size_bytes);
         crate::commands::notifications::dispatch_notification(
@@ -411,6 +409,7 @@ async fn create_server_backup_impl(
     tier: &str,
     pool: &RconPool,
     skip_world_save: bool,
+    base_dir: &str,
 ) -> Result<BackupRecord, String> {
     const MAX_ATTEMPTS: u32 = 3;
     const RETRY_DELAY_SECS: u64 = 15;
@@ -427,8 +426,12 @@ async fn create_server_backup_impl(
         sleep(Duration::from_secs(POST_SAVE_WAIT_SECS)).await;
     }
 
-    let saved_arks = PathBuf::from(&install_path)
-        .join("ShooterGame").join("Saved").join("SavedArks").join(&map_path);
+    // Use canonical path when base_dir is known, otherwise fall back to following the symlink.
+    let saved_arks = if !base_dir.is_empty() {
+        PathBuf::from(base_dir).join("Saves").join(server_id).join("SavedArks").join(map_path)
+    } else {
+        PathBuf::from(&install_path).join("ShooterGame").join("Saved").join("SavedArks").join(map_path)
+    };
     let save_games = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SaveGames");
     let saved_root = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
@@ -584,12 +587,8 @@ pub async fn backup_all_players(
     map_id: String,
     backup_dir: String,
     triggered_by: String,
-    save_folder_name: Option<String>,
 ) -> Result<Vec<BackupRecord>, String> {
-    let effective_map_path = save_folder_name
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| map_path.clone());
-    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &effective_map_path, &map_id, &backup_dir, &triggered_by).await;
+    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by).await;
     if let Ok(ref recs) = result {
         let count = recs.len();
         if count > 0 {
@@ -776,53 +775,55 @@ pub async fn create_ini_backup(
     })
 }
 
-/// Create the save directory link used with -SaveDirectoryOverride.
+/// Create the save directory link for a server.
 ///
 /// Creates:
-///   `{base_dir}/Saves/{save_folder_name}/`            ← the real save location
-///   `{install_path}/ShooterGame/Saved/SavedArks/{save_folder_name}`  ← the link target
+///   `{base_dir}/Saves/{server_id}/SavedArks/`                ← the real save location
+///   `{install_path}/ShooterGame/Saved/SavedArks`  →  symlink  ← replaces the whole SavedArks dir
 ///
-/// On Linux: a symlink pointing to the base_dir/Saves/ subdirectory.
-/// On Windows: an NTFS junction point (no admin rights required for junctions on local filesystems).
+/// On Linux: a symlink. On Windows: an NTFS junction (no admin rights required).
 ///
-/// If the link already exists and already points to the correct target, returns success without changes.
+/// If `SavedArks` already exists as a regular directory (first-run or leftover from a
+/// previous install), it is removed so the symlink/junction can be placed at that path.
+/// If the link already points to the correct target, returns success without changes.
 #[tauri::command]
 pub async fn create_save_link(
     install_path: String,
-    save_folder_name: String,
+    server_id: String,
     base_dir: String,
 ) -> Result<(), String> {
-    if save_folder_name.is_empty() {
-        return Err("save_folder_name must not be empty".to_string());
+    if server_id.is_empty() {
+        return Err("server_id must not be empty".to_string());
     }
 
-    // The real save storage directory
-    let save_target = PathBuf::from(&base_dir).join("Saves").join(&save_folder_name);
+    // The canonical save storage directory (real data lives here)
+    let save_target = PathBuf::from(&base_dir).join("Saves").join(&server_id).join("SavedArks");
     fs::create_dir_all(&save_target).map_err(|e| format!("Failed to create save target dir: {e}"))?;
 
-    // The path where the server expects saves (must be the link)
-    let saved_arks = PathBuf::from(&install_path)
-        .join("ShooterGame").join("Saved").join("SavedArks");
-    fs::create_dir_all(&saved_arks).map_err(|e| format!("Failed to create SavedArks dir: {e}"))?;
+    // The path inside the server install where SavedArks should be (will become the link)
+    let saved_dir = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
+    fs::create_dir_all(&saved_dir).map_err(|e| format!("Failed to create Saved dir: {e}"))?;
+    let link_path = saved_dir.join("SavedArks");
 
-    let link_path = saved_arks.join(&save_folder_name);
-
-    // If already correctly linked, do nothing
+    // If something already exists at link_path, check it and remove if wrong
     if link_path.exists() || link_path.is_symlink() {
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(existing) = std::fs::read_link(&link_path) {
-                if existing == save_target {
-                    return Ok(());
-                }
+        if let Ok(existing) = std::fs::read_link(&link_path) {
+            if existing == save_target {
+                return Ok(());
             }
-            // Wrong target or broken link — remove and recreate
-            let _ = fs::remove_file(&link_path);
         }
-        #[cfg(target_os = "windows")]
-        {
-            // Junction already exists — leave it; user can manage via OS if needed
-            return Ok(());
+        // Wrong target, broken link, or plain directory — remove so we can recreate.
+        // On Windows, junctions must be removed with remove_dir (not remove_dir_all,
+        // which would follow the junction and delete the actual save data).
+        if link_path.is_symlink() {
+            #[cfg(target_os = "windows")]
+            { let _ = fs::remove_dir(&link_path); }
+            #[cfg(not(target_os = "windows"))]
+            { let _ = fs::remove_file(&link_path); }
+        } else if link_path.is_dir() {
+            let _ = fs::remove_dir_all(&link_path);
+        } else {
+            let _ = fs::remove_file(&link_path);
         }
     }
 
@@ -847,23 +848,19 @@ pub async fn create_save_link(
 /// - `"players"` — delete `.arkprofile` and `.arktribe` files only (resets characters/tribes).
 /// - `"full"`    — delete all save files (world + characters + tribe + mod saves).
 ///
-/// The save directory is `{install_path}/ShooterGame/Saved/SavedArks/{save_folder_name}/`
-/// when save_folder_name is non-empty, otherwise `{install_path}/ShooterGame/Saved/SavedArks/`.
+/// `SavedArks` is a symlink to the canonical save directory, so all tiers operate
+/// on the real data transparently. `map_path` is the map folder name (e.g. `TheIsland_WP`).
 ///
 /// The server MUST NOT be running when this is called (enforced on the frontend).
 #[tauri::command]
 pub async fn wipe_server_saves(
     install_path: String,
-    save_folder_name: String,
+    map_path: String,
     tier: String,
 ) -> Result<(), String> {
-    let saves_root = if save_folder_name.is_empty() {
-        PathBuf::from(&install_path).join("ShooterGame").join("Saved").join("SavedArks")
-    } else {
-        PathBuf::from(&install_path)
-            .join("ShooterGame").join("Saved").join("SavedArks")
-            .join(&save_folder_name)
-    };
+    let saves_root = PathBuf::from(&install_path)
+        .join("ShooterGame").join("Saved").join("SavedArks")
+        .join(&map_path);
 
     if !saves_root.exists() {
         return Ok(());
@@ -911,6 +908,60 @@ pub async fn wipe_server_saves(
         _ => return Err(format!("Unknown wipe tier: {tier}")),
     }
 
+    Ok(())
+}
+
+/// Copy the save data for a specific map from one server to another.
+///
+/// Source: `{base_dir}/Saves/{source_server_id}/SavedArks/{map_path}/`
+/// Target: `{base_dir}/Saves/{target_server_id}/SavedArks/{map_path}/`
+///
+/// The target map subfolder is cleared before the copy so the result is an
+/// exact mirror of the source. Both servers must be stopped before calling this.
+#[tauri::command]
+pub async fn import_server_saves(
+    source_server_id: String,
+    target_server_id: String,
+    base_dir: String,
+    map_path: String,
+) -> Result<(), String> {
+    if source_server_id == target_server_id {
+        return Err("Source and target server must be different".to_string());
+    }
+
+    let source = PathBuf::from(&base_dir)
+        .join("Saves").join(&source_server_id).join("SavedArks").join(&map_path);
+    let target = PathBuf::from(&base_dir)
+        .join("Saves").join(&target_server_id).join("SavedArks").join(&map_path);
+
+    if !source.exists() {
+        return Err(format!("Source save directory does not exist: {}", source.display()));
+    }
+
+    // Clear the target map subfolder first
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|e| format!("Failed to clear target save dir: {e}"))?;
+    }
+    fs::create_dir_all(&target).map_err(|e| format!("Failed to create target save dir: {e}"))?;
+
+    // Recursively copy everything from source into target
+    fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
+        for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let dst_path = dst.join(entry.file_name());
+            let src_path = entry.path();
+            if src_path.is_dir() {
+                fs::create_dir_all(&dst_path).map_err(|e| e.to_string())?;
+                copy_dir(&src_path, &dst_path)?;
+            } else {
+                fs::copy(&src_path, &dst_path)
+                    .map_err(|e| format!("Failed to copy {:?}: {e}", src_path))?;
+            }
+        }
+        Ok(())
+    }
+
+    copy_dir(&source, &target)?;
     Ok(())
 }
 

@@ -396,6 +396,9 @@ export function ServerCard({ server }: Props) {
 
       try {
         await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
+        await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+          console.warn("createSaveLink failed after reinstall:", e);
+        });
         await updateServerStatus(server.id, "stopped", null);
         dispatchNotification({
           eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_COMPLETE,

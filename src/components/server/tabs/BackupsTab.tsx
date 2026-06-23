@@ -715,22 +715,25 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const [showFullWarning, setShowFullWarning] = useState(false);
   const [fullEstimate,    setFullEstimate]    = useState(0);
   const [backupDir,       setBackupDir]       = useState("");
+  const [baseDir,         setBaseDir]         = useState("");
   const [syncPending,     setSyncPending]     = useState<{ toImport: BackupRecord[] } | null>(null);
   const [syncing,         setSyncing]         = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [srv, plr, ful, bdir] = await Promise.all([
+      const [srv, plr, ful, bdir, bsdir] = await Promise.all([
         getServerBackupsByType(server.id, "server"),
         getServerBackupsByType(server.id, "player"),
         getServerBackupsByType(server.id, "full"),
         getAppSetting("backup_dir"),
+        getAppSetting("base_dir"),
       ]);
       setServerBackups(srv);
       setPlayerBackups(plr);
       setFullBackups(ful);
       setBackupDir(bdir ?? "");
+      setBaseDir(bsdir ?? "");
     } catch (e) {
       toast.error(`Failed to load backups: ${e}`);
     } finally {
@@ -765,7 +768,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     try {
       const rec: BackupRecord = await tauriCmd.createServerBackup(
         server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual",
-        "", server.save_folder_name || undefined
+        "", baseDir
       );
       await insertBackup({
         id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
@@ -789,8 +792,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting player backups…" });
     try {
       const records = await tauriCmd.backupAllPlayers(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual",
-        server.save_folder_name || undefined
+        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
       );
       if (records.length === 0) {
         toast.info("No player profiles found to back up.");

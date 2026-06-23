@@ -67,7 +67,6 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     rconPassword: server.rcon_password,
     extraArgs,
     modIds:       enabledModIds,
-    altSaveDirectoryName: server.save_folder_name || undefined,
   };
 
   if (isLinux) {
