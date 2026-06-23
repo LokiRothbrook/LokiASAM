@@ -893,6 +893,14 @@ export async function updateBackupBroadcastMessage(id: string, message: string):
   );
 }
 
+export async function updateServerMap(id: string, mapId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [mapId, id]
+  );
+}
+
 /** Set the update_available flag for a single server. */
 export async function setServerUpdateAvailable(
   id: string,

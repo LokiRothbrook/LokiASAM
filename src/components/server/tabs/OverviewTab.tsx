@@ -820,9 +820,16 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       await updateServerStatus(server.id, "installing", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       router.push("/");
+
+      const { ARK_MAPS } = await import("@/data/game-data");
+      const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+
       tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath)
         .then(() => tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
           console.warn("createSaveLink failed after reinstall:", e);
+        }))
+        .then(() => tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed after reinstall:", e);
         }))
         .then(() => updateServerStatus(server.id, "stopped", null))
         .catch(() => updateServerStatus(server.id, "install_failed", null))

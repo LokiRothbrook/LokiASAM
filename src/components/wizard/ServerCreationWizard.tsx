@@ -2847,8 +2847,14 @@ function InstallStep({
 
       // Create SavedArks symlink/junction pointing to managed Saves/{serverId}/SavedArks/
       if (baseDirRef.current) {
+        const { ARK_MAPS } = await import("@/data/game-data");
+        const mapPath = ARK_MAPS.find((m) => m.id === data.mapId)?.mapPath ?? "TheIsland_WP";
+
         await tauriCmd.createSaveLink(installPath, serverId, baseDirRef.current).catch((e) => {
           console.warn("createSaveLink failed (non-fatal):", e);
+        });
+        await tauriCmd.createModsSavesLink(installPath, serverId, baseDirRef.current, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed (non-fatal):", e);
         });
       }
 

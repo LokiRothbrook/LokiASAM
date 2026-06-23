@@ -557,6 +557,10 @@ export const tauriCmd = {
    *  {installPath}/ShooterGame/Saved/SavedArks → {baseDir}/Saves/{serverId}/SavedArks */
   createSaveLink: (installPath: string, serverId: string, baseDir: string) =>
     invoke<void>("create_save_link", { installPath, serverId, baseDir }),
+  /** Create a symlink (Linux) or NTFS junction (Windows) for mod saves so that
+   *  {installPath}/ShooterGame/Saved/SaveGames → {baseDir}/Saves/{serverId}/Mods/{mapPath}/SaveGames */
+  createModsSavesLink: (installPath: string, serverId: string, baseDir: string, mapPath: string) =>
+    invoke<void>("create_mods_saves_link", { installPath, serverId, baseDir, mapPath }),
   /** Copy the current map's save subfolder from one server to another. Both servers must be stopped. */
   importServerSaves: (sourceServerId: string, targetServerId: string, baseDir: string, mapPath: string) =>
     invoke<void>("import_server_saves", { sourceServerId, targetServerId, baseDir, mapPath }),
@@ -571,9 +575,9 @@ export const tauriCmd = {
   listIniBackups: (serverId: string, backupDir: string) =>
     invoke<string[]>("list_ini_backups", { serverId, backupDir }),
 
-  /** Restore a server backup: extract 7z over SavedArks+SaveGames. */
-  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string) =>
-    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath }),
+  /** Restore a server backup: extract 7z to canonical locations and recreate symlinks. */
+  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string, baseDir: string, mapPath: string) =>
+    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath, baseDir, mapPath }),
 
   /** Restore a player backup: extract 7z into SavedArks/{mapPath}. */
   restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, mapPath: string) =>

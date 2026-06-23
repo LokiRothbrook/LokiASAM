@@ -235,6 +235,7 @@ pub async fn rcon_broadcast(pool: &RconPool, server_id: &str, message: &str) {
 
 /// Write `files` into a 7z archive at `dest_path`.
 /// `root` is stripped from each file path to produce the archive entry name.
+/// `alt_root` is an alternative root tried if primary root fails (used for mixed-source backups).
 /// Emits progress events keyed on `server_id`.
 /// Returns Ok(skipped_count) on success.  A non-zero skipped_count means some
 /// files disappeared between enumeration and compression — the caller should
@@ -247,22 +248,65 @@ fn compress_to_7z(
     dest_path: &Path,
     label: &str,
 ) -> Result<usize, String> {
-    let total = files.len().max(1) as f32;
+    compress_to_7z_with_alt_root(app, server_id, files, root, None, dest_path, label)
+}
+
+fn compress_to_7z_with_alt_root(
+    app: &AppHandle,
+    server_id: &str,
+    files: &[PathBuf],
+    root: &Path,
+    alt_root: Option<&Path>,
+    dest_path: &Path,
+    label: &str,
+) -> Result<usize, String> {
+    compress_to_7z_with_entries(
+        app,
+        server_id,
+        &files.iter().map(|f| (f.clone(), None)).collect::<Vec<_>>(),
+        root,
+        alt_root,
+        dest_path,
+        label,
+    )
+}
+
+/// Compress files with explicit entry names for archive structure.
+/// `entries` is a vec of (file_path, optional_custom_entry_name).
+/// If custom entry name is None, it's calculated by stripping the root paths.
+fn compress_to_7z_with_entries(
+    app: &AppHandle,
+    server_id: &str,
+    entries: &[(PathBuf, Option<String>)],
+    root: &Path,
+    alt_root: Option<&Path>,
+    dest_path: &Path,
+    label: &str,
+) -> Result<usize, String> {
+    let total = entries.len().max(1) as f32;
     let mut writer = SevenZWriter::create(dest_path).map_err(|e| e.to_string())?;
     let mut skipped = 0usize;
 
-    for (idx, file_path) in files.iter().enumerate() {
-        let rel = file_path
-            .strip_prefix(root)
-            .map_err(|e| e.to_string())?;
-        let entry_name = rel.to_string_lossy().replace('\\', "/");
+    for (idx, (file_path, custom_entry)) in entries.iter().enumerate() {
+        let entry_name = if let Some(custom) = custom_entry {
+            custom.clone()
+        } else {
+            let rel = file_path
+                .strip_prefix(root)
+                .or_else(|_| {
+                    alt_root.ok_or(()).and_then(|alt| file_path.strip_prefix(alt).map_err(|_| ()))
+                })
+                .map_err(|_| format!(
+                    "File {} doesn't match root {} or alt root {:?}",
+                    file_path.display(), root.display(), alt_root.map(|r| r.display())
+                ))?;
+            rel.to_string_lossy().replace('\\', "/")
+        };
 
         let pct = (idx as f32 / total * 99.0).min(99.0);
         emit_progress(app, server_id, pct, &entry_name, label);
 
-        // Skip files that disappeared between enumeration and compression (ASA
-        // uses delete+rename atomic writes, which creates a brief window where
-        // the file doesn't exist).  Count skips so callers can retry.
+        // Skip files that disappeared between enumeration and compression
         let file = match File::open(file_path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -273,7 +317,7 @@ fn compress_to_7z(
         };
         let metadata = file.metadata().map_err(|e| e.to_string())?;
         let mut entry = SevenZArchiveEntry::new();
-        entry.name = entry_name.clone();
+        entry.name = entry_name;
         entry.size = metadata.len();
         entry.is_directory = false;
         writer
@@ -434,7 +478,21 @@ async fn create_server_backup_impl(
     };
     let save_games = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SaveGames");
-    let saved_root = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
+
+    // When base_dir is used, files come from two roots: canonical saves and install_path SaveGames.
+    // Calculate the primary root based on whether base_dir is used.
+    let saved_root = if !base_dir.is_empty() {
+        PathBuf::from(base_dir).join("Saves").join(server_id)
+    } else {
+        PathBuf::from(&install_path).join("ShooterGame").join("Saved")
+    };
+
+    // The alternate root is always install_path/ShooterGame/Saved for SaveGames compatibility.
+    let alt_root = if !base_dir.is_empty() {
+        Some(PathBuf::from(&install_path).join("ShooterGame").join("Saved"))
+    } else {
+        None
+    };
 
     let out_dir = PathBuf::from(&backup_dir).join(&server_id).join("server");
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
@@ -466,17 +524,35 @@ async fn create_server_backup_impl(
             return Err("No save files found to back up".to_string());
         }
 
+        // Build entries with custom names for SaveGames files to include map path
+        let mut entries: Vec<(PathBuf, Option<String>)> = Vec::new();
+        for file_path in all_files {
+            let custom_name = if file_path.starts_with(&save_games) {
+                // For SaveGames files, prepend Mods/{map_path}/SaveGames/
+                let rel_path = file_path.strip_prefix(&save_games)
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("");
+                let rel_clean = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
+                Some(format!("Mods/{}/SaveGames/{}", map_path, rel_clean.replace('\\', "/")))
+            } else {
+                // For SavedArks files, let compress_to_7z_with_entries handle it
+                None
+            };
+            entries.push((file_path, custom_name));
+        }
+
         let (ts_file, ts_iso) = now_timestamp();
         let archive_name = format!("{safe_name}-{ts_file}{suffix}.7z");
         let archive_path = out_dir.join(&archive_name);
 
         let app_c = app.clone();
         let sid   = server_id.to_string();
-        let files = all_files;
         let root  = saved_root.clone();
+        let alt   = alt_root.clone();
         let dest  = archive_path.clone();
         let compress_result = tokio::task::spawn_blocking(move || {
-            compress_to_7z(&app_c, &sid, &files, &root, &dest, "Creating server backup…")
+            compress_to_7z_with_entries(&app_c, &sid, &entries, &root, alt.as_deref(), &dest, "Creating server backup…")
         })
         .await
         .map_err(|e| format!("Backup task panicked: {e}"))?;
@@ -842,6 +918,76 @@ pub async fn create_save_link(
     Ok(())
 }
 
+/// Create the mods saves directory link for a server (per-map SaveGames).
+///
+/// Creates:
+///   `{base_dir}/Saves/{server_id}/Mods/{map_path}/SaveGames/`         ← the real mod save location
+///   `{install_path}/ShooterGame/Saved/SaveGames`  →  symlink/junction  ← points to current map's mod data
+///
+/// On Linux: a symlink. On Windows: an NTFS junction (no admin rights required).
+///
+/// This is called when the server starts or when the map changes to ensure the
+/// SaveGames symlink points to the current map's mod save data.
+#[tauri::command]
+pub async fn create_mods_saves_link(
+    install_path: String,
+    server_id: String,
+    base_dir: String,
+    map_path: String,
+) -> Result<(), String> {
+    if server_id.is_empty() || map_path.is_empty() {
+        return Err("server_id and map_path must not be empty".to_string());
+    }
+
+    // The canonical mod save storage directory for this map (real data lives here)
+    let mods_target = PathBuf::from(&base_dir)
+        .join("Saves")
+        .join(&server_id)
+        .join("Mods")
+        .join(&map_path)
+        .join("SaveGames");
+    fs::create_dir_all(&mods_target).map_err(|e| format!("Failed to create mods target dir: {e}"))?;
+
+    // The path inside the server install where SaveGames should be (will become the link)
+    let saved_dir = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
+    fs::create_dir_all(&saved_dir).map_err(|e| format!("Failed to create Saved dir: {e}"))?;
+    let link_path = saved_dir.join("SaveGames");
+
+    // If something already exists at link_path, check it and remove if it points to wrong target
+    if link_path.exists() || link_path.is_symlink() {
+        if let Ok(existing) = std::fs::read_link(&link_path) {
+            if existing == mods_target {
+                return Ok(());
+            }
+        }
+        // Wrong target, broken link, or plain directory — remove so we can recreate.
+        if link_path.is_symlink() {
+            #[cfg(target_os = "windows")]
+            { let _ = fs::remove_dir(&link_path); }
+            #[cfg(not(target_os = "windows"))]
+            { let _ = fs::remove_file(&link_path); }
+        } else if link_path.is_dir() {
+            let _ = fs::remove_dir_all(&link_path);
+        } else {
+            let _ = fs::remove_file(&link_path);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::os::unix::fs::symlink(&mods_target, &link_path)
+            .map_err(|e| format!("Failed to create symlink: {e}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        junction::create(&mods_target, &link_path)
+            .map_err(|e| format!("Failed to create junction point: {e}"))?;
+    }
+
+    Ok(())
+}
+
 /// Wipe server save files at one of three tiers:
 ///
 /// - `"map"`     — delete world `.ark` files only (clears map state, preserves characters).
@@ -1073,16 +1219,95 @@ pub async fn create_full_backup(
 // Restore
 // ---------------------------------------------------------------------------
 
-/// Restore a Server backup: extract 7z over SavedArks/{mapPath} and SaveGames.
+/// Restore a Server backup: extract 7z to correct canonical locations and recreate symlinks.
+/// Archive structure:
+///   SavedArks/{map_path}/... → restored to {install_path}/ShooterGame/Saved/SavedArks/{map_path}/
+///   Mods/{map_path}/SaveGames/... → restored to {base_dir}/Saves/{server_id}/Mods/{map_path}/SaveGames/
 #[tauri::command]
 pub async fn restore_server_backup(
     app: AppHandle,
     server_id: String,
     backup_file_path: String,
     install_path: String,
+    base_dir: String,
+    map_path: String,
 ) -> Result<(), String> {
-    let saved_root = PathBuf::from(&install_path).join("ShooterGame").join("Saved");
-    extract_7z_with_progress(&app, &server_id, &backup_file_path, &saved_root, "Restoring server backup…").await
+    use std::fs;
+
+    // Validate inputs
+    if server_id.is_empty() || map_path.is_empty() {
+        return Err("server_id and map_path must not be empty".to_string());
+    }
+
+    // Step 1: Clear existing save locations
+    emit_progress(&app, &server_id, 10.0, "", "Clearing existing saves…");
+    let saved_arks_path = PathBuf::from(&base_dir).join("Saves").join(&server_id).join("SavedArks").join(&map_path);
+    if saved_arks_path.exists() {
+        fs::remove_dir_all(&saved_arks_path).map_err(|e| format!("Failed to clear SavedArks: {e}"))?;
+    }
+
+    let mods_saves_path = PathBuf::from(&base_dir).join("Saves").join(&server_id).join("Mods").join(&map_path).join("SaveGames");
+    if mods_saves_path.exists() {
+        fs::remove_dir_all(&mods_saves_path).map_err(|e| format!("Failed to clear SaveGames: {e}"))?;
+    }
+
+    // Step 2: Extract backup to temp directory
+    emit_progress(&app, &server_id, 20.0, "", "Extracting backup…");
+    let temp_dir = std::env::temp_dir().join(format!("lokiasam-restore-{}", server_id));
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    sevenz_rust::decompress_file(&backup_file_path, &temp_dir)
+        .map_err(|e| e.to_string())?;
+
+    // Step 3: Move extracted files to correct locations
+    emit_progress(&app, &server_id, 50.0, "", "Moving files to correct locations…");
+
+    // Process SavedArks files
+    let temp_saved_arks = temp_dir.join("SavedArks").join(&map_path);
+    if temp_saved_arks.exists() {
+        fs::create_dir_all(&saved_arks_path).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&temp_saved_arks, &saved_arks_path).map_err(|e| e.to_string())?;
+    }
+
+    // Process Mods/SaveGames files
+    let temp_mods = temp_dir.join("Mods").join(&map_path).join("SaveGames");
+    if temp_mods.exists() {
+        fs::create_dir_all(&mods_saves_path).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&temp_mods, &mods_saves_path).map_err(|e| e.to_string())?;
+    }
+
+    // Step 4: Recreate symlinks
+    emit_progress(&app, &server_id, 80.0, "", "Recreating symlinks…");
+    create_save_link(install_path.clone(), server_id.clone(), base_dir.clone()).await?;
+    create_mods_saves_link(install_path, server_id.clone(), base_dir, map_path).await?;
+
+    // Step 5: Cleanup temp directory
+    emit_progress(&app, &server_id, 95.0, "", "Cleaning up…");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    emit_progress(&app, &server_id, 100.0, "", "Restore complete");
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    use std::fs;
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let dest_path = dst.join(&file_name);
+
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Restore a Player backup: extract 7z into SavedArks/{mapPath}.

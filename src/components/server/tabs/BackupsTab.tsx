@@ -872,7 +872,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         await new Promise((r) => setTimeout(r, 2000));
       }
       if (target.backup_type === "server") {
-        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path);
+        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path, baseDir, mapPath);
       } else if (target.backup_type === "player") {
         await tauriCmd.restorePlayerBackup(server.id, target.file_path, server.install_path, mapPath);
       } else if (target.backup_type === "full") {

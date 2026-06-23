@@ -33,10 +33,10 @@ import {
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import {
   INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
-  buildPresetConfig, ARK_EVENTS,
+  buildPresetConfig, ARK_EVENTS, ARK_MAPS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -1774,6 +1774,32 @@ export function ConfigTab({ server }: Props) {
     setActiveTab("raw");
   };
 
+  const handleMapChange = async (newMapId: string) => {
+    if (server.status !== "stopped") {
+      toast.error("Server must be stopped to change maps");
+      return;
+    }
+    try {
+      const baseDir = await getAppSetting("base_dir");
+      if (!baseDir) {
+        toast.error("Base directory not configured");
+        return;
+      }
+      const newMapData = ARK_MAPS.find((m) => m.id === newMapId);
+      if (!newMapData) {
+        toast.error("Map not found");
+        return;
+      }
+      // Update the SaveGames symlink for the new map
+      await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, newMapData.mapPath);
+      // Update the database
+      await updateServerMap(server.id, newMapId);
+      toast.success(`Map changed to ${newMapData.displayName}`);
+    } catch (e) {
+      toast.error(`Failed to change map: ${e}`);
+    }
+  };
+
   const switchFromRaw = () => {
     const gus = rawTextToSections(rawGus);
     const game = rawTextToSections(rawGame);
@@ -1929,6 +1955,36 @@ export function ConfigTab({ server }: Props) {
       {/* ── Structured view — all INI field groups ────────────────────────── */}
       {activeTab === "structured" && config && (
         <div className="flex flex-col gap-4">
+          {/* Map Selector */}
+          <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-cyan-rgb),0.2)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Server Map</p>
+                <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                  Current map: <strong>{ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id}</strong>
+                </p>
+              </div>
+              {server.status !== "stopped" && (
+                <div className="text-xs px-2 py-1 rounded" style={{ background: "rgba(255,165,0,0.15)", color: "#ffa500" }}>
+                  Stop to change
+                </div>
+              )}
+            </div>
+            <Select value={server.map_id} onValueChange={handleMapChange} disabled={server.status !== "stopped"}>
+              <SelectTrigger style={{ background: "rgba(10,10,30,0.6)", borderColor: "rgba(var(--neon-cyan-rgb),0.3)" }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ARK_MAPS.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* INI Field Groups */}
           {INI_FIELD_GROUPS.map((g, idx) => (
             <SectionGroup
               key={g.id}

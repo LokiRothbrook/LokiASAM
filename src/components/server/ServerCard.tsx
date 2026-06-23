@@ -396,8 +396,16 @@ export function ServerCard({ server }: Props) {
 
       try {
         await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
+
+        // Import ARK_MAPS for map path lookup
+        const { ARK_MAPS } = await import("@/data/game-data");
+        const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+
         await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
           console.warn("createSaveLink failed after reinstall:", e);
+        });
+        await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed after update:", e);
         });
         await updateServerStatus(server.id, "stopped", null);
         dispatchNotification({

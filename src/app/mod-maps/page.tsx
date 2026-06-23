@@ -135,27 +135,6 @@ export default function ModMapsPage() {
         </div>
       )}
 
-      {/* Official maps reference */}
-      <div className="space-y-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
-          Official Maps (read-only reference)
-        </h2>
-        <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-          {ARK_MAPS.filter((m) => m.isOfficial && m.released).map((m, i, arr) => (
-            <div
-              key={m.id}
-              className="flex items-center justify-between px-4 py-2.5 text-sm"
-              style={{
-                borderBottom: i < arr.length - 1 ? "1px solid rgba(var(--neon-purple-rgb),0.07)" : undefined,
-              }}
-            >
-              <span style={{ color: "var(--text-primary)" }}>{m.displayName}</span>
-              <span className="font-mono text-xs" style={{ color: "var(--text-muted)" }}>{m.mapPath}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Built-in mod maps reference */}
       {ARK_MAPS.filter((m) => m.isMod && m.released).length > 0 && (
         <div className="space-y-2">
