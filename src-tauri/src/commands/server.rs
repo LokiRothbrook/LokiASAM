@@ -1127,7 +1127,7 @@ pub async fn get_server_disk_usage(
     };
 
     let save_bytes = if !base_dir.is_empty() {
-        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&server_id).join("SavedArks");
+        let p = std::path::PathBuf::from(&base_dir).join("saves").join(&server_id).join("SavedArks");
         dir_size(&p)
     } else {
         0
@@ -1199,7 +1199,7 @@ pub async fn delete_server(
     }
 
     if delete_saves && !base_dir.is_empty() {
-        let p = std::path::PathBuf::from(&base_dir).join("Saves").join(&server_id);
+        let p = std::path::PathBuf::from(&base_dir).join("saves").join(&server_id);
         if p.exists() {
             std::fs::remove_dir_all(&p)
                 .map_err(|e| format!("Failed to delete save data: {e}"))?;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { check } from "@tauri-apps/plugin-updater";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -10,6 +11,7 @@ import { tauriCmd } from "@/lib/tauri-commands";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 export function UpdateManager() {
+  const router           = useRouter();
   const checkingRef      = useRef(false);
   const protonCheckRef   = useRef(false);
   const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
@@ -22,10 +24,28 @@ export function UpdateManager() {
       if (!protonPath) return;
       const info = await tauriCmd.checkProtonGeUpdate(protonPath);
       if (!info.updateAvailable) return;
+      const toastId = `proton-update-${info.latestVersion}`;
       toast.info(`Proton-GE ${info.latestVersion} is available`, {
-        id: `proton-update-${info.latestVersion}`,
-        description: `Current: ${info.currentVersion || "unknown"}. Update in Settings → Updates → Proton-GE.`,
+        id: toastId,
+        description: `Current: ${info.currentVersion || "unknown"}.`,
         duration: Infinity,
+        action: {
+          label: "Update",
+          onClick: () => {
+            toast.dismiss(toastId);
+            router.push("/settings?tab=updates&autoUpdateProton=1");
+          },
+        },
+        actionButtonStyle: {
+          background: "rgba(var(--neon-purple-rgb),0.15)",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          color: "var(--neon-purple)",
+        },
+        cancelButtonStyle: {
+          background: "transparent",
+          border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
+          color: "var(--text-muted)",
+        },
         cancel: { label: "Dismiss", onClick: () => {} },
       });
     } catch {

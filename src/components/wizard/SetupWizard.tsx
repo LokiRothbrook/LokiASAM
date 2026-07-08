@@ -1095,7 +1095,7 @@ function BaseDirStep() {
         const sep = home.includes("\\") ? "\\" : "/";
         const defaultDir = home.replace(/[/\\]$/, "") + sep + "Ark-Servers";
         setBaseDir(defaultDir);
-        setBackupDir(defaultDir + sep + "Backups");
+        setBackupDir(defaultDir + sep + "backups");
         await validateDir(defaultDir);
       } catch {
         // Outside Tauri (dev preview) — leave blank
@@ -1110,7 +1110,7 @@ function BaseDirStep() {
   const handleChange = (value: string) => {
     setBaseDir(value);
     const sep = value.includes("\\") ? "\\" : "/";
-    setBackupDir(value.replace(/[/\\]$/, "") + sep + "Backups");
+    setBackupDir(value.replace(/[/\\]$/, "") + sep + "backups");
     setDirResult(null);
     setBaseDirWritable(false);
     if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);

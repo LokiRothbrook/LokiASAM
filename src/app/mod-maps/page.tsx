@@ -1,18 +1,32 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Map, Plus, Trash2, Loader2 } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Map, Plus, Trash2, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { getCustomMaps, insertCustomMap, deleteCustomMap, type CustomMapRow } from "@/lib/db";
+import { getCustomMaps, insertCustomMap, updateCustomMap, deleteCustomMap, type CustomMapRow } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
+
+const TH = ({ children }: { children: React.ReactNode }) => (
+  <th className="px-4 py-2 text-left text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+    {children}
+  </th>
+);
 
 export default function ModMapsPage() {
   const [customMaps, setCustomMaps]   = useState<CustomMapRow[]>([]);
   const [loading, setLoading]         = useState(true);
   const [showAdd, setShowAdd]         = useState(false);
+  const [editTarget, setEditTarget]   = useState<CustomMapRow | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [modId, setModId]             = useState("");
   const [mapPath, setMapPath]         = useState("");
@@ -31,7 +45,21 @@ export default function ModMapsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleAdd = async () => {
+  const closeDialog = () => {
+    if (saving) return;
+    setShowAdd(false);
+    setEditTarget(null);
+    setDisplayName(""); setModId(""); setMapPath("");
+  };
+
+  const openEdit = (map: CustomMapRow) => {
+    setEditTarget(map);
+    setDisplayName(map.display_name);
+    setModId(map.mod_id);
+    setMapPath(map.map_path);
+  };
+
+  const handleSave = async () => {
     const name = displayName.trim();
     const id   = modId.trim();
     const path = mapPath.trim();
@@ -39,13 +67,17 @@ export default function ModMapsPage() {
     if (!/^\d+$/.test(id)) { toast.error("Mod ID must be numeric."); return; }
     setSaving(true);
     try {
-      await insertCustomMap(crypto.randomUUID(), name, id, path);
-      setDisplayName(""); setModId(""); setMapPath("");
-      setShowAdd(false);
+      if (editTarget) {
+        await updateCustomMap(editTarget.id, name, id, path);
+        toast.success(`"${name}" updated.`);
+      } else {
+        await insertCustomMap(crypto.randomUUID(), name, id, path);
+        toast.success(`Custom map "${name}" added.`);
+      }
+      closeDialog();
       await load();
-      toast.success(`Custom map "${name}" added.`);
     } catch (e) {
-      toast.error(`Failed to add map: ${e}`);
+      toast.error(`Failed to ${editTarget ? "update" : "add"} map: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -78,7 +110,7 @@ export default function ModMapsPage() {
         </div>
         <Button
           variant="outline"
-          onClick={() => setShowAdd((v) => !v)}
+          onClick={() => setShowAdd(true)}
           className="gap-2"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
         >
@@ -87,20 +119,22 @@ export default function ModMapsPage() {
         </Button>
       </div>
 
-      {/* Add form */}
-      {showAdd && (
-        <div
-          className="glass-card rounded-xl p-4 space-y-3"
-          style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.25)" }}
-        >
-          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>New Custom Map</h3>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Add / Edit dialog */}
+      <Dialog open={showAdd || editTarget !== null} onOpenChange={(open) => { if (!open) closeDialog(); }}>
+        <DialogContent className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--neon-purple)" }}>
+              {editTarget ? "Edit Custom Map" : "New Custom Map"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
             <div className="space-y-1.5">
               <Label style={{ color: "var(--text-primary)" }}>Display Name</Label>
               <Input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="e.g. Fjordur Reborn"
+                disabled={saving}
                 style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
             </div>
@@ -108,8 +142,10 @@ export default function ModMapsPage() {
               <Label style={{ color: "var(--text-primary)" }}>CurseForge Mod ID</Label>
               <Input
                 value={modId}
-                onChange={(e) => setModId(e.target.value)}
+                onChange={(e) => setModId(e.target.value.replace(/\D/g, ""))}
                 placeholder="e.g. 965379"
+                inputMode="numeric"
+                disabled={saving}
                 style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
             </div>
@@ -119,6 +155,7 @@ export default function ModMapsPage() {
                 value={mapPath}
                 onChange={(e) => setMapPath(e.target.value)}
                 placeholder="e.g. MyMap_WP"
+                disabled={saving}
                 style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
               />
               <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
@@ -126,49 +163,63 @@ export default function ModMapsPage() {
               </p>
             </div>
           </div>
-          <div className="flex gap-2 justify-end">
-            <Button size="sm" variant="outline" onClick={() => setShowAdd(false)} disabled={saving} style={{ color: "var(--text-primary)" }}>Cancel</Button>
+          <DialogFooter>
             <Button
-              size="sm" onClick={handleAdd} disabled={saving || !displayName.trim() || !modId.trim() || !mapPath.trim()}
+              variant="outline"
+              onClick={closeDialog}
+              disabled={saving}
+              style={{ color: "var(--text-primary)" }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={saving || !displayName.trim() || !modId.trim() || !mapPath.trim()}
               style={{ background: "rgba(var(--neon-purple-rgb),0.15)", borderColor: "rgba(var(--neon-purple-rgb),0.5)", color: "var(--neon-purple)" }}
             >
-              {saving ? <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Saving…</> : "Save Map"}
+              {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />Saving…</> : editTarget ? "Save Changes" : "Save Map"}
             </Button>
-          </div>
-        </div>
-      )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Built-in mod maps reference */}
       {ARK_MAPS.filter((m) => m.isMod && m.released).length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
+          <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--neon-purple)" }}>
             Built-in Mod Maps (read-only reference)
           </h2>
           <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-            {ARK_MAPS.filter((m) => m.isMod && m.released).map((m, i, arr) => (
-              <div
-                key={m.id}
-                className="flex items-center justify-between px-4 py-2.5 text-sm"
-                style={{
-                  borderBottom: i < arr.length - 1 ? "1px solid rgba(var(--neon-purple-rgb),0.07)" : undefined,
-                }}
-              >
-                <div>
-                  <span style={{ color: "var(--text-primary)" }}>{m.displayName}</span>
-                  {m.requiredModId && (
-                    <span className="ml-2 text-xs font-mono" style={{ color: "var(--text-muted)" }}>mod {m.requiredModId}</span>
-                  )}
-                </div>
-                <span className="font-mono text-xs" style={{ color: "var(--text-muted)" }}>{m.mapPath}</span>
-              </div>
-            ))}
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+                  <TH>Display Name</TH>
+                  <TH>Map Launch Parameter</TH>
+                  <TH>CurseForge Mod ID</TH>
+                  <th className="w-20" />
+                </tr>
+              </thead>
+              <tbody>
+                {ARK_MAPS.filter((m) => m.isMod && m.released).map((m, i, arr) => (
+                  <tr
+                    key={m.id}
+                    style={{ borderBottom: i < arr.length - 1 ? "1px solid rgba(var(--neon-purple-rgb),0.07)" : undefined }}
+                  >
+                    <td className="px-4 py-2.5 font-medium" style={{ color: "var(--text-primary)" }}>{m.displayName}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs" style={{ color: "var(--text-primary)" }}>{m.mapPath}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs" style={{ color: "var(--text-primary)" }}>{m.requiredModId ?? "—"}</td>
+                    <td className="px-2 py-2.5 w-20" />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
       {/* Custom maps */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
+        <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--neon-purple)" }}>
           Your Custom Maps
         </h2>
         {loading ? (
@@ -198,30 +249,48 @@ export default function ModMapsPage() {
           </div>
         ) : (
           <div className="glass-card rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
-            {customMaps.map((m, i) => (
-              <div
-                key={m.id}
-                className="flex items-center justify-between px-4 py-3"
-                style={{
-                  borderBottom: i < customMaps.length - 1 ? "1px solid rgba(var(--neon-purple-rgb),0.08)" : undefined,
-                }}
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{m.display_name}</p>
-                  <p className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>
-                    mod {m.mod_id} · {m.map_path}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleDelete(m)}
-                  className="ml-4 p-1.5 rounded-lg transition-colors hover:bg-red-500/10"
-                  style={{ color: "rgba(255,0,85,0.6)" }}
-                  title={`Remove ${m.display_name}`}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+                  <TH>Display Name</TH>
+                  <TH>Map Launch Parameter</TH>
+                  <TH>CurseForge Mod ID</TH>
+                  <th className="w-20" />
+                </tr>
+              </thead>
+              <tbody>
+                {customMaps.map((m, i) => (
+                  <tr
+                    key={m.id}
+                    style={{ borderBottom: i < customMaps.length - 1 ? "1px solid rgba(var(--neon-purple-rgb),0.08)" : undefined }}
+                  >
+                    <td className="px-4 py-3 font-medium" style={{ color: "var(--text-primary)" }}>{m.display_name}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: "var(--text-primary)" }}>{m.map_path}</td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: "var(--text-primary)" }}>{m.mod_id}</td>
+                    <td className="px-2 py-3">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openEdit(m)}
+                          className="p-1.5 rounded-lg transition-colors hover:bg-(--surface-elevated)"
+                          style={{ color: "var(--neon-purple)" }}
+                          title={`Edit ${m.display_name}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(m)}
+                          className="p-1.5 rounded-lg transition-colors hover:bg-red-500/10"
+                          style={{ color: "rgba(255,0,85,0.6)" }}
+                          title={`Remove ${m.display_name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

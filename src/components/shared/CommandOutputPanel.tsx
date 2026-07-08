@@ -51,6 +51,10 @@ export function clearOutputBuffer(channel: string): void {
   _buffers.delete(channel);
 }
 
+export function hasOutputBuffer(channel: string): boolean {
+  return (_buffers.get(channel)?.length ?? 0) > 0;
+}
+
 export interface CommandOutputPanelProps {
   /** The Tauri event channel to subscribe to, e.g. "steamcmd://output/setup". */
   eventChannel: string;

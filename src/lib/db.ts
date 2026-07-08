@@ -2127,6 +2127,16 @@ export async function insertCustomMap(
   );
 }
 
+export async function updateCustomMap(
+  id: string, displayName: string, modId: string, mapPath: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE custom_maps SET display_name = ?, mod_id = ?, map_path = ? WHERE id = ?",
+    [displayName, modId, mapPath, id]
+  );
+}
+
 export async function deleteCustomMap(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM custom_maps WHERE id = ?", [id]);

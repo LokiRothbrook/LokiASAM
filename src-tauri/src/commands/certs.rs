@@ -104,7 +104,12 @@ async fn install_windows(cert_path: &str) -> Result<(), String> {
 #[cfg(target_os = "linux")]
 async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) -> Result<(), String> {
     let proton_script = format!("{proton_path}/proton");
-    let wine_bin      = format!("{proton_path}/files/bin/wine64");
+    // Wine 10 (GE-Proton 11+) unified wine64 into a single wine binary.
+    // Fall back to wine if wine64 is absent.
+    let wine_bin = {
+        let w64 = format!("{proton_path}/files/bin/wine64");
+        if PathBuf::from(&w64).exists() { w64 } else { format!("{proton_path}/files/bin/wine") }
+    };
     let wine_pfx      = format!("{prefix_path}/pfx");
     let marker        = PathBuf::from(prefix_path).join(CERT_MARKER_FILENAME);
 

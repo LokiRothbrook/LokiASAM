@@ -141,10 +141,10 @@ async fn download_proton_ge_inner(
         .find(|a| {
             a["name"]
                 .as_str()
-                .map(|n| n.ends_with(".tar.gz"))
+                .map(|n| n.ends_with(".tar.gz") && !n.contains("aarch64"))
                 .unwrap_or(false)
         })
-        .ok_or("No .tar.gz asset found in release")?;
+        .ok_or("No x86_64 .tar.gz asset found in release")?;
 
     let asset_name = asset["name"]
         .as_str()
@@ -308,7 +308,7 @@ pub async fn check_proton_ge_update(current_path: String) -> Result<ProtonUpdate
             a.iter().find(|asset| {
                 asset["name"]
                     .as_str()
-                    .map(|n| n.ends_with(".tar.gz"))
+                    .map(|n| n.ends_with(".tar.gz") && !n.contains("aarch64"))
                     .unwrap_or(false)
             })
         })

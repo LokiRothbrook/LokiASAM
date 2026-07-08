@@ -39,8 +39,8 @@ import {
   getReleasedMaps, getOfficialMaps, getModMaps, getMapById,
   GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS, buildPresetConfig,
   DEFAULT_GAME_USER_SETTINGS, DEFAULT_GAME_INI,
-  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS,
-  type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter,
+  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS, ARK_EVENTS,
+  type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter, type ArkEvent,
 } from "@/data/game-data";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { dispatchNotification } from "@/lib/notifications";
@@ -48,8 +48,8 @@ import {
   getAppSetting, setAppSetting, createServer, deleteServerRecord, saveServerConfig,
   createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
   addServerMod, getServers, getServerMods, createClusterRecord,
-  updateBackupBroadcastMessage,
-  type ClusterRow,
+  updateBackupBroadcastMessage, getServerConfig, setServerActiveEvent,
+  type ClusterRow, type ServerRow,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -116,10 +116,33 @@ interface WizardData {
   serverPasswordConfirm: string;
   adminPassword: string;
   adminPasswordConfirm: string;
+  motdMessage: string;
+  motdDuration: number;
+  // Step 0 — Event
+  activeEventId: string;
   // Step 1 — Game Mode
   gameMode: "pvp" | "pve";
+  // Game Mode — General (both PvP & PvE)
+  adminLogging: boolean;
+  serverCrosshair: boolean;
+  showDamageNumbers: boolean;
+  showPlayerLocation: boolean;
+  forceAllStructureLocking: boolean;
+  alwaysAllowStructurePickup: boolean;
+  disableStructurePlacementCollision: boolean;
+  // Game Mode — PvE specific
   flyerCarryPvE: boolean;
+  allowCaveBuildingPvE: boolean;
+  pveAllowStructuresAtSupplyDrops: boolean;
+  allowCrateSpawnsOnTopOfStructures: boolean;
+  disableStructureDecayPvE: boolean;
+  disableDinoDecayPvE: boolean;
+  // Game Mode — PvP specific
   pvpFriendlyFire: boolean;
+  preventOfflinePvP: boolean;
+  preventOfflinePvPInterval: number;
+  // Copy from server
+  copyFromServerId: string;
   // Step 2 — Style
   presetStyle: "official" | "casual" | "boosted" | "guided_custom" | "full_custom";
   // Step 2a — Guided Custom rates
@@ -138,6 +161,9 @@ interface WizardData {
   // Automation — restart
   autoRestart: boolean;
   autoRestartCron: string;
+  autoRestartWarnPlayers: boolean;
+  autoRestartWarnMinutes: number;
+  autoRestartMessage: string;
   // Automation — backup tiers (TimeShift)
   serverBackupTiers: Record<"H"|"D"|"W"|"M", { enabled: boolean; keep: number }>;
   playerBackupTiers: Record<"H"|"D"|"W"|"M", { enabled: boolean; keep: number }>;
@@ -210,9 +236,25 @@ const DEFAULT_DATA: WizardData = {
   serverPasswordConfirm: "",
   adminPassword: "",
   adminPasswordConfirm: "",
+  activeEventId: "",
   gameMode: "pve",
-  flyerCarryPvE: true,
+  adminLogging: true,
+  serverCrosshair: true,
+  showDamageNumbers: true,
+  showPlayerLocation: true,
+  forceAllStructureLocking: true,
+  alwaysAllowStructurePickup: true,
+  disableStructurePlacementCollision: false,
+  flyerCarryPvE: false,
+  allowCaveBuildingPvE: false,
+  pveAllowStructuresAtSupplyDrops: true,
+  allowCrateSpawnsOnTopOfStructures: true,
+  disableStructureDecayPvE: false,
+  disableDinoDecayPvE: false,
   pvpFriendlyFire: true,
+  preventOfflinePvP: false,
+  preventOfflinePvPInterval: 900,
+  copyFromServerId: "",
   presetStyle: "casual",
   guidedRates: DEFAULT_GUIDED_RATES,
   fullCustomGus: {},
@@ -224,6 +266,9 @@ const DEFAULT_DATA: WizardData = {
   clusterId: "",
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
+  autoRestartWarnPlayers: true,
+  autoRestartWarnMinutes: 15,
+  autoRestartMessage: "Server restarting in {minutes} minutes. Progress will be saved.",
   serverBackupTiers: {
     H: { enabled: false, keep: 24 },
     D: { enabled: true,  keep: 7  },
@@ -247,6 +292,8 @@ const DEFAULT_DATA: WizardData = {
   modIds: [],
   lockedModIds: [],
   modNames: {},
+  motdMessage: "",
+  motdDuration: 20,
 };
 
 // ---------------------------------------------------------------------------
@@ -263,25 +310,35 @@ function computeSteps(data: WizardData): StepDef[] {
   const steps: StepDef[] = [
     { id: "basic",    label: "Basic Info",  icon: Server },
     { id: "gamemode", label: "Game Mode",   icon: Sword },
-    { id: "style",    label: "Server Style", icon: Sliders },
   ];
-  if (data.presetStyle === "guided_custom") {
-    steps.push({ id: "guided_rates",    label: "Core Rates", icon: Sliders });
-    steps.push({ id: "guided_breeding", label: "Breeding",   icon: Heart });
-    steps.push({ id: "guided_combat",   label: "Combat",     icon: Sword });
-    steps.push({ id: "guided_behavior", label: "Server QoL", icon: Settings2 });
+
+  if (!data.copyFromServerId) {
+    steps.push({ id: "style", label: "Server Style", icon: Sliders });
+    if (data.presetStyle === "guided_custom") {
+      steps.push({ id: "guided_rates",    label: "Core Rates", icon: Sliders });
+      steps.push({ id: "guided_breeding", label: "Breeding",   icon: Heart });
+      steps.push({ id: "guided_combat",   label: "Combat",     icon: Sword });
+      steps.push({ id: "guided_behavior", label: "Server QoL", icon: Settings2 });
+    }
+    if (data.presetStyle === "full_custom") {
+      steps.push({ id: "full_ini", label: "INI Config", icon: Code2 });
+    }
   }
-  if (data.presetStyle === "full_custom") {
-    steps.push({ id: "full_ini", label: "INI Config", icon: Code2 });
-  }
+
   steps.push(
     { id: "network",    label: "Network",    icon: Network },
-    { id: "firewall",   label: "Firewall",   icon: Shield },
     { id: "cluster",    label: "Cluster",    icon: GitBranch },
     { id: "automation", label: "Automation", icon: Clock },
-    { id: "launch",     label: "Launch Args", icon: Terminal },
-    { id: "mods",       label: "Mods",       icon: Package },
-    { id: "install",    label: "Install",    icon: Download },
+  );
+
+  if (!data.copyFromServerId) {
+    steps.push({ id: "launch", label: "Launch Args", icon: Terminal });
+  }
+
+  steps.push(
+    { id: "mods",     label: "Mods",     icon: Package },
+    { id: "firewall", label: "Firewall", icon: Shield },
+    { id: "install",  label: "Install",  icon: Download },
   );
   return steps;
 }
@@ -335,6 +392,7 @@ function BasicInfoStep({
   const [nameChecked, setNameChecked] = useState(false);
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const nameDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAdminPw,      setShowAdminPw]      = useState(false);
   const [showAdminConfirm, setShowAdminConfirm] = useState(false);
   const [showServerPw,     setShowServerPw]     = useState(false);
@@ -435,8 +493,18 @@ function BasicInfoStep({
         <Label style={{ color: "var(--text-primary)" }}>Server Name <span style={{ color: "var(--neon-red)" }}>*</span></Label>
         <Input
           value={data.name}
-          onChange={(e) => { onChange({ name: e.target.value }); onNameValidated(false); setNameChecked(false); }}
-          onBlur={(e) => checkName(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            onChange({ name: val });
+            onNameValidated(false);
+            setNameChecked(false);
+            if (nameDebounce.current) clearTimeout(nameDebounce.current);
+            nameDebounce.current = setTimeout(() => checkName(val), 600);
+          }}
+          onBlur={(e) => {
+            if (nameDebounce.current) clearTimeout(nameDebounce.current);
+            checkName(e.target.value);
+          }}
           placeholder="My ASA Server"
           style={{
             background: "var(--surface)",
@@ -490,7 +558,7 @@ function BasicInfoStep({
             <div
               className="absolute top-full left-0 right-0 z-50 mt-1 rounded-lg overflow-hidden"
               style={{
-                background: "rgba(8,8,25,0.98)",
+                background: "var(--popover)",
                 border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
                 boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
                 maxHeight: "320px",
@@ -543,6 +611,54 @@ function BasicInfoStep({
         </p>
       </div>
 
+      {/* Active Event */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-1.5">
+          <Label style={{ color: "var(--text-primary)" }}>
+            Active Event <span style={{ color: "var(--text-muted)" }}>(optional)</span>
+          </Label>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs text-xs leading-snug">
+                Activates a seasonal event on the server. The required event mod is automatically downloaded and enabled when the server starts — you don&apos;t need to add it to the mod list manually.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+        <select
+          value={data.activeEventId}
+          onChange={(e) => onChange({ activeEventId: e.target.value })}
+          className="w-full text-sm rounded-lg px-3 py-2"
+          style={{
+            background: "var(--surface)",
+            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+            color: "var(--text-primary)",
+            outline: "none",
+          }}
+        >
+          <option value="">No active event</option>
+          {ARK_EVENTS.map((ev: ArkEvent) => (
+            <option key={ev.id} value={ev.id}>{ev.displayName}</option>
+          ))}
+        </select>
+        {data.activeEventId && (() => {
+          const ev = ARK_EVENTS.find((e) => e.id === data.activeEventId);
+          return ev ? (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+              style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+              <div>
+                <p style={{ color: "var(--text-primary)" }}>{ev.description}</p>
+                <p className="mt-0.5" style={{ color: "var(--text-muted)" }}>Event mod ID: {ev.modId} (auto-managed)</p>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </div>
+
       {/* Max Players */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -554,8 +670,8 @@ function BasicInfoStep({
 
       {/* Passwords */}
       {(() => {
-        const adminMismatch = !!data.adminPasswordConfirm && data.adminPassword !== data.adminPasswordConfirm;
-        const serverMismatch = !!data.serverPasswordConfirm && data.serverPassword !== data.serverPasswordConfirm;
+        const adminMismatch = !!data.adminPassword && data.adminPassword !== data.adminPasswordConfirm;
+        const serverMismatch = !!data.serverPassword && data.serverPassword !== data.serverPasswordConfirm;
         const fieldStyle = (hasValue: boolean, mismatch: boolean) => ({
           background: "var(--surface)",
           borderColor: mismatch ? "var(--neon-red)" : !hasValue ? "rgba(255,0,85,0.5)" : "rgba(var(--neon-purple-rgb),0.3)",
@@ -651,6 +767,53 @@ function BasicInfoStep({
                 )}
               </div>
             </div>
+
+            {/* Message of the Day */}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Label style={{ color: "var(--text-primary)" }}>
+                  Message of the Day <span style={{ color: "var(--text-muted)" }}>(optional)</span>
+                </Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
+                    </TooltipTrigger>
+                    <TooltipContent>Shown to players in a pop-up when they join. Leave blank to disable. Use \n for line breaks.</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <textarea
+                value={data.motdMessage}
+                onChange={(e) => onChange({ motdMessage: e.target.value })}
+                placeholder={"Welcome to the server!\nUse \\n for line breaks."}
+                rows={3}
+                className="w-full text-sm rounded px-3 py-2 resize-none"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+                  color: "var(--text-primary)",
+                  outline: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+              {data.motdMessage.trim() && (
+                <div className="flex items-center gap-3">
+                  <Label className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>Display for</Label>
+                  <div className="flex-1">
+                    <NumberField
+                      value={data.motdDuration}
+                      onChange={(v) => onChange({ motdDuration: v })}
+                      min={1}
+                      max={120}
+                      step={1}
+                      defaultValue={20}
+                    />
+                  </div>
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>seconds</span>
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}
@@ -662,98 +825,257 @@ function BasicInfoStep({
 // Step 1 — Game Mode
 // ---------------------------------------------------------------------------
 
-function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+function GameModeToggle({ label, description, value, onChange: onChangeFn, warn }: {
+  label: string; description: string; value: boolean;
+  onChange: (v: boolean) => void; warn?: boolean;
+}) {
+  const color = warn ? "rgba(255,140,0,0.06)" : "rgba(var(--neon-purple-rgb),0.04)";
+  const border = warn ? "rgba(255,140,0,0.15)" : "rgba(var(--neon-purple-rgb),0.12)";
+  const accent = warn ? "var(--neon-orange, #ff8c00)" : "var(--neon-purple)";
   return (
-    <div className="space-y-4">
-      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-        Choose the core ruleset for your server. This determines whether players can fight each other.
-      </p>
-      <div className="grid grid-cols-2 gap-4">
-        {GAME_MODES.map((mode: GameModeConfig) => {
-          const active = data.gameMode === mode.id;
-          return (
-            <button
-              key={mode.id}
-              onClick={() => onChange({ gameMode: mode.id })}
-              className="rounded-xl p-5 text-left transition-all flex flex-col gap-3"
+    <div className="flex items-center justify-between px-2 py-2 rounded-lg gap-3"
+      style={{ background: color, border: `1px solid ${border}` }}>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className="text-sm" style={{ color: "var(--text-primary)" }}>{label}</span>
+        <TooltipProvider><Tooltip><TooltipTrigger asChild>
+          <HelpCircle className="w-3 h-3 cursor-help shrink-0" style={{ color: accent }} />
+        </TooltipTrigger><TooltipContent className="max-w-xs text-xs leading-snug">{description}</TooltipContent></Tooltip></TooltipProvider>
+      </div>
+      <button type="button" onClick={() => onChangeFn(!value)} className="shrink-0">
+        {value
+          ? <ToggleRight className="w-8 h-8" style={{ color: accent }} />
+          : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+      </button>
+    </div>
+  );
+}
+
+function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
+  const [existingServers, setExistingServers] = useState<ServerRow[]>([]);
+  const [loadingCopy, setLoadingCopy] = useState(false);
+
+  useEffect(() => { getServers().then(setExistingServers).catch(() => {}); }, []);
+
+  const handleCopyFrom = async (serverId: string, serverName: string) => {
+    setLoadingCopy(true);
+    try {
+      const [config, mods, allServers] = await Promise.all([
+        getServerConfig(serverId),
+        getServerMods(serverId),
+        getServers(),
+      ]);
+      const source = allServers.find((s) => s.id === serverId);
+      const gus = config && config.game_user_settings_json
+        ? (JSON.parse(config.game_user_settings_json) as Record<string, Record<string, string>>)
+        : {};
+      const serverPVE = gus?.ServerSettings?.ServerPVE?.toLowerCase();
+      const detectedMode: "pve" | "pvp" =
+        serverPVE === "true" || source?.preset_id?.includes("pve") ? "pve" : "pvp";
+      const newModIds = mods.map((m) => m.mod_id);
+      const newModNames: Record<string, string> = {};
+      for (const m of mods) newModNames[m.mod_id] = m.mod_name;
+      onChange({
+        copyFromServerId: serverId,
+        gameMode: detectedMode,
+        presetStyle: "full_custom",
+        fullCustomGus: gus,
+        fullCustomGameIni: config?.game_ini_json ? JSON.parse(config.game_ini_json) : {},
+        launchArgs: config?.launch_args_json ? JSON.parse(config.launch_args_json) : { NoBattlEye: "true", servergamelog: "true" },
+        modIds: newModIds,
+        modNames: newModNames,
+        lockedModIds: [],
+      });
+    } catch (e) {
+      console.error("Copy from server failed:", e);
+    } finally {
+      setLoadingCopy(false);
+    }
+  };
+
+  const isCopying = !!data.copyFromServerId;
+  const copySource = existingServers.find((s) => s.id === data.copyFromServerId);
+
+  return (
+    <TooltipProvider>
+      <div className="space-y-4">
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Choose the core ruleset for your server. This determines whether players can fight each other.
+        </p>
+
+        {/* PvP / PvE cards */}
+        <div className={cn("grid gap-4", existingServers.length > 0 ? "grid-cols-3" : "grid-cols-2")}>
+          {GAME_MODES.map((mode: GameModeConfig) => {
+            const active = data.gameMode === mode.id && !isCopying;
+            return (
+              <button
+                key={mode.id}
+                onClick={() => { onChange({ gameMode: mode.id, copyFromServerId: "" }); }}
+                className="rounded-xl p-5 text-left transition-all flex flex-col gap-3"
+                style={{
+                  background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
+                  border: `1px solid ${active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
+                  boxShadow: active ? "0 0 24px rgba(var(--neon-purple-rgb),0.1)" : "none",
+                }}
+              >
+                <div className="text-3xl">{mode.icon}</div>
+                <div>
+                  <p className="text-base font-bold" style={{ color: active ? "var(--neon-purple)" : "var(--text-primary)" }}>
+                    {mode.displayName}
+                  </p>
+                  <p className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                    {mode.description}
+                  </p>
+                </div>
+                {active && (
+                  <div className="flex items-center gap-1.5 mt-auto">
+                    <CheckCircle2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
+                    <span className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Selected</span>
+                  </div>
+                )}
+              </button>
+            );
+          })}
+
+          {/* Copy from server card */}
+          {existingServers.length > 0 && (
+            <div className="rounded-xl p-5 flex flex-col gap-3 transition-all"
               style={{
-                background: active ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
-                border: `1px solid ${active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
-                boxShadow: active ? "0 0 24px rgba(var(--neon-purple-rgb),0.1)" : "none",
-              }}
-            >
-              <div className="text-3xl">{mode.icon}</div>
+                background: isCopying ? "rgba(var(--neon-purple-rgb),0.08)" : "var(--surface)",
+                border: `1px solid ${isCopying ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.12)"}`,
+              }}>
+              <div className="text-3xl">🗂️</div>
               <div>
-                <p className="text-base font-bold" style={{ color: active ? "var(--neon-purple)" : "var(--text-primary)" }}>
-                  {mode.displayName}
+                <p className="text-base font-bold" style={{ color: isCopying ? "var(--neon-purple)" : "var(--text-primary)" }}>
+                  Copy from Server
                 </p>
                 <p className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--text-muted)" }}>
-                  {mode.description}
+                  Clone INI config, launch args, and mods from an existing server.
                 </p>
               </div>
-              {active && (
-                <div className="flex items-center gap-1.5 mt-auto">
-                  <CheckCircle2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-                  <span className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>Selected</span>
+              {isCopying && copySource ? (
+                <div className="mt-auto space-y-1.5">
+                  <div className="flex items-center gap-1.5" style={{ color: "var(--neon-purple)" }}>
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span className="text-xs font-semibold truncate">{copySource.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onChange({ copyFromServerId: "", presetStyle: "casual" })}
+                    className="text-[10px] underline"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-auto space-y-1">
+                  {existingServers.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      disabled={loadingCopy}
+                      onClick={() => handleCopyFrom(s.id, s.name)}
+                      className="w-full text-left px-2 py-1.5 rounded text-xs transition-colors hover:bg-[rgba(var(--neon-purple-rgb),0.1)] flex items-center gap-2"
+                      style={{ color: "var(--text-primary)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
+                    >
+                      {loadingCopy ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <Server className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />}
+                      <span className="truncate">{s.name}</span>
+                    </button>
+                  ))}
                 </div>
               )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* PvE-specific options shown when PvE is selected */}
-      {data.gameMode === "pve" && (
-        <div className="rounded-xl p-4 space-y-2" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-          <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>PvE Options</p>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm" style={{ color: "var(--text-primary)" }}>Flyer Carry (PvE)</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow flyers to pick up wild dinos and players. On by default for PvE.</p>
             </div>
-            <button
-              type="button"
-              onClick={() => onChange({ flyerCarryPvE: !data.flyerCarryPvE })}
-              className="shrink-0 flex items-center"
-              aria-label={data.flyerCarryPvE ? "Disable flyer carry" : "Enable flyer carry"}
-            >
-              {data.flyerCarryPvE
-                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-            </button>
-          </div>
+          )}
         </div>
-      )}
 
-      {/* PvP-specific options shown when PvP is selected */}
-      {data.gameMode === "pvp" && (
-        <div className="rounded-xl p-4 space-y-3" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(255,0,85,0.2)" }}>
-          <p className="text-xs font-semibold" style={{ color: "var(--neon-red)" }}>PvP Options</p>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm" style={{ color: "var(--text-primary)" }}>Friendly Fire</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow tribe members to damage each other. On by default for PvP.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ pvpFriendlyFire: !data.pvpFriendlyFire })}
-              className="shrink-0 flex items-center"
-              aria-label={data.pvpFriendlyFire ? "Disable friendly fire" : "Enable friendly fire"}
-            >
-              {data.pvpFriendlyFire
-                ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-red)" }} />
-                : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-            </button>
-          </div>
-          <div className="flex items-start gap-2 pt-1 border-t" style={{ borderColor: "rgba(255,0,85,0.15)" }}>
-            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--text-muted)" }} />
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Cryo sickness cannot be disabled on PvP servers via INI — it is hardcoded to PvP mode by the game. A mod is required to remove it on PvP.
+        {/* Copy-mode info banner */}
+        {isCopying && (
+          <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+            <p style={{ color: "var(--text-muted)" }}>
+              Configuration copied from <strong style={{ color: "var(--text-primary)" }}>{copySource?.name}</strong>.
+              INI config, launch args, and mods will mirror the source server.
+              Style and Rate steps are skipped — you can still adjust network, automation, and other settings.
             </p>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* General settings — shown for non-copy flow */}
+        {!isCopying && (
+          <>
+            {/* General */}
+            <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+              <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-purple)" }}>General Settings</p>
+              <GameModeToggle label="Admin Logging" description="Logs all admin commands to the server's game log file and in-game chat. Recommended for accountability." value={data.adminLogging} onChange={(v) => onChange({ adminLogging: v })} />
+              <GameModeToggle label="Server Crosshair" description="Enables the crosshair reticle for all players on this server." value={data.serverCrosshair} onChange={(v) => onChange({ serverCrosshair: v })} />
+              <GameModeToggle label="Show Damage Numbers" description="Shows floating damage numbers above targets when hit (ShowFloatingDamageText)." value={data.showDamageNumbers} onChange={(v) => onChange({ showDamageNumbers: v })} />
+              <GameModeToggle label="Show Player Location" description="Players can see their GPS coordinates on the map (ShowMapPlayerLocation)." value={data.showPlayerLocation} onChange={(v) => onChange({ showPlayerLocation: v })} />
+              <GameModeToggle label="Force All Structures Locking" description="Newly placed structures default to locked so only the owner/tribe can access them." value={data.forceAllStructureLocking} onChange={(v) => onChange({ forceAllStructureLocking: v })} />
+              <GameModeToggle label="Always Allow Structure Pickup" description="Players can pick up their own structures at any time, not just within the placement grace period." value={data.alwaysAllowStructurePickup} onChange={(v) => onChange({ alwaysAllowStructurePickup: v })} />
+              <GameModeToggle label="Disable Structure Placement Collision" description="Allows structures to be placed overlapping terrain and other objects. Useful for creative builds." value={data.disableStructurePlacementCollision} onChange={(v) => onChange({ disableStructurePlacementCollision: v })} />
+              {/* NoBattlEye — CLI shortcut */}
+              <GameModeToggle
+                label="Disable BattlEye"
+                description="Passes -NoBattlEye at launch. Disables BattlEye anti-cheat. Recommended for private/modded servers to avoid false positives."
+                value={data.launchArgs.NoBattlEye === "true"}
+                onChange={(v) => onChange({ launchArgs: { ...data.launchArgs, NoBattlEye: v ? "true" : "false" } })}
+                warn
+              />
+              {/* ForceAllowCaveFlyers — CLI shortcut */}
+              <GameModeToggle
+                label="Force Allow Cave Flyers"
+                description="Passes -ForceAllowCaveFlyers at launch. Allows flying dinosaurs inside caves. Default is off in vanilla."
+                value={data.launchArgs.ForceAllowCaveFlyers === "true"}
+                onChange={(v) => onChange({ launchArgs: { ...data.launchArgs, ForceAllowCaveFlyers: v ? "true" : "false" } })}
+              />
+            </div>
+
+            {/* PvE options */}
+            {data.gameMode === "pve" && (
+              <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(0,255,136,0.15)" }}>
+                <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-green)" }}>PvE Options</p>
+                <GameModeToggle label="Flyer Carry (PvE)" description="AllowFlyerCarryPvE — allows flyers to carry wild dinos and players. Off by default in vanilla PvE." value={data.flyerCarryPvE} onChange={(v) => onChange({ flyerCarryPvE: v })} />
+                <GameModeToggle label="Cave Building (PvE)" description="AllowCaveBuildingPvE — allows players to build structures inside caves. Off by default." value={data.allowCaveBuildingPvE} onChange={(v) => onChange({ allowCaveBuildingPvE: v })} />
+                <GameModeToggle label="Build Near Supply Drops" description="PvEAllowStructuresAtSupplyDrops — allows players to build structures near supply drop landing zones." value={data.pveAllowStructuresAtSupplyDrops} onChange={(v) => onChange({ pveAllowStructuresAtSupplyDrops: v })} />
+                <GameModeToggle label="Supply Drops Land on Structures" description="AllowCrateSpawnsOnTopOfStructures — supply crates can land on top of player structures." value={data.allowCrateSpawnsOnTopOfStructures} onChange={(v) => onChange({ allowCrateSpawnsOnTopOfStructures: v })} />
+                <GameModeToggle label="Disable Structure Decay (PvE)" description="DisableStructureDecayPvE — structures never decay from inactivity. Useful for casual or roleplaying servers." value={data.disableStructureDecayPvE} onChange={(v) => onChange({ disableStructureDecayPvE: v })} />
+                <GameModeToggle label="Disable Dino Decay (PvE)" description="DisableDinoDecayPvE — tamed dinos never decay from owner inactivity." value={data.disableDinoDecayPvE} onChange={(v) => onChange({ disableDinoDecayPvE: v })} />
+              </div>
+            )}
+
+            {/* PvP options */}
+            {data.gameMode === "pvp" && (
+              <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(255,0,85,0.2)" }}>
+                <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-red)" }}>PvP Options</p>
+                <GameModeToggle label="Friendly Fire" description="Allows tribe members to damage each other in combat. On by default for PvP." value={data.pvpFriendlyFire} onChange={(v) => onChange({ pvpFriendlyFire: v })} />
+                <GameModeToggle label="Offline Raid Protection (ORP)" description="PreventOfflinePvP — prevents structures and tames from taking damage when the owning tribe is offline." value={data.preventOfflinePvP} onChange={(v) => onChange({ preventOfflinePvP: v })} />
+                {data.preventOfflinePvP && (
+                  <div className="flex items-center gap-3 pl-1">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>ORP Grace Period</span>
+                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-red)" }} />
+                      </TooltipTrigger><TooltipContent className="max-w-xs text-xs">PreventOfflinePvPInterval — seconds after all tribe members log off before ORP activates. Default: 900 (15 minutes).</TooltipContent></Tooltip></TooltipProvider>
+                    </div>
+                    <div className="w-28">
+                      <NumberField value={data.preventOfflinePvPInterval} onChange={(v) => onChange({ preventOfflinePvPInterval: v })} min={0} max={7200} step={60} defaultValue={900} />
+                    </div>
+                    <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>seconds</span>
+                  </div>
+                )}
+                <div className="flex items-start gap-2 pt-2 border-t" style={{ borderColor: "rgba(255,0,85,0.15)" }}>
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--text-muted)" }} />
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Cryo sickness cannot be disabled on PvP servers via INI — it is hardcoded to PvP mode by the game. A mod is required to remove it on PvP.
+                  </p>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -819,7 +1141,7 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
                 {active && <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />}
               </div>
               {(style.id === "guided_custom" || style.id === "full_custom") && active && (
-                <p className="text-[10px] mt-2 flex items-center gap-1" style={{ color: "var(--neon-cyan)" }}>
+                <p className="text-[10px] mt-2 flex items-center gap-1" style={{ color: "var(--neon-purple)" }}>
                   <ArrowRight className="w-3 h-3" />
                   {style.id === "guided_custom" ? "Next: 4-step guided setup — rates, breeding, combat, and QoL" : "Next step: open INI editor"}
                 </p>
@@ -850,7 +1172,7 @@ interface RateSliderProps {
 function RateSlider({ label, description, value, min, max, step, onChange, formatValue }: RateSliderProps) {
   const display = formatValue ? formatValue(value) : `${value}×`;
   return (
-    <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+    <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{label}</p>
@@ -870,7 +1192,7 @@ function GuidedToggle({ label, description, value, onChange, warn }: {
   const color = warn ? "var(--neon-red)" : "var(--neon-purple)";
   const border = warn ? "rgba(255,0,85,0.2)" : "rgba(var(--neon-purple-rgb),0.12)";
   return (
-    <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: `1px solid ${border}` }}>
+    <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "var(--surface)", border: `1px solid ${border}` }}>
       <div>
         <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{label}</p>
         <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>{description}</p>
@@ -926,7 +1248,7 @@ function GuidedBreedingStep({ data, onChange }: { data: WizardData; onChange: (p
         <RateSlider label="Baby Mature Speed" description="How fast babies grow to adults. 10× = maturation is 10× faster than vanilla." value={r.matureSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("matureSpeedMultiplier", v)} />
         <RateSlider label="Egg Hatch Speed" description="How fast eggs hatch. Can be set independently from mature speed." value={r.hatchSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("hatchSpeedMultiplier", v)} />
 
-        <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "rgba(10,10,30,0.4)", border: `1px solid ${starvationRisk ? "rgba(255,0,85,0.4)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "var(--surface)", border: `1px solid ${starvationRisk ? "rgba(255,0,85,0.4)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold" style={{ color: starvationRisk ? "var(--neon-red)" : "var(--text-primary)" }}>
@@ -1048,42 +1370,8 @@ function GuidedBehaviorStep({ data, onChange }: { data: WizardData; onChange: (p
         {isPvE && (
           <RateSlider label="Corpse Decomposition Time" description="How long player corpses last. More time to retrieve your items." value={r.globalCorpseDecompMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("globalCorpseDecompMultiplier", v)} />
         )}
-        {isPvP && (
-          <>
-            <GuidedToggle
-              label="Offline Raid Protection (ORP)"
-              description="Protects a tribe's structures and tames from damage while all members are offline."
-              value={r.enableORP}
-              onChange={(v) => set("enableORP", v)}
-            />
-            {r.enableORP && (
-              <RateSlider
-                label="ORP Activation Delay"
-                description="Seconds after the last tribe member logs off before ORP activates. 900 = 15 minutes."
-                value={r.orpInterval}
-                min={60} max={3600} step={60}
-                onChange={(v) => set("orpInterval", v)}
-                formatValue={(v) => `${Math.round(v / 60)} min`}
-              />
-            )}
-          </>
-        )}
-        {isPvE && (
-          <>
-            <GuidedToggle
-              label="Disable Structure Decay"
-              description="Turns off PvE structure decay timers. Players won't lose buildings from inactivity."
-              value={r.disableStructureDecay}
-              onChange={(v) => set("disableStructureDecay", v)}
-            />
-            <GuidedToggle
-              label="Disable Tame Decay"
-              description="Turns off PvE tame unclaiming timers. Dinos won't become claimable from inactivity."
-              value={r.disableDinoDecay}
-              onChange={(v) => set("disableDinoDecay", v)}
-            />
-          </>
-        )}
+        {/* ORP is now controlled in the Game Mode step */}
+        {/* Structure/tame decay is now controlled in the Game Mode step */}
       </div>
     </div>
   );
@@ -1095,13 +1383,34 @@ function GuidedBehaviorStep({ data, onChange }: { data: WizardData; onChange: (p
 
 function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["session", "admin", "rates"]));
+  const [searchQuery, setSearchQuery] = useState("");
+  const preSearchExpandedRef = useRef<Set<string> | null>(null);
 
-  const toggleGroup = (id: string) =>
+  const handleSearchChange = (q: string) => {
+    if (q && !searchQuery) {
+      preSearchExpandedRef.current = new Set(expandedGroups);
+    } else if (!q && searchQuery) {
+      if (preSearchExpandedRef.current) {
+        setExpandedGroups(preSearchExpandedRef.current);
+        preSearchExpandedRef.current = null;
+      }
+    }
+    setSearchQuery(q);
+  };
+
+  const toggleGroup = (id: string) => {
+    if (searchQuery) return;
     setExpandedGroups((prev) => {
       const n = new Set(prev);
       n.has(id) ? n.delete(id) : n.add(id);
       return n;
     });
+  };
+
+  // Snapshot the wizard-built config on first render. Used as the reset baseline
+  // for boolean fields so the icon only appears when the user changes something
+  // from what the wizard set up, not from the raw game-engine default.
+  const initialGusRef = useRef<Record<string, Record<string, string>> | null>(null);
 
   // Build an initial GUS from defaults + mode settings if not yet customized
   const gus = useMemo(() => {
@@ -1125,8 +1434,17 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     return result;
   }, [data.fullCustomGus, data.gameMode, data.name, data.serverPassword, data.rconPort, data.adminPassword, data.maxPlayers]);
 
+  // Capture the first computed value of gus as the reset baseline
+  if (initialGusRef.current === null) {
+    initialGusRef.current = gus;
+  }
+
   const getValue = (iniSection: string, key: string): string => {
     return gus[iniSection]?.[key] ?? "";
+  };
+
+  const getInitialVal = (iniSection: string, key: string): string => {
+    return initialGusRef.current?.[iniSection]?.[key] ?? "";
   };
 
   const setValue = (iniSection: string, key: string, value: string) => {
@@ -1140,36 +1458,82 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   // Skip read-only fields (ports/name managed elsewhere)
   const readonlyKeys = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort", "MaxPlayers", "ServerAdminPassword"]);
 
+  const lq = searchQuery.toLowerCase().trim();
+  const filteredGroups = useMemo(() => {
+    if (!lq) return null;
+    return INI_FIELD_GROUPS.map((group) => ({
+      ...group,
+      fields: group.fields.filter(
+        (f) => f.section === "gus" && !readonlyKeys.has(f.key) && (
+          f.label.toLowerCase().includes(lq) ||
+          f.key.toLowerCase().includes(lq) ||
+          (f.description ?? "").toLowerCase().includes(lq)
+        )
+      ),
+    })).filter((g) => g.fields.length > 0);
+  }, [lq]);
+
   return (
     <TooltipProvider delayDuration={300}>
       <div className="space-y-3">
-        <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
-          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
-          <p style={{ color: "var(--text-muted)" }}>
-            Server name, passwords, and ports are configured on the previous pages and are excluded here.
-            All settings here will be written to <code>GameUserSettings.ini</code>.
-          </p>
+        {/* Search bar */}
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            placeholder="Filter settings…"
+            className="w-full text-sm rounded-lg px-3 py-2 pr-8"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
+              color: "var(--text-primary)",
+              outline: "none",
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => handleSearchChange("")}
+              className="absolute inset-y-0 right-0 flex items-center pr-2.5"
+              style={{ color: "var(--neon-purple)" }}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
-
+        {lq && filteredGroups?.length === 0 && (
+          <div className="rounded-lg py-8 text-center" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>No settings match &ldquo;{searchQuery}&rdquo;</p>
+          </div>
+        )}
         <div className="space-y-2 pr-1">
-          {INI_FIELD_GROUPS.map((group) => {
-            const open = expandedGroups.has(group.id);
-            const visibleFields = group.fields.filter(
-              (f) => f.section === "gus" && !readonlyKeys.has(f.key)
-            );
-            if (visibleFields.length === 0) return null;
+          {(filteredGroups ?? INI_FIELD_GROUPS).map((group) => {
+            const isFiltering = !!lq;
+            const open = isFiltering || expandedGroups.has(group.id);
+            const visibleFields = isFiltering
+              ? group.fields
+              : group.fields.filter((f) => f.section === "gus" && !readonlyKeys.has(f.key));
+            if (!isFiltering && visibleFields.length === 0) return null;
             return (
               <div key={group.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
                 <button
                   onClick={() => toggleGroup(group.id)}
                   className="w-full flex items-center justify-between px-4 py-2.5"
-                  style={{ background: "rgba(10,10,30,0.7)" }}
+                  style={{ background: "var(--surface-elevated)", cursor: isFiltering ? "default" : "pointer" }}
                 >
-                  <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
-                  {open ? <ChevronUp className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /> : <ChevronDown className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
+                    {isFiltering && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+                        {visibleFields.length}
+                      </span>
+                    )}
+                  </div>
+                  {!isFiltering && (open ? <ChevronUp className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /> : <ChevronDown className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />)}
                 </button>
                 {open && (
-                  <div className="p-3 space-y-2.5" style={{ background: "rgba(5,5,20,0.5)" }}>
+                  <div className="p-3 space-y-2.5" style={{ background: "var(--surface)" }}>
                     {visibleFields.map((field) => {
                       const raw = getValue(field.iniSection, field.key);
                       // Fall back to the field's defaultValue when the config hasn't set this key yet,
@@ -1183,7 +1547,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                           {field.description && (
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <HelpCircle className="w-3 h-3 shrink-0 cursor-help" style={{ color: "var(--text-subtle)" }} />
+                                <HelpCircle className="w-3 h-3 shrink-0 cursor-help" style={{ color: "var(--neon-purple)" }} />
                               </TooltipTrigger>
                               <TooltipContent side="top" className="max-w-xs text-xs leading-snug">
                                 {field.description}
@@ -1194,19 +1558,34 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                       );
 
                       if (isBool) {
+                        const initialVal = getInitialVal(field.iniSection, field.key);
+                        const baseVal = initialVal !== "" ? initialVal : (field.defaultValue !== undefined ? String(field.defaultValue) : "");
+                        const isNonDefault = baseVal !== "" && val.toLowerCase() !== baseVal.toLowerCase();
                         return (
                           <div key={field.key} className="flex items-center justify-between gap-2">
                             {LabelWithTooltip}
-                            <button
-                              type="button"
-                              onClick={() => setValue(field.iniSection, field.key, val.toLowerCase() === "true" ? "False" : "True")}
-                              className="shrink-0"
-                              aria-label={val.toLowerCase() === "true" ? "Disable" : "Enable"}
-                            >
-                              {val.toLowerCase() === "true"
-                                ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
-                                : <ToggleLeft  className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
-                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {isNonDefault && (
+                                <button
+                                  type="button"
+                                  onClick={() => setValue(field.iniSection, field.key, baseVal.charAt(0).toUpperCase() + baseVal.slice(1).toLowerCase())}
+                                  title="Reset to default"
+                                  style={{ background: "none", border: "none", padding: "2px", cursor: "pointer", color: "rgba(var(--neon-purple-rgb),0.5)", lineHeight: 0 }}
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setValue(field.iniSection, field.key, val.toLowerCase() === "true" ? "False" : "True")}
+                                aria-label={val.toLowerCase() === "true" ? "Disable" : "Enable"}
+                                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}
+                              >
+                                {val.toLowerCase() === "true"
+                                  ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+                                  : <ToggleLeft  className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+                              </button>
+                            </div>
                           </div>
                         );
                       }
@@ -1221,7 +1600,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                               min={field.min}
                               max={field.max}
                               step={field.step}
-                              defaultValue={field.defaultValue}
+                              defaultValue={typeof field.defaultValue === "number" ? field.defaultValue : undefined}
                             />
                           ) : (
                             <Input
@@ -1672,7 +2051,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           ))}
 
           {/* Create new cluster inline */}
-          <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(10,10,30,0.4)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
+          <div className="rounded-lg p-3 space-y-2" style={{ background: "var(--surface)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
             <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>Create a new cluster</p>
             <div className="flex gap-2">
               <Input
@@ -1695,8 +2074,8 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           </div>
 
           {data.clusterId && (
-            <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)" }}>
-              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
               <p style={{ color: "var(--text-muted)" }}>
                 <strong style={{ color: "var(--text-primary)" }}>NoTransferFromFiltering</strong> has been automatically enabled to isolate this cluster from other servers.
               </p>
@@ -1771,7 +2150,7 @@ function WizTierRow({
         onChange={(e) => onChange({ keep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
         className="w-16 h-8 text-sm text-center shrink-0"
         style={{
-          background: "rgba(0,0,0,0.4)",
+          background: "var(--surface)",
           border: `1px solid ${state.enabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
           color: "var(--text-primary)",
         }}
@@ -1802,78 +2181,152 @@ const LAUNCH_PARAM_CATEGORY_LABELS: Record<string, string> = {
   network:     "Network",
 };
 
+// Keys shown in guided paths (NoBattlEye + ForceAllowCaveFlyers are in Game Mode; crossplay in Network)
+const GUIDED_LAUNCH_KEYS = new Set([
+  "DisableUndermeshChecking",
+  "DisableUndermeshKilling",
+  "culture",
+  "servergamelog",
+  "ServerRCONOutputTribeLogs",
+  "servergamelogincludetribelogs",
+  "EnableIdlePlayerKick",
+  "AutoDestroyStructures",
+  "DisableCustomCosmetics",
+]);
+
+// NoBattlEye and ForceAllowCaveFlyers are always in Game Mode — hidden from Launch Args entirely
+const GAME_MODE_KEYS = new Set(["NoBattlEye", "ForceAllowCaveFlyers"]);
+
+const CULTURE_OPTIONS = [
+  { value: "",    label: "None (server default)" },
+  { value: "en",  label: "English (en)" },
+  { value: "de",  label: "German (de)" },
+  { value: "fr",  label: "French (fr)" },
+  { value: "es",  label: "Spanish (es)" },
+  { value: "it",  label: "Italian (it)" },
+  { value: "ja",  label: "Japanese (ja)" },
+  { value: "ko",  label: "Korean (ko)" },
+  { value: "pt",  label: "Portuguese (pt)" },
+  { value: "ru",  label: "Russian (ru)" },
+  { value: "zh",  label: "Chinese Simplified (zh)" },
+];
+
 function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const args = data.launchArgs;
+  const isFullCustom = data.presetStyle === "full_custom";
 
   const setArg = (key: string, value: string) =>
     onChange({ launchArgs: { ...args, [key]: value } });
 
-  // Group params by category, skip cluster (handled in cluster step)
   const categories = ["performance", "admin", "gameplay", "access"] as const;
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-        Configure command-line arguments passed when starting the server. These cannot be set in INI files.
-        All settings can be changed later from the server's Config tab.
-      </p>
-      <div className="space-y-3 pr-1">
-        {categories.map((cat) => {
-          const params = LAUNCH_PARAMETERS.filter((p: LaunchParameter) => p.category === cat);
-          if (params.length === 0) return null;
-          return (
-            <div key={cat} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-              <div className="px-3 py-2" style={{ background: "rgba(10,10,30,0.7)" }}>
-                <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>
-                  {LAUNCH_PARAM_CATEGORY_LABELS[cat]}
-                </p>
-              </div>
-              <div className="p-3 space-y-2.5" style={{ background: "rgba(5,5,20,0.5)" }}>
-                {params.map((p: LaunchParameter) => {
-                  const val = args[p.key] ?? String(p.defaultValue);
-                  if (p.type === "boolean") {
-                    const on = val === "true" || val === "1";
-                    return (
-                      <div key={p.key} className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium font-mono" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
-                          <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>{p.description}</p>
+    <TooltipProvider>
+      <div className="space-y-4">
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Command-line arguments passed when starting the server. These cannot be set in INI files.
+          {!isFullCustom && " Showing commonly-used parameters — all others can be set from the Config tab after setup."}
+        </p>
+        <div className="space-y-3 pr-1">
+          {categories.map((cat) => {
+            const allParams = LAUNCH_PARAMETERS.filter((p: LaunchParameter) => p.category === cat);
+            const params = allParams.filter((p: LaunchParameter) => {
+              if (GAME_MODE_KEYS.has(p.key)) return false;
+              if (!isFullCustom && !GUIDED_LAUNCH_KEYS.has(p.key)) return false;
+              return true;
+            });
+            if (params.length === 0) return null;
+            return (
+              <div key={cat} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+                <div className="px-3 py-2" style={{ background: "var(--surface-elevated)" }}>
+                  <p className="text-xs font-semibold" style={{ color: "var(--neon-purple)" }}>
+                    {LAUNCH_PARAM_CATEGORY_LABELS[cat]}
+                  </p>
+                </div>
+                <div className="p-3 space-y-2.5" style={{ background: "var(--surface)" }}>
+                  {params.map((p: LaunchParameter) => {
+                    const val = args[p.key] ?? String(p.defaultValue ?? "");
+
+                    // Culture: render as dropdown
+                    if (p.key === "culture") {
+                      return (
+                        <div key={p.key} className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs font-medium font-mono" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <HelpCircle className="w-3 h-3 cursor-help shrink-0" style={{ color: "var(--neon-purple)" }} />
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs text-xs leading-snug">{p.description}</TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <select
+                            value={val}
+                            onChange={(e) => setArg(p.key, e.target.value)}
+                            className="w-full text-xs rounded px-2 py-1.5"
+                            style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)", outline: "none" }}
+                          >
+                            {CULTURE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </select>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setArg(p.key, on ? "false" : "true")}
-                          className="shrink-0 flex items-center mt-0.5"
-                          aria-label={on ? "Disable" : "Enable"}
-                        >
-                          {on
-                            ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
-                            : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
-                        </button>
+                      );
+                    }
+
+                    if (p.type === "boolean") {
+                      const on = val === "true" || val === "1";
+                      return (
+                        <div key={p.key} className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="text-xs font-medium font-mono truncate" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <HelpCircle className="w-3 h-3 cursor-help shrink-0" style={{ color: "var(--neon-purple)" }} />
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs text-xs leading-snug">{p.description}</TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setArg(p.key, on ? "false" : "true")}
+                            className="shrink-0 flex items-center"
+                            aria-label={on ? "Disable" : "Enable"}
+                          >
+                            {on
+                              ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+                              : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={p.key} className="space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-medium font-mono" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <HelpCircle className="w-3 h-3 cursor-help shrink-0" style={{ color: "var(--neon-purple)" }} />
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs text-xs leading-snug">{p.description}</TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <Input
+                          value={val}
+                          placeholder={String(p.defaultValue ?? "") || "(empty = disabled)"}
+                          onChange={(e) => setArg(p.key, e.target.value)}
+                          className="h-7 text-xs font-mono"
+                          style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+                        />
                       </div>
                     );
-                  }
-                  return (
-                    <div key={p.key} className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-xs font-medium font-mono" style={{ color: "var(--text-primary)" }}>{p.flag}</p>
-                      </div>
-                      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{p.description}</p>
-                      <Input
-                        value={val}
-                        placeholder={String(p.defaultValue) || "(empty = disabled)"}
-                        onChange={(e) => setArg(p.key, e.target.value)}
-                        className="h-7 text-xs font-mono"
-                        style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-                      />
-                    </div>
-                  );
-                })}
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -1936,15 +2389,15 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
             className="flex items-center gap-3 px-3 py-2 rounded-lg"
             style={{
               background: "rgba(255,255,255,0.02)",
-              border: `1px solid ${data.loginBackupEnabled ? "rgba(0,255,255,0.3)" : "rgba(255,255,255,0.05)"}`,
+              border: `1px solid ${data.loginBackupEnabled ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.05)"}`,
             }}
           >
             <Input type="number" min={1} max={999} value={data.loginBackupKeep}
               onChange={(e) => onChange({ loginBackupKeep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
               className="w-16 h-8 text-sm text-center shrink-0"
               style={{
-                background: "rgba(0,0,0,0.4)",
-                border: `1px solid ${data.loginBackupEnabled ? "rgba(0,255,255,0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                background: "var(--surface)",
+                border: `1px solid ${data.loginBackupEnabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 color: "var(--text-primary)",
               }} />
             <div className="flex-1 min-w-0">
@@ -1955,7 +2408,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
             </div>
             <button type="button" onClick={() => onChange({ loginBackupEnabled: !data.loginBackupEnabled })} className="cursor-pointer shrink-0">
               {data.loginBackupEnabled
-                ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-cyan)" }} />
+                ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
                 : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />
               }
             </button>
@@ -1969,7 +2422,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
             <Input type="number" min={1} max={999} value={data.manualBackupKeep}
               onChange={(e) => onChange({ manualBackupKeep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
               className="w-16 h-8 text-sm text-center shrink-0"
-              style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--text-primary)" }} />
+              style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", color: "var(--text-primary)" }} />
             <div className="flex-1 min-w-0">
               <span className="text-sm" style={{ color: "var(--text-muted)" }}>manual backups to keep</span>
               <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
@@ -1994,7 +2447,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
                 onChange={(e) => onChange({ fullBackupKeep: Math.max(1, parseInt(e.target.value, 10) || 1) })}
                 className="w-16 h-8 text-sm text-center shrink-0"
                 style={{
-                  background: "rgba(0,0,0,0.4)",
+                  background: "var(--surface)",
                   border: `1px solid ${data.fullBackupEnabled ? "rgba(var(--neon-purple-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                   color: "var(--text-primary)",
                 }} />
@@ -2056,7 +2509,57 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
           </div>
         </div>
         {data.autoRestart && (
-          <CronSelect value={data.autoRestartCron} onChange={(v) => onChange({ autoRestartCron: v })} />
+          <div className="space-y-3 pt-1 border-t" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
+            <CronSelect value={data.autoRestartCron} onChange={(v) => onChange({ autoRestartCron: v })} />
+            {/* Warn players toggle */}
+            <div className="flex items-center justify-between px-1 py-2 rounded-lg gap-3"
+              style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm" style={{ color: "var(--text-primary)" }}>Warn Players Before Restart</span>
+                <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                  <HelpCircle className="w-3 h-3 cursor-help shrink-0" style={{ color: "var(--neon-purple)" }} />
+                </TooltipTrigger><TooltipContent className="max-w-xs text-xs">Broadcasts an in-game RCON message to all players before the restart happens.</TooltipContent></Tooltip></TooltipProvider>
+              </div>
+              <button type="button" onClick={() => onChange({ autoRestartWarnPlayers: !data.autoRestartWarnPlayers })} className="cursor-pointer shrink-0">
+                {data.autoRestartWarnPlayers
+                  ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft  className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+              </button>
+            </div>
+            {data.autoRestartWarnPlayers && (
+              <>
+                {/* Warning minutes */}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warn</span>
+                    <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                      <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
+                    </TooltipTrigger><TooltipContent className="max-w-xs text-xs">How many minutes before the restart the warning message is broadcast.</TooltipContent></Tooltip></TooltipProvider>
+                  </div>
+                  <div className="w-24">
+                    <NumberField value={data.autoRestartWarnMinutes} onChange={(v) => onChange({ autoRestartWarnMinutes: v })} min={1} max={60} step={1} defaultValue={15} />
+                  </div>
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>minutes before restart</span>
+                </div>
+                {/* Warning message */}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warning Message</span>
+                    <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                      <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
+                    </TooltipTrigger><TooltipContent className="max-w-xs text-xs">Use {"{minutes}"} as a placeholder for the countdown value in the message.</TooltipContent></Tooltip></TooltipProvider>
+                  </div>
+                  <Input
+                    value={data.autoRestartMessage}
+                    onChange={(e) => onChange({ autoRestartMessage: e.target.value })}
+                    placeholder="Server restarting in {minutes} minutes…"
+                    className="text-xs"
+                    style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 
@@ -2079,19 +2582,21 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
               </button>
             </div>
             <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-              Send a chat warning then destroy all wild dinos via RCON on a schedule.
+              Broadcast a chat warning then destroy all wild dinos via RCON on a schedule.
             </p>
           </div>
         </div>
         {data.wipeDinosEnabled && (
-          <CronSelect value={data.wipeDinosCron} onChange={(v) => onChange({ wipeDinosCron: v })} />
+          <div className="pt-1 border-t" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
+            <CronSelect value={data.wipeDinosCron} onChange={(v) => onChange({ wipeDinosCron: v })} />
+          </div>
         )}
       </div>
 
       {/* ── Auto-Update note ─────────────────────────────────────── */}
       <div className="flex gap-2.5 rounded-lg px-3 py-2.5"
-        style={{ background: "rgba(0,255,255,0.04)", border: "1px solid rgba(0,255,255,0.15)" }}>
-        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-cyan)" }} />
+        style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           <strong style={{ color: "var(--text-primary)" }}>Auto-Update</strong> is configured per-server in the Automation tab after setup.
         </p>
@@ -2107,8 +2612,19 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const allMaps = useAllMaps();
   const [input, setInput] = useState("");
-  const [existingServers, setExistingServers] = useState<import("@/lib/db").ServerRow[]>([]);
-  const [copyFromId, setCopyFromId] = useState("");
+  const [existingServers, setExistingServers] = useState<ServerRow[]>([]);
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  const copyMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClickOut(e: MouseEvent) {
+      if (copyMenuRef.current && !copyMenuRef.current.contains(e.target as Node)) {
+        setCopyMenuOpen(false);
+      }
+    }
+    if (copyMenuOpen) document.addEventListener("mousedown", onClickOut);
+    return () => document.removeEventListener("mousedown", onClickOut);
+  }, [copyMenuOpen]);
 
   useEffect(() => {
     getServers().then(setExistingServers).catch(() => {});
@@ -2184,56 +2700,69 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
           Add mods by ID or browse CurseForge.
         </p>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="gap-1.5 shrink-0"
-          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
-          onClick={handleOpenBrowser}
-        >
-          <Globe className="w-3.5 h-3.5" />
-          {modBrowserOpen ? "Close Browser" : "Browse Mods"}
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {existingServers.length > 0 && (
+            <div className="relative" ref={copyMenuRef}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
+                onClick={() => setCopyMenuOpen((v) => !v)}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Copy Mods from Server
+              </Button>
+              {copyMenuOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-50 rounded-lg overflow-hidden min-w-[200px]"
+                  style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}
+                >
+                  <div className="py-1">
+                    {existingServers.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={async () => {
+                          const srcMods = await getServerMods(s.id);
+                          const newIds = srcMods.map((m) => m.mod_id).filter((id) => !data.modIds.includes(id));
+                          const newNames = { ...data.modNames };
+                          for (const m of srcMods) newNames[m.mod_id] = m.mod_name;
+                          onChange({ modIds: [...data.modIds, ...newIds], modNames: newNames });
+                          setCopyMenuOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm transition-colors hover:bg-[rgba(var(--neon-purple-rgb),0.08)]"
+                        style={{ color: "var(--text-primary)" }}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
+            onClick={handleOpenBrowser}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            {modBrowserOpen ? "Close Browser" : "Browse Mods"}
+          </Button>
+        </div>
       </div>
 
       {selectedMap?.isMod && selectedMap.requiredModId && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
-          <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
-          <p style={{ color: "var(--neon-cyan)" }}>
+          <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+          <p style={{ color: "var(--neon-purple)" }}>
             <strong>{selectedMap.displayName}</strong> map mod ({selectedMap.requiredModId}) is locked and will always be loaded.
             To remove it, change the map on the Basic Info step.
           </p>
-        </div>
-      )}
-
-      {/* Copy mods from existing server */}
-      {existingServers.length > 0 && (
-        <div className="flex gap-2 items-center">
-          <select
-            value={copyFromId}
-            onChange={(e) => setCopyFromId(e.target.value)}
-            className="flex-1 text-xs rounded-lg px-2 py-1.5"
-            style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
-          >
-            <option value="">Copy mods from existing server…</option>
-            {existingServers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <Button
-            size="sm" variant="outline"
-            disabled={!copyFromId}
-            onClick={async () => {
-              const srcMods = await getServerMods(copyFromId);
-              const newIds = srcMods.map((m) => m.mod_id).filter((id) => !data.modIds.includes(id));
-              const newNames = { ...data.modNames };
-              for (const m of srcMods) newNames[m.mod_id] = m.mod_name;
-              onChange({ modIds: [...data.modIds, ...newIds], modNames: newNames });
-              setCopyFromId("");
-            }}
-            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
-          >
-            Copy
-          </Button>
         </div>
       )}
 
@@ -2382,6 +2911,11 @@ function InstallStep({
       // MaxPlayers lives in [/Script/Engine.GameSession] in ASA
       if (!result["/Script/Engine.GameSession"]) result["/Script/Engine.GameSession"] = {};
       result["/Script/Engine.GameSession"].MaxPlayers = String(data.maxPlayers);
+      if (data.motdMessage.trim()) {
+        result.MessageOfTheDay = { Message: data.motdMessage.trim(), Duration: String(data.motdDuration) };
+      } else {
+        delete result.MessageOfTheDay;
+      }
       return result;
     }
 
@@ -2403,7 +2937,7 @@ function InstallStep({
       };
     }
 
-    // Apply game-mode-specific overrides the user may have toggled
+    // PvE flag applied to preset config base
     if (data.gameMode === "pve") {
       config = { ...config, AllowFlyerCarryPvE: data.flyerCarryPvE };
     }
@@ -2430,9 +2964,6 @@ function InstallStep({
 
     // ── Settings shared across all named presets ──────────────────────────────
     if (isNamedPreset) {
-      serverSettings.ShowFloatingDamageText = "True";
-      serverSettings.AdminLogging = "True";
-      serverSettings.ForceAllStructureLocking = "True";
       serverSettings.DinoCountMultiplier = "1.0";
       serverSettings.MaxTamedDinos = "5000";
     }
@@ -2440,11 +2971,6 @@ function InstallStep({
     // ── PvE mode additions ────────────────────────────────────────────────────
     if (data.gameMode === "pve") {
       serverSettings.ServerPVE = "True";
-      if (isNamedPreset) {
-        serverSettings.AlwaysAllowStructurePickup = "True";
-        serverSettings.PvEAllowStructuresAtSupplyDrops = "True";
-        serverSettings.AllowCrateSpawnsOnTopOfStructures = "True";
-      }
     }
 
     // ── Official preset ───────────────────────────────────────────────────────
@@ -2506,34 +3032,50 @@ function InstallStep({
       serverSettings.GlobalSpoilingTimeMultiplier      = String(r.globalSpoilingTimeMultiplier);
       serverSettings.GlobalItemDecompositionTimeMultiplier = String(r.globalItemDecompMultiplier);
       serverSettings.AllowFlyingStaminaRecovery        = r.allowFlyingStaminaRecovery ? "True" : "False";
-      serverSettings.ShowFloatingDamageText            = "True";
-      serverSettings.AdminLogging                      = "True";
-      serverSettings.ForceAllStructureLocking          = "True";
       serverSettings.AutoSavePeriodMinutes             = "15.0";
-      serverSettings.ServerCrosshair                   = "True";
 
-      if (data.gameMode === "pvp") {
-        serverSettings.PreventOfflinePvP         = r.enableORP ? "True" : "False";
-        serverSettings.PreventOfflinePvPInterval = String(r.orpInterval);
-      }
       if (data.gameMode === "pve") {
-        serverSettings.ServerPVE                          = "True";
-        serverSettings.AlwaysAllowStructurePickup         = "True";
-        serverSettings.PvEAllowStructuresAtSupplyDrops    = "True";
-        serverSettings.AllowCrateSpawnsOnTopOfStructures  = "True";
-        serverSettings.AllowCaveBuildingPvE               = "True";
-        serverSettings.DisableStructureDecayPvE           = r.disableStructureDecay ? "True" : "False";
-        serverSettings.DisableDinoDecayPvE                = r.disableDinoDecay      ? "True" : "False";
-        serverSettings.AutoDestroyDecayedDinos            = r.disableStructureDecay  ? "False" : "True";
+        serverSettings.ServerPVE = "True";
       }
     }
 
-    return {
+    // ── Game Mode general settings override (applied last for all non-full_custom presets) ──
+    serverSettings.AdminLogging                       = data.adminLogging ? "True" : "False";
+    serverSettings.ServerCrosshair                   = data.serverCrosshair ? "True" : "False";
+    serverSettings.ShowFloatingDamageText             = data.showDamageNumbers ? "True" : "False";
+    serverSettings.ShowMapPlayerLocation              = data.showPlayerLocation ? "True" : "False";
+    serverSettings.ForceAllStructureLocking           = data.forceAllStructureLocking ? "True" : "False";
+    serverSettings.AlwaysAllowStructurePickup         = data.alwaysAllowStructurePickup ? "True" : "False";
+    serverSettings.DisableStructurePlacementCollision = data.disableStructurePlacementCollision ? "True" : "False";
+
+    if (data.gameMode === "pve") {
+      serverSettings.AllowFlyerCarryPvE              = data.flyerCarryPvE ? "True" : "False";
+      serverSettings.AllowCaveBuildingPvE            = data.allowCaveBuildingPvE ? "True" : "False";
+      serverSettings.PvEAllowStructuresAtSupplyDrops = data.pveAllowStructuresAtSupplyDrops ? "True" : "False";
+      serverSettings.AllowCrateSpawnsOnTopOfStructures = data.allowCrateSpawnsOnTopOfStructures ? "True" : "False";
+      serverSettings.DisableStructureDecayPvE        = data.disableStructureDecayPvE ? "True" : "False";
+      serverSettings.DisableDinoDecayPvE             = data.disableDinoDecayPvE ? "True" : "False";
+      // Auto-destroy decayed dinos only makes sense when decay is enabled
+      serverSettings.AutoDestroyDecayedDinos         = data.disableStructureDecayPvE ? "False" : "True";
+    }
+
+    if (data.gameMode === "pvp") {
+      serverSettings.PreventOfflinePvP = data.preventOfflinePvP ? "True" : "False";
+      if (data.preventOfflinePvP) {
+        serverSettings.PreventOfflinePvPInterval = String(data.preventOfflinePvPInterval);
+      }
+    }
+
+    const result: Record<string, Record<string, string>> = {
       SessionSettings: sessionSettings,
       ServerSettings: serverSettings,
       // ASA reads MaxPlayers from this UE section, not [ServerSettings]
       "/Script/Engine.GameSession": { MaxPlayers: String(data.maxPlayers) },
     };
+    if (data.motdMessage.trim()) {
+      result.MessageOfTheDay = { Message: data.motdMessage.trim(), Duration: String(data.motdDuration) };
+    }
+    return result;
   };
 
   /** Build the Game.ini section map from wizard data */
@@ -2754,9 +3296,17 @@ function InstallStep({
           }
         }
 
+        if (data.activeEventId) {
+          await setServerActiveEvent(serverId, data.activeEventId);
+        }
+
         if (data.autoRestart) {
           const id = generateUUID();
-          const restartCfg = JSON.stringify({ broadcastWarning: true, warningMinutes: 15, message: "Server restarting in {minutes} minutes. Progress will be saved." });
+          const restartCfg = JSON.stringify({
+            broadcastWarning: data.autoRestartWarnPlayers,
+            warningMinutes: data.autoRestartWarnMinutes,
+            message: data.autoRestartMessage,
+          });
           await createSchedule({ id, serverId, scheduleType: "restart", cronExpression: data.autoRestartCron, enabled: true, configJson: restartCfg });
           const nextIso = getNextCronDate(data.autoRestartCron)?.toISOString() ?? new Date().toISOString();
           await updateScheduleConfig(id, data.autoRestartCron, restartCfg, nextIso);
@@ -2896,7 +3446,7 @@ function InstallStep({
         <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Configuration Summary</h3>
         <div className="space-y-1.5 max-h-48 overflow-y-auto">
           {summaryItems.map(({ label, value }) => (
-            <div key={label} className="flex items-center justify-between px-3 py-1.5 rounded" style={{ background: "rgba(10,10,30,0.5)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+            <div key={label} className="flex items-center justify-between px-3 py-1.5 rounded" style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
               <span className="text-xs font-mono" style={{ color: "var(--text-primary)" }}>{value}</span>
             </div>
@@ -2934,10 +3484,10 @@ function InstallStep({
             Installation in progress. This may take 15–30 minutes…
           </p>
           <div className="flex items-center gap-2 shrink-0">
-            <Button onClick={() => { backgroundRef.current = true; onGoToDashboard(); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+            <Button onClick={() => { backgroundRef.current = true; onGoToDashboard(); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", background: "rgba(var(--neon-purple-rgb),0.08)" }}>
               <ArrowRight className="w-3 h-3" /> Continue in Background
             </Button>
-            <Button onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+            <Button onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs hover:brightness-110" style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.5)", background: "rgba(255,0,85,0.12)" }}>
               <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           </div>
@@ -2992,7 +3542,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const cleanupFnRef = useRef<(() => Promise<void>) | null>(null);
 
-  const steps = useMemo(() => computeSteps(data), [data.presetStyle]);
+  const steps = useMemo(() => computeSteps(data), [data.presetStyle, data.copyFromServerId]);
   const currentStepDef = steps[step];
   const isInstallStep = currentStepDef?.id === "install";
 
@@ -3004,11 +3554,11 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
     });
   }, []);
 
-  // When presetStyle changes, clamp step to avoid being past the new step count
+  // When presetStyle or copyFromServerId changes, clamp step to avoid being past the new step count
   useEffect(() => {
     const newSteps = computeSteps(data);
     if (step >= newSteps.length) setStep(newSteps.length - 1);
-  }, [data.presetStyle]);
+  }, [data.presetStyle, data.copyFromServerId]);
 
   const canAdvance = (): boolean => {
     if (!currentStepDef) return false;
@@ -3076,7 +3626,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(var(--neon-purple-rgb),0.08) 0%, transparent 60%)" }} />
 
       {/* Top bar */}
-      <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "rgba(5,5,20,0.8)" }}>
+      <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "var(--surface-elevated)" }}>
         <div className="flex items-center gap-2">
           <LokiIcon size={16} style={{ filter: "drop-shadow(0 0 4px var(--neon-purple))" }} />
           <span className="text-sm font-semibold text-glow-purple" style={{ color: "var(--neon-purple)" }}>New Server</span>
@@ -3092,7 +3642,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
           {/* Left sidebar */}
           <div
             className="w-52 shrink-0 rounded-xl p-4 flex flex-col gap-1 self-stretch"
-            style={{ background: "rgba(10,10,30,0.7)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", backdropFilter: "blur(12px)" }}
+            style={{ background: "var(--glass-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", backdropFilter: "blur(12px)" }}
           >
             <p className="text-xs font-semibold mb-3 px-1" style={{ color: "var(--text-muted)" }}>NEW SERVER</p>
             {steps.map((s, i) => {
@@ -3137,7 +3687,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
 
             <div
               className="flex-1 rounded-xl p-6 overflow-y-auto"
-              style={{ background: "rgba(10,10,30,0.6)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", backdropFilter: "blur(12px)" }}
+              style={{ background: "var(--glass-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", backdropFilter: "blur(12px)" }}
             >
               <AnimatePresence mode="wait" custom={direction}>
                 <motion.div
@@ -3157,7 +3707,16 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
             {/* Navigation */}
             {!isInstallStep && (
               <div className="flex items-center justify-between mt-4">
-                <Button variant="ghost" onClick={prev} disabled={step === 0} className="gap-2" style={{ color: "var(--text-muted)" }}>
+                <Button
+                  onClick={prev}
+                  disabled={step === 0}
+                  className="gap-2"
+                  style={{
+                    background: step === 0 ? "rgba(var(--neon-purple-rgb),0.05)" : "rgba(var(--neon-purple-rgb),0.15)",
+                    border: "1px solid rgba(var(--neon-purple-rgb),0.4)",
+                    color: step === 0 ? "var(--text-muted)" : "var(--neon-purple)",
+                  }}
+                >
                   <ArrowLeft className="w-4 h-4" /> Back
                 </Button>
                 <Button
@@ -3182,7 +3741,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       {/* Cancel confirmation overlay */}
       {showCancelConfirm && (
         <div className="absolute inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)" }}>
-          <div className="rounded-xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4" style={{ background: "rgba(8,8,25,0.98)", border: "1px solid rgba(255,0,85,0.35)", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}>
+          <div className="rounded-xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4" style={{ background: "var(--popover)", border: "1px solid rgba(255,0,85,0.35)", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}>
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: "var(--neon-red)" }} />
               <div>

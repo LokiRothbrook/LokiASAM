@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Folder, Terminal, Info, Archive, Copy,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
@@ -19,7 +20,7 @@ import {
   Dialog, DialogContent, DialogDescription,
   DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
+import { CommandOutputPanel, hasOutputBuffer } from "@/components/shared/CommandOutputPanel";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import {
   getAppSetting, setAppSetting,
@@ -716,9 +717,12 @@ function AboutSection() {
   const [appVersion, setAppVersion]   = useState("…");
   const [asaBuild, setAsaBuild]       = useState("—");
   const [protonVersion, setProtonVer] = useState("—");
-  const [paths, setPaths] = useState({
+  const [protonPath, setProtonPath]   = useState("—");
+  const [configured, setConfigured] = useState({
     baseDir: "—", backupDir: "—", steamcmd: "—",
-    dbPath: "—", cachePath: "—", logRoot: "—",
+  });
+  const [managed, setManaged] = useState({
+    dbPath: "—", cachePath: "—", savesRoot: "—", clustersRoot: "—", logRoot: "—",
   });
   const [copied, setCopied] = useState(false);
   const versionCache = useBuildVersionCache();
@@ -726,7 +730,7 @@ function AboutSection() {
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("0.10.0"));
     (async () => {
-      const [baseDir, backupDir, steamcmd, asaCached, protonPath, logRoot] = await Promise.all([
+      const [baseDir, backupDir, steamcmd, asaCached, protonRaw, logRoot] = await Promise.all([
         getAppSetting("base_dir"),
         getAppSetting("backup_dir"),
         getAppSetting("steamcmd_path"),
@@ -737,20 +741,25 @@ function AboutSection() {
 
       setAsaBuild(asaCached || "—");
 
-      if (protonPath) {
-        const ver = protonPath.replace(/[/\\]$/, "").split(/[/\\]/).pop() ?? "";
+      if (protonRaw) {
+        const ver = protonRaw.replace(/[/\\]$/, "").split(/[/\\]/).pop() ?? "";
         setProtonVer(ver || "—");
+        setProtonPath(protonRaw);
       }
 
       const sep  = (baseDir ?? "").includes("\\") ? "\\" : "/";
       const base = (baseDir ?? "").replace(/[/\\]$/, "");
-      setPaths({
+      setConfigured({
         baseDir:   baseDir   || "—",
         backupDir: backupDir || "—",
         steamcmd:  steamcmd  || "—",
-        dbPath:    base ? `${base}${sep}lokiasam${sep}lokiasam.db`           : "—",
-        cachePath: base ? `${base}${sep}lokiasam${sep}cache${sep}asa-server` : "—",
-        logRoot:   logRoot   || "—",
+      });
+      setManaged({
+        dbPath:       base ? `${base}${sep}lokiasam${sep}lokiasam.db`           : "—",
+        cachePath:    base ? `${base}${sep}lokiasam${sep}cache${sep}asa-server` : "—",
+        savesRoot:    base ? `${base}${sep}saves`                               : "—",
+        clustersRoot: base ? `${base}${sep}clusters`                            : "—",
+        logRoot:      logRoot || "—",
       });
     })();
   }, []);
@@ -770,14 +779,20 @@ function AboutSection() {
     ...(IS_LINUX ? [{ label: "Proton-GE", value: protonVersion }] : []),
   ];
 
-  const pathRows = [
-    { label: "Base Directory",   value: paths.baseDir },
-    { label: "Backup Directory", value: paths.backupDir },
-    { label: "SteamCMD",         value: paths.steamcmd },
-    { label: "Database",         value: paths.dbPath },
-    { label: "Server Cache",     value: paths.cachePath },
-    { label: "Log Storage",      value: paths.logRoot },
-    { label: "Bootstrap",        value: bootstrapHint },
+  const configuredRows = [
+    { label: "Base Directory",   value: configured.baseDir },
+    { label: "Backup Directory", value: configured.backupDir },
+    { label: "SteamCMD",         value: configured.steamcmd },
+    ...(IS_LINUX ? [{ label: "Proton-GE", value: protonPath }] : []),
+  ];
+
+  const managedRows = [
+    { label: "Database",     value: managed.dbPath },
+    { label: "Server Cache", value: managed.cachePath },
+    { label: "Saves",        value: managed.savesRoot },
+    { label: "Clusters",     value: managed.clustersRoot },
+    { label: "Log Storage",  value: managed.logRoot },
+    { label: "Bootstrap",    value: bootstrapHint },
   ];
 
   const handleCopy = () => {
@@ -785,8 +800,11 @@ function AboutSection() {
       "Versions:",
       ...versionRows.map((r) => `  ${r.label}: ${r.value}`),
       "",
-      "Directories:",
-      ...pathRows.map((r) => `  ${r.label}: ${r.value}`),
+      "Configured Directories:",
+      ...configuredRows.map((r) => `  ${r.label}: ${r.value}`),
+      "",
+      "Managed Directories:",
+      ...managedRows.map((r) => `  ${r.label}: ${r.value}`),
     ].join("\n");
     navigator.clipboard.writeText(text).catch(() => null);
     setCopied(true);
@@ -824,9 +842,14 @@ function AboutSection() {
           {versionRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
         </div>
 
-        <AboutSectionLabel>Directories</AboutSectionLabel>
+        <AboutSectionLabel>Configured Directories</AboutSectionLabel>
         <div className="space-y-2.5">
-          {pathRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
+          {configuredRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
+        </div>
+
+        <AboutSectionLabel>Managed Directories</AboutSectionLabel>
+        <div className="space-y-2.5">
+          {managedRows.map((r) => <AboutRow key={r.label} label={r.label} value={r.value} />)}
         </div>
       </div>
     </div>
@@ -1445,7 +1468,14 @@ function SteamcmdReinstallRow() {
 // Proton-GE install/reinstall row (managed installs only, Linux only)
 // ---------------------------------------------------------------------------
 
+const PROTON_CHANNEL = "proton://output/download";
+
 function ProtonGeInstallRow() {
+  const protonOpLabel    = useAppStore((s) => s.protonOpLabel);
+  const protonOpDone     = useAppStore((s) => s.protonOpDone);
+  const setProtonOpLabel = useAppStore((s) => s.setProtonOpLabel);
+  const setProtonOpDone  = useAppStore((s) => s.setProtonOpDone);
+
   const [protonPath, setProtonPath]           = useState("");
   const [isManaged, setIsManaged]             = useState(false);
   const [phase, setPhase]                     = useState<"idle" | "running" | "done" | "error">("idle");
@@ -1460,6 +1490,13 @@ function ProtonGeInstallRow() {
       setProtonPath(p ?? "");
       setIsManaged(managed === "true");
     });
+  }, []);
+
+  // Restore phase from Zustand on mount so nav-away/back shows the right state.
+  useEffect(() => {
+    if (protonOpLabel !== null) setPhase("running");
+    else if (protonOpDone)      setPhase("done");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleConfirmManaged = async () => {
@@ -1483,6 +1520,8 @@ function ProtonGeInstallRow() {
       : `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}proton`;
     setIsReinstall(reinstall);
     setPhase("running");
+    setProtonOpLabel(reinstall ? "Reinstalling Proton-GE…" : "Installing Proton-GE…");
+    setProtonOpDone(false);
     try {
       if (reinstall && protonPath) {
         await tauriCmd.deleteDirectory(protonPath).catch(() => {});
@@ -1491,10 +1530,14 @@ function ProtonGeInstallRow() {
       await setAppSetting("proton_path", newPath);
       setProtonPath(newPath);
       setPhase("done");
+      setProtonOpLabel(null);
+      setProtonOpDone(true);
       toast.success(`Proton-GE ${reinstall ? "reinstalled" : "installed"} successfully.`);
     } catch (e) {
       if (!String(e).includes("Aborted")) toast.error(`Proton-GE ${reinstall ? "reinstall" : "install"} failed: ${e}`);
       setPhase("error");
+      setProtonOpLabel(null);
+      setProtonOpDone(false);
     }
   };
 
@@ -1582,8 +1625,8 @@ function ProtonGeInstallRow() {
           </Button>
         </div>
       </div>
-      {(busy || phase === "done") && (
-        <CommandOutputPanel eventChannel="proton://output/download" label="Proton-GE" completed={phase === "done"} bodyClassName="h-40" />
+      {(phase === "running" || phase === "done" || hasOutputBuffer(PROTON_CHANNEL)) && (
+        <CommandOutputPanel eventChannel={PROTON_CHANNEL} label="Proton-GE" completed={phase === "done"} bodyClassName="h-40" />
       )}
     </div>
   );
@@ -1827,7 +1870,12 @@ function FirewallRepairRow() {
 // Proton-GE Update section (Linux only)
 // ---------------------------------------------------------------------------
 
-function ProtonGeUpdateSection() {
+function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
+  const protonOpLabel    = useAppStore((s) => s.protonOpLabel);
+  const protonOpDone     = useAppStore((s) => s.protonOpDone);
+  const setProtonOpLabel = useAppStore((s) => s.setProtonOpLabel);
+  const setProtonOpDone  = useAppStore((s) => s.setProtonOpDone);
+
   const [protonPath, setProtonPath]         = useState("");
   const [isManaged, setIsManaged]           = useState(false);
   const [checking, setChecking]             = useState(false);
@@ -1836,6 +1884,8 @@ function ProtonGeUpdateSection() {
   const [downloadDone, setDownloadDone]     = useState(false);
   const [checkMode, setCheckMode]           = useState("disabled");
   const [showManagedConfirm, setShowManagedConfirm] = useState(false);
+  const autoStartedRef = useRef(false);
+  const sectionRef     = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -1847,6 +1897,23 @@ function ProtonGeUpdateSection() {
       setIsManaged(managed === "true");
       setCheckMode(mode ?? "disabled");
     });
+  }, []);
+
+  // Restore in-progress / done state from Zustand on mount (nav-away/back).
+  useEffect(() => {
+    if (protonOpLabel !== null) setDownloading(true);
+    else if (protonOpDone)      setDownloadDone(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Scroll this section into view when navigated here from the update toast.
+  useEffect(() => {
+    if (!autoStart) return;
+    const frame = requestAnimationFrame(() => {
+      sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCheckUpdate = async () => {
@@ -1868,6 +1935,8 @@ function ProtonGeUpdateSection() {
     if (!protonPath) { toast.error("Proton-GE path not configured."); return; }
     const targetDir = protonPath.replace(/[/\\][^/\\]+$/, "");
     setDownloading(true); setDownloadDone(false);
+    setProtonOpLabel("Updating Proton-GE…");
+    setProtonOpDone(false);
     try {
       const newPath = await tauriCmd.downloadProtonGe(targetDir);
       await setAppSetting("proton_path", newPath);
@@ -1876,8 +1945,14 @@ function ProtonGeUpdateSection() {
       setIsManaged(true);
       setDownloadDone(true);
       setUpdateInfo(null);
+      setProtonOpLabel(null);
+      setProtonOpDone(true);
       toast.success("Proton-GE updated successfully.");
-    } catch (e) { toast.error(`Proton-GE update failed: ${e}`); }
+    } catch (e) {
+      setProtonOpLabel(null);
+      setProtonOpDone(false);
+      if (!String(e).includes("Aborted")) toast.error(`Proton-GE update failed: ${e}`);
+    }
     finally { setDownloading(false); }
   };
 
@@ -1893,6 +1968,14 @@ function ProtonGeUpdateSection() {
     await setAppSetting("proton_ge_check_mode", value);
   };
 
+  // When navigated here via the update toast, auto-start the download once settings are loaded.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current || !protonPath || !isManaged) return;
+    autoStartedRef.current = true;
+    handleDownload();
+  }, [autoStart, protonPath, isManaged]);
+
   // Determine if the current path is inside the managed location
   const managedPattern = /[/\\]proton[/\\]GE-Proton/;
   const looksExternal = protonPath && !managedPattern.test(protonPath);
@@ -1901,7 +1984,7 @@ function ProtonGeUpdateSection() {
     : "";
 
   return (
-    <div className="space-y-4">
+    <div ref={sectionRef} className="space-y-4">
       {/* Current version row */}
       {currentVersion && (
         <div className="flex items-center gap-2 flex-wrap">
@@ -1969,14 +2052,14 @@ function ProtonGeUpdateSection() {
 
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
-        <Button onClick={handleCheckUpdate} disabled={checking || downloading || !isManaged} size="sm" className="gap-1.5"
+        <Button onClick={handleCheckUpdate} disabled={checking || !!protonOpLabel || !isManaged} size="sm" className="gap-1.5"
           style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
           {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           Check for Proton-GE Update
         </Button>
 
         {(updateInfo?.updateAvailable || (!protonPath && updateInfo)) && (isManaged || !looksExternal) && (
-          <Button onClick={handleDownload} disabled={downloading || downloadDone} size="sm" className="gap-1.5"
+          <Button onClick={handleDownload} disabled={!!protonOpLabel || downloadDone} size="sm" className="gap-1.5"
             style={{
               background: downloadDone ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
               border: `1px solid ${downloadDone ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
@@ -1987,7 +2070,7 @@ function ProtonGeUpdateSection() {
           </Button>
         )}
 
-        {downloading && (
+        {protonOpLabel && (
           <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1.5"
             style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
             <StopCircle className="w-3 h-3" /> Abort
@@ -2055,8 +2138,8 @@ function ProtonGeUpdateSection() {
       </Dialog>
 
       {/* Download output */}
-      {(downloading || downloadDone) && (
-        <CommandOutputPanel eventChannel="proton://output/download" label="Proton-GE Download" completed={downloadDone} bodyClassName="h-48" />
+      {(downloading || downloadDone || hasOutputBuffer(PROTON_CHANNEL)) && (
+        <CommandOutputPanel eventChannel={PROTON_CHANNEL} label="Proton-GE Download" completed={downloadDone} bodyClassName="h-48" />
       )}
     </div>
   );
@@ -2488,7 +2571,13 @@ type TabId = typeof TABS[number]["id"];
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<TabId>("general");
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab") as TabId | null;
+  const autoUpdateProton = searchParams.get("autoUpdateProton") === "1";
+
+  const [activeTab, setActiveTab] = useState<TabId>(
+    tabParam && TABS.some((t) => t.id === tabParam) ? tabParam : "general"
+  );
   const [matrixRefreshKey, setMatrixRefreshKey] = useState(0);
   const [autoStartCache, setAutoStartCache] = useState(false);
   const scrollContainerRef  = useRef<HTMLDivElement>(null);
@@ -2629,7 +2718,7 @@ export default function SettingsPage() {
           </Section>
           {IS_LINUX && (
             <Section icon={Terminal} title="Proton-GE" description="Update the Proton-GE compatibility layer to the latest release.">
-              <ProtonGeUpdateSection />
+              <ProtonGeUpdateSection autoStart={autoUpdateProton} />
             </Section>
           )}
         </div>

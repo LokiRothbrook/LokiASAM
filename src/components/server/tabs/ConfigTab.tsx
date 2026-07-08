@@ -168,7 +168,7 @@ function FieldRow({
           min={field.min}
           max={field.max}
           step={field.step}
-          defaultValue={field.defaultValue}
+          defaultValue={typeof field.defaultValue === "number" ? field.defaultValue : undefined}
         />
       </div>
     );

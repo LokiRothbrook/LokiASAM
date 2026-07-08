@@ -216,7 +216,7 @@ function DeleteDialog({
           />
           <DeleteToggleRow
             label={`Delete map saves${diskUsage && diskUsage.saveBytes > 0 ? ` (${formatBytes(diskUsage.saveBytes)})` : diskUsage ? " (none)" : ""}`}
-            sublabel={baseDir ? `${baseDir}/Saves/${server.id}/` : "Saves directory"}
+            sublabel={baseDir ? `${baseDir}/saves/${server.id}/` : "Saves directory"}
             enabled={deleteSaves}
             onToggle={() => setDeleteSaves((v) => !v)}
             color="var(--neon-red)"

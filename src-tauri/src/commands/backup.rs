@@ -472,7 +472,7 @@ async fn create_server_backup_impl(
 
     // Use canonical path when base_dir is known, otherwise fall back to following the symlink.
     let saved_arks = if !base_dir.is_empty() {
-        PathBuf::from(base_dir).join("Saves").join(server_id).join("SavedArks").join(map_path)
+        PathBuf::from(base_dir).join("saves").join(server_id).join("SavedArks").join(map_path)
     } else {
         PathBuf::from(&install_path).join("ShooterGame").join("Saved").join("SavedArks").join(map_path)
     };
@@ -482,7 +482,7 @@ async fn create_server_backup_impl(
     // When base_dir is used, files come from two roots: canonical saves and install_path SaveGames.
     // Calculate the primary root based on whether base_dir is used.
     let saved_root = if !base_dir.is_empty() {
-        PathBuf::from(base_dir).join("Saves").join(server_id)
+        PathBuf::from(base_dir).join("saves").join(server_id)
     } else {
         PathBuf::from(&install_path).join("ShooterGame").join("Saved")
     };
@@ -873,7 +873,7 @@ pub async fn create_save_link(
     }
 
     // The canonical save storage directory (real data lives here)
-    let save_target = PathBuf::from(&base_dir).join("Saves").join(&server_id).join("SavedArks");
+    let save_target = PathBuf::from(&base_dir).join("saves").join(&server_id).join("SavedArks");
     fs::create_dir_all(&save_target).map_err(|e| format!("Failed to create save target dir: {e}"))?;
 
     // The path inside the server install where SavedArks should be (will become the link)
@@ -941,7 +941,7 @@ pub async fn create_mods_saves_link(
 
     // The canonical mod save storage directory for this map (real data lives here)
     let mods_target = PathBuf::from(&base_dir)
-        .join("Saves")
+        .join("saves")
         .join(&server_id)
         .join("Mods")
         .join(&map_path)
@@ -1076,9 +1076,9 @@ pub async fn import_server_saves(
     }
 
     let source = PathBuf::from(&base_dir)
-        .join("Saves").join(&source_server_id).join("SavedArks").join(&map_path);
+        .join("saves").join(&source_server_id).join("SavedArks").join(&map_path);
     let target = PathBuf::from(&base_dir)
-        .join("Saves").join(&target_server_id).join("SavedArks").join(&map_path);
+        .join("saves").join(&target_server_id).join("SavedArks").join(&map_path);
 
     if !source.exists() {
         return Err(format!("Source save directory does not exist: {}", source.display()));
@@ -1241,12 +1241,12 @@ pub async fn restore_server_backup(
 
     // Step 1: Clear existing save locations
     emit_progress(&app, &server_id, 10.0, "", "Clearing existing saves…");
-    let saved_arks_path = PathBuf::from(&base_dir).join("Saves").join(&server_id).join("SavedArks").join(&map_path);
+    let saved_arks_path = PathBuf::from(&base_dir).join("saves").join(&server_id).join("SavedArks").join(&map_path);
     if saved_arks_path.exists() {
         fs::remove_dir_all(&saved_arks_path).map_err(|e| format!("Failed to clear SavedArks: {e}"))?;
     }
 
-    let mods_saves_path = PathBuf::from(&base_dir).join("Saves").join(&server_id).join("Mods").join(&map_path).join("SaveGames");
+    let mods_saves_path = PathBuf::from(&base_dir).join("saves").join(&server_id).join("Mods").join(&map_path).join("SaveGames");
     if mods_saves_path.exists() {
         fs::remove_dir_all(&mods_saves_path).map_err(|e| format!("Failed to clear SaveGames: {e}"))?;
     }
