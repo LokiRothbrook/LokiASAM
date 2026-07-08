@@ -65,8 +65,8 @@ export interface ArkMap {
  *
  * Official map release status as of 2026:
  *   Released: The Island, Scorched Earth, Aberration, The Center, Extinction,
- *             Astraeos, Ragnarok, Valguero, Lost Colony, Genesis Part 1, Dragontopia
- *   Upcoming: Genesis Part 2, Lost Island, Fjordur, Crystal Isles
+ *             Astraeos, Ragnarok, Valguero, Lost Colony, Genesis Part 1
+ *   Upcoming: Dragontopia (December), Genesis Part 2, Lost Island, Fjordur, Crystal Isles
  */
 export const ARK_MAPS: ArkMap[] = [
   // ── Official / Base Game ──────────────────────────────────────────────────
@@ -168,6 +168,7 @@ export const ARK_MAPS: ArkMap[] = [
     released: true,
     isMod: false,
   },
+  // ── Official / Announced but Not Yet Released ─────────────────────────────
   {
     id: "dragontopia",
     displayName: "Dragontopia",
@@ -175,10 +176,9 @@ export const ARK_MAPS: ArkMap[] = [
     isOfficial: true,
     dlcRequired: true,
     dlcName: "Dragontopia",
-    released: true,
+    released: false,
     isMod: false,
   },
-  // ── Official / Announced but Not Yet Released ─────────────────────────────
   {
     id: "genesis2",
     displayName: "Genesis: Part 2",
