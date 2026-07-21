@@ -278,26 +278,50 @@ async fn tail_log_with_backfill(
         }
     };
 
-    // ── Backfill: read all existing content from start ───────────────────────
+    // ── Backfill: read only the tail of the file, not the whole thing ────────
+    // Long-running servers can accumulate a ShooterGame.log hundreds of MB to
+    // GB in size. Reading the entire file into memory and shipping it as one
+    // giant IPC payload every time the Logs tab (re)connects was a real source
+    // of CPU/memory spikes — cap both the bytes read and the lines kept.
+    const BACKFILL_CAP_BYTES: u64 = 2 * 1024 * 1024; // 2 MB of recent content
+    const BACKFILL_CAP_LINES: usize = 5000;
+
     let backfill_event = format!("{}/{server_id}", events::LOG_BACKFILL);
-    let mut backfill: Vec<LogLine> = Vec::new();
+    let file_len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let start_offset = file_len.saturating_sub(BACKFILL_CAP_BYTES);
+    if start_offset > 0 {
+        let _ = file.seek(SeekFrom::Start(start_offset)).await;
+    }
+
+    let mut backfill: std::collections::VecDeque<LogLine> = std::collections::VecDeque::new();
     let mut buf = String::new();
     let mut reader = BufReader::new(&mut file);
+    let mut first_line = start_offset > 0; // seeked mid-file — first read is likely a partial line
     loop {
         buf.clear();
         match reader.read_line(&mut buf).await {
             Ok(0) => break,
             Ok(_) => {
+                if first_line {
+                    // Discard: we seeked into the middle of the file, so this
+                    // line is truncated at the start — not worth showing.
+                    first_line = false;
+                    continue;
+                }
                 let trimmed = buf.trim_end_matches(['\n', '\r']).to_string();
                 if !trimmed.is_empty() {
                     let level = classify_level(&trimmed).to_string();
-                    backfill.push(LogLine { line: trimmed, level });
+                    backfill.push_back(LogLine { line: trimmed, level });
+                    if backfill.len() > BACKFILL_CAP_LINES {
+                        backfill.pop_front();
+                    }
                 }
             }
             Err(_) => break,
         }
     }
     if !backfill.is_empty() {
+        let backfill: Vec<LogLine> = backfill.into();
         let _ = app.emit(&backfill_event, &backfill);
     }
 

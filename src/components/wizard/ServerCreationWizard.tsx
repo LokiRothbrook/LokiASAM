@@ -3273,7 +3273,6 @@ function InstallStep({
           port: data.port,
           queryPort: data.queryPort,
           rconPort: data.rconPort,
-          rconPassword: data.adminPassword,
           maxPlayers: data.maxPlayers,
           serverPassword: data.serverPassword || undefined,
           adminPassword: data.adminPassword,

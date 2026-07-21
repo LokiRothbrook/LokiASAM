@@ -38,7 +38,7 @@ import type { ServerRow } from "@/lib/db";
 import { formatServerVersion } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
-import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getMapById } from "@/data/game-data";
+import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getMapById, getSaveFolder } from "@/data/game-data";
 import { setServerActiveEvent } from "@/lib/db";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
@@ -690,7 +690,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       await tauriCmd.gracefulStopServer(
         server.id,
         server.rcon_port,
-        server.rcon_password,
+        server.admin_password,
         server.shutdown_warn_players !== 0,
         server.shutdown_warn_minutes ?? 5,
         server.shutdown_message || "Server will shut down in {time}.",
@@ -723,7 +723,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
         serverId:      server.id,
         warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
         rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
+        rconPassword:  server.admin_password,
         message:       server.restart_message || "Server restarting in {time}.",
         cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
         startParams,
@@ -765,7 +765,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
         serverName:    server.name,
         warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
         rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
+        rconPassword:  server.admin_password,
         message:       server.update_message || "Server going down for update in {time}.",
         cancelMessage: server.update_cancel_message || "Update has been canceled.",
         installPath:   server.install_path,
@@ -787,9 +787,17 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           server.install_path,
           wasRunning,
           restartAfterUpdate,
-          (msg) => toast.info(msg),
           server.rcon_port,
-          server.rcon_password,
+          server.admin_password,
+          {
+            // This branch only runs when the warn-players countdown path above
+            // wasn't taken (warn disabled, or server wasn't running) — still
+            // always saves the world and shuts down cleanly via RCON either way.
+            warnPlayers: false,
+            warnMinutes: server.update_warn_minutes ?? 5,
+            warnMessage: server.update_message || "Server going down for update in {time}.",
+          },
+          (msg) => toast.info(msg),
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -841,9 +849,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
 
   const handleWipe = async (tier: "map" | "players" | "full") => {
     setWiping(true);
-    const mapPath = getMapById(server.map_id)?.mapPath ?? server.map_id;
+    const mapDef = getMapById(server.map_id);
+    const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
     try {
-      await tauriCmd.wipeServerSaves(server.install_path, mapPath, tier);
+      await tauriCmd.wipeServerSaves(server.install_path, saveFolder, tier);
       setWipeConfirm(null);
       toast.success(`Save wipe complete (${tier})`);
     } catch (e) {
@@ -866,8 +875,9 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     try {
       const baseDir = await getAppSetting("base_dir");
       if (!baseDir) throw new Error("Base directory not configured");
-      const mapPath = getMapById(server.map_id)?.mapPath ?? server.map_id;
-      await tauriCmd.importServerSaves(importSourceId, server.id, baseDir, mapPath);
+      const mapDef = getMapById(server.map_id);
+      const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
+      await tauriCmd.importServerSaves(importSourceId, server.id, baseDir, saveFolder);
       setShowImport(false);
       toast.success("Save data imported successfully");
     } catch (e) {
@@ -1028,8 +1038,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             onClick={async () => {
               const [backupDir, baseDir] = await Promise.all([getAppSetting("backup_dir"), getAppSetting("base_dir")]);
               if (!backupDir) return;
-              const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
-              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual", "", baseDir ?? "")
+              const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
+              const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
+              const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
+              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, saveFolder, server.map_id, backupDir, "manual", "", baseDir ?? "")
                 .then(async (record: BackupRecord) => {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,

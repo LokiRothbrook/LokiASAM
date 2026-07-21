@@ -36,7 +36,7 @@ import {
   buildPresetConfig, ARK_EVENTS, ARK_MAPS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -694,23 +694,25 @@ function ModSettingValue({
 // Custom mod sections editor
 // ---------------------------------------------------------------------------
 
+// Standard GameUserSettings.ini sections this app already manages elsewhere —
+// never touched by the custom mod-section editor below.
+const GUS_STANDARD_SECTIONS = new Set([
+  "serversettings",
+  "sessionsettings",
+  "messageoftheday",
+  "ragnarok",
+  "/script/engine.gamesession",
+]);
+
 function CustomModSections({
-  gameIni,
+  gameUserSettings,
   onChange,
 }: {
-  gameIni: Record<string, Record<string, string>>;
+  gameUserSettings: Record<string, Record<string, string>>;
   onChange: (updated: Record<string, Record<string, string>>) => void;
 }) {
-  const STANDARD_SECTIONS = new Set([
-    "/script/shootergame.shootergamemode",
-    "ServerSettings",
-    "SessionSettings",
-    "MessageOfTheDay",
-    "Ragnarok",
-  ]);
-
-  const customSections: CustomSection[] = Object.entries(gameIni)
-    .filter(([name]) => !STANDARD_SECTIONS.has(name.toLowerCase()) && !STANDARD_SECTIONS.has(name))
+  const customSections: CustomSection[] = Object.entries(gameUserSettings)
+    .filter(([name]) => !GUS_STANDARD_SECTIONS.has(name.toLowerCase()))
     .map(([name, kvs]) => ({
       sectionName: name,
       rows: Object.entries(kvs).map(([key, value]) => ({ key, value })),
@@ -721,9 +723,9 @@ function CustomModSections({
   const [addSettingFor, setAddSettingFor] = useState<number | null>(null);
 
   const commit = (sections: CustomSection[]) => {
-    const updated = { ...gameIni };
+    const updated = { ...gameUserSettings };
     for (const key of Object.keys(updated)) {
-      if (!STANDARD_SECTIONS.has(key.toLowerCase()) && !STANDARD_SECTIONS.has(key)) {
+      if (!GUS_STANDARD_SECTIONS.has(key.toLowerCase())) {
         delete updated[key];
       }
     }
@@ -786,7 +788,7 @@ function CustomModSections({
         <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,5,25,0.7)", borderBottom: "1px solid rgba(180,100,255,0.15)" }}>
           <div>
             <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Mod Settings</span>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>Custom <code>Game.ini</code> sections for mods — add a section per mod, then add its settings.</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>Custom <code>GameUserSettings.ini</code> sections for mods — add a section per mod, then add its settings.</p>
           </div>
         </div>
 
@@ -1750,6 +1752,19 @@ export function ConfigTab({ server }: Props) {
         JSON.stringify(toSave.gameIni),
         JSON.stringify(toSave.launchArgs ?? {}),
       );
+
+      // admin_password is the single source of truth for both the INI value and
+      // RCON auth. If this save changed ServerAdminPassword (e.g. via the raw
+      // editor), keep the DB in sync so RCON doesn't silently start failing —
+      // then bounce the live RCON connection so it reconnects with the new
+      // password immediately instead of waiting for the next failed command.
+      const newAdminPassword = (toSave.gameUserSettings as Record<string, Record<string, string>>)
+        ?.ServerSettings?.ServerAdminPassword;
+      if (newAdminPassword && newAdminPassword !== server.admin_password) {
+        await updateServerAdminPassword(server.id, newAdminPassword);
+        tauriCmd.rconDisconnect(server.id).catch(() => {});
+      }
+
       setIsDirty(false);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
@@ -2002,9 +2017,9 @@ export function ConfigTab({ server }: Props) {
       {/* ── Mod Settings tab ─────────────────────────────────────────────── */}
       {activeTab === "mods" && config && (
         <CustomModSections
-          gameIni={config.gameIni as Record<string, Record<string, string>>}
+          gameUserSettings={config.gameUserSettings as Record<string, Record<string, string>>}
           onChange={(updated) => {
-            setConfig({ ...config, gameIni: updated });
+            setConfig({ ...config, gameUserSettings: updated });
             setIsDirty(true);
           }}
         />

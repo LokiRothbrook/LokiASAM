@@ -14,7 +14,7 @@ import {
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { ARK_MAPS } from "@/data/game-data";
+import { ARK_MAPS, getSaveFolder } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 
@@ -39,12 +39,6 @@ function formatHumanDate(iso: string): string {
     hour: "numeric", minute: "2-digit", second: "2-digit",
   });
   return `${datePart} ${timePart}`;
-}
-
-function platform(): string {
-  return typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows")
-    ? "LinuxServer"
-    : "WindowsServer";
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +550,7 @@ function IniBackupSection({
   async function handleRestore(timestamp: string) {
     onBusyChange(true);
     try {
-      await tauriCmd.restoreIniBackup(`${backupDir}/${serverId}/ini/${timestamp}`, installPath, platform());
+      await tauriCmd.restoreIniBackup(`${backupDir}/${serverId}/ini/${timestamp}`, installPath);
       toast.success(`Config restored from ${timestamp}.`);
     } catch (e) {
       toast.error(`INI restore failed: ${e}`);
@@ -701,7 +695,9 @@ interface Props {
 }
 
 export function BackupsTab({ server, onNavigateToAutomation }: Props) {
-  const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+  const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
+  const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
+  const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
 
   const [serverBackups, setServerBackups] = useState<BackupRow[]>([]);
   const [playerBackups, setPlayerBackups] = useState<BackupRow[]>([]);
@@ -767,7 +763,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting server backup…" });
     try {
       const rec: BackupRecord = await tauriCmd.createServerBackup(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual",
+        server.id, server.name, server.install_path, mapPath, saveFolder, server.map_id, backupDir, "manual",
         "", baseDir
       );
       await insertBackup({
@@ -792,7 +788,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting player backups…" });
     try {
       const records = await tauriCmd.backupAllPlayers(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
+        server.id, server.name, server.install_path, saveFolder, server.map_id, backupDir, "manual"
       );
       if (records.length === 0) {
         toast.info("No player profiles found to back up.");
@@ -872,9 +868,9 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         await new Promise((r) => setTimeout(r, 2000));
       }
       if (target.backup_type === "server") {
-        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path, baseDir, mapPath);
+        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path, baseDir, mapPath, saveFolder);
       } else if (target.backup_type === "player") {
-        await tauriCmd.restorePlayerBackup(server.id, target.file_path, server.install_path, mapPath);
+        await tauriCmd.restorePlayerBackup(server.id, target.file_path, server.install_path, saveFolder);
       } else if (target.backup_type === "full") {
         await tauriCmd.restoreFullBackup(server.id, target.file_path, server.install_path);
       }

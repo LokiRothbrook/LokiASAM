@@ -64,7 +64,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     port:         server.port,
     queryPort:    server.query_port,
     rconPort:     server.rcon_port,
-    rconPassword: server.rcon_password,
+    rconPassword: server.admin_password,
     extraArgs,
     modIds:       enabledModIds,
   };

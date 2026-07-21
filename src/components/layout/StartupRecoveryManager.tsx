@@ -55,7 +55,11 @@ export function StartupRecoveryManager() {
             try {
               await updateServerStatus(server.id, "updating", null);
               queryClient.invalidateQueries({ queryKey: ["servers"] });
-              await applyUpdateToServer(server.id, server.name, server.install_path, false, false);
+              await applyUpdateToServer(
+                server.id, server.name, server.install_path, false, false,
+                server.rcon_port, server.admin_password,
+                { warnPlayers: false, warnMinutes: 0, warnMessage: "" },
+              );
             } catch {
               // applyUpdateToServer already dispatches a failure notification
             }

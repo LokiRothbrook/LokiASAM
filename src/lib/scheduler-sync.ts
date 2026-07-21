@@ -103,7 +103,7 @@ export async function syncSchedulesToRust(): Promise<void> {
           port: server.port,
           queryPort: server.query_port,
           rconPort: server.rcon_port,
-          rconPassword: server.rcon_password,
+          rconPassword: server.admin_password,
           extraArgs,
           modIds,
           protonPath: protonPath ?? undefined,
@@ -181,6 +181,75 @@ export async function syncSchedulesToRust(): Promise<void> {
         configJson:   JSON.stringify({ intervalMs }),
         nextRunMs,
       });
+    }
+
+    // ── Per-server Auto-Update entries ──────────────────────────────────────
+    // Synthesized (not stored as `schedules` rows) from each server's
+    // update_automation_json, same pattern as the global-update-check entry
+    // above. Reuses the existing fully-graceful `fire_update` handler in
+    // scheduler.rs — countdown warning, SaveWorld+doexit, SteamCMD update,
+    // sync, conditional restart — the same safe-shutdown path manual updates
+    // already use. Only generated when there's actually an update available,
+    // so this never restarts a server just to find nothing changed.
+    if (steamcmdPath && baseDir) {
+      for (const server of servers) {
+        if (server.update_available !== 1) continue;
+        if (server.status === "updating" || server.status === "installing") continue;
+
+        let automation: { mode: "off" | "immediately" | "at_time"; update_time: string; restart_after_update: boolean; only_if_running: boolean };
+        try {
+          automation = { mode: "off", update_time: "03:00", restart_after_update: true, only_if_running: true, ...JSON.parse(server.update_automation_json || "{}") };
+        } catch {
+          continue;
+        }
+        if (automation.mode === "off") continue;
+
+        let nextRunMs: number | null = null;
+        if (automation.mode === "immediately") {
+          nextRunMs = Date.now() + 15_000;
+        } else if (automation.mode === "at_time") {
+          const [h, m] = automation.update_time.split(":").map(Number);
+          const cron = `${isNaN(m) ? 0 : m} ${isNaN(h) ? 3 : h} * * *`;
+          const next = getNextCronDate(cron);
+          nextRunMs = next ? next.getTime() : null;
+        }
+        if (nextRunMs === null) continue;
+
+        const map = ARK_MAPS.find((m) => m.id === server.map_id);
+        const mapPath = map?.mapPath ?? "TheIsland_WP";
+
+        entries.push({
+          scheduleId:    `update-auto-${server.id}`,
+          serverId:      server.id,
+          serverName:    server.name,
+          installPath:   server.install_path,
+          mapPath,
+          mapId:         server.map_id,
+          port:          server.port,
+          queryPort:     server.query_port,
+          rconPort:      server.rcon_port,
+          rconPassword:  server.admin_password,
+          extraArgs:     [],
+          modIds:        [],
+          protonPath:    protonPath ?? undefined,
+          prefixPath:    prefixPath ?? undefined,
+          steamcmdPath:  steamcmdPath ?? "",
+          baseDir:       baseDir ?? "",
+          backupDir:     backupDir ?? "",
+          scheduleType:  "update",
+          enabled:       true,
+          configJson: JSON.stringify({
+            broadcastWarning:    server.update_warn_players === 1,
+            warningMinutes:      server.update_warn_minutes ?? 5,
+            skipIfPlayersOnline: false,
+            restartAfterUpdate:  automation.restart_after_update,
+            onlyIfRunning:       automation.only_if_running,
+            message:             server.update_message || "Server going down for update in {time}.",
+            cancelMessage:       server.update_cancel_message || "Update has been canceled.",
+          }),
+          nextRunMs,
+        });
+      }
     }
 
     await tauriCmd.syncSchedules(entries);

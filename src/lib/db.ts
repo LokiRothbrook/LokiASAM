@@ -58,7 +58,6 @@ async function runMigrations(db: Database): Promise<void> {
     port                   INTEGER NOT NULL DEFAULT 7777,
     query_port             INTEGER NOT NULL DEFAULT 27015,
     rcon_port              INTEGER NOT NULL DEFAULT 27020,
-    rcon_password          TEXT NOT NULL DEFAULT '',
     max_players            INTEGER NOT NULL DEFAULT 70,
     server_password        TEXT,
     admin_password         TEXT NOT NULL DEFAULT '',
@@ -502,6 +501,58 @@ async function runMigrations(db: Database): Promise<void> {
     map_path     TEXT NOT NULL,
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // ── Migration 020: drop rcon_password — admin_password is now the single
+  // source of truth for both RCON auth and ServerAdminPassword. The two used
+  // to drift apart (rcon_password was set once at creation/import and never
+  // touched again), which silently broke RCON whenever the admin password
+  // changed. No data needs to be copied first: admin_password already holds
+  // the correct value for every server (set at creation/import from the real
+  // password), while rcon_password could be stale or, for imported servers, a
+  // random placeholder that never matched the real password at all.
+  try {
+    await db.execute("ALTER TABLE servers DROP COLUMN rcon_password");
+  } catch { /* already dropped, or pre-existing DB without the column */ }
+
+  // ── Migration 021: move custom mod sections from Game.ini to GameUserSettings.ini ──
+  // The Mod Settings editor used to write custom [ModName] sections into
+  // Game.ini, which most mods never actually read their config from — ASA mods
+  // read custom sections from GameUserSettings.ini. Move any previously-saved
+  // custom sections over so existing configs aren't silently ignored by mods.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_021_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const GAME_INI_STANDARD_SECTIONS = new Set(["/script/shootergame.shootergamemode"]);
+      type Row = { server_id: string; game_ini_json: string; game_user_settings_json: string };
+      const rows = await db.select<Row[]>(
+        "SELECT server_id, game_ini_json, game_user_settings_json FROM server_config"
+      );
+      for (const row of rows) {
+        try {
+          const gameIni = JSON.parse(row.game_ini_json ?? "{}") as Record<string, Record<string, string>>;
+          const gus = JSON.parse(row.game_user_settings_json ?? "{}") as Record<string, Record<string, string>>;
+          const customKeys = Object.keys(gameIni).filter(
+            (k) => !GAME_INI_STANDARD_SECTIONS.has(k.toLowerCase())
+          );
+          if (customKeys.length === 0) continue;
+
+          for (const key of customKeys) {
+            gus[key] = { ...(gus[key] ?? {}), ...gameIni[key] };
+            delete gameIni[key];
+          }
+          await db.execute(
+            "UPDATE server_config SET game_ini_json = ?, game_user_settings_json = ? WHERE server_id = ?",
+            [JSON.stringify(gameIni), JSON.stringify(gus), row.server_id]
+          );
+        } catch { /* skip malformed */ }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_021_done', 'true')"
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -516,9 +567,9 @@ export interface ServerRow {
   port: number;
   query_port: number;
   rcon_port: number;
-  rcon_password: string;
   max_players: number;
   server_password: string | null;
+  /** ServerAdminPassword — single source of truth for both the INI value and RCON auth. */
   admin_password: string;
   cluster_id: string | null;
   preset_id: string | null;
@@ -640,7 +691,6 @@ export interface CreateServerInput {
   port: number;
   queryPort: number;
   rconPort: number;
-  rconPassword: string;
   maxPlayers: number;
   saveFolderName?: string;
   serverPassword?: string;
@@ -654,9 +704,9 @@ export async function createServer(input: CreateServerInput): Promise<string> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO servers
-       (id, name, map_id, install_path, port, query_port, rcon_port, rcon_password,
+       (id, name, map_id, install_path, port, query_port, rcon_port,
         max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
     [
       input.id,
       input.name,
@@ -665,7 +715,6 @@ export async function createServer(input: CreateServerInput): Promise<string> {
       input.port,
       input.queryPort,
       input.rconPort,
-      input.rconPassword,
       input.maxPlayers,
       input.serverPassword ?? null,
       input.adminPassword,
@@ -675,6 +724,19 @@ export async function createServer(input: CreateServerInput): Promise<string> {
     ]
   );
   return input.id;
+}
+
+/**
+ * Update the stored ServerAdminPassword (used for both the INI value and RCON
+ * auth). Called whenever ConfigTab saves a config that changed
+ * ServerSettings.ServerAdminPassword, so the RCON connection never goes stale.
+ */
+export async function updateServerAdminPassword(id: string, adminPassword: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET admin_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [adminPassword, id]
+  );
 }
 
 /** Delete a server record and all its related config/mods/schedules (CASCADE). */

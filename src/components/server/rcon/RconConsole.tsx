@@ -164,13 +164,13 @@ export function RconConsole({ server }: Props) {
     setConnecting(true);
     setError(null);
     try {
-      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
+      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.admin_password);
       // State update comes via rcon://status/{id} event — no need to set here.
     } catch (e) {
       setError(String(e));
       setConnecting(false);
     }
-  }, [server.id, server.rcon_port, server.rcon_password]);
+  }, [server.id, server.rcon_port, server.admin_password]);
 
   // Sync initial connected state from Rust on mount (covers the case where
   // RconManager already connected before this tab was opened).

@@ -376,6 +376,143 @@ pub async fn get_process_stats(pid: u32, install_path: Option<String>) -> Result
     })
 }
 
+// ---------------------------------------------------------------------------
+// Centralized stats collection — batch counterpart to get_process_stats
+// ---------------------------------------------------------------------------
+//
+// The stats-recorder background task in lib.rs used to call get_process_stats
+// once per running server, every 5 s. Each call did its own full-system
+// sysinfo refresh AND (on Linux) its own full /proc cmdline scan — meaning N
+// running servers meant N independent full-system scans every tick, all doing
+// synchronous/blocking file I/O directly on the async runtime's worker
+// threads (no spawn_blocking). That's both wasted CPU that scales with total
+// system process count and a real risk of starving every other command
+// (including the Quit button) behind that blocking work.
+//
+// `collect_all_server_stats` replaces that with one refresh + one blocking
+// pass covering every running server, using a `System` that persists across
+// ticks (so CPU deltas come from the natural 5 s tick interval instead of an
+// artificial extra sleep-and-refresh), and caching each server's expensive
+// install-path PID discovery so it only re-scans /proc periodically instead
+// of every single tick.
+
+/// Per-server cache of install-path-matched "extra root" PIDs (Linux only —
+/// see get_process_stats' doc comment for why this scan exists). Rediscovery
+/// via a full /proc cmdline scan is the expensive part, so it's only redone
+/// every `REDISCOVERY_INTERVAL_TICKS` ticks; in between we just re-walk the
+/// subtree of the previously-found roots against the freshly refreshed
+/// snapshot, which touches no files and is effectively free.
+#[derive(Default)]
+pub struct PidDiscoveryCache {
+    extra_roots: Vec<sysinfo::Pid>,
+    ticks_since_scan: u32,
+}
+
+const REDISCOVERY_INTERVAL_TICKS: u32 = 6; // ~30 s at the stats recorder's 5 s cadence
+
+/// Compute CPU%/memory for every currently-running server in a single pass.
+///
+/// Synchronous and blocking (sysinfo refresh + procfs reads) — callers must
+/// run this inside `tokio::task::spawn_blocking`. `sys` and `discovery`
+/// should be owned by the caller and threaded through call to call so the
+/// System and the discovery cache persist across ticks.
+pub fn collect_all_server_stats(
+    sys: &mut sysinfo::System,
+    discovery: &mut std::collections::HashMap<String, PidDiscoveryCache>,
+    servers: &[(String, u32, String)], // (server_id, pid, install_path)
+) -> std::collections::HashMap<String, ProcessStats> {
+    use sysinfo::{Pid, ProcessesToUpdate};
+    use std::collections::HashSet;
+
+    // remove_dead_processes = true: unlike get_process_stats (which builds a
+    // fresh System per call), this System is long-lived across ticks, so
+    // dead PIDs must actually be pruned or they'd accumulate forever.
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    let mut out = std::collections::HashMap::new();
+
+    for (server_id, pid, install_path) in servers {
+        let root = Pid::from_u32(*pid);
+        let cache = discovery.entry(server_id.clone()).or_default();
+
+        #[cfg(target_os = "linux")]
+        {
+            let due_for_rescan = cache.ticks_since_scan == 0
+                || cache.ticks_since_scan >= REDISCOVERY_INTERVAL_TICKS;
+            if due_for_rescan && !install_path.is_empty() {
+                cache.extra_roots = super::utils::find_pids_by_install_path(install_path)
+                    .into_iter()
+                    .map(Pid::from_u32)
+                    .collect();
+                cache.ticks_since_scan = 1;
+            } else {
+                cache.ticks_since_scan += 1;
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = install_path;
+        }
+
+        // Rebuild the full PID set from the (possibly cached) roots against the
+        // freshly refreshed snapshot — cheap, no additional syscalls.
+        let mut all_pids: HashSet<Pid> = collect_subtree(sys, root).into_iter().collect();
+        for extra_root in &cache.extra_roots {
+            if all_pids.insert(*extra_root) {
+                for sp in collect_subtree(sys, *extra_root) {
+                    all_pids.insert(sp);
+                }
+            }
+        }
+
+        let root_alive = sys.process(root).is_some();
+        if !root_alive && !all_pids.iter().any(|p| sys.process(*p).is_some()) {
+            // Process genuinely gone this tick — skip it rather than failing
+            // the whole batch; the caller's own watchers handle crash/exit
+            // detection separately.
+            continue;
+        }
+
+        let mut total_cpu = 0.0f32;
+        let mut total_mem_bytes = 0u64;
+
+        for p in &all_pids {
+            if let Some(proc) = sys.process(*p) {
+                total_cpu += proc.cpu_usage();
+            }
+            #[cfg(target_os = "linux")]
+            if super::utils::is_process_leader(p.as_u32()) {
+                total_mem_bytes += super::utils::read_proc_pss_bytes(p.as_u32());
+            }
+            #[cfg(not(target_os = "linux"))]
+            if let Some(proc) = sys.process(*p) {
+                total_mem_bytes += proc.memory();
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        let cpu_percent = {
+            let cores = std::thread::available_parallelism()
+                .map(|n| n.get() as f32)
+                .unwrap_or(1.0);
+            total_cpu / cores
+        };
+        #[cfg(target_os = "windows")]
+        let cpu_percent = total_cpu;
+
+        out.insert(
+            server_id.clone(),
+            ProcessStats {
+                cpu_percent,
+                memory_mb: total_mem_bytes as f32 / 1_048_576.0,
+                pid: *pid,
+            },
+        );
+    }
+
+    out
+}
+
 /// Send a Source Query UDP A2S_INFO packet to a game server and parse the response.
 ///
 /// Used to get live player count, map name, and version without requiring RCON.

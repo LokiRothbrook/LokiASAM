@@ -274,7 +274,7 @@ export function ServerCard({ server }: Props) {
       await tauriCmd.gracefulStopServer(
         server.id,
         server.rcon_port,
-        server.rcon_password,
+        server.admin_password,
         server.shutdown_warn_players !== 0,
         server.shutdown_warn_minutes ?? 5,
         server.shutdown_message || "Server will shut down in {time}.",
@@ -304,7 +304,7 @@ export function ServerCard({ server }: Props) {
         serverId:      server.id,
         warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
         rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
+        rconPassword:  server.admin_password,
         message:       server.restart_message || "Server restarting in {time}.",
         cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
         startParams,
@@ -349,7 +349,7 @@ export function ServerCard({ server }: Props) {
         serverName:    server.name,
         warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
         rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
+        rconPassword:  server.admin_password,
         message:       server.update_message || "Server going down for update in {time}.",
         cancelMessage: server.update_cancel_message || "Update has been canceled.",
         installPath:   server.install_path,
@@ -371,9 +371,17 @@ export function ServerCard({ server }: Props) {
           server.install_path,
           wasRunning,
           restartAfterUpdate,
-          (msg) => toast.info(msg),
           server.rcon_port,
-          server.rcon_password,
+          server.admin_password,
+          {
+            // This branch only runs when the warn-players countdown path above
+            // wasn't taken (warn disabled, or server wasn't running) — still
+            // always saves the world and shuts down cleanly via RCON either way.
+            warnPlayers: false,
+            warnMinutes: server.update_warn_minutes ?? 5,
+            warnMessage: server.update_message || "Server going down for update in {time}.",
+          },
+          (msg) => toast.info(msg),
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {

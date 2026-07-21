@@ -516,6 +516,13 @@ export default function DashboardPage() {
             server.install_path,
             wasRunning,
             restartAfterUpdate,
+            server.rcon_port,
+            server.admin_password,
+            {
+              warnPlayers: server.update_warn_players !== 0,
+              warnMinutes: server.update_warn_minutes ?? 5,
+              warnMessage: server.update_message || "Server going down for update in {time}.",
+            },
             (msg) => toast.info(msg, { id: `update-${server.id}` }),
           );
         } catch (err) {

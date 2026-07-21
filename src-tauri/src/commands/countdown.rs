@@ -418,6 +418,11 @@ pub async fn start_graceful_update(
             "updateApplied": true,
             "serverId": params.server_id,
         }));
+        if let Some(db_path) = state2.get_db_path() {
+            if let Ok(conn) = crate::db::open(&db_path) {
+                crate::db::clear_update_available(&conn, &params.server_id);
+            }
+        }
 
         // Restart if requested and we have start params.
         if params.restart_after {

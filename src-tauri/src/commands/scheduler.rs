@@ -231,6 +231,11 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
     let skip_if_players = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
     let restart_after   = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
+    // When false, restart_after applies even if the server was stopped before
+    // the update (used by per-server Auto-Update automation's "Only restart if
+    // server was already running" toggle — unchecked means "always end up
+    // running after an update").
+    let only_if_running = cfg["onlyIfRunning"].as_bool().unwrap_or(true);
     let message         = cfg["message"].as_str().unwrap_or("Server going down for update in {time}.").to_string();
     let cancel_msg      = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
 
@@ -326,8 +331,18 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         "serverId": entry.server_id,
     }));
 
-    // Restart if requested and server was running.
-    if restart_after && is_running {
+    // Clear the per-server update flag — otherwise the UI keeps showing
+    // "Update Available" and, for "immediately" mode, the next scheduler
+    // sync would generate this same auto-update entry all over again.
+    if let Some(db_path) = app.state::<AppState>().get_db_path() {
+        if let Ok(conn) = crate::db::open(&db_path) {
+            crate::db::clear_update_available(&conn, &entry.server_id);
+        }
+    }
+
+    // Restart if requested — either the server was already running, or the
+    // schedule says to bring it up regardless (only_if_running = false).
+    if restart_after && (is_running || !only_if_running) {
         let params = entry_to_start_params(entry);
         inner_start_server(app.clone(), params).await.map(|_| ())?;
     }

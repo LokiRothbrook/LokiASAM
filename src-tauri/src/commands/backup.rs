@@ -333,11 +333,17 @@ fn compress_to_7z_with_entries(
 // Cleanup: delete ARK's own auto-generated backup files
 // ---------------------------------------------------------------------------
 
-/// Delete ARK's own auto-generated rolling copies from SavedArks/{mapPath}:
+/// Delete ARK's own auto-generated rolling copies from SavedArks/{saveFolder}:
 ///   - `{mapPath}_*.ark`    — ARK's own timestamped world-save backups
 ///   - `{mapPath}_*.arkrbf` — ASA rollback files
 ///   - `*.profilebak`       — ARK player-profile backups
 ///   - `*.tribebak`         — ARK tribe backups
+///
+/// `save_folder` is the real on-disk SavedArks subfolder name (see
+/// `ArkMap.saveFolder` in game-data.ts) — for almost every map this equals
+/// `map_path`, but they diverge for Club ARK. The file-name prefix inside the
+/// folder always uses `map_path` regardless (ASA keeps the `_WP` suffix there
+/// even when the folder itself drops it).
 ///
 /// Never touches the live `{mapPath}.ark`, `_AntiCorruptionBackup.bak`,
 /// `*.arkprofile`, or `*.arktribe` files.
@@ -347,12 +353,13 @@ fn compress_to_7z_with_entries(
 pub async fn cleanup_ark_own_backups(
     install_path: String,
     map_path: String,
+    save_folder: String,
 ) -> Result<u32, String> {
     let saved_dir = PathBuf::from(&install_path)
         .join("ShooterGame")
         .join("Saved")
         .join("SavedArks")
-        .join(&map_path);
+        .join(&save_folder);
 
     if !saved_dir.exists() {
         return Ok(0);
@@ -394,9 +401,13 @@ pub async fn cleanup_ark_own_backups(
 /// Inner implementation callable from both the Tauri command and the Rust
 /// backup_manager tick handler (which cannot use State<'_> wrappers).
 ///
+/// `map_path` is the launch/CLI map name, used for the SaveGames archive-internal
+/// naming convention (LokiASAM's own symlink structure). `save_folder` is the
+/// real on-disk `SavedArks/{X}` subfolder name — identical to `map_path` for
+/// almost every map, but diverges for Club ARK (see `ArkMap.saveFolder`).
 /// `skip_world_save`: pass `true` when the caller has already issued SaveWorld.
 /// `base_dir`: when non-empty, resolves the canonical save path
-///   `{base_dir}/Saves/{server_id}/SavedArks/{map_path}` instead of following
+///   `{base_dir}/Saves/{server_id}/SavedArks/{save_folder}` instead of following
 ///   the SavedArks symlink inside the install directory.
 pub async fn create_server_backup_inner(
     app: &AppHandle,
@@ -404,6 +415,7 @@ pub async fn create_server_backup_inner(
     server_name: &str,
     install_path: &str,
     map_path: &str,
+    save_folder: &str,
     map_id: &str,
     backup_dir: &str,
     triggered_by: &str,
@@ -412,7 +424,7 @@ pub async fn create_server_backup_inner(
     skip_world_save: bool,
     base_dir: &str,
 ) -> Result<BackupRecord, String> {
-    create_server_backup_impl(app, server_id, server_name, install_path, map_path, map_id, backup_dir, triggered_by, tier, pool, skip_world_save, base_dir).await
+    create_server_backup_impl(app, server_id, server_name, install_path, map_path, save_folder, map_id, backup_dir, triggered_by, tier, pool, skip_world_save, base_dir).await
 }
 
 /// Tauri command: exposed to the frontend for manual/UI-triggered backups.
@@ -423,6 +435,7 @@ pub async fn create_server_backup(
     server_name: String,
     install_path: String,
     map_path: String,
+    save_folder: String,
     map_id: String,
     backup_dir: String,
     triggered_by: String,
@@ -430,7 +443,7 @@ pub async fn create_server_backup(
     base_dir: String,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
-    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by, &tier, &pool, false, &base_dir).await;
+    let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &save_folder, &map_id, &backup_dir, &triggered_by, &tier, &pool, false, &base_dir).await;
     if let Ok(ref rec) = result {
         let size = fmt_size(rec.file_size_bytes);
         crate::commands::notifications::dispatch_notification(
@@ -447,6 +460,7 @@ async fn create_server_backup_impl(
     server_name: &str,
     install_path: &str,
     map_path: &str,
+    save_folder: &str,
     map_id: &str,
     backup_dir: &str,
     triggered_by: &str,
@@ -472,9 +486,9 @@ async fn create_server_backup_impl(
 
     // Use canonical path when base_dir is known, otherwise fall back to following the symlink.
     let saved_arks = if !base_dir.is_empty() {
-        PathBuf::from(base_dir).join("saves").join(server_id).join("SavedArks").join(map_path)
+        PathBuf::from(base_dir).join("saves").join(server_id).join("SavedArks").join(save_folder)
     } else {
-        PathBuf::from(&install_path).join("ShooterGame").join("Saved").join("SavedArks").join(map_path)
+        PathBuf::from(&install_path).join("ShooterGame").join("Saved").join("SavedArks").join(save_folder)
     };
     let save_games = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SaveGames");
@@ -511,7 +525,7 @@ async fn create_server_backup_impl(
         // Fresh cleanup and enumeration on every attempt so each retry gets a
         // stable snapshot after ASA has finished writing.
         emit_progress(&app, &server_id, 2.0, "", "Cleaning ARK backups…");
-        let _ = cleanup_ark_own_backups(install_path.to_string(), map_path.to_string()).await;
+        let _ = cleanup_ark_own_backups(install_path.to_string(), map_path.to_string(), save_folder.to_string()).await;
 
         let mut all_files: Vec<PathBuf> = Vec::new();
         if saved_arks.exists() {
@@ -521,7 +535,11 @@ async fn create_server_backup_impl(
             collect_files(&save_games, &mut all_files).map_err(|e| e.to_string())?;
         }
         if all_files.is_empty() {
-            return Err("No save files found to back up".to_string());
+            // Transient (server just started, hasn't autosaved yet) rather than a
+            // permanent condition — let the retry loop below give ASA more time
+            // instead of failing outright on the very first empty snapshot.
+            last_error = "No save files found to back up".to_string();
+            continue;
         }
 
         // Build entries with custom names for SaveGames files to include map path
@@ -601,19 +619,23 @@ async fn create_server_backup_impl(
 
 /// Inner implementation for all-players backup — callable from both the Tauri
 /// command and the Rust backup_manager tick handler.
+///
+/// `save_folder` is the real on-disk `SavedArks/{X}` subfolder name — identical
+/// to the launch map path for almost every map, but diverges for Club ARK
+/// (see `ArkMap.saveFolder` in game-data.ts).
 pub async fn backup_all_players_inner(
     app: &AppHandle,
     server_id: &str,
     server_name: &str,
     install_path: &str,
-    map_path: &str,
+    save_folder: &str,
     map_id: &str,
     backup_dir: &str,
     triggered_by: &str,
 ) -> Result<Vec<BackupRecord>, String> {
     let saved_dir = PathBuf::from(install_path)
         .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(map_path);
+        .join("SavedArks").join(save_folder);
 
     if !saved_dir.exists() {
         return Ok(vec![]);
@@ -638,7 +660,7 @@ pub async fn backup_all_players_inner(
             server_id,
             server_name,
             install_path,
-            map_path,
+            save_folder,
             map_id,
             backup_dir,
             eos_id,
@@ -659,12 +681,12 @@ pub async fn backup_all_players(
     server_id: String,
     server_name: String,
     install_path: String,
-    map_path: String,
+    save_folder: String,
     map_id: String,
     backup_dir: String,
     triggered_by: String,
 ) -> Result<Vec<BackupRecord>, String> {
-    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &map_path, &map_id, &backup_dir, &triggered_by).await;
+    let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &save_folder, &map_id, &backup_dir, &triggered_by).await;
     if let Ok(ref recs) = result {
         let count = recs.len();
         if count > 0 {
@@ -682,12 +704,15 @@ pub async fn backup_all_players(
 // ---------------------------------------------------------------------------
 
 /// Inner implementation for single-player backup — callable without Tauri State wrappers.
+/// `save_folder` is the real on-disk `SavedArks/{X}` subfolder name — identical
+/// to the launch map path for almost every map, but diverges for Club ARK
+/// (see `ArkMap.saveFolder` in game-data.ts).
 pub async fn create_player_backup_inner(
     app: &AppHandle,
     server_id: &str,
     server_name: &str,
     install_path: &str,
-    map_path: &str,
+    save_folder: &str,
     map_id: &str,
     backup_dir: &str,
     eos_id: &str,
@@ -697,7 +722,7 @@ pub async fn create_player_backup_inner(
 ) -> Result<BackupRecord, String> {
     let profile_file = PathBuf::from(install_path)
         .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(map_path)
+        .join("SavedArks").join(save_folder)
         .join(format!("{eos_id}.arkprofile"));
 
     if !profile_file.exists() {
@@ -760,7 +785,7 @@ pub async fn create_player_backup(
     server_id: String,
     server_name: String,
     install_path: String,
-    map_path: String,
+    save_folder: String,
     map_id: String,
     backup_dir: String,
     eos_id: String,
@@ -769,7 +794,7 @@ pub async fn create_player_backup(
     tier: String,
 ) -> Result<BackupRecord, String> {
     let result = create_player_backup_inner(
-        &app, &server_id, &server_name, &install_path, &map_path,
+        &app, &server_id, &server_name, &install_path, &save_folder,
         &map_id, &backup_dir, &eos_id, &player_name, &triggered_by, &tier,
     ).await;
     if let Ok(ref rec) = result {
@@ -806,13 +831,11 @@ pub async fn create_ini_backup(
     install_path: String,
     backup_dir: String,
 ) -> Result<IniBackupRecord, String> {
-    #[cfg(target_os = "windows")]
-    let platform = "WindowsServer";
-    #[cfg(not(target_os = "windows"))]
-    let platform = "LinuxServer";
-
+    // ASA ships only a Windows dedicated server binary. On Linux it runs under
+    // Proton/Wine, so the server process always writes its config to the
+    // WindowsServer subfolder regardless of the host OS running LokiASAM.
     let config_dir = PathBuf::from(&install_path)
-        .join("ShooterGame").join("Saved").join("Config").join(platform);
+        .join("ShooterGame").join("Saved").join("Config").join("WindowsServer");
 
     let ini_files = ["GameUserSettings.ini", "Game.ini"];
     let sources: Vec<PathBuf> = ini_files.iter()
@@ -995,18 +1018,20 @@ pub async fn create_mods_saves_link(
 /// - `"full"`    — delete all save files (world + characters + tribe + mod saves).
 ///
 /// `SavedArks` is a symlink to the canonical save directory, so all tiers operate
-/// on the real data transparently. `map_path` is the map folder name (e.g. `TheIsland_WP`).
+/// on the real data transparently. `save_folder` is the real on-disk SavedArks
+/// subfolder name (e.g. `TheIsland_WP` — identical to the launch map path for
+/// almost every map, but diverges for Club ARK; see `ArkMap.saveFolder`).
 ///
 /// The server MUST NOT be running when this is called (enforced on the frontend).
 #[tauri::command]
 pub async fn wipe_server_saves(
     install_path: String,
-    map_path: String,
+    save_folder: String,
     tier: String,
 ) -> Result<(), String> {
     let saves_root = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SavedArks")
-        .join(&map_path);
+        .join(&save_folder);
 
     if !saves_root.exists() {
         return Ok(());
@@ -1059,26 +1084,29 @@ pub async fn wipe_server_saves(
 
 /// Copy the save data for a specific map from one server to another.
 ///
-/// Source: `{base_dir}/Saves/{source_server_id}/SavedArks/{map_path}/`
-/// Target: `{base_dir}/Saves/{target_server_id}/SavedArks/{map_path}/`
+/// Source: `{base_dir}/Saves/{source_server_id}/SavedArks/{save_folder}/`
+/// Target: `{base_dir}/Saves/{target_server_id}/SavedArks/{save_folder}/`
 ///
-/// The target map subfolder is cleared before the copy so the result is an
-/// exact mirror of the source. Both servers must be stopped before calling this.
+/// `save_folder` is the real on-disk SavedArks subfolder name — identical to
+/// the launch map path for almost every map, but diverges for Club ARK (see
+/// `ArkMap.saveFolder`). The target map subfolder is cleared before the copy
+/// so the result is an exact mirror of the source. Both servers must be
+/// stopped before calling this.
 #[tauri::command]
 pub async fn import_server_saves(
     source_server_id: String,
     target_server_id: String,
     base_dir: String,
-    map_path: String,
+    save_folder: String,
 ) -> Result<(), String> {
     if source_server_id == target_server_id {
         return Err("Source and target server must be different".to_string());
     }
 
     let source = PathBuf::from(&base_dir)
-        .join("saves").join(&source_server_id).join("SavedArks").join(&map_path);
+        .join("saves").join(&source_server_id).join("SavedArks").join(&save_folder);
     let target = PathBuf::from(&base_dir)
-        .join("saves").join(&target_server_id).join("SavedArks").join(&map_path);
+        .join("saves").join(&target_server_id).join("SavedArks").join(&save_folder);
 
     if !source.exists() {
         return Err(format!("Source save directory does not exist: {}", source.display()));
@@ -1221,8 +1249,14 @@ pub async fn create_full_backup(
 
 /// Restore a Server backup: extract 7z to correct canonical locations and recreate symlinks.
 /// Archive structure:
-///   SavedArks/{map_path}/... → restored to {install_path}/ShooterGame/Saved/SavedArks/{map_path}/
+///   SavedArks/{save_folder}/... → restored to {install_path}/ShooterGame/Saved/SavedArks/{save_folder}/
 ///   Mods/{map_path}/SaveGames/... → restored to {base_dir}/Saves/{server_id}/Mods/{map_path}/SaveGames/
+///
+/// `save_folder` is the real on-disk SavedArks subfolder name — identical to
+/// `map_path` for almost every map, but diverges for Club ARK (see
+/// `ArkMap.saveFolder` in game-data.ts). The archive's internal SavedArks
+/// entries were written using `save_folder` too (create_server_backup_impl
+/// reads from the real folder), so both sides must agree here.
 #[tauri::command]
 pub async fn restore_server_backup(
     app: AppHandle,
@@ -1231,6 +1265,7 @@ pub async fn restore_server_backup(
     install_path: String,
     base_dir: String,
     map_path: String,
+    save_folder: String,
 ) -> Result<(), String> {
     use std::fs;
 
@@ -1241,7 +1276,7 @@ pub async fn restore_server_backup(
 
     // Step 1: Clear existing save locations
     emit_progress(&app, &server_id, 10.0, "", "Clearing existing saves…");
-    let saved_arks_path = PathBuf::from(&base_dir).join("saves").join(&server_id).join("SavedArks").join(&map_path);
+    let saved_arks_path = PathBuf::from(&base_dir).join("saves").join(&server_id).join("SavedArks").join(&save_folder);
     if saved_arks_path.exists() {
         fs::remove_dir_all(&saved_arks_path).map_err(|e| format!("Failed to clear SavedArks: {e}"))?;
     }
@@ -1266,7 +1301,7 @@ pub async fn restore_server_backup(
     emit_progress(&app, &server_id, 50.0, "", "Moving files to correct locations…");
 
     // Process SavedArks files
-    let temp_saved_arks = temp_dir.join("SavedArks").join(&map_path);
+    let temp_saved_arks = temp_dir.join("SavedArks").join(&save_folder);
     if temp_saved_arks.exists() {
         fs::create_dir_all(&saved_arks_path).map_err(|e| e.to_string())?;
         copy_dir_recursive(&temp_saved_arks, &saved_arks_path).map_err(|e| e.to_string())?;
@@ -1310,32 +1345,37 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Restore a Player backup: extract 7z into SavedArks/{mapPath}.
+/// Restore a Player backup: extract 7z into SavedArks/{save_folder}.
+/// `save_folder` is the real on-disk SavedArks subfolder name — identical to
+/// the launch map path for almost every map, but diverges for Club ARK.
 #[tauri::command]
 pub async fn restore_player_backup(
     app: AppHandle,
     server_id: String,
     backup_file_path: String,
     install_path: String,
-    map_path: String,
+    save_folder: String,
 ) -> Result<(), String> {
     let target = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved")
-        .join("SavedArks").join(&map_path);
+        .join("SavedArks").join(&save_folder);
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     extract_7z_with_progress(&app, &server_id, &backup_file_path, &target, "Restoring player backup…").await
 }
 
 /// Restore an INI backup from a snapshot folder.
+///
+/// Always restores into the WindowsServer config subfolder — ASA ships only a
+/// Windows dedicated server binary, so that's what the server process reads
+/// regardless of the host OS running LokiASAM (see config.rs::config_dir).
 #[tauri::command]
 pub async fn restore_ini_backup(
     backup_folder_path: String,
     install_path: String,
-    platform: String,
 ) -> Result<(), String> {
     let src_dir = PathBuf::from(&backup_folder_path);
     let dst_dir = PathBuf::from(&install_path)
-        .join("ShooterGame").join("Saved").join("Config").join(&platform);
+        .join("ShooterGame").join("Saved").join("Config").join("WindowsServer");
 
     fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
 

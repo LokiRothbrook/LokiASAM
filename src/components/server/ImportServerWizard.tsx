@@ -137,11 +137,14 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
   const handleImport = async () => {
     if (!name.trim()) { toast.error("Server name is required."); return; }
     if (await isServerNameTaken(name.trim())) { toast.error("A server with that name already exists."); return; }
+    // adminPass is now the only password used for RCON auth too — it must match
+    // whatever ServerAdminPassword the imported INI actually has, or RCON will
+    // never authenticate.
+    if (!adminPass.trim()) { toast.error("Admin password is required — it's also used to connect via RCON."); return; }
 
     setSaving(true);
     try {
       const id = crypto.randomUUID();
-      const rconPassword = crypto.randomUUID().slice(0, 12);
 
       await createServer({
         id,
@@ -151,7 +154,6 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         port: parseInt(port) || 7777,
         queryPort: parseInt(queryPort) || 27015,
         rconPort: parseInt(rconPort) || 27020,
-        rconPassword,
         maxPlayers: parseInt(maxPlayers) || 70,
         serverPassword: serverPass.trim() || undefined,
         adminPassword: adminPass.trim(),

@@ -36,7 +36,7 @@ export function RconManager() {
     getServers().then((servers) => {
       for (const s of servers) {
         if (s.status === "running") {
-          connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+          connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
         }
       }
     }).catch(() => null);
@@ -45,10 +45,10 @@ export function RconManager() {
   // ── React immediately when a server becomes "running" ─────────────────────
   useTauriEvent<ServerStatus>("server://any-change", (payload) => {
     if (payload.status === "running") {
-      // Fetch the server row to get rcon_port and rcon_password.
+      // Fetch the server row to get rcon_port and admin_password.
       getServers().then((servers) => {
         const s = servers.find((srv) => srv.id === payload.serverId);
-        if (s) connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+        if (s) connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
       }).catch(() => null);
     }
 
@@ -64,7 +64,7 @@ export function RconManager() {
     getServers().then((servers) => {
       const s = servers.find((srv) => srv.id === payload.serverId);
       if (s && s.status === "running") {
-        connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+        connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
       }
     }).catch(() => null);
   });
@@ -77,7 +77,7 @@ export function RconManager() {
         if (s.status !== "running") continue;
         const connected = await tauriCmd.rconIsConnected(s.id).catch(() => false);
         if (!connected) {
-          connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+          connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
         }
       }
     }, SAFETY_NET_MS);

@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { tauriCmd } from "@/lib/tauri-commands";
-import { ARK_MAPS } from "@/data/game-data";
+import { ARK_MAPS, getSaveFolder } from "@/data/game-data";
 import {
   deleteServerRecord,
   createServer,
@@ -299,7 +299,6 @@ function CloneDialog({
         port,
         queryPort,
         rconPort,
-        rconPassword: server.rcon_password,
         maxPlayers: server.max_players,
         serverPassword: server.server_password ?? undefined,
         adminPassword: server.admin_password,
@@ -456,12 +455,15 @@ export function ServerActionMenu({ server }: Props) {
       const backupDir = await getAppSetting("backup_dir");
       if (!backupDir) { toast.error("Backup directory not configured. Check Settings."); return; }
 
-      const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+      const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
+      const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
+      const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
       const record: BackupRecord = await tauriCmd.createServerBackup(
         server.id,
         server.name,
         server.install_path,
         mapPath,
+        saveFolder,
         server.map_id,
         backupDir,
         "manual",

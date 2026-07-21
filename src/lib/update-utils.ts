@@ -158,9 +158,19 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
 
 // ── Single-server update apply ────────────────────────────────────────────────
 
+/** In-game warning to broadcast (if enabled) before a stop triggered by an update. */
+export interface UpdateShutdownWarn {
+  warnPlayers: boolean;
+  warnMinutes: number;
+  warnMessage: string;
+}
+
 /**
  * Apply the cached update to a single server:
- *   1. Stop the server if it is running.
+ *   1. Stop the server if it is running — always via graceful_stop_server, which
+ *      always issues SaveWorld + doexit over RCON first (same safe-shutdown path
+ *      the Stop button uses), and additionally broadcasts a countdown warning to
+ *      players when `shutdownWarn.warnPlayers` is set. This never force-kills.
  *   2. Apply the shared cache to the server's install directory.
  *   3. Restart the server if it was running AND restartAfterUpdate is true.
  *   4. Clear the update_available flag.
@@ -175,9 +185,10 @@ export async function applyUpdateToServer(
   installPath: string,
   wasRunning: boolean,
   restartAfterUpdate: boolean,
+  rconPort: number,
+  rconPassword: string,
+  shutdownWarn: UpdateShutdownWarn,
   onStatusChange?: (msg: string) => void,
-  rconPort?: number,
-  rconPassword?: string,
 ): Promise<void> {
   const [cacheBase, steamcmdPath] = await Promise.all([
     getAppSetting("base_dir"),
@@ -200,12 +211,10 @@ export async function applyUpdateToServer(
   try {
     if (wasRunning) {
       onStatusChange?.("Stopping server…");
-      if (rconPort !== undefined && rconPassword !== undefined) {
-        await tauriCmd.gracefulStopServer(serverId, rconPort, rconPassword, false, 0, "");
-      } else {
-        await tauriCmd.stopServer(serverId, false);
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+      await tauriCmd.gracefulStopServer(
+        serverId, rconPort, rconPassword,
+        shutdownWarn.warnPlayers, shutdownWarn.warnMinutes, shutdownWarn.warnMessage,
+      );
     }
 
     onStatusChange?.("Applying update…");

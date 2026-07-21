@@ -868,6 +868,7 @@ const AUTO_CHECK_OPTIONS = [
 
 function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void }) {
   const asaCacheOpLabel = useAppStore((s) => s.asaCacheOpLabel);
+  const enqueueStartup = useAppStore((s) => s.enqueueStartup);
   const [checking, setChecking]       = useState(false);
   const [cachedBuild, setCached]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
@@ -954,26 +955,36 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
       const servers = await getServers();
       const outdated = servers.filter((s) => s.update_available === 1);
       for (const server of outdated) {
+        const wasRunning = server.status === "running";
         try {
           await applyUpdateToServer(
             server.id,
             server.name,
             server.install_path,
-            server.status === "running",
-            false,
+            wasRunning,
+            true, // dialog promises running servers are restarted after the update
+            server.rcon_port,
+            server.admin_password,
+            {
+              warnPlayers: server.update_warn_players === 1,
+              warnMinutes: server.update_warn_minutes ?? 5,
+              warnMessage: server.update_message || "Server going down for update in {time}.",
+            },
           );
         } catch (err) {
           // restartNeeded signal — server updated successfully, restart handled inside.
-          if (!(err && typeof err === "object" && "restartNeeded" in err)) {
-            await dispatchNotification({
-              eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
-              serverId:   server.id,
-              serverName: server.name,
-              title:      `${server.name} Update Failed`,
-              body:       `Failed to update ${server.name}: ${err}`,
-              severity:   "error",
-            });
+          if (err && typeof err === "object" && "restartNeeded" in err) {
+            enqueueStartup([server.id]);
+            continue;
           }
+          await dispatchNotification({
+            eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+            serverId:   server.id,
+            serverName: server.name,
+            title:      `${server.name} Update Failed`,
+            body:       `Failed to update ${server.name}: ${err}`,
+            severity:   "error",
+          });
         }
       }
       await dispatchNotification({

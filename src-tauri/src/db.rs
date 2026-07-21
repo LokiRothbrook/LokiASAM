@@ -124,6 +124,16 @@ pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
     .unwrap_or_default()
 }
 
+/// Clear the update_available flag after a scheduled update has been applied,
+/// so the UI stops showing "Update Available" and the auto-update scheduler
+/// (which only fires while this flag is set) doesn't keep re-firing.
+pub fn clear_update_available(conn: &Connection, server_id: &str) {
+    let _ = conn.execute(
+        "UPDATE servers SET update_available = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        [server_id],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // schedules
 // ---------------------------------------------------------------------------

@@ -62,6 +62,19 @@ fn map_id_to_path(map_id: &str) -> &'static str {
     }
 }
 
+/// Real on-disk `SavedArks/{X}` subfolder name for a map, when it differs from
+/// the launch/CLI map path returned by `map_id_to_path`. Club ARK (Bob's
+/// Missions) is the one known case: it launches as `BobsMissions_WP` and its
+/// save files keep that `_WP` prefix, but ASA creates the folder itself as
+/// just `SavedArks/BobsMissions/` (no `_WP`). Mirrors `saveFolder` on
+/// `ArkMap` in game-data.ts — keep both in sync.
+fn map_id_to_save_folder(map_id: &str) -> &'static str {
+    match map_id {
+        "clubark" => "BobsMissions",
+        _         => map_id_to_path(map_id),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tier configuration
 // ---------------------------------------------------------------------------
@@ -387,7 +400,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         _ => return,
     };
 
-    let map_path = map_id_to_path(&server.map_id);
+    let save_folder = map_id_to_save_folder(&server.map_id);
 
     // Create the archive (eos_id used as player_name for the filename).
     let rec = match create_player_backup_inner(
@@ -395,7 +408,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         server_id,
         &server.name,
         &server.install_path,
-        map_path,
+        save_folder,
         &server.map_id,
         &backup_dir,
         eos_id,
@@ -491,6 +504,7 @@ pub async fn execute_tick(app: &AppHandle) {
 
         let schedules = db::get_server_schedules(&conn, &server.id);
         let map_path = map_id_to_path(&server.map_id);
+        let save_folder = map_id_to_save_folder(&server.map_id);
 
         // Parse both schedule configs up front so we can decide whether a
         // world save is needed before starting either backup.
@@ -529,6 +543,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     &server.name,
                     &server.install_path,
                     map_path,
+                    save_folder,
                     &server.map_id,
                     &backup_dir,
                     "schedule",
@@ -561,7 +576,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     &server.id,
                     &server.name,
                     &server.install_path,
-                    map_path,
+                    save_folder,
                     &server.map_id,
                     &backup_dir,
                     "schedule",

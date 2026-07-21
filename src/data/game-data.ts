@@ -56,6 +56,21 @@ export interface ArkMap {
    * map is selected — the user cannot remove it without changing the map.
    */
   requiredModId?: string;
+  /**
+   * Real on-disk `SavedArks/{X}` subfolder name, when it differs from `mapPath`.
+   * Almost every map uses the same string for the launch arg, the SavedArks
+   * folder name, and file-name prefixes inside it. Club ARK (Bob's Missions) is
+   * the one known exception: it launches as `BobsMissions_WP` and its save files
+   * keep that `_WP` prefix, but ASA creates the folder itself as just
+   * `SavedArks/BobsMissions/` (no `_WP`). Omit this field for every normal map —
+   * callers should fall back to `mapPath` via `getSaveFolder()`.
+   */
+  saveFolder?: string;
+}
+
+/** Real on-disk SavedArks subfolder name for a map — see ArkMap.saveFolder. */
+export function getSaveFolder(map: Pick<ArkMap, "mapPath" | "saveFolder">): string {
+  return map.saveFolder ?? map.mapPath;
 }
 
 /**
@@ -242,6 +257,10 @@ export const ARK_MAPS: ArkMap[] = [
     id: "clubark",
     displayName: "Club ARK",
     mapPath: "BobsMissions_WP",
+    // ASA creates the on-disk save folder as "BobsMissions" (no _WP suffix),
+    // even though the map launches as BobsMissions_WP and its save files keep
+    // the _WP prefix (e.g. SavedArks/BobsMissions/BobsMissions_WP.ark).
+    saveFolder: "BobsMissions",
     isOfficial: false,
     dlcRequired: false,
     released: true,

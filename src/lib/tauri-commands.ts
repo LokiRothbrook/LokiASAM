@@ -528,31 +528,39 @@ export const tauriCmd = {
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
 
   // Backups
+  //
+  // `mapPath` is the launch/CLI map name (e.g. TheIsland_WP) — used for the
+  // Mods/{mapPath}/SaveGames archive convention, which is LokiASAM's own
+  // internal structure and never needs to change.
+  // `saveFolder` is the real on-disk SavedArks subfolder name — identical to
+  // mapPath for almost every map, except Club ARK (see getSaveFolder() /
+  // ArkMap.saveFolder in game-data.ts). Always compute it via getSaveFolder().
+
   /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
   createServerBackup: (
-    serverId: string, serverName: string, installPath: string, mapPath: string,
+    serverId: string, serverName: string, installPath: string, mapPath: string, saveFolder: string,
     mapId: string, backupDir: string, triggeredBy: string, tier = "", baseDir = "",
-  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier, baseDir }),
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, saveFolder, mapId, backupDir, triggeredBy, tier, baseDir }),
 
   /** Player backup: 7z a single .arkprofile file. */
   createPlayerBackup: (
-    serverId: string, serverName: string, installPath: string, mapPath: string,
+    serverId: string, serverName: string, installPath: string, saveFolder: string,
     mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string, tier = "",
-  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
+  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, saveFolder, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
 
-  /** Back up every .arkprofile in SavedArks/{mapPath}/ in one call. */
+  /** Back up every .arkprofile in SavedArks/{saveFolder}/ in one call. */
   backupAllPlayers: (
-    serverId: string, serverName: string, installPath: string, mapPath: string,
+    serverId: string, serverName: string, installPath: string, saveFolder: string,
     mapId: string, backupDir: string, triggeredBy: string,
-  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy }),
+  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, saveFolder, mapId, backupDir, triggeredBy }),
 
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
   createIniBackup: (serverId: string, installPath: string, backupDir: string) =>
     invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir }),
   /** Wipe server save files. tier: "map" | "players" | "full". Server must be stopped.
-   *  mapPath is the map folder name (e.g. TheIsland_WP). */
-  wipeServerSaves: (installPath: string, mapPath: string, tier: "map" | "players" | "full") =>
-    invoke<void>("wipe_server_saves", { installPath, mapPath, tier }),
+   *  saveFolder is the real on-disk SavedArks folder name (e.g. TheIsland_WP). */
+  wipeServerSaves: (installPath: string, saveFolder: string, tier: "map" | "players" | "full") =>
+    invoke<void>("wipe_server_saves", { installPath, saveFolder, tier }),
   /** Create a symlink (Linux) or NTFS junction (Windows) so that
    *  {installPath}/ShooterGame/Saved/SavedArks → {baseDir}/Saves/{serverId}/SavedArks */
   createSaveLink: (installPath: string, serverId: string, baseDir: string) =>
@@ -562,8 +570,8 @@ export const tauriCmd = {
   createModsSavesLink: (installPath: string, serverId: string, baseDir: string, mapPath: string) =>
     invoke<void>("create_mods_saves_link", { installPath, serverId, baseDir, mapPath }),
   /** Copy the current map's save subfolder from one server to another. Both servers must be stopped. */
-  importServerSaves: (sourceServerId: string, targetServerId: string, baseDir: string, mapPath: string) =>
-    invoke<void>("import_server_saves", { sourceServerId, targetServerId, baseDir, mapPath }),
+  importServerSaves: (sourceServerId: string, targetServerId: string, baseDir: string, saveFolder: string) =>
+    invoke<void>("import_server_saves", { sourceServerId, targetServerId, baseDir, saveFolder }),
 
   /** Full backup: 7z the entire install_path directory. */
   createFullBackup: (
@@ -576,16 +584,16 @@ export const tauriCmd = {
     invoke<string[]>("list_ini_backups", { serverId, backupDir }),
 
   /** Restore a server backup: extract 7z to canonical locations and recreate symlinks. */
-  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string, baseDir: string, mapPath: string) =>
-    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath, baseDir, mapPath }),
+  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string, baseDir: string, mapPath: string, saveFolder: string) =>
+    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath, baseDir, mapPath, saveFolder }),
 
-  /** Restore a player backup: extract 7z into SavedArks/{mapPath}. */
-  restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, mapPath: string) =>
-    invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, mapPath }),
+  /** Restore a player backup: extract 7z into SavedArks/{saveFolder}. */
+  restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, saveFolder: string) =>
+    invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, saveFolder }),
 
-  /** Restore an INI backup: copy loose INI files back to Config/{platform}. */
-  restoreIniBackup: (backupFolderPath: string, installPath: string, platform: string) =>
-    invoke<void>("restore_ini_backup", { backupFolderPath, installPath, platform }),
+  /** Restore an INI backup: copy loose INI files back to Config/WindowsServer. */
+  restoreIniBackup: (backupFolderPath: string, installPath: string) =>
+    invoke<void>("restore_ini_backup", { backupFolderPath, installPath }),
 
   /** Restore a full backup: extract 7z over the entire install_path. */
   restoreFullBackup: (serverId: string, backupFilePath: string, installPath: string) =>
@@ -595,8 +603,8 @@ export const tauriCmd = {
   deleteBackup: (filePath: string) => invoke<void>("delete_backup", { filePath }),
 
   /** Delete ARK's own timestamped .ark backups and .profilebak files. */
-  cleanupArkOwnBackups: (installPath: string, mapPath: string) =>
-    invoke<number>("cleanup_ark_own_backups", { installPath, mapPath }),
+  cleanupArkOwnBackups: (installPath: string, mapPath: string, saveFolder: string) =>
+    invoke<number>("cleanup_ark_own_backups", { installPath, mapPath, saveFolder }),
 
   /** Estimate total uncompressed size of a directory in bytes. */
   estimateDirSize: (dirPath: string) => invoke<number>("estimate_dir_size", { dirPath }),
