@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { check } from "@tauri-apps/plugin-updater";
 import { invoke } from "@tauri-apps/api/core";
@@ -16,7 +16,7 @@ export function UpdateManager() {
   const protonCheckRef   = useRef(false);
   const isLinux = typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
-  async function checkForProtonUpdate() {
+  const checkForProtonUpdate = useCallback(async () => {
     if (protonCheckRef.current) return;
     protonCheckRef.current = true;
     try {
@@ -53,9 +53,9 @@ export function UpdateManager() {
     } finally {
       protonCheckRef.current = false;
     }
-  }
+  }, [router]);
 
-  async function checkForUpdate() {
+  const checkForUpdate = useCallback(async () => {
     if (checkingRef.current) return;
     checkingRef.current = true;
     try {
@@ -112,7 +112,7 @@ export function UpdateManager() {
     } finally {
       checkingRef.current = false;
     }
-  }
+  }, []);
 
   useEffect(() => {
     let appIntervalId:    ReturnType<typeof setInterval> | null = null;
@@ -145,8 +145,7 @@ export function UpdateManager() {
       if (appIntervalId)    clearInterval(appIntervalId);
       if (protonIntervalId) clearInterval(protonIntervalId);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isLinux, checkForUpdate, checkForProtonUpdate]);
 
   return null;
 }

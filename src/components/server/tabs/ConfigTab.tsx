@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
-  Settings2, X, AlertCircle, ToggleLeft, ToggleRight, Terminal,
-  HelpCircle, Upload, Search, FileText, Clipboard, Wand2, Clock, Package,
+  Settings2, X, ToggleLeft, ToggleRight, Terminal,
+  HelpCircle, Upload, FileText, Clipboard, Wand2, Clock, Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,12 +45,6 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 interface Props {
   server: ServerRow;
 }
-
-// Keys excluded from the "Full INI Editor" — handled on the server overview/setup pages.
-const OVERVIEW_KEYS = new Set([
-  "SessionName", "ServerPassword", "ServerAdminPassword",
-  "Port", "QueryPort", "RCONPort", "RCONEnabled", "MaxPlayers",
-]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -330,139 +324,6 @@ function SectionGroup({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Full INI Editor Modal
-// ---------------------------------------------------------------------------
-
-function FullIniModal({
-  config,
-  onSave,
-  onClose,
-}: {
-  config: ServerConfigJson;
-  onSave: (updated: ServerConfigJson) => void;
-  onClose: () => void;
-}) {
-  const [local, setLocal] = useState<ServerConfigJson>(config);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
-
-  const q = search.trim().toLowerCase();
-
-  const toggleGroup = (id: string) =>
-    setExpandedGroups((prev) => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-
-  const handleChange = (f: IniFieldDef, val: string) => {
-    setLocal((prev) => setIniValue(prev, f.section, f.iniSection, f.key, val));
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
-    >
-      <div
-        className="w-full max-w-3xl mx-4 flex flex-col rounded-2xl overflow-hidden"
-        style={{
-          background: "rgba(8,8,25,0.98)",
-          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
-          boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
-          maxHeight: "90vh",
-        }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-          <div className="flex items-center gap-2">
-            <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Full INI Editor</span>
-          </div>
-          <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0" style={{ color: "var(--text-muted)" }}>
-            <X className="w-4 h-4" />
-          </Button>
-        </div>
-
-        <div className="px-3 py-2 shrink-0 space-y-2" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
-          <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-            <AlertCircle className="w-3 h-3" style={{ color: "var(--neon-purple)" }} />
-            Server name, passwords, and ports are managed on the overview page and are excluded here.
-            Changes take effect on the next server restart.
-          </p>
-          {/* Search */}
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-subtle)" }} />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search settings…"
-              className="h-8 pl-8 text-xs"
-              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-            />
-          </div>
-        </div>
-
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-          {INI_FIELD_GROUPS.map((group) => {
-            let visibleFields = group.fields.filter((f) => !OVERVIEW_KEYS.has(f.key));
-            if (q) {
-              visibleFields = visibleFields.filter(
-                (f) =>
-                  f.label.toLowerCase().includes(q) ||
-                  f.key.toLowerCase().includes(q) ||
-                  (f.description?.toLowerCase().includes(q) ?? false),
-              );
-            }
-            if (visibleFields.length === 0) return null;
-            const open = q ? true : expandedGroups.has(group.id);
-            return (
-              <div key={group.id} className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-                <button
-                  onClick={() => { if (!q) toggleGroup(group.id); }}
-                  className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
-                  style={{ background: "rgba(10,10,30,0.7)" }}
-                >
-                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
-                  {open
-                    ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-                    : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
-                </button>
-                {open && (
-                  <div className="px-4 pb-3 divide-y" style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(5,5,20,0.5)" }}>
-                    {visibleFields.map((f) => (
-                      <FieldRow
-                        key={`${f.iniSection}.${f.key}`}
-                        field={f}
-                        value={getIniValue(local, f.section, f.iniSection, f.key)}
-                        onChange={(val) => handleChange(f, val)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-          <Button variant="ghost" onClick={onClose} size="sm" style={{ color: "var(--text-muted)" }}>Cancel</Button>
-          <Button
-            onClick={() => { onSave(local); onClose(); }}
-            size="sm"
-            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
-          >
-            <Save className="w-3.5 h-3.5 mr-1.5" /> Apply Changes
-          </Button>
-        </div>
-      </div>
     </div>
   );
 }

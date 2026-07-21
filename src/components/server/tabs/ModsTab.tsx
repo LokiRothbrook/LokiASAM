@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useOnMount } from "@/hooks/useOnMount";
 import {
   Package, Plus, Trash2, ChevronUp, ChevronDown, Globe,
   AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Info, HelpCircle, X,
@@ -90,9 +91,9 @@ export function ModsTab({ server }: Props) {
   const [addInput, setAddInput] = useState("");
   const [addError, setAddError] = useState("");
 
-  const markChanged = () => {
+  const markChanged = useCallback(() => {
     if (server.status === "running") setShowRestartNote(true);
-  };
+  }, [server.status]);
 
   const addInputRef = useRef<HTMLInputElement>(null);
   const prevVerifyingRef = useRef(false);
@@ -110,7 +111,7 @@ export function ModsTab({ server }: Props) {
   const stopVerifying    = useAppStore((s) => s.stopVerifying);
 
   // ── Load mods from SQLite ──────────────────────────────────────────────
-  const loadMods = async () => {
+  const loadMods = useCallback(async () => {
     setLoading(true);
     try {
       const rows = await getServerMods(server.id);
@@ -120,22 +121,24 @@ export function ModsTab({ server }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [server.id]);
 
-  useEffect(() => { loadMods(); }, [server.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useOnMount(loadMods);
 
   // Real-time update: a mod was added via the browser window
-  useEffect(() => {
+  const syncOnModAdded = useCallback(() => {
     if (modAddedCount > 0) { loadMods(); markChanged(); }
-  }, [modAddedCount]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [modAddedCount, loadMods, markChanged]);
+  useOnMount(syncOnModAdded);
 
   // Reload when the browser window is closed (safety net for any missed events)
-  useEffect(() => {
+  const syncOnBrowserClosed = useCallback(() => {
     if (modBrowserJustClosed) {
       loadMods();
       setModBrowserJustClosed(false);
     }
-  }, [modBrowserJustClosed]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [modBrowserJustClosed, loadMods, setModBrowserJustClosed]);
+  useOnMount(syncOnBrowserClosed);
 
   // Clear the add input when verification finishes
   useEffect(() => {
@@ -445,7 +448,7 @@ export function ModsTab({ server }: Props) {
             ) : (
               <>
                 Opens CurseForge in a separate window with a
-                <span style={{ color: "var(--neon-purple)" }}> "+ Add Mod"</span>{" "}
+                <span style={{ color: "var(--neon-purple)" }}> &quot;+ Add Mod&quot;</span>{" "}
                 button on each mod page.
               </>
             )}

@@ -156,21 +156,26 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
   const [dirBytes, setDirBytes]       = useState<number | null>(null);
 
   useEffect(() => {
+    // The parent mounts a fresh DeleteDialog (key={cluster.id}) per target,
+    // so deleteFiles/dirBytes already start at their useState initial values
+    // for each cluster — this effect only needs to resolve the async dir size.
     if (!cluster) return;
-    setDeleteFiles(true);
-    setDirBytes(null);
 
-    // Resolve actual cluster directory
+    let cancelled = false;
     getAppSetting("base_dir").then((baseDir) => {
+      if (cancelled) return;
       const dir = cluster.cluster_dir_override?.trim()
         ? cluster.cluster_dir_override
         : `${(baseDir ?? "").replace(/[/\\]$/, "")}/clusters/${cluster.id}`;
       setClusterDir(dir);
 
-        return tauriCmd.getDirSize(dir).then((bytes) => setDirBytes(bytes)).catch(() => setDirBytes(-1));
+      return tauriCmd.getDirSize(dir)
+        .then((bytes) => { if (!cancelled) setDirBytes(bytes); })
+        .catch(() => { if (!cancelled) setDirBytes(-1); });
     }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cluster?.id]);
+
+    return () => { cancelled = true; };
+  }, [cluster]);
 
   async function handleDelete() {
     if (!cluster) return;
@@ -433,6 +438,7 @@ export default function ClustersPage() {
         onCreated={refresh}
       />
       <DeleteDialog
+        key={deleteTarget?.id}
         cluster={deleteTarget}
         onClose={() => setDeleteTarget(null)}
         onDeleted={refresh}

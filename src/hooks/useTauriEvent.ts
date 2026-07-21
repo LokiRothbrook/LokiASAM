@@ -32,9 +32,14 @@ export function useTauriEvent<T = unknown>(
   event: string,
   handler: (payload: T) => void
 ): void {
-  // Stable ref for handler so effect deps don't change on every render
+  // Stable ref for handler so effect deps don't change on every render.
+  // Synced in its own effect (runs after every render, no deps array) rather
+  // than during render itself — writing to a ref during render is unsafe
+  // under concurrent rendering / StrictMode double-invoke.
   const handlerRef = useRef(handler);
-  handlerRef.current = handler;
+  useEffect(() => {
+    handlerRef.current = handler;
+  });
 
   useEffect(() => {
     if (

@@ -43,19 +43,16 @@ import { useServerStats } from "@/hooks/useServerStats";
 import { tauriCmd } from "@/lib/tauri-commands";
 import {
   updateServerStatus,
-  getServerConfig,
   getServerModCount,
-  getServerMods,
   getLastBackupTime,
   getNextScheduledRestart,
   getHasBackupEnabled,
   getAppSetting,
-  resetServersFromStatus,
 } from "@/lib/db";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
-import { buildStartParams, isLinux } from "@/lib/server-utils";
+import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";

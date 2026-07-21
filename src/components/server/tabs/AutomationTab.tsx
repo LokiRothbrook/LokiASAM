@@ -4,14 +4,14 @@ import { useState, useCallback, useEffect } from "react";
 import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
-  AlertTriangle, ChevronDown, ChevronUp,
+  AlertTriangle,
   ArrowUp, Clock, Zap, Skull, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
+import { useOnMount } from "@/hooks/useOnMount";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
@@ -523,11 +523,6 @@ function effectiveCron(tiers: Record<BackupTier, TierState>): string {
   return "0 * * * *";
 }
 
-/** Find the single consolidated backup schedule row for a given type. */
-function findBackupSchedule(schedules: ScheduleRow[], type: BackupScheduleType): ScheduleRow | null {
-  return schedules.find((s) => s.schedule_type === type) ?? null;
-}
-
 function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
   return schedules.find((s) => s.schedule_type === "backup_full") ?? null;
 }
@@ -537,14 +532,13 @@ function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
 // ---------------------------------------------------------------------------
 
 function BackupTypeSection({
-  title, scheduleType, serverId, schedules, onRefresh, accentHex,
+  title, scheduleType, serverId, schedules, onRefresh,
 }: {
   title: string;
   scheduleType: BackupScheduleType;
   serverId: string;
   schedules: ScheduleRow[];
   onRefresh: () => void;
-  accentHex: string;
 }) {
   const buildState = (): Record<BackupTier, TierState> => {
     const s = {} as Record<BackupTier, TierState>;
@@ -585,7 +579,16 @@ function BackupTypeSection({
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
 
-  useEffect(() => { setTiers(buildState()); }, [schedules.length, serverId, scheduleType]);
+  // Re-derive tiers when the upstream schedules genuinely change, compared
+  // during render (React's documented "adjusting state" pattern) rather than
+  // via an effect — buildState() is a pure computation from schedules/
+  // serverId/scheduleType, not an async fetch.
+  const tiersKey = `${serverId}:${scheduleType}:${schedules.length}`;
+  const [prevTiersKey, setPrevTiersKey] = useState(tiersKey);
+  if (tiersKey !== prevTiersKey) {
+    setPrevTiersKey(tiersKey);
+    setTiers(buildState());
+  }
 
   const patch = (tier: BackupTier, delta: Partial<TierState>) =>
     setTiers((s) => ({ ...s, [tier]: { ...s[tier], ...delta } }));
@@ -700,12 +703,17 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
 
-  useEffect(() => {
+  // Re-derive keep/enabled when the upstream schedules genuinely change,
+  // compared during render rather than via an effect.
+  const fullKey = `${serverId}:${schedules.length}`;
+  const [prevFullKey, setPrevFullKey] = useState(fullKey);
+  if (fullKey !== prevFullKey) {
+    setPrevFullKey(fullKey);
     const row = findFullSchedule(schedules);
     const c = parseCfg(row?.config_json);
     setKeep((c.keep as number) ?? 3);
     setEnabled(row ? row.enabled === 1 : false);
-  }, [schedules.length, serverId]);
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -950,12 +958,10 @@ function BackupScheduleSection({ serverId, schedules, onRefresh }: {
 
       <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.08)" }}>
         <BackupTypeSection title="Server Backups" scheduleType="backup_server"
-          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
-          accentHex="#bf00ff" />
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
         <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
         <BackupTypeSection title="Player Backups" scheduleType="backup_player"
-          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
-          accentHex="#00ffff" />
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
         <LoginBackupRow serverId={serverId} />
         <ManualBackupRow serverId={serverId} />
         <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
@@ -1191,7 +1197,7 @@ export function AutomationTab({ server }: Props) {
     finally { setLoading(false); }
   }, [server.id]);
 
-  useEffect(() => { loadSchedules(); }, [loadSchedules]);
+  useOnMount(loadSchedules);
 
   function schedulesFor(type: ScheduleType): ScheduleRow[] {
     return schedules.filter((s) => s.schedule_type === type);

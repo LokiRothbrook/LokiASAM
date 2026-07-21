@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Plus, Server, Activity, RefreshCw, Upload,
-  ArrowUp, Loader2, CheckCircle2, AlertTriangle, LayoutDashboard,
+  ArrowUp, Loader2, AlertTriangle, LayoutDashboard,
   Play, Square, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useOnMount } from "@/hooks/useOnMount";
 import { toast } from "sonner";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { formatServerVersion } from "@/lib/db";
@@ -57,7 +58,7 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
     setLatestBuild(latest ?? "");
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useOnMount(load);
 
   // Background check result — refresh state + run per-server check (with toasts).
   useTauriEvent<UpdateCheckResult | { updateApplied?: boolean }>("asa://update-check", async (payload) => {
@@ -490,10 +491,10 @@ export default function DashboardPage() {
     if (targets.length === 0) { setUpdatingAll(false); return; }
 
     try {
-      // First: mark all targets with their initial status.
+      // Mark all targets with their initial status.
       // Active server = first in list → "updating"
       // Rest → "update_queued"
-      const [first, ...rest] = targets;
+      const rest = targets.slice(1);
 
       if (rest.length > 0) {
         await Promise.all(

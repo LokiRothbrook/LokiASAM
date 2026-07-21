@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MoreVertical, Trash2, Copy, FolderOpen, HardDrive, Loader2, ToggleLeft, ToggleRight } from "lucide-react";
 import {
   DropdownMenu,
@@ -110,23 +110,41 @@ function DeleteDialog({
   const [backupDir, setBackupDir]         = useState("");
   const [baseDir, setBaseDir]             = useState("");
 
+  // Reset toggles the moment the dialog transitions to open — compared during
+  // render (React's documented "adjusting state" pattern) instead of via an
+  // effect, since it's a synchronous reset with no async work of its own.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      setDeleteFiles(true); setDeleteBackups(true);
+      setDeleteLogs(true);  setDeleteSaves(true);
+      setRemoveRules(true); setDiskUsage(null);
+    }
+  }
+
+  // server is read via a ref so unrelated re-fetches of the parent's server
+  // list (which hand this component a fresh object each time) don't re-run
+  // this effect — only an actual `open` transition should trigger the fetch.
+  const serverRef = useRef(server);
+  useEffect(() => {
+    serverRef.current = server;
+  });
+
   useEffect(() => {
     if (!open) return;
-    // Reset toggles each time the dialog opens (all ON by default)
-    setDeleteFiles(true); setDeleteBackups(true);
-    setDeleteLogs(true);  setDeleteSaves(true);
-    setRemoveRules(true); setDiskUsage(null);
+    const currentServer = serverRef.current;
 
     Promise.all([
       getServers(),
       getAppSetting("backup_dir"),
       getAppSetting("base_dir"),
     ]).then(([all, bkDir, bsDir]) => {
-      setExclusivePorts(computeExclusivePorts(server, all));
+      setExclusivePorts(computeExclusivePorts(currentServer, all));
 
       // Remaining ports = every port from servers OTHER than this one.
       // This is the complete desired state passed to the firewall backend after deletion.
-      const otherServers = all.filter((s) => s.id !== server.id);
+      const otherServers = all.filter((s) => s.id !== currentServer.id);
       const remainingMap = new Map<string, PortDef>();
       for (const s of otherServers) {
         for (const p of getServerFirewallPorts(s)) {
@@ -139,11 +157,10 @@ function DeleteDialog({
       const bsd = bsDir ?? "";
       setBackupDir(bd);
       setBaseDir(bsd);
-      return tauriCmd.getServerDiskUsage(server.id, bd, bsd);
+      return tauriCmd.getServerDiskUsage(currentServer.id, bd, bsd);
     }).then((usage) => {
       setDiskUsage(usage);
     }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const handleDelete = async () => {

@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Network, Server, ArrowLeft, UserPlus, UserMinus,
-  Play, Square, Folder, Copy, ChevronDown,
+  Folder, Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -411,7 +411,7 @@ function ClusterDetailContent() {
         </div>
         <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
           This Cluster ID is passed as{" "}
-          <code className="font-mono">-ClusterID={cluster.id}</code> to each member server's
+          <code className="font-mono">-ClusterID={cluster.id}</code> to each member server&apos;s
           launch arguments so they can share player and tribe data.
         </p>
       </div>

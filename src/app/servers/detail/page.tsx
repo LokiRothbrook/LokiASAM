@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useOnMount } from "@/hooks/useOnMount";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -59,20 +60,19 @@ export default function ServerDetailPage() {
   const versionCache = useBuildVersionCache();
 
   // ── Load server row ──────────────────────────────────────────────────────
-  const reload = async () => {
+  const reload = useCallback(async () => {
     if (!serverId) return;
     try {
       const s = await getServer(serverId);
       if (!s) { setNotFound(true); } else { setServer(s); }
     } catch { setNotFound(true); }
     finally { setLoading(false); }
-  };
+  }, [serverId]);
 
   useEffect(() => {
-    if (!serverId) { router.replace("/"); return; }
-    reload();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId]);
+    if (!serverId) router.replace("/");
+  }, [serverId, router]);
+  useOnMount(reload);
 
   // ── Live status updates from backend ────────────────────────────────────
   useTauriEvent<ServerStatus>(`server://status/${serverId}`, async (payload) => {

@@ -102,16 +102,19 @@ export function CommandOutputPanel({
   const completedRef = useRef(false);
   const completedProp = useRef(completed);
 
-  // Keep ref in sync for the cleanup function
-  completedProp.current = completed;
+  // Keep ref in sync for the cleanup function — synced in its own effect
+  // (runs after every render) rather than during render itself.
+  useEffect(() => {
+    completedProp.current = completed;
+  });
 
-  // On mount: scroll to bottom if there are already lines from the buffer
+  // On mount (or channel change): scroll to bottom if there are already
+  // lines from the buffer.
   useEffect(() => {
     if (scrollRef.current && (_buffers.get(eventChannel)?.length ?? 0) > 0) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [eventChannel]);
 
   // On unmount: clear buffer if process is done (or clearBufferOnClose is set)
   useEffect(() => {
@@ -120,7 +123,6 @@ export function CommandOutputPanel({
         clearOutputBuffer(eventChannel);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventChannel, clearBufferOnClose]);
 
   // Subscribe to the Tauri event channel
@@ -147,12 +149,19 @@ export function CommandOutputPanel({
     }
   }, [lines, autoScroll]);
 
-  // Elapsed time counter — resets when the event channel changes.
+  // Elapsed time counter — resets when the event channel changes. The
+  // display resets (finalElapsed/elapsed) are compared during render rather
+  // than set synchronously at the top of the effect below.
+  const [prevEventChannel, setPrevEventChannel] = useState(eventChannel);
+  if (eventChannel !== prevEventChannel) {
+    setPrevEventChannel(eventChannel);
+    setFinalElapsed(null);
+    setElapsed("0s");
+  }
+
   useEffect(() => {
     startTimeRef.current = new Date();
     completedRef.current = false;
-    setFinalElapsed(null);
-    setElapsed("0s");
 
     const interval = setInterval(() => {
       if (completedRef.current) {

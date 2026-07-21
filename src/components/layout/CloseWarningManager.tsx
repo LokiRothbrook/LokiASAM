@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,7 +40,7 @@ export function CloseWarningManager() {
     return { count: active.length, ids: active.map((s) => s.id) };
   };
 
-  const checkAndWarn = async (): Promise<boolean> => {
+  const checkAndWarn = useCallback(async (): Promise<boolean> => {
     const [{ count, ids }, runningOps] = await Promise.all([
       checkActiveInstalls(),
       tauriCmd.getRunningOps().catch(() => [] as string[]),
@@ -57,7 +57,7 @@ export function CloseWarningManager() {
       return true;
     }
     return false;
-  };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -107,7 +107,7 @@ export function CloseWarningManager() {
       unlistenClose?.();
       unlistenTrayQuit?.();
     };
-  }, []);
+  }, [checkAndWarn]);
 
   const handleAbortAndClose = async () => {
     setAborting(true);

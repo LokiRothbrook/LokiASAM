@@ -64,7 +64,7 @@ export function StartupReconciliationManager() {
         setIsServerScanPending(false);
       }
     })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setPreScanStatuses, setIsServerScanPending, queryClient]);
 
   return null;
 }

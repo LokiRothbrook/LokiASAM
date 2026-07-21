@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { tauriCmd, type DetectedServerConfig } from "@/lib/tauri-commands";
 import {
-  createServer, saveServerConfig, getAppSetting, isServerNameTaken,
+  createServer, saveServerConfig, isServerNameTaken,
 } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { open } from "@tauri-apps/plugin-dialog";

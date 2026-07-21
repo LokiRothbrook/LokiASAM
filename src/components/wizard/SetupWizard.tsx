@@ -25,7 +25,7 @@ import {
   FolderOpen, HardDrive, Terminal, Bell, CheckCircle2, ArrowRight, ArrowLeft,
   Loader2, AlertCircle, HardDrive as DiskIcon, Cpu, RefreshCw, Download,
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
-  X, BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff, Shield,
+  BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff, Shield,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LokiIcon } from "@/components/shared/LokiIcon";
@@ -39,13 +39,13 @@ import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
 import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry, type FirewallStatus, type PortDef } from "@/lib/tauri-commands";
-import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAutostart } from "@/hooks/useAutostart";
+import { useOnMount } from "@/hooks/useOnMount";
 import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -149,10 +149,13 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [wiping, setWiping] = useState(false);
 
-  // When the outer dialog closes, reset state.
-  useEffect(() => {
+  // When the outer dialog closes, reset state — compared during render
+  // rather than in an effect, since it's a synchronous derivation of `open`.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (!open) { setFullWipe(false); setConfirmOpen(false); setWiping(false); }
-  }, [open]);
+  }
 
   const handleFullWipeToggle = () => {
     if (!fullWipe) {
@@ -495,13 +498,13 @@ function ImportVerifyPanel({
   // Mod Certs
   const [certPhase, setCertPhase] = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
   const [certError, setCertError] = useState("");
-  const [certSkipped, setCertSkipped] = useState(false);
+  const [certSkipped] = useState(false);
 
   // Firewall
   const [fwPhase, setFwPhase] = useState<"idle" | "checking" | "ready" | "opening" | "done" | "error">("idle");
   const [fwStatus, setFwStatus] = useState<FirewallStatus | null>(null);
   const [fwError, setFwError] = useState("");
-  const [fwSkipped, setFwSkipped] = useState(false);
+  const [fwSkipped] = useState(false);
   const [showFwDialog, setShowFwDialog] = useState(false);
 
   const handleInstallSteamcmd = async () => {
@@ -580,11 +583,7 @@ function ImportVerifyPanel({
     }
   };
 
-  const handleSkipCerts = () => {
-    setCertSkipped(true);
-  };
-
-  const handleCheckFirewall = async () => {
+  const handleCheckFirewall = useCallback(async () => {
     setFwError("");
     setFwPhase("checking");
     try {
@@ -624,7 +623,7 @@ function ImportVerifyPanel({
       setFwError(String(e));
       setFwPhase("error");
     }
-  };
+  }, [info.allServersPorts]);
 
   const handleOpenFirewallPorts = async () => {
     if (!fwStatus) return;
@@ -647,12 +646,8 @@ function ImportVerifyPanel({
     }
   };
 
-  const handleSkipFirewall = () => {
-    setFwSkipped(true);
-  };
-
   // Auto-check firewall when servers data loads (doesn't require Proton-GE for checking)
-  useEffect(() => {
+  const syncFirewallCheck = useCallback(() => {
     if (
       fwPhase === "idle" &&
       info.allServersPorts &&
@@ -660,11 +655,11 @@ function ImportVerifyPanel({
     ) {
       handleCheckFirewall();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info.allServersPorts]);
+  }, [fwPhase, info.allServersPorts, handleCheckFirewall]);
+  useOnMount(syncFirewallCheck);
 
   // Auto-validate found tools
-  useEffect(() => {
+  const syncAutoValidate = useCallback(() => {
     if (info && !info.steamcmdMissing && !steamcmdDone) {
       setSteamcmdDone(true);
     }
@@ -674,8 +669,8 @@ function ImportVerifyPanel({
     if (info && IS_LINUX && !info.protonMissing && !protonDone) {
       setProtonDone(true);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info?.steamcmdMissing, info?.protonMissing]);
+  }, [info, steamcmdDone, protonDone]);
+  useOnMount(syncAutoValidate);
 
   // Check if cert is already installed
   useEffect(() => {
@@ -692,7 +687,6 @@ function ImportVerifyPanel({
         // If check fails, leave as idle so user can manually install
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [protonDone, info?.proton, info?.protonPrefix]);
 
   const allGood = !info.steamcmdMissing || steamcmdDone;
@@ -1101,8 +1095,7 @@ function BaseDirStep() {
         // Outside Tauri (dev preview) — leave blank
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [setBaseDir, setBackupDir, validateDir]);
 
   // Clean up debounce on unmount.
   useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
@@ -1467,10 +1460,10 @@ function BackupDirStep() {
     }
   }, [setBackupDirWritable]);
 
-  useEffect(() => {
+  const syncValidateOnMount = useCallback(() => {
     if (backupDir) validateDir(backupDir);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [backupDir, validateDir]);
+  useOnMount(syncValidateOnMount);
 
   useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
 
@@ -1852,9 +1845,17 @@ function ProtonGEStep() {
     }
   }, [baseDir, manuallyAddedPaths, found]);
 
+  // Latest-scan ref so the mode-change trigger below doesn't need `scan`
+  // itself as a dependency (its identity churns with `found`/`manuallyAddedPaths`).
+  const scanRef = useRef(scan);
   useEffect(() => {
-    if (protonMode === "existing") scan();
-  }, [protonMode]); // eslint-disable-line react-hooks/exhaustive-deps
+    scanRef.current = scan;
+  });
+
+  const syncScanOnModeChange = useCallback(() => {
+    if (protonMode === "existing") scanRef.current();
+  }, [protonMode]);
+  useOnMount(syncScanOnModeChange);
 
   const handleSelectDetected = async (entry: ProtonEntry) => {
     if (validating) return;
@@ -2265,8 +2266,8 @@ function CertStep() {
   const {
     baseDir,
     protonPath,
-    certInstalled, setCertInstalled,
-    certSkipped,   setCertSkipped,
+    setCertInstalled,
+    certSkipped,
   } = useSetupStore();
 
   const [phase, setPhase] = useState<CertPhase>("checking");
@@ -2274,26 +2275,25 @@ function CertStep() {
 
   // On mount, check whether the cert is already installed so we can show the
   // "already installed" state immediately rather than prompting the user.
-  useEffect(() => {
-    (async () => {
-      try {
-        const sep = baseDir.includes("\\") ? "\\" : "/";
-        const prefix = IS_LINUX
-          ? baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix"
-          : undefined;
-        const proton = IS_LINUX && protonPath ? protonPath : undefined;
-        const installed = await tauriCmd.checkAmazonRootCaInstalled(proton, prefix);
-        if (installed) {
-          setCertInstalled(true);
-          setPhase("done");
-        } else {
-          setPhase("idle");
-        }
-      } catch {
+  const checkCertInstalled = useCallback(async () => {
+    try {
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const prefix = IS_LINUX
+        ? baseDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton" + sep + "prefix"
+        : undefined;
+      const proton = IS_LINUX && protonPath ? protonPath : undefined;
+      const installed = await tauriCmd.checkAmazonRootCaInstalled(proton, prefix);
+      if (installed) {
+        setCertInstalled(true);
+        setPhase("done");
+      } else {
         setPhase("idle");
       }
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    } catch {
+      setPhase("idle");
+    }
+  }, [baseDir, protonPath, setCertInstalled]);
+  useOnMount(checkCertInstalled);
 
   const handleInstall = async () => {
     setError("");
@@ -2316,10 +2316,6 @@ function CertStep() {
       setError(String(e));
       setPhase("error");
     }
-  };
-
-  const handleSkip = () => {
-    setCertSkipped(true);
   };
 
   const phaseLabel: Record<CertPhase, string> = {
@@ -2346,7 +2342,7 @@ function CertStep() {
           ARK SA uses the CurseForge API (secured by Amazon TLS) to load mod
           metadata at startup. Installing the Amazon Root CA certificate ensures
           that connection is trusted, preventing intermittent
-          "serverUnreachable" errors when starting servers with mods.
+          &quot;serverUnreachable&quot; errors when starting servers with mods.
         </p>
       </div>
 
@@ -2779,8 +2775,7 @@ function AutoUpdateStep() {
     } else if (protonMode === "managed" && protonCheckMode === "disabled") {
       setProtonCheckMode("startup");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [protonMode]);
+  }, [protonMode, protonCheckMode, setProtonCheckMode]);
 
   const asaIntervals = [
     { value: "disabled",       label: "Disabled" },
@@ -3180,7 +3175,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     steamcmdPath, steamcmdValidated,
     themePreset, themeAccent,
     protonPath, protonValidated, protonMode,
-    certInstalled, certSkipped, setCertSkipped,
+    certInstalled, setCertSkipped,
     setBaseDir, setBackupDir, setSteamcmdPath, setSteamcmdValidated,
     setProtonPath, setProtonValidated,
     discordWebhook,

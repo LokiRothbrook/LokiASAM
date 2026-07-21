@@ -22,10 +22,10 @@ import {
   Server, Network, GitBranch, Clock, Package,
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
   CheckCircle2, Plus, X, ChevronRight, StopCircle, RefreshCw,
-  Sword, Leaf, Sliders, Settings2, Code2, Globe, Lock,
-  ChevronDown, ChevronUp, LayoutList, ToggleLeft, ToggleRight, Terminal,
+  Sword, Sliders, Settings2, Code2, Globe, Lock,
+  ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Terminal,
   Shield, Info, Heart, AlertTriangle, HelpCircle, Eye, EyeOff,
-  HardDrive, Skull, RotateCcw, Megaphone, MessageSquare,
+  HardDrive, Skull, RotateCcw, MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,9 +36,7 @@ import { NumberField } from "@/components/shared/NumberField";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import {
-  getReleasedMaps, getOfficialMaps, getModMaps, getMapById,
   GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS, buildPresetConfig,
-  DEFAULT_GAME_USER_SETTINGS, DEFAULT_GAME_INI,
   LAUNCH_PARAMETERS, NOTIFICATION_EVENTS, ARK_EVENTS,
   type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter, type ArkEvent,
 } from "@/data/game-data";
@@ -53,6 +51,7 @@ import {
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useOnMount } from "@/hooks/useOnMount";
 import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
 import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { useAppStore } from "@/store/useAppStore";
@@ -306,21 +305,21 @@ interface StepDef {
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
 }
 
-function computeSteps(data: WizardData): StepDef[] {
+function computeSteps(presetStyle: WizardData["presetStyle"], copyFromServerId: WizardData["copyFromServerId"]): StepDef[] {
   const steps: StepDef[] = [
     { id: "basic",    label: "Basic Info",  icon: Server },
     { id: "gamemode", label: "Game Mode",   icon: Sword },
   ];
 
-  if (!data.copyFromServerId) {
+  if (!copyFromServerId) {
     steps.push({ id: "style", label: "Server Style", icon: Sliders });
-    if (data.presetStyle === "guided_custom") {
+    if (presetStyle === "guided_custom") {
       steps.push({ id: "guided_rates",    label: "Core Rates", icon: Sliders });
       steps.push({ id: "guided_breeding", label: "Breeding",   icon: Heart });
       steps.push({ id: "guided_combat",   label: "Combat",     icon: Sword });
       steps.push({ id: "guided_behavior", label: "Server QoL", icon: Settings2 });
     }
-    if (data.presetStyle === "full_custom") {
+    if (presetStyle === "full_custom") {
       steps.push({ id: "full_ini", label: "INI Config", icon: Code2 });
     }
   }
@@ -331,7 +330,7 @@ function computeSteps(data: WizardData): StepDef[] {
     { id: "automation", label: "Automation", icon: Clock },
   );
 
-  if (!data.copyFromServerId) {
+  if (!copyFromServerId) {
     steps.push({ id: "launch", label: "Launch Args", icon: Terminal });
   }
 
@@ -856,7 +855,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
 
   useEffect(() => { getServers().then(setExistingServers).catch(() => {}); }, []);
 
-  const handleCopyFrom = async (serverId: string, serverName: string) => {
+  const handleCopyFrom = async (serverId: string) => {
     setLoadingCopy(true);
     try {
       const [config, mods, allServers] = await Promise.all([
@@ -974,7 +973,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
                       key={s.id}
                       type="button"
                       disabled={loadingCopy}
-                      onClick={() => handleCopyFrom(s.id, s.name)}
+                      onClick={() => handleCopyFrom(s.id)}
                       className="w-full text-left px-2 py-1.5 rounded text-xs transition-colors hover:bg-[rgba(var(--neon-purple-rgb),0.1)] flex items-center gap-2"
                       style={{ color: "var(--text-primary)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
                     >
@@ -1242,7 +1241,7 @@ function GuidedBreedingStep({ data, onChange }: { data: WizardData; onChange: (p
   return (
     <div className="space-y-3">
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-        Tune breeding rates. Food consumption speed is critical — if it's too high relative to mature speed, babies will starve before they grow up.
+        Tune breeding rates. Food consumption speed is critical — if it&apos;s too high relative to mature speed, babies will starve before they grow up.
       </p>
       <div className="space-y-2 pr-1">
         <RateSlider label="Baby Mature Speed" description="How fast babies grow to adults. 10× = maturation is 10× faster than vanilla." value={r.matureSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("matureSpeedMultiplier", v)} />
@@ -1381,6 +1380,11 @@ function GuidedBehaviorStep({ data, onChange }: { data: WizardData; onChange: (p
 // Step 2b — Full INI Config Editor
 // ---------------------------------------------------------------------------
 
+// Read-only fields (ports/name managed elsewhere) — module-level so it's a
+// stable reference for the useMemo below instead of being recreated (and
+// needing to be a dependency) on every render.
+const FULL_INI_READONLY_KEYS = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort", "MaxPlayers", "ServerAdminPassword"]);
+
 function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["session", "admin", "rates"]));
   const [searchQuery, setSearchQuery] = useState("");
@@ -1402,15 +1406,10 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     if (searchQuery) return;
     setExpandedGroups((prev) => {
       const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id); else n.add(id);
       return n;
     });
   };
-
-  // Snapshot the wizard-built config on first render. Used as the reset baseline
-  // for boolean fields so the icon only appears when the user changes something
-  // from what the wizard set up, not from the raw game-engine default.
-  const initialGusRef = useRef<Record<string, Record<string, string>> | null>(null);
 
   // Build an initial GUS from defaults + mode settings if not yet customized
   const gus = useMemo(() => {
@@ -1434,17 +1433,19 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     return result;
   }, [data.fullCustomGus, data.gameMode, data.name, data.serverPassword, data.rconPort, data.adminPassword, data.maxPlayers]);
 
-  // Capture the first computed value of gus as the reset baseline
-  if (initialGusRef.current === null) {
-    initialGusRef.current = gus;
-  }
+  // Snapshot the wizard-built config on first render (lazy state initializer,
+  // runs once) — used as the reset baseline for boolean fields so the icon
+  // only appears when the user changes something from what the wizard set
+  // up, not from the raw game-engine default. State rather than a ref since
+  // it needs to be read during render.
+  const [initialGus] = useState(() => gus);
 
   const getValue = (iniSection: string, key: string): string => {
     return gus[iniSection]?.[key] ?? "";
   };
 
   const getInitialVal = (iniSection: string, key: string): string => {
-    return initialGusRef.current?.[iniSection]?.[key] ?? "";
+    return initialGus?.[iniSection]?.[key] ?? "";
   };
 
   const setValue = (iniSection: string, key: string, value: string) => {
@@ -1455,16 +1456,13 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     onChange({ fullCustomGus: updated });
   };
 
-  // Skip read-only fields (ports/name managed elsewhere)
-  const readonlyKeys = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort", "MaxPlayers", "ServerAdminPassword"]);
-
   const lq = searchQuery.toLowerCase().trim();
   const filteredGroups = useMemo(() => {
     if (!lq) return null;
     return INI_FIELD_GROUPS.map((group) => ({
       ...group,
       fields: group.fields.filter(
-        (f) => f.section === "gus" && !readonlyKeys.has(f.key) && (
+        (f) => f.section === "gus" && !FULL_INI_READONLY_KEYS.has(f.key) && (
           f.label.toLowerCase().includes(lq) ||
           f.key.toLowerCase().includes(lq) ||
           (f.description ?? "").toLowerCase().includes(lq)
@@ -1513,7 +1511,7 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
             const open = isFiltering || expandedGroups.has(group.id);
             const visibleFields = isFiltering
               ? group.fields
-              : group.fields.filter((f) => f.section === "gus" && !readonlyKeys.has(f.key));
+              : group.fields.filter((f) => f.section === "gus" && !FULL_INI_READONLY_KEYS.has(f.key));
             if (!isFiltering && visibleFields.length === 0) return null;
             return (
               <div key={group.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
@@ -1680,8 +1678,24 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   const [checking, setChecking] = useState(false);
   const [conflicts, setConflicts] = useState<Record<string, string>>({});
 
+  const updateConflicts = useCallback((
+    game: number, query: number, rcon: number,
+    usedMap?: Map<number, string>,
+  ) => {
+    getServers().then((servers) => {
+      const used = usedMap ?? new Map(servers.flatMap((s) => [
+        [s.port, s.name], [s.query_port, s.name], [s.rcon_port, s.name],
+      ] as [number, string][]));
+      const next: Record<string, string> = {};
+      if (used.has(game))  next.port      = used.get(game)!;
+      if (used.has(query)) next.queryPort  = used.get(query)!;
+      if (used.has(rcon))  next.rconPort   = used.get(rcon)!;
+      setConflicts(next);
+    }).catch(() => {});
+  }, []);
+
   // On mount: load existing servers, suggest next available ports, detect conflicts
-  useEffect(() => {
+  const suggestPorts = useCallback(() => {
     getServers().then((servers) => {
       if (servers.length === 0) return;
 
@@ -1716,24 +1730,8 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
       const checkRcon  = isDefault ? suggestRcon  : data.rconPort;
       updateConflicts(checkGame, checkQuery, checkRcon, usedPorts);
     }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function updateConflicts(
-    game: number, query: number, rcon: number,
-    usedMap?: Map<number, string>,
-  ) {
-    getServers().then((servers) => {
-      const used = usedMap ?? new Map(servers.flatMap((s) => [
-        [s.port, s.name], [s.query_port, s.name], [s.rcon_port, s.name],
-      ] as [number, string][]));
-      const next: Record<string, string> = {};
-      if (used.has(game))  next.port      = used.get(game)!;
-      if (used.has(query)) next.queryPort  = used.get(query)!;
-      if (used.has(rcon))  next.rconPort   = used.get(rcon)!;
-      setConflicts(next);
-    }).catch(() => {});
-  }
+  }, [data.port, data.queryPort, data.rconPort, onChange, updateConflicts]);
+  useOnMount(suggestPorts);
 
   const checkPort = async (portKey: string, port: number) => {
     setChecking(true);
@@ -1815,14 +1813,19 @@ function FirewallStep({ data }: { data: WizardData }) {
     { port: data.rconPort,  protocol: "tcp" },
   ];
 
-  useEffect(() => {
-    tauriCmd.checkFirewallPorts(ports).then((result) => {
+  const checkFirewall = useCallback(() => {
+    const checkPorts: PortDef[] = [
+      { port: data.port,      protocol: "udp" },
+      { port: data.queryPort, protocol: "udp" },
+      { port: data.rconPort,  protocol: "tcp" },
+    ];
+    tauriCmd.checkFirewallPorts(checkPorts).then((result) => {
       setStatus(result);
       const allCovered = !result.active || result.ports.every((p) => p.covered);
       setPhase(allCovered ? "done" : "ready");
     }).catch(() => setPhase("ready"));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [data.port, data.queryPort, data.rconPort]);
+  useOnMount(checkFirewall);
 
   const handleAddRules = async () => {
     if (!status) return;
@@ -1959,7 +1962,7 @@ function FirewallStep({ data }: { data: WizardData }) {
             className="text-xs text-center py-1.5"
             style={{ color: "var(--text-subtle)" }}
           >
-            Skip — I'll manage manually
+            Skip — I&apos;ll manage manually
           </button>
         )}
       </div>
@@ -2118,7 +2121,6 @@ function CronSelect({ value, onChange }: { value: string; onChange: (v: string) 
 const WIZ_TIER_ORDER = ["M", "W", "D", "H"] as const;
 type WizTier = typeof WIZ_TIER_ORDER[number];
 const WIZ_TIER_LABEL: Record<WizTier, string> = { M: "monthly", W: "weekly", D: "daily", H: "hourly" };
-const WIZ_TIER_DEFAULT_KEEP: Record<WizTier, number> = { M: 3, W: 4, D: 7, H: 24 };
 
 function wizBackupEffectiveCron(tiers: WizardData["serverBackupTiers"]): string {
   if (tiers.H.enabled) return "0 * * * *";
@@ -2339,9 +2341,6 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
     onChange({ serverBackupTiers: { ...data.serverBackupTiers, [tier]: { ...data.serverBackupTiers[tier], ...patch } } });
   const patchPlayerTier = (tier: WizTier, patch: { enabled?: boolean; keep?: number }) =>
     onChange({ playerBackupTiers: { ...data.playerBackupTiers, [tier]: { ...data.playerBackupTiers[tier], ...patch } } });
-
-  const serverAny = WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled);
-  const playerAny = WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled);
 
   return (
     <div className="space-y-4">
@@ -2633,7 +2632,6 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
   const modBrowserOpen      = useAppStore((s) => s.modBrowserOpen);
   const setModBrowserOpen   = useAppStore((s) => s.setModBrowserOpen);
   const setModBrowserParams = useAppStore((s) => s.setModBrowserParams);
-  const modAddedCount       = useAppStore((s) => s.modAddedCount);
   const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
   const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
 
@@ -2834,7 +2832,6 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
 function InstallStep({
   data,
   serverId,
-  steps,
   onInstallComplete,
   onGoToDashboard,
   onStatusChange,
@@ -2842,7 +2839,6 @@ function InstallStep({
 }: {
   data: WizardData;
   serverId: string;
-  steps: StepDef[];
   onInstallComplete: () => void;
   onGoToDashboard: () => void;
   onStatusChange: (status: string) => void;
@@ -3541,7 +3537,15 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const cleanupFnRef = useRef<(() => Promise<void>) | null>(null);
 
-  const steps = useMemo(() => computeSteps(data), [data.presetStyle, data.copyFromServerId]);
+  const steps = useMemo(() => computeSteps(data.presetStyle, data.copyFromServerId), [data.presetStyle, data.copyFromServerId]);
+
+  // Clamp step to the new step count if presetStyle/copyFromServerId changed
+  // and shrank the steps array — adjusted during render (React's documented
+  // "adjust state during render" pattern) rather than in an effect.
+  if (step >= steps.length) {
+    setStep(steps.length - 1);
+  }
+
   const currentStepDef = steps[step];
   const isInstallStep = currentStepDef?.id === "install";
 
@@ -3552,12 +3556,6 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       return next;
     });
   }, []);
-
-  // When presetStyle or copyFromServerId changes, clamp step to avoid being past the new step count
-  useEffect(() => {
-    const newSteps = computeSteps(data);
-    if (step >= newSteps.length) setStep(newSteps.length - 1);
-  }, [data.presetStyle, data.copyFromServerId]);
 
   const canAdvance = (): boolean => {
     if (!currentStepDef) return false;
@@ -3608,7 +3606,6 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
         <InstallStep
           data={data}
           serverId={serverId}
-          steps={steps}
           onInstallComplete={onClose}
           onGoToDashboard={onClose}
           onStatusChange={setInstallStatus}
@@ -3647,7 +3644,6 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
             {steps.map((s, i) => {
               const done = i < step;
               const active = i === step;
-              const Icon = s.icon;
               return (
                 <div
                   key={s.id}

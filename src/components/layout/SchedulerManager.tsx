@@ -31,7 +31,7 @@ export function SchedulerManager() {
 
   // Non-backup scheduler events: restart, broadcast, update, global_update_check.
   useTauriEvent<SchedulerFiredPayload>("scheduler://fired", async (payload) => {
-    const { scheduleId, serverId, serverName, scheduleType, success, error } = payload;
+    const { scheduleId, serverName, scheduleType, success, error } = payload;
 
     if (scheduleType === "global_update_check") {
       await setAppSetting("asa_last_checked", new Date().toISOString());

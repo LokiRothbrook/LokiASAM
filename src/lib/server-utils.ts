@@ -122,7 +122,6 @@ export async function buildLaunchCommandPreview(
 
   const exe = isLinux ? "./ShooterGameServer" : "ShooterGameServer.exe";
   const modsArg = enabledModIds.length > 0 ? `-mods=${enabledModIds.join(",")}` : "";
-  const portArgs = `-port=${server.port} -queryport=${server.query_port} -RCONPort=${server.rcon_port} -MaxPlayers=${server.max_players}`;
   const altSave = server.save_folder_name ? `?AltSaveDirectoryName=${server.save_folder_name}` : "";
 
   const parts = [

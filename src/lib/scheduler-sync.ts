@@ -11,7 +11,6 @@
 import { tauriCmd, type ScheduleEntry } from "@/lib/tauri-commands";
 import {
   getServers, getServerSchedules, getServerMods, getServerConfig, getAppSetting,
-  setAppSetting,
 } from "@/lib/db";
 import { ARK_MAPS, LAUNCH_PARAMETERS } from "@/data/game-data";
 import { getNextCronDate } from "@/components/shared/CronBuilder";

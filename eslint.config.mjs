@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Rust/Tauri build output — not JS/TS source, was being linted by accident.
+    "src-tauri/**",
   ]),
 ]);
 

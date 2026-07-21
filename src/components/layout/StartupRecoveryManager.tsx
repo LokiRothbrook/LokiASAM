@@ -102,7 +102,7 @@ export function StartupRecoveryManager() {
       }
       // pref === "never" → do nothing
     })();
-  }, [isServerScanPending, preScanStatuses]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isServerScanPending, preScanStatuses, enqueueStartup, queryClient]);
 
   const handleLeaveOffline = async () => {
     setShowDownedDialog(false);

@@ -1155,7 +1155,6 @@ export async function copyServerMods(sourceServerId: string, targetServerId: str
 
 /** Copy the server config (INI + launch args) from sourceServerId to targetServerId. */
 export async function copyServerConfig(sourceServerId: string, targetServerId: string): Promise<void> {
-  const db = await getDb();
   const src = await getServerConfig(sourceServerId);
   if (!src) return;
   await saveServerConfig(

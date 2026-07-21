@@ -7,7 +7,7 @@
  * input alongside a human-readable description of the expression.
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Info } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { CronExpressionParser } from "cron-parser";
@@ -102,8 +102,12 @@ export function CronBuilder({ value, onChange, label }: Props) {
 
   const isCustom = selected.cron === "";
 
-  useEffect(() => {
-    // Sync selection when `value` changes externally.
+  // Sync selection when `value` changes externally — compared during render
+  // rather than via an effect, since it's a synchronous derivation from the
+  // `value` prop with no async work of its own.
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
     const preset = CRON_PRESETS.find((p) => p.cron === value && p.cron !== "");
     if (preset) {
       setSelected(preset);
@@ -111,8 +115,7 @@ export function CronBuilder({ value, onChange, label }: Props) {
       setSelected(CRON_PRESETS[CRON_PRESETS.length - 1]);
       setCustomCron(value);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+  }
 
   function handlePresetChange(preset: CronPreset) {
     setSelected(preset);

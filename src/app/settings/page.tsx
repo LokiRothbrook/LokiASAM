@@ -6,7 +6,7 @@ import {
   Folder, Terminal, Info, Archive, Copy,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
   Save, RefreshCw, ArrowUp, Bell, MessageSquare, Mail, Monitor, Send, Download,
-  Server, Palette, Link, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings, TriangleAlert,
+  Server, Palette, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgr
 import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { listen } from "@tauri-apps/api/event";
 import {
-  applyTheme, applyThemeAccent, applyThemePreset,
+  applyTheme, applyThemeAccent,
   ACCENT_OPTIONS, THEME_PRESETS,
   type ThemeAccent, type ThemePreset,
 } from "@/lib/theme";
@@ -47,6 +47,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
+import { useOnMount } from "@/hooks/useOnMount";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -873,30 +874,20 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
   const [cachedBuild, setCached]      = useState("");
   const [lastChecked, setLastChecked] = useState("");
   const [autoCheckHours, setAutoCheck] = useState("disabled");
-  const [hasCacheInstalled, setHasCacheInstalled] = useState<boolean | null>(null);
   const [showApplyAll, setShowApplyAll] = useState(false);
   const [applyAllInfo, setApplyAllInfo] = useState<{ total: number; running: number }>({ total: 0, running: 0 });
   const [applyingAll, setApplyingAll] = useState(false);
 
   const load = useCallback(async () => {
-    const [cached, checked, hours, baseDir] = await Promise.all([
+    const [cached, checked, hours] = await Promise.all([
       getAppSetting("asa_cached_build_id"),
       getAppSetting("asa_last_checked"),
       getAppSetting("asa_auto_check_hours"),
-      getAppSetting("base_dir"),
     ]);
     setCached(cached ?? ""); setLastChecked(checked ?? ""); setAutoCheck(hours ?? "disabled");
-    if (baseDir) {
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const has = await tauriCmd.checkDir(cacheDir).then((r) => r.writable).catch(() => false);
-      setHasCacheInstalled(has);
-    } else {
-      setHasCacheInstalled(false);
-    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useOnMount(load);
 
   const handleCheck = async () => {
     setChecking(true);
@@ -1258,7 +1249,11 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
   const [baseDir, setBaseDir]         = useState("");
   const [phase, setPhase]             = useState<"idle" | "running" | "done" | "error">("idle");
   const [operation, setOperation]     = useState<"install" | "reinstall" | "verify">("install");
-  const [autoStartPending, setAutoStartPending] = useState(false);
+  // Latches the initial autoStart prop value — the prop itself flips back to
+  // false as soon as onAutoStartConsumed fires below, but the install still
+  // needs to wait for baseDir to finish loading before it can actually start.
+  const autoStartLatchedRef = useRef(autoStart);
+  const autoStartFiredRef   = useRef(false);
   // True only when we reconnected to an op that was already running (navigation case).
   // When runCacheOp starts the op directly, it manages phase itself — no polling needed.
   const reconnectedRef = useRef(false);
@@ -1306,15 +1301,20 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
     return dir ?? "";
   }, []);
 
+  // onAutoStartConsumed is a fresh inline callback from the parent every
+  // render; keep the latest in a ref so the mount-only effect below doesn't
+  // need it as a dependency (and doesn't re-fire on every parent re-render).
+  const onAutoStartConsumedRef = useRef(onAutoStartConsumed);
+  useEffect(() => {
+    onAutoStartConsumedRef.current = onAutoStartConsumed;
+  });
+
   // On mount: check if a cache operation is already running in the background
   // (e.g. user navigated away and came back). Restore running state if so.
-  useEffect(() => {
-    if (autoStart) {
-      onAutoStartConsumed?.();
-      setAutoStartPending(true);
-    }
+  const initMount = useCallback(() => {
+    if (autoStartLatchedRef.current) onAutoStartConsumedRef.current?.();
     load().then((dir) => {
-      if (autoStart && dir) return; // autoStartPending will drive the start via the effect below
+      if (autoStartLatchedRef.current && dir) return; // autoStartLatchedRef drives the start via the effect below
       tauriCmd.getRunningOps().then((ops) => {
         if (ops.includes("check")) {
           reconnectedRef.current = true;
@@ -1323,15 +1323,19 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
         }
       }).catch(() => {});
     });
-  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [load]);
+  useOnMount(initMount);
 
-  // After an auto-start navigation: once baseDir is loaded, scroll into view and start install.
+  // After an auto-start navigation: once baseDir is loaded, scroll into view and
+  // start install. autoStartFiredRef guards against firing more than once —
+  // it's mutated inside the effect (not during render), and doesn't need to
+  // trigger a re-render itself the way state would.
   useEffect(() => {
-    if (!autoStartPending || !baseDir) return;
-    setAutoStartPending(false);
+    if (!autoStartLatchedRef.current || !baseDir || autoStartFiredRef.current) return;
+    autoStartFiredRef.current = true;
     containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     runCacheOp("install");
-  }, [autoStartPending, baseDir, runCacheOp]);
+  }, [baseDir, runCacheOp]);
 
   // Poll for completion — only when we reconnected to a background op.
   // When runCacheOp started the op directly, it awaits the result itself.
@@ -1489,8 +1493,14 @@ function ProtonGeInstallRow() {
 
   const [protonPath, setProtonPath]           = useState("");
   const [isManaged, setIsManaged]             = useState(false);
-  const [phase, setPhase]                     = useState<"idle" | "running" | "done" | "error">("idle");
-  const [isReinstall, setIsReinstall]         = useState(false);
+  // Initialized from Zustand (synchronously available on first render) so
+  // nav-away/back shows the right state immediately — no effect needed to
+  // "restore" it after mount.
+  const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">(() => {
+    if (protonOpLabel !== null) return "running";
+    if (protonOpDone) return "done";
+    return "idle";
+  });
   const [showManagedConfirm, setShowManagedConfirm] = useState(false);
 
   useEffect(() => {
@@ -1501,13 +1511,6 @@ function ProtonGeInstallRow() {
       setProtonPath(p ?? "");
       setIsManaged(managed === "true");
     });
-  }, []);
-
-  // Restore phase from Zustand on mount so nav-away/back shows the right state.
-  useEffect(() => {
-    if (protonOpLabel !== null) setPhase("running");
-    else if (protonOpDone)      setPhase("done");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleConfirmManaged = async () => {
@@ -1529,7 +1532,6 @@ function ProtonGeInstallRow() {
     const targetDir = protonPath
       ? protonPath.replace(/[/\\][^/\\]+$/, "")
       : `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}proton`;
-    setIsReinstall(reinstall);
     setPhase("running");
     setProtonOpLabel(reinstall ? "Reinstalling Proton-GE…" : "Installing Proton-GE…");
     setProtonOpDone(false);
@@ -1891,8 +1893,11 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
   const [isManaged, setIsManaged]           = useState(false);
   const [checking, setChecking]             = useState(false);
   const [updateInfo, setUpdateInfo]         = useState<ProtonUpdateInfo | null>(null);
-  const [downloading, setDownloading]       = useState(false);
-  const [downloadDone, setDownloadDone]     = useState(false);
+  // Initialized from Zustand (synchronously available on first render) so
+  // nav-away/back shows the right state immediately — no effect needed to
+  // "restore" it after mount.
+  const [downloading, setDownloading]       = useState(() => protonOpLabel !== null);
+  const [downloadDone, setDownloadDone]     = useState(() => protonOpLabel === null && protonOpDone);
   const [checkMode, setCheckMode]           = useState("disabled");
   const [showManagedConfirm, setShowManagedConfirm] = useState(false);
   const autoStartedRef = useRef(false);
@@ -1910,13 +1915,6 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
     });
   }, []);
 
-  // Restore in-progress / done state from Zustand on mount (nav-away/back).
-  useEffect(() => {
-    if (protonOpLabel !== null) setDownloading(true);
-    else if (protonOpDone)      setDownloadDone(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Scroll this section into view when navigated here from the update toast.
   useEffect(() => {
     if (!autoStart) return;
@@ -1924,8 +1922,7 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
       sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     return () => cancelAnimationFrame(frame);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [autoStart]);
 
   const handleCheckUpdate = async () => {
     setChecking(true);
@@ -1942,7 +1939,7 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
     finally { setChecking(false); }
   };
 
-  const handleDownload = async () => {
+  const handleDownload = useCallback(async () => {
     if (!protonPath) { toast.error("Proton-GE path not configured."); return; }
     const targetDir = protonPath.replace(/[/\\][^/\\]+$/, "");
     setDownloading(true); setDownloadDone(false);
@@ -1965,7 +1962,7 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
       if (!String(e).includes("Aborted")) toast.error(`Proton-GE update failed: ${e}`);
     }
     finally { setDownloading(false); }
-  };
+  }, [protonPath, setProtonOpLabel, setProtonOpDone]);
 
   const handleConfirmManaged = async () => {
     await setAppSetting("proton_ge_managed", "true");
@@ -1980,12 +1977,11 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
   };
 
   // When navigated here via the update toast, auto-start the download once settings are loaded.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!autoStart || autoStartedRef.current || !protonPath || !isManaged) return;
     autoStartedRef.current = true;
     handleDownload();
-  }, [autoStart, protonPath, isManaged]);
+  }, [autoStart, protonPath, isManaged, handleDownload]);
 
   // Determine if the current path is inside the managed location
   const managedPattern = /[/\\]proton[/\\]GE-Proton/;
@@ -2188,7 +2184,7 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
     try { setConfigs(await getNotificationConfigs(null)); } catch (err) { toast.error("Failed to load notification configs", { description: String(err) }); }
   }, []);
 
-  useEffect(() => { loadConfigs(); }, [loadConfigs]);
+  useOnMount(loadConfigs);
 
   function getConfig(channelId: string) { return configs.find((c) => c.channel === channelId); }
 
@@ -2271,13 +2267,22 @@ interface GlobalChannelCardProps {
   onTest: (cfgJson: string) => Promise<boolean>;
 }
 
-function GlobalChannelCard({ channelId: _channelId, icon: Icon, label, desc, fields, enabled, cfg, saving, onToggle, onSave, onTest }: GlobalChannelCardProps) {
+function GlobalChannelCard({ icon: Icon, label, desc, fields, enabled, cfg, saving, onToggle, onSave, onTest }: GlobalChannelCardProps) {
   const [localCfg, setLocalCfg] = useState<Record<string, string>>(cfg);
   const [testing, setTesting]   = useState(false);
   const [testPassed, setTestPassed] = useState(false);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setLocalCfg(cfg); }, [JSON.stringify(cfg)]);
+  const cfgKey = JSON.stringify(cfg);
+  const [prevCfgKey, setPrevCfgKey] = useState(cfgKey);
+  // Re-sync the local editable copy when the upstream cfg genuinely changes
+  // (not on every render — cfg is a fresh object each render even when its
+  // contents are the same). Comparing during render and updating state here
+  // is React's documented pattern for "adjusting state when a prop changes"
+  // without needing a separate effect (refs can't be read/written during
+  // render, so the "previous value" has to be state too).
+  if (prevCfgKey !== cfgKey) {
+    setPrevCfgKey(cfgKey);
+    setLocalCfg(cfg);
+  }
 
   const handleTestClick = async () => {
     setTesting(true);
@@ -2433,7 +2438,7 @@ function AppImageIntegrationSection() {
               </Button>
             </div>
             <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-              If the icon doesn't appear in your launcher, log out and back in (or reboot).
+              If the icon doesn&apos;t appear in your launcher, log out and back in (or reboot).
             </p>
           </div>
         ) : (

@@ -61,12 +61,15 @@ export function useServerStatsHistory(
   );
 
   // ── Live mode: time-anchored gap chart ────────────────────────────────────
-  // Recompute whenever the buffer changes (new 5 s sample arrives).
-  // `now` is captured at compute time so the window always ends at the current tick.
+  // Recompute whenever the buffer changes (new 5 s sample arrives). Anchored
+  // to the last real sample's own timestamp rather than a fresh Date.now()
+  // read during render (impure — could produce inconsistent results if React
+  // re-renders without committing). When the buffer is empty every slot is a
+  // gap regardless of the anchor value, so the fallback of 0 is harmless.
   const gappedLive = useMemo<ChartPoint[]>(() => {
     if (timeframe !== "Live") return EMPTY_BUFFER;
 
-    const now = Date.now();
+    const now = liveBuffer[liveBuffer.length - 1]?.ts ?? 0;
 
     // Build a lookup from rounded-slot-ts → ChartPoint for fast matching.
     const lookup = new Map<number, ChartPoint>();
@@ -95,17 +98,23 @@ export function useServerStatsHistory(
   }, [liveBuffer, timeframe]);
 
   // ── DB-backed timeframes ──────────────────────────────────────────────────
-  const [dbData, setDbData]   = useState<ChartPoint[]>([]);
-  const [loading, setLoading] = useState(false);
+  // `loading` is derived by comparing the currently-requested key against the
+  // key of the last completed fetch, rather than an explicit setLoading(true)
+  // at the top of the effect — the effect then only calls setState from
+  // within the promise callbacks (an async continuation, not the synchronous
+  // effect body), which is the pattern react-hooks/set-state-in-effect wants.
+  const [dbData, setDbData]     = useState<ChartPoint[]>([]);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const requestedKey = serverId && timeframe !== "Live" ? `${serverId}:${timeframe}` : null;
+  const loading = requestedKey !== null && requestedKey !== loadedKey;
 
   useEffect(() => {
-    if (timeframe === "Live" || !serverId) {
-      setDbData([]);
-      return;
-    }
+    // dbData isn't read while timeframe === "Live" (see the early return
+    // below), so there's nothing to clear here — just skip the fetch.
+    if (timeframe === "Live" || !serverId) return;
 
     let cancelled = false;
-    setLoading(true);
+    const key = `${serverId}:${timeframe}`;
 
     const { fromMs, bucketMs, useDaily } = DB_CONFIG[timeframe];
     const from = Date.now() - fromMs;
@@ -115,13 +124,14 @@ export function useServerStatsHistory(
       : queryStatHistory(serverId, from, bucketMs)
     )
       .then((rows) => {
-        if (!cancelled) setDbData(rows);
+        if (cancelled) return;
+        setDbData(rows);
+        setLoadedKey(key);
       })
       .catch(() => {
-        if (!cancelled) setDbData([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setDbData([]);
+        setLoadedKey(key);
       });
 
     return () => { cancelled = true; };

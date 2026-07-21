@@ -186,8 +186,7 @@ function NotificationsContent() {
       }, 3000);
       return () => clearTimeout(timeout);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [resetUnreadBump, queryClient, highlightId, router]);
 
   const filtered = notifications.filter((n) => {
     if (severityFilter !== "all" && n.severity !== severityFilter) return false;

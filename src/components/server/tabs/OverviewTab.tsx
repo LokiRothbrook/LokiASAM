@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Zap, Settings2, Terminal, Skull, CheckCircle2, ShieldCheck, ChevronDown, ChevronRight, Sparkles,
+  Settings2, Terminal, Skull, ShieldCheck, ChevronDown, ChevronRight, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,14 +35,13 @@ import { applyUpdateToServer } from "@/lib/update-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
-import { formatServerVersion } from "@/lib/db";
-import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
 import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getMapById, getSaveFolder } from "@/data/game-data";
 import { setServerActiveEvent } from "@/lib/db";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useOnMount } from "@/hooks/useOnMount";
 
 interface Props {
   server: ServerRow;
@@ -573,7 +572,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
-  const versionCache = useBuildVersionCache();
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
   const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
@@ -621,6 +619,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     return () => clearInterval(id);
   }, [isRunning, isStarting]);
 
+  // server is read via a ref inside the effect below so unrelated re-renders
+  // (e.g. status polling) don't force server's full identity into that
+  // effect's deps — only an actual id/install_path change should refetch.
+  const serverRef = useRef(server);
+  useEffect(() => {
+    serverRef.current = server;
+  });
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -642,7 +648,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             launchArgs,
           });
           // Build launch command preview (async, non-blocking)
-          buildLaunchCommandPreview(server, launchArgs).then(setLaunchCommand).catch(() => {});
+          buildLaunchCommandPreview(serverRef.current, launchArgs).then(setLaunchCommand).catch(() => {});
         }
         setLastBackup(lb);
         setNextRestart(nr);
@@ -901,10 +907,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   }, [server.id]);
 
   // Fetch player list on mount/server-change if running.
-  useEffect(() => {
+  const syncPlayersIfRunning = useCallback(() => {
     if (server.status === "running") refreshPlayers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id]);
+  }, [server.status, refreshPlayers]);
+  useOnMount(syncPlayersIfRunning);
 
   // The per-server event emits the players array directly as payload.
   useTauriEvent<ArkPlayer[]>(

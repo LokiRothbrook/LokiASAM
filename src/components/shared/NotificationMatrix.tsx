@@ -140,8 +140,7 @@ function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
   // Re-query credential status whenever the parent signals a credential change.
   useEffect(() => {
     if (refreshKey !== undefined && refreshKey > 0) loadState();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+  }, [refreshKey, loadState]);
 
   useImperativeHandle(ref, () => ({
     getChannelEvents: () =>

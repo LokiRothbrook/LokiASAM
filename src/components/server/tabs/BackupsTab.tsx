@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useOnMount } from "@/hooks/useOnMount";
 import {
   Archive, Plus, Trash2, RotateCcw, HardDrive, User, FileText,
   AlertCircle, Loader2, RefreshCw, CalendarClock,
@@ -215,7 +216,6 @@ function BackupRowCard({
 }) {
   const isLogin = backup.triggered_by === "login";
   const tiers = !isLogin && backup.tiers ? backup.tiers.split(",").filter(Boolean) : [];
-  const fname = backup.file_path.split(/[\\/]/).pop() ?? backup.file_path;
   const displayName = backup.backup_type === "player" && backup.player_name
     ? backup.player_name
     : null;
@@ -537,6 +537,7 @@ function IniBackupSection({
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!backupDir) return;
     setLoading(true);
     try {
       setSnapshots(await tauriCmd.listIniBackups(serverId, backupDir));
@@ -545,7 +546,7 @@ function IniBackupSection({
     }
   }, [serverId, backupDir]);
 
-  useEffect(() => { if (backupDir) load(); }, [load, backupDir]);
+  useOnMount(load);
 
   async function handleRestore(timestamp: string) {
     onBusyChange(true);
@@ -737,7 +738,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     }
   }, [server.id]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useOnMount(loadAll);
 
   useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,

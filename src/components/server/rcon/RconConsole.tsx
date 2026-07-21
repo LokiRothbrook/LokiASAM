@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { tauriCmd, type RconLogLine, type ArkPlayer, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useOnMount } from "@/hooks/useOnMount";
 import type { ServerRow } from "@/lib/db";
 
 interface Props {
@@ -65,7 +66,17 @@ export function RconConsole({ server }: Props) {
   const [connected, setConnected]     = useState(false);
   const [connecting, setConnecting]   = useState(false);
   const [error, setError]             = useState<string | null>(null);
-  const [lines, setLines]             = useState<RconLogLine[]>([]);
+  // Seeded with a "not running" placeholder when applicable — server.status is
+  // already known synchronously on first render, no effect needed to set it.
+  const [lines, setLines] = useState<RconLogLine[]>(() =>
+    server.status !== "running"
+      ? [{
+          timestampMs: Date.now(),
+          text: "Server is not running — start the server to use RCON.",
+          kind: "system",
+        }]
+      : []
+  );
   const [cmdInput, setCmdInput]       = useState("");
   const [msgInput, setMsgInput]       = useState("");
   const [sending, setSending]         = useState(false);
@@ -174,29 +185,23 @@ export function RconConsole({ server }: Props) {
 
   // Sync initial connected state from Rust on mount (covers the case where
   // RconManager already connected before this tab was opened).
-  useEffect(() => {
-    if (server.status !== "running") {
-      setLines([{
-        timestampMs: Date.now(),
-        text: "Server is not running — start the server to use RCON.",
-        kind: "system",
-      }]);
-      return;
-    }
+  const syncConnectedState = useCallback(() => {
+    if (server.status !== "running") return;
     tauriCmd.rconIsConnected(server.id).then((live) => {
       setConnected(live);
       if (!live) setError(null);
     }).catch(() => null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [server.status, server.id]);
+  useOnMount(syncConnectedState);
 
   // Seed player list from cache (no RCON command) and load file-based lists once connected.
   // Subsequent updates come from rcon://players/{id} events via RconManager's 30 s tick.
-  useEffect(() => {
+  const syncOnConnect = useCallback(() => {
     if (!connected) return;
     tauriCmd.rconGetCachedPlayers(server.id).then((p) => { if (p !== null) setPlayers(p); }).catch(() => null);
     refreshLists();
-  }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connected, server.id, refreshLists]);
+  useOnMount(syncOnConnect);
 
   // ── Send a raw RCON command ───────────────────────────────────────────────
   const sendCommand = useCallback(async (cmd: string) => {

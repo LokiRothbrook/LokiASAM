@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
+import { useOnMount } from "@/hooks/useOnMount";
 import { Map, Plus, Trash2, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +44,7 @@ export default function ModMapsPage() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useOnMount(load);
 
   const closeDialog = () => {
     if (saving) return;

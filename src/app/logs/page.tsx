@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { ScrollText, ChevronDown, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,15 +16,12 @@ export default function LogsPage() {
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard } = useAppStore();
 
-  const [selectedId, setSelectedId] = useState<string>(
+  const [rawSelectedId, setSelectedId] = useState<string>(
     searchParams.get("server") ?? ""
   );
-
-  useEffect(() => {
-    if (!selectedId && servers.length > 0) {
-      setSelectedId(servers[0].id);
-    }
-  }, [servers, selectedId]);
+  // Defaults to the first server once the list loads, without needing a
+  // separate effect+state just to mirror that default back into state.
+  const selectedId = rawSelectedId || servers[0]?.id || "";
 
   const selectedServer: ServerRow | undefined = servers.find(
     (s) => s.id === selectedId
