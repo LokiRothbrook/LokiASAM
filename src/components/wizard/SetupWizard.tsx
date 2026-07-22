@@ -1037,16 +1037,57 @@ function ImportVerifyPanel({
 // BaseDirStep — includes "Import previous install" tab
 // ---------------------------------------------------------------------------
 
+/**
+ * Shared directory-check-with-debounce state for BaseDirStep and
+ * BackupDirStep, which were previously two copies of the same
+ * dirResult/checking/validateDir/debounce-cleanup logic differing only in
+ * which store setter they call.
+ */
+function useDirValidation(setWritable: (w: boolean) => void) {
+  const [dirResult, setDirResult] = useState<DirCheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const validateDir = useCallback(async (path: string) => {
+    if (!path.trim()) return;
+    setChecking(true);
+    setDirResult(null);
+    try {
+      const result = await tauriCmd.checkDir(path);
+      setDirResult(result);
+      setWritable(result.writable);
+    } catch {
+      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
+      setDirResult(fallback);
+      setWritable(false);
+    } finally {
+      setChecking(false);
+    }
+  }, [setWritable]);
+
+  useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
+
+  /** Clears the current result and (re-)schedules a debounced validateDir call. */
+  const validateDirDebounced = useCallback((path: string) => {
+    setDirResult(null);
+    setWritable(false);
+    if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);
+    if (path.trim()) {
+      validateDebounceRef.current = setTimeout(() => validateDir(path), 600);
+    }
+  }, [validateDir, setWritable]);
+
+  return { dirResult, checking, validateDir, validateDirDebounced };
+}
+
 function BaseDirStep() {
   const {
     baseDir, setBaseDir, setBackupDir, setBaseDirWritable,
     importMode, setImportMode, importDir, setImportDir, importValid, setImportValid,
   } = useSetupStore();
-  const [dirResult, setDirResult] = useState<DirCheckResult | null>(null);
-  const [checking, setChecking] = useState(false);
+  const { dirResult, checking, validateDir, validateDirDebounced } = useDirValidation(setBaseDirWritable);
   const [wipeOpen, setWipeOpen] = useState(false);
   const [importChecking, setImportChecking] = useState(false);
-  const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [importError, setImportError] = useState("");
   const [importInfo, setImportInfo] = useState<{
     servers: number;
@@ -1064,23 +1105,6 @@ function BaseDirStep() {
     }>;
   } | null>(null);
 
-  const validateDir = useCallback(async (path: string) => {
-    if (!path.trim()) return;
-    setChecking(true);
-    setDirResult(null);
-    try {
-      const result = await tauriCmd.checkDir(path);
-      setDirResult(result);
-      setBaseDirWritable(result.writable);
-    } catch {
-      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
-      setDirResult(fallback);
-      setBaseDirWritable(false);
-    } finally {
-      setChecking(false);
-    }
-  }, [setBaseDirWritable]);
-
   // Auto-fill with platform default on mount
   useEffect(() => {
     (async () => {
@@ -1097,19 +1121,11 @@ function BaseDirStep() {
     })();
   }, [setBaseDir, setBackupDir, validateDir]);
 
-  // Clean up debounce on unmount.
-  useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
-
   const handleChange = (value: string) => {
     setBaseDir(value);
     const sep = value.includes("\\") ? "\\" : "/";
     setBackupDir(value.replace(/[/\\]$/, "") + sep + "backups");
-    setDirResult(null);
-    setBaseDirWritable(false);
-    if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);
-    if (value.trim()) {
-      validateDebounceRef.current = setTimeout(() => validateDir(value), 600);
-    }
+    validateDirDebounced(value);
   };
 
   const pickDir = async () => {
@@ -1439,42 +1455,16 @@ function BaseDirStep() {
 
 function BackupDirStep() {
   const { backupDir, setBackupDir, setBackupDirWritable } = useSetupStore();
-  const [dirResult, setDirResult] = useState<DirCheckResult | null>(null);
-  const [checking, setChecking] = useState(false);
-  const validateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const validateDir = useCallback(async (path: string) => {
-    if (!path.trim()) return;
-    setChecking(true);
-    setDirResult(null);
-    try {
-      const result = await tauriCmd.checkDir(path);
-      setDirResult(result);
-      setBackupDirWritable(result.writable);
-    } catch {
-      const fallback: DirCheckResult = { writable: false, freeBytes: 0, error: "Could not check directory.", isNew: false, hasLokiasam: false, isEmpty: false };
-      setDirResult(fallback);
-      setBackupDirWritable(false);
-    } finally {
-      setChecking(false);
-    }
-  }, [setBackupDirWritable]);
+  const { dirResult, checking, validateDir, validateDirDebounced } = useDirValidation(setBackupDirWritable);
 
   const syncValidateOnMount = useCallback(() => {
     if (backupDir) validateDir(backupDir);
   }, [backupDir, validateDir]);
   useOnMount(syncValidateOnMount);
 
-  useEffect(() => () => { if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current); }, []);
-
   const handleChange = (value: string) => {
     setBackupDir(value);
-    setDirResult(null);
-    setBackupDirWritable(false);
-    if (validateDebounceRef.current) clearTimeout(validateDebounceRef.current);
-    if (value.trim()) {
-      validateDebounceRef.current = setTimeout(() => validateDir(value), 600);
-    }
+    validateDirDebounced(value);
   };
 
   const pickDir = async () => {
@@ -2268,6 +2258,7 @@ function CertStep() {
     protonPath,
     setCertInstalled,
     certSkipped,
+    setLoading,
   } = useSetupStore();
 
   const [phase, setPhase] = useState<CertPhase>("checking");
@@ -2297,6 +2288,10 @@ function CertStep() {
 
   const handleInstall = async () => {
     setError("");
+    // Block Back/Next like the SteamCMD/Proton-GE steps do — otherwise the
+    // user can navigate away mid-install, the step unmounts, and its local
+    // phase/error state (including a failure) is silently discarded.
+    setLoading(true, "Installing certificate…");
     try {
       const tmp = await tempDir();
       setPhase("downloading");
@@ -2315,6 +2310,8 @@ function CertStep() {
     } catch (e) {
       setError(String(e));
       setPhase("error");
+    } finally {
+      setLoading(false);
     }
   };
 

@@ -11,6 +11,7 @@ use sevenz_rust::{SevenZWriter, SevenZArchiveEntry};
 
 use crate::events;
 use crate::state::rcon_pool::{RconCmd, RconPool};
+use super::utils::{fmt_size, tier_suffix, copy_dir_recursive};
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -84,39 +85,10 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
-fn fmt_size(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
-    } else if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else {
-        format!("{:.1} KB", bytes as f64 / 1_024.0)
-    }
-}
-
 fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
-}
-
-/// Build a filename tier suffix like "-DH" from a tiers string like "D,H" or "H".
-/// Tiers are sorted in canonical priority order (M W D H).
-fn tier_suffix(tiers: &str) -> String {
-    if tiers.is_empty() {
-        return String::new();
-    }
-    const ORDER: &[char] = &['M', 'W', 'D', 'H'];
-    let flags: Vec<char> = tiers.split(',')
-        .filter_map(|t| t.trim().chars().next())
-        .filter(|c| ORDER.contains(c))
-        .collect();
-    if flags.is_empty() {
-        return String::new();
-    }
-    let mut sorted: Vec<char> = ORDER.iter().copied().filter(|c| flags.contains(c)).collect();
-    sorted.dedup();
-    format!("-{}", sorted.iter().collect::<String>())
 }
 
 /// Find and parse a `YYYY-MM-DD_HH-MM-SS` timestamp embedded in a filename stem.
@@ -128,9 +100,20 @@ pub fn parse_backup_filename(stem: &str) -> Option<(String, String)> {
     if len < 19 { return None; }
 
     for i in 0..=(len - 19) {
-        let candidate = &stem[i..i + 19];
-        if is_timestamp(candidate.as_bytes()) {
-            let after = &stem[i + 19..];
+        // Index the byte slice (not `stem`) — `i`/`i+19` may not land on UTF-8
+        // char boundaries for non-ASCII filenames, and `&str` indexing panics
+        // in that case, while byte-slice indexing does not.
+        let candidate = &bytes[i..i + 19];
+        if is_timestamp(candidate) {
+            // `is_timestamp` only matches ASCII digits/separators, so this is
+            // always valid UTF-8.
+            let candidate = std::str::from_utf8(candidate).unwrap();
+            let after = match std::str::from_utf8(&bytes[i + 19..]) {
+                Ok(s) => s,
+                // `i + 19` doesn't land on a char boundary for the remainder —
+                // treat as no match rather than panicking.
+                Err(_) => continue,
+            };
             // After timestamp: either empty, or "-{MWDH letters}", or something else (no tier)
             let tiers = if let Some(rest) = after.strip_prefix('-') {
                 if !rest.is_empty() && rest.chars().all(|c| matches!(c, 'M' | 'W' | 'D' | 'H')) {
@@ -1119,23 +1102,8 @@ pub async fn import_server_saves(
     fs::create_dir_all(&target).map_err(|e| format!("Failed to create target save dir: {e}"))?;
 
     // Recursively copy everything from source into target
-    fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
-        for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let dst_path = dst.join(entry.file_name());
-            let src_path = entry.path();
-            if src_path.is_dir() {
-                fs::create_dir_all(&dst_path).map_err(|e| e.to_string())?;
-                copy_dir(&src_path, &dst_path)?;
-            } else {
-                fs::copy(&src_path, &dst_path)
-                    .map_err(|e| format!("Failed to copy {:?}: {e}", src_path))?;
-            }
-        }
-        Ok(())
-    }
-
-    copy_dir(&source, &target)?;
+    copy_dir_recursive(&source, &target, &[])
+        .map_err(|e| format!("Failed to copy save files: {e}"))?;
     Ok(())
 }
 
@@ -1304,14 +1272,14 @@ pub async fn restore_server_backup(
     let temp_saved_arks = temp_dir.join("SavedArks").join(&save_folder);
     if temp_saved_arks.exists() {
         fs::create_dir_all(&saved_arks_path).map_err(|e| e.to_string())?;
-        copy_dir_recursive(&temp_saved_arks, &saved_arks_path).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&temp_saved_arks, &saved_arks_path, &[]).map_err(|e| e.to_string())?;
     }
 
     // Process Mods/SaveGames files
     let temp_mods = temp_dir.join("Mods").join(&map_path).join("SaveGames");
     if temp_mods.exists() {
         fs::create_dir_all(&mods_saves_path).map_err(|e| e.to_string())?;
-        copy_dir_recursive(&temp_mods, &mods_saves_path).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&temp_mods, &mods_saves_path, &[]).map_err(|e| e.to_string())?;
     }
 
     // Step 4: Recreate symlinks
@@ -1324,24 +1292,6 @@ pub async fn restore_server_backup(
     let _ = fs::remove_dir_all(&temp_dir);
 
     emit_progress(&app, &server_id, 100.0, "", "Restore complete");
-    Ok(())
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    use std::fs;
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let dest_path = dst.join(&file_name);
-
-        if path.is_dir() {
-            copy_dir_recursive(&path, &dest_path)?;
-        } else {
-            fs::copy(&path, &dest_path)?;
-        }
-    }
     Ok(())
 }
 

@@ -2,9 +2,9 @@ use crate::state::{scheduler::SchedulerState, AppState};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 
-use super::server::{inner_start_server, inner_stop_server, StartServerParams};
+use super::server::{inner_start_server, StartServerParams};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,8 +21,6 @@ pub struct SchedulerFiredPayload {
     pub schedule_type: String,
     pub success: bool,
     pub error: Option<String>,
-    /// All backup records created by this firing (player backups produce one per player).
-    pub backup_records: Vec<crate::commands::backup::BackupRecord>,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,9 +122,17 @@ async fn fire_wipe_dinos(app: &AppHandle, entry: &crate::state::scheduler::Sched
 }
 
 async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    if !is_server_running(app, &entry.server_id) {
+    if !super::server::is_server_running(app, &entry.server_id) {
         return Ok(());
     }
+
+    // Refuse to restart a server whose hourly backup is currently in
+    // progress — killing the process mid-backup can produce a silently
+    // incomplete archive. The restart will fire again at its next scheduled
+    // occurrence.
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&entry.server_id)
+        .ok_or_else(|| format!("A backup is currently in progress for {} — restart will retry next time", entry.server_id))?;
 
     let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
     let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
@@ -136,7 +142,15 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
     let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
     {
         let state = app.state::<AppState>();
-        state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
+        let mut cd = state.countdowns.lock().unwrap();
+        // Refuse to start a second countdown for this server — otherwise a
+        // restart and an update schedule (or two restarts) becoming due in
+        // the same tick would silently overwrite each other's countdown
+        // handle and both run their own stop/start sequence concurrently.
+        if cd.contains_key(&entry.server_id) {
+            return Err(format!("A countdown is already in progress for {}", entry.server_id));
+        }
+        cd.insert(entry.server_id.clone(), tx);
     }
 
     let result = super::countdown::run_countdown(
@@ -160,15 +174,7 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
         return Ok(());
     }
 
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-    sleep(Duration::from_secs(3)).await;
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
-
-    for _ in 0..60 {
-        sleep(Duration::from_millis(500)).await;
-        if !is_server_running(app, &entry.server_id) { break; }
-    }
-    let _ = inner_stop_server(app, &entry.server_id, false);
+    super::server::graceful_shutdown_via_rcon(app, &entry.server_id, entry.rcon_port, &entry.rcon_password).await;
 
     let params = entry_to_start_params(entry);
     inner_start_server(app.clone(), params).await.map(|_| ())
@@ -227,7 +233,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
     let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
 
-    let is_running    = is_server_running(app, &entry.server_id);
+    let is_running    = super::server::is_server_running(app, &entry.server_id);
     let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
     let skip_if_players = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
     let restart_after   = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
@@ -250,11 +256,27 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         }
     }
 
+    // Refuse to update a server whose hourly backup is currently reading its
+    // files — overwriting them mid-backup can produce a silently incomplete
+    // archive. The per-server auto-update entry is regenerated on the next
+    // schedule sync as long as update_available stays set, so this retries
+    // shortly rather than being lost.
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&entry.server_id)
+        .ok_or_else(|| format!("A backup is currently in progress for {} — update will retry shortly", entry.server_id))?;
+
     if is_running {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
         {
             let state = app.state::<AppState>();
-            state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
+            let mut cd = state.countdowns.lock().unwrap();
+            // See fire_restart — refuse to clobber a countdown already in
+            // progress for this server (e.g. a restart schedule racing this
+            // update schedule in the same tick).
+            if cd.contains_key(&entry.server_id) {
+                return Err(format!("A countdown is already in progress for {}", entry.server_id));
+            }
+            cd.insert(entry.server_id.clone(), tx);
         }
 
         let result = super::countdown::run_countdown(
@@ -278,15 +300,7 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             return Ok(());
         }
 
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-        sleep(Duration::from_secs(3)).await;
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
-
-        for _ in 0..60 {
-            sleep(Duration::from_millis(500)).await;
-            if !is_server_running(app, &entry.server_id) { break; }
-        }
-        let _ = inner_stop_server(app, &entry.server_id, false);
+        super::server::graceful_shutdown_via_rcon(app, &entry.server_id, entry.rcon_port, &entry.rcon_password).await;
     }
 
     // Emit "updating" so the server card shows the spinner.
@@ -367,15 +381,6 @@ fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> Star
     }
 }
 
-/// Returns true if a server is currently running (checked via AppState).
-fn is_server_running(app: &AppHandle, server_id: &str) -> bool {
-    app.state::<AppState>()
-        .running_servers
-        .lock()
-        .unwrap()
-        .contains_key(server_id)
-}
-
 /// Called by the background scheduler loop in lib.rs.
 /// Checks for due entries, fires them in separate spawned tasks, and marks them
 /// as fired (next_run_ms = u64::MAX) to prevent double-fire until the frontend resyncs.
@@ -403,28 +408,28 @@ pub fn tick_scheduler(app: &AppHandle) {
             let server_id = entry.server_id.clone();
             let server_name = entry.server_name.clone();
 
-            let (success, error, backup_records) = match schedule_type.as_str() {
+            let (success, error) = match schedule_type.as_str() {
                 "broadcast" => match fire_broadcast(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "restart" => match fire_restart(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "update" => match fire_update(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "global_update_check" => match fire_global_update_check(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "wipe_dinos" => match fire_wipe_dinos(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
-                _ => (false, Some(format!("Unknown schedule type: {schedule_type}")), vec![]),
+                _ => (false, Some(format!("Unknown schedule type: {schedule_type}"))),
             };
 
             let _ = app.emit(
@@ -436,7 +441,6 @@ pub fn tick_scheduler(app: &AppHandle) {
                     schedule_type,
                     success,
                     error,
-                    backup_records,
                 },
             );
         });

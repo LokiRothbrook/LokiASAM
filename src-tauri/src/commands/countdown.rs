@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 use crate::state::CountdownSignal;
-use super::server::{inner_stop_server, inner_start_server, StartServerParams};
+use super::server::{inner_start_server, StartServerParams};
 
 // ---------------------------------------------------------------------------
 // Tauri event payload
@@ -260,24 +260,9 @@ pub async fn start_graceful_restart(
         deregister_countdown(&state2, &params.server_id);
 
         if matches!(result, CountdownResult::Proceed) {
-            // saveworld → doexit → wait → restart
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "saveworld"
+            super::server::graceful_shutdown_via_rcon(
+                &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
-            sleep(Duration::from_secs(3)).await;
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "doexit"
-            ).await;
-
-            // Wait up to 30s for graceful exit.
-            for _ in 0..60 {
-                sleep(Duration::from_millis(500)).await;
-                let still_running = state2.running_servers.lock().unwrap().contains_key(&params.server_id);
-                if !still_running { break; }
-            }
-            // Force-kill if still alive.
-            let _ = inner_stop_server(&app2, &params.server_id, false);
-
             let _ = inner_start_server(app2, params.start_params).await;
         }
     });
@@ -350,20 +335,9 @@ pub async fn start_graceful_update(
 
         // Stop the server gracefully if it was running.
         if was_running {
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "saveworld"
+            super::server::graceful_shutdown_via_rcon(
+                &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
-            sleep(Duration::from_secs(3)).await;
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "doexit"
-            ).await;
-
-            for _ in 0..60 {
-                sleep(Duration::from_millis(500)).await;
-                let still = state2.running_servers.lock().unwrap().contains_key(&params.server_id);
-                if !still { break; }
-            }
-            let _ = inner_stop_server(&app2, &params.server_id, false);
         }
 
         // Emit "updating" status so server card shows spinner.

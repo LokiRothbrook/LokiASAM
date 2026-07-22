@@ -184,6 +184,70 @@ fn pid_alive(pid: u32) -> bool {
     sys.process(spid).is_some()
 }
 
+/// Returns true if a server is currently tracked as running in AppState.
+pub fn is_server_running(app: &tauri::AppHandle, server_id: &str) -> bool {
+    app.state::<AppState>()
+        .running_servers
+        .lock()
+        .unwrap()
+        .contains_key(server_id)
+}
+
+/// The graceful-shutdown-via-RCON sequence shared by every restart/update
+/// path (scheduled and manually-triggered via the countdown commands):
+/// SaveWorld → wait 3s for the save to flush → doexit → poll for the process
+/// to actually exit (up to 30s) → force-kill if it's still alive. Previously
+/// reimplemented six times across server.rs/scheduler.rs/countdown.rs, with
+/// two copies having drifted to a 2s wait instead of 3s.
+pub async fn graceful_shutdown_via_rcon(
+    app: &tauri::AppHandle,
+    server_id: &str,
+    rcon_port: u16,
+    rcon_password: &str,
+) {
+    use tokio::time::{sleep, Duration};
+
+    let _ = super::rcon::transient_rcon_command(rcon_port, rcon_password, "saveworld").await;
+    sleep(Duration::from_secs(3)).await;
+    let _ = super::rcon::transient_rcon_command(rcon_port, rcon_password, "doexit").await;
+
+    for _ in 0..60 {
+        sleep(Duration::from_millis(500)).await;
+        if !is_server_running(app, server_id) { break; }
+    }
+    let _ = inner_stop_server(app, server_id, false);
+}
+
+/// PID-based variant of `graceful_shutdown_via_rcon`, for the two call sites
+/// (`graceful_stop_server`, `inner_restart_server`) that only clear the
+/// `running_servers` registry entry themselves *after* this returns — for
+/// them, polling the registry mid-wait would never observe the process as
+/// gone, so this polls the OS process table directly instead. SaveWorld →
+/// wait 3s → doexit → poll `pid_alive` (up to 30s) → force-kill via
+/// `kill_process_tree` if still alive.
+async fn graceful_shutdown_via_rcon_pid(
+    pid: u32,
+    install_path: &str,
+    rcon_port: u16,
+    rcon_password: &str,
+) {
+    use super::rcon::transient_rcon_command;
+    use tokio::time::{sleep, Duration};
+
+    let _ = transient_rcon_command(rcon_port, rcon_password, "saveworld").await;
+    sleep(Duration::from_secs(3)).await;
+    let _ = transient_rcon_command(rcon_port, rcon_password, "doexit").await;
+
+    for _ in 0..60 {
+        sleep(Duration::from_millis(500)).await;
+        if !pid_alive(pid) { break; }
+    }
+    if pid_alive(pid) {
+        kill_process_tree(pid, false, install_path);
+        sleep(Duration::from_millis(500)).await;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -415,6 +479,7 @@ async fn inner_start_server_with_state(
         // ── Intentional stop ─────────────────────────────────────────────────
         if was_intentional {
             app_state.running_servers.lock().unwrap().remove(&sid);
+            handle_clone.state::<RconPool>().remove_server(&sid).await;
             LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
             crate::commands::notifications::dispatch_notification(
                 &handle_clone, "server_stopped", Some(&sid), &server_name_notif,
@@ -430,6 +495,7 @@ async fn inner_start_server_with_state(
         // ── Runtime crash (was confirmed running) ────────────────────────────
         if confirmed_clone.load(Ordering::Relaxed) {
             app_state.running_servers.lock().unwrap().remove(&sid);
+            handle_clone.state::<RconPool>().remove_server(&sid).await;
             LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
             crate::commands::notifications::dispatch_notification(
                 &handle_clone, "server_crashed", Some(&sid), &server_name_notif,
@@ -830,16 +896,7 @@ pub async fn inner_restart_server(
         if graceful {
             // Graceful path: ask the server to save and exit via RCON so it
             // flushes world data cleanly (same as the Stop button does).
-            use crate::commands::rcon::transient_rcon_command;
-            let _ = transient_rcon_command(params.rcon_port, &params.rcon_password, "saveworld").await;
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            let _ = transient_rcon_command(params.rcon_port, &params.rcon_password, "doexit").await;
-
-            // Wait up to 30 s for the server to exit cleanly.
-            for _ in 0..60 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                if !pid_alive(pid) { break; }
-            }
+            graceful_shutdown_via_rcon_pid(pid, &install_path, params.rcon_port, &params.rcon_password).await;
         } else {
             kill_process_tree(pid, false, &install_path);
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -855,6 +912,10 @@ pub async fn inner_restart_server(
         let state = app_handle.state::<AppState>();
         state.stopping_servers.lock().unwrap().remove(&params.server_id);
         state.running_servers.lock().unwrap().remove(&params.server_id);
+        // Drop any RCON state tied to the process we just killed — the new
+        // instance gets a fresh connection, and this avoids briefly showing
+        // a stale pre-restart player list.
+        app_handle.state::<RconPool>().remove_server(&params.server_id).await;
     }
 
     inner_start_server(app_handle, params).await
@@ -1169,11 +1230,24 @@ pub async fn delete_server(
             .unwrap()
             .insert(server_id.clone());
         kill_process_tree(pid, false, &install_path);
-        // Brief wait — we don't block long here.
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Wait for the process to actually exit (up to 15 s) before touching
+        // its files — a fixed 500 ms wait isn't enough on a slow-to-release
+        // process (common on Windows under antivirus scanning), and would
+        // make remove_dir_all below fail with "file in use".
+        for _ in 0..30 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            if !pid_alive(pid) { break; }
+        }
+        if pid_alive(pid) {
+            kill_process_tree(pid, false, &install_path);
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
         state.running_servers.lock().unwrap().remove(&server_id);
         state.stopping_servers.lock().unwrap().remove(&server_id);
     }
+    // The server is being permanently removed — always drop its RCON state,
+    // regardless of which delete_* flags were set.
+    app.state::<RconPool>().remove_server(&server_id).await;
 
     if delete_files && !install_path.is_empty() {
         std::fs::remove_dir_all(&install_path)
@@ -1339,27 +1413,13 @@ pub async fn graceful_stop_server(
         }
     }
 
-    // SaveWorld then DoExit
-    let _ = transient_rcon_command(rcon_port, &rcon_password, "saveworld").await;
-    sleep(tokio::time::Duration::from_secs(2)).await;
-    let _ = transient_rcon_command(rcon_port, &rcon_password, "doexit").await;
-
-    // Wait up to 30 s for process to exit
-    for _ in 0..60 {
-        sleep(tokio::time::Duration::from_millis(500)).await;
-        if !pid_alive(pid) { break; }
-    }
-    if pid_alive(pid) {
-        kill_process_tree(pid, false, &install_path);
-        sleep(tokio::time::Duration::from_millis(500)).await;
-    }
+    // SaveWorld → wait → DoExit → poll for exit → force-kill if still alive.
+    graceful_shutdown_via_rcon_pid(pid, &install_path, rcon_port, &rcon_password).await;
 
     // Clean up state
     state.stopping_servers.lock().unwrap().remove(&server_id);
     state.running_servers.lock().unwrap().remove(&server_id);
-    pool.cmd_channels.lock().await.remove(&server_id);
-    pool.log_buffer.lock().await.remove(&server_id);
-    pool.player_cache.lock().await.remove(&server_id);
+    pool.remove_server(&server_id).await;
 
     // Rotate logs now that the process is confirmed dead. Covers servers that
     // were found running at startup (watched by the scan watcher which exits

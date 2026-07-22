@@ -158,14 +158,13 @@ pub async fn source_query_version(port: u16) -> Option<String> {
 /// strings), app_id(2), players(1), max_players(1), bots(1), server_type(1),
 /// environment(1), visibility(1), vac(1), version (null-term string).
 fn parse_a2s_version(data: &[u8]) -> Option<String> {
+    use super::utils::read_cstring;
+
     let mut pos = 1; // skip protocol byte
 
     // Skip four null-terminated strings: name, map, folder, game
     for _ in 0..4 {
-        while pos < data.len() && data[pos] != 0 {
-            pos += 1;
-        }
-        pos += 1; // consume null terminator
+        read_cstring(data, &mut pos).ok()?;
     }
 
     // Skip: app_id(2) + players(1) + max_players(1) + bots(1) +
@@ -176,12 +175,7 @@ fn parse_a2s_version(data: &[u8]) -> Option<String> {
         return None;
     }
 
-    // Version string (null-terminated)
-    let start = pos;
-    while pos < data.len() && data[pos] != 0 {
-        pos += 1;
-    }
-    let version = std::str::from_utf8(&data[start..pos]).ok()?;
+    let version = read_cstring(data, &mut pos).ok()?;
     if version.is_empty() {
         return None;
     }
@@ -191,7 +185,7 @@ fn parse_a2s_version(data: &[u8]) -> Option<String> {
     if parts.len() >= 2 {
         Some(format!("{}.{}", parts[0], parts[1]))
     } else {
-        Some(version.to_string())
+        Some(version)
     }
 }
 

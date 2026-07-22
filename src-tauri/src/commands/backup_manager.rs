@@ -24,16 +24,7 @@ use super::backup::{
     create_server_backup_inner, backup_all_players_inner, create_player_backup_inner,
     rcon_save_world, rcon_broadcast, BackupRecord,
 };
-
-fn fmt_size(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
-    } else if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else {
-        format!("{:.1} KB", bytes as f64 / 1_024.0)
-    }
-}
+use super::utils::{fmt_size, tier_suffix};
 
 // ---------------------------------------------------------------------------
 // Map ID → ASA map path (matches ARK_MAPS in game-data.ts)
@@ -145,20 +136,6 @@ fn tier_config_any_enabled(cfg: &TierConfig) -> bool {
 // ---------------------------------------------------------------------------
 // Path helpers (mirrors computeRenamedPath from SchedulerManager.tsx)
 // ---------------------------------------------------------------------------
-
-/// Build a tier suffix string like "-MWD" from a comma-separated tiers string like "M,W,D".
-fn tier_suffix(tiers: &str) -> String {
-    if tiers.is_empty() {
-        return String::new();
-    }
-    const ORDER: [char; 4] = ['M', 'W', 'D', 'H'];
-    let flags: Vec<char> = tiers
-        .split(',')
-        .filter_map(|t| t.trim().chars().next())
-        .collect();
-    let sorted: String = ORDER.iter().filter(|c| flags.contains(c)).collect();
-    if sorted.is_empty() { String::new() } else { format!("-{sorted}") }
-}
 
 /// Rename a backup file path to embed the new tier suffix.
 /// "server-2024-01-15_10-00-00.7z"        → "server-2024-01-15_10-00-00-DH.7z"
@@ -501,6 +478,16 @@ pub async fn execute_tick(app: &AppHandle) {
         if !running_ids.contains(&server.id) {
             continue;
         }
+
+        // Skip a server currently undergoing a scheduled restart/update —
+        // reading its files while they're mid-overwrite could produce a
+        // silently incomplete archive. Picked up again on the next hourly
+        // tick. Held for the rest of this iteration.
+        let app_state = app.state::<AppState>();
+        let Some(_lock) = app_state.try_lock_server(&server.id) else {
+            eprintln!("[backup_manager] Skipping backup for {} — restart/update in progress", server.id);
+            continue;
+        };
 
         let schedules = db::get_server_schedules(&conn, &server.id);
         let map_path = map_id_to_path(&server.map_id);

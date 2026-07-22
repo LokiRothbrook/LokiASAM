@@ -6,11 +6,15 @@
  * update_available column in the DB and optionally fires notifications.
  */
 
-import { getServers, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting } from "@/lib/db";
+import {
+  getServers, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting,
+  updateServerStatus, type ServerRow,
+} from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
+import { toast } from "sonner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -249,4 +253,95 @@ export async function applyUpdateToServer(
     });
     throw err;
   }
+}
+
+// ── Apply updates to every outdated server ────────────────────────────────────
+
+/**
+ * Apply the cached update to every server in `targets` (typically every
+ * server with `update_available === 1`), sequentially. Writes the correct
+ * status transition at each step (update_queued → updating → running/stopped,
+ * or startup_queued when a restart is needed) and calls `onInvalidate` after
+ * every write so callers never show stale state — this is the single shared
+ * implementation for both the Dashboard's "Update All" and Settings' "Apply
+ * Update to All Servers", which previously reimplemented this independently
+ * with diverging correctness (only one of the two kept the DB status column
+ * in sync).
+ */
+export async function applyUpdateToAllServers(
+  targets: ServerRow[],
+  restartAfterUpdate: boolean,
+  opts: {
+    enqueueStartup: (ids: string[]) => void;
+    onInvalidate: () => void;
+    /** Per-server progress text, e.g. for a toast keyed by server id. */
+    onProgress?: (serverId: string, msg: string) => void;
+  },
+): Promise<{ succeeded: number; failed: number }> {
+  let succeeded = 0;
+  let failed = 0;
+
+  // Everything after the first target starts as queued so the UI can show
+  // it's pending while the first one is actively updating.
+  const rest = targets.slice(1);
+  if (rest.length > 0) {
+    await Promise.all(rest.map((s) => updateServerStatus(s.id, "update_queued", null)));
+    opts.onInvalidate();
+  }
+
+  for (const server of targets) {
+    await updateServerStatus(server.id, "updating", null);
+    opts.onInvalidate();
+
+    const wasRunning = server.status === "running" || server.status === "starting";
+
+    try {
+      await applyUpdateToServer(
+        server.id,
+        server.name,
+        server.install_path,
+        wasRunning,
+        restartAfterUpdate,
+        server.rcon_port,
+        server.admin_password,
+        {
+          warnPlayers: server.update_warn_players !== 0,
+          warnMinutes: server.update_warn_minutes ?? 5,
+          warnMessage: server.update_message || "Server going down for update in {time}.",
+        },
+        (msg) => opts.onProgress?.(server.id, msg),
+      );
+      succeeded += 1;
+    } catch (err) {
+      if (err && typeof err === "object" && "restartNeeded" in err) {
+        await updateServerStatus(server.id, "startup_queued", null);
+        opts.onInvalidate();
+        opts.enqueueStartup([server.id]);
+        succeeded += 1;
+        continue;
+      }
+      failed += 1;
+      toast.error(`Failed to update ${server.name}`, { description: String(err) });
+      await updateServerStatus(server.id, "stopped", null).catch(() => {});
+      opts.onInvalidate();
+      continue;
+    }
+
+    await updateServerStatus(server.id, "stopped", null).catch(() => {});
+    opts.onInvalidate();
+  }
+
+  if (succeeded > 0) {
+    toast.success(`Updated ${succeeded} server${succeeded === 1 ? "" : "s"} successfully.`);
+    await dispatchNotification({
+      eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
+      serverId:   null,
+      serverName: "All Servers",
+      title:      `${succeeded} Server${succeeded !== 1 ? "s" : ""} Updated`,
+      body:       `${succeeded} server${succeeded !== 1 ? "s have" : " has"} been updated from the cache.`,
+      severity:   "success",
+    });
+  }
+
+  return { succeeded, failed };
 }

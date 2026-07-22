@@ -60,6 +60,26 @@ pub struct AppState {
     /// Used by Rust-side business logic (backup manager, notification dispatch) to open
     /// their own rusqlite connections without blocking the Tauri plugin-sql connection.
     pub db_path: Mutex<Option<String>>,
+    /// Server IDs currently undergoing a backup, restart, or update — held for
+    /// the whole operation so the hourly backup tick and a scheduled
+    /// restart/update can never run concurrently against the same server
+    /// (a restart/update killing or overwriting files mid-backup can produce
+    /// a silently-incomplete archive). Acquire via `try_lock_server`.
+    pub busy_servers: Mutex<HashSet<String>>,
+}
+
+/// RAII guard returned by `AppState::try_lock_server` — releases the lock
+/// when dropped, on every exit path (return, `?`, panic unwind) of whichever
+/// scope holds it.
+pub struct ServerLockGuard<'a> {
+    state: &'a AppState,
+    server_id: String,
+}
+
+impl Drop for ServerLockGuard<'_> {
+    fn drop(&mut self) {
+        self.state.busy_servers.lock().unwrap().remove(&self.server_id);
+    }
 }
 
 impl AppState {
@@ -77,6 +97,19 @@ impl AppState {
             abort_flags: Mutex::new(HashMap::new()),
             countdowns: Mutex::new(HashMap::new()),
             db_path: Mutex::new(None),
+            busy_servers: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Attempt to mark a server as busy (backup/restart/update in progress).
+    /// Returns `None` if another operation already holds the lock; otherwise
+    /// a guard that releases it when dropped.
+    pub fn try_lock_server(&self, server_id: &str) -> Option<ServerLockGuard<'_>> {
+        let inserted = self.busy_servers.lock().unwrap().insert(server_id.to_string());
+        if inserted {
+            Some(ServerLockGuard { state: self, server_id: server_id.to_string() })
+        } else {
+            None
         }
     }
 

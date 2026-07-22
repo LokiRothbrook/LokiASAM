@@ -20,7 +20,7 @@ import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
 import { getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
-import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, type ServerUpdateInfo } from "@/lib/update-utils";
 import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -415,7 +415,8 @@ export default function DashboardPage() {
           .catch(async (e) => {
             await updateServerStatus(s.id, "start-failed", null);
             toast.error(`Failed to start ${s.name}: ${e}`);
-          });
+          })
+          .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
       }
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       toast.info(`Starting ${stopped.length} server${stopped.length === 1 ? "" : "s"}…`);
@@ -427,9 +428,20 @@ export default function DashboardPage() {
     if (running.length === 0) return;
     setGlobalActionPending(true);
     try {
-      await Promise.all(running.map((s) => tauriCmd.stopServer(s.id, false).catch(() => null)));
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
+      let failed = 0;
+      await Promise.all(running.map(async (s) => {
+        try {
+          await updateServerStatus(s.id, "stopping", s.pid);
+          await tauriCmd.stopServer(s.id, false);
+        } catch (e) {
+          failed += 1;
+          toast.error(`Failed to stop ${s.name}: ${e}`);
+        } finally {
+          queryClient.invalidateQueries({ queryKey: ["servers"] });
+        }
+      }));
+      const succeeded = running.length - failed;
+      if (succeeded > 0) toast.info(`Stopping ${succeeded} server${succeeded === 1 ? "" : "s"}…`);
     } finally { setGlobalActionPending(false); }
   }, [servers, queryClient]);
 
@@ -438,15 +450,23 @@ export default function DashboardPage() {
     if (running.length === 0) return;
     setGlobalActionPending(true);
     try {
-      for (const s of running) {
-        const params = await buildStartParams(s);
-        tauriCmd.restartServer(params, true).catch((e) =>
-          toast.error(`Failed to restart ${s.name}: ${e}`)
-        );
-      }
+      await Promise.all(running.map(async (s) => {
+        try {
+          await updateServerStatus(s.id, "stopping", s.pid);
+          queryClient.invalidateQueries({ queryKey: ["servers"] });
+          const params = await buildStartParams(s);
+          const newPid = await tauriCmd.restartServer(params, true);
+          await updateServerStatus(s.id, "running", newPid);
+        } catch (e) {
+          toast.error(`Failed to restart ${s.name}: ${e}`);
+          await updateServerStatus(s.id, "error", null);
+        } finally {
+          queryClient.invalidateQueries({ queryKey: ["servers"] });
+        }
+      }));
       toast.info(`Restarting ${running.length} server${running.length === 1 ? "" : "s"}…`);
     } finally { setGlobalActionPending(false); }
-  }, [servers]);
+  }, [servers, queryClient]);
 
   // ── Update All handler ────────────────────────────────────────────────────
 
@@ -458,60 +478,11 @@ export default function DashboardPage() {
     if (targets.length === 0) { setUpdatingAll(false); return; }
 
     try {
-      // Mark all targets with their initial status.
-      // Active server = first in list → "updating"
-      // Rest → "update_queued"
-      const rest = targets.slice(1);
-
-      if (rest.length > 0) {
-        await Promise.all(
-          rest.map((s) => updateServerStatus(s.id, "update_queued", null))
-        );
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-      }
-
-      // Process sequentially
-      for (const server of targets) {
-        await updateServerStatus(server.id, "updating", null);
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-
-        const wasRunning = server.status === "running" || server.status === "starting";
-
-        try {
-          await applyUpdateToServer(
-            server.id,
-            server.name,
-            server.install_path,
-            wasRunning,
-            restartAfterUpdate,
-            server.rcon_port,
-            server.admin_password,
-            {
-              warnPlayers: server.update_warn_players !== 0,
-              warnMinutes: server.update_warn_minutes ?? 5,
-              warnMessage: server.update_message || "Server going down for update in {time}.",
-            },
-            (msg) => toast.info(msg, { id: `update-${server.id}` }),
-          );
-        } catch (err) {
-          if (err && typeof err === "object" && "restartNeeded" in err) {
-            // Queue this server for startup after update
-            await updateServerStatus(server.id, "startup_queued", null);
-            queryClient.invalidateQueries({ queryKey: ["servers"] });
-            const serverData = servers.find((s) => s.id === server.id);
-            if (serverData) enqueueStartup([serverData.id]);
-            continue;
-          }
-          toast.error(`Failed to update ${server.name}`, { description: String(err) });
-          await updateServerStatus(server.id, "stopped", null).catch(() => {});
-          queryClient.invalidateQueries({ queryKey: ["servers"] });
-        }
-
-        await updateServerStatus(server.id, "stopped", null).catch(() => {});
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-      }
-
-      toast.success(`Updated ${targets.length} server${targets.length === 1 ? "" : "s"} successfully.`);
+      await applyUpdateToAllServers(targets, restartAfterUpdate, {
+        enqueueStartup,
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+        onProgress: (serverId, msg) => toast.info(msg, { id: `update-${serverId}` }),
+      });
     } finally {
       setUpdatingAll(false);
       queryClient.invalidateQueries({ queryKey: ["servers"] });

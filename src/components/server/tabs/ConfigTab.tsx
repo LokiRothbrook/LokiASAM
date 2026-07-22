@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
   Settings2, X, ToggleLeft, ToggleRight, Terminal,
@@ -917,7 +919,7 @@ function QuickSetupModal({
 function EventCard({ server }: { server: ServerRow }) {
   const [activeEventId, setActiveEventId] = useState<string | null>(server.active_event ?? null);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   const currentEvent = ARK_EVENTS.find((e) => e.id === activeEventId) ?? null;
 
@@ -926,8 +928,7 @@ function EventCard({ server }: { server: ServerRow }) {
     setSaving(true);
     try {
       await setServerActiveEvent(server.id, eventId);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save event: ${e}`);
     } finally {
@@ -998,14 +999,13 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
     server.shutdown_message || "Server will shut down in {time}."
   );
   const [saving, setSaving]   = useState(false);
-  const [saved, setSaved]     = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   const handleSave = async () => {
     setSaving(true);
     try {
       await updateServerShutdownSettings(server.id, warnPlayers, warnMinutes, message);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save shutdown settings: ${e}`);
     } finally {
@@ -1087,14 +1087,13 @@ function RestartSettingsCard({ server }: { server: ServerRow }) {
   const [message, setMessage]               = useState(server.restart_message || "Server restarting in {time}.");
   const [cancelMessage, setCancelMessage]   = useState(server.restart_cancel_message || "Restart has been canceled.");
   const [saving, setSaving]                 = useState(false);
-  const [saved, setSaved]                   = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   const handleSave = async () => {
     setSaving(true);
     try {
       await updateServerRestartSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save restart settings: ${e}`);
     } finally {
@@ -1186,14 +1185,13 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
   const [message, setMessage]               = useState(server.update_message || "Server going down for update in {time}.");
   const [cancelMessage, setCancelMessage]   = useState(server.update_cancel_message || "Update has been canceled.");
   const [saving, setSaving]                 = useState(false);
-  const [saved, setSaved]                   = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   const handleSave = async () => {
     setSaving(true);
     try {
       await updateServerUpdateSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save update settings: ${e}`);
     } finally {
@@ -1429,6 +1427,7 @@ function AdvancedConfigTab({
 }
 
 export function ConfigTab({ server }: Props) {
+  const queryClient = useQueryClient();
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
@@ -1436,7 +1435,7 @@ export function ConfigTab({ server }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
+  const [savedFlash, triggerSavedFlash] = useSavedFlash();
   const [isDirty, setIsDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPasteModal, setShowPasteModal] = useState(false);
@@ -1533,20 +1532,26 @@ export function ConfigTab({ server }: Props) {
       const text = await readTextFile(selected);
       const sections = rawTextToSections(text);
       if (!config) return;
-      // Determine which file was picked by looking at key section names
-      const isGus = Object.keys(sections).some((s) =>
-        ["ServerSettings", "SessionSettings", "MessageOfTheDay", "Ragnarok"].includes(s),
-      );
-      const isGame = Object.keys(sections).some((s) =>
-        s.toLowerCase().includes("shootergame"),
-      );
+      // Route each section to its file individually — an imported file
+      // containing sections that belong to both files (a combined export,
+      // or a custom mod section whose name happens to mention "shootergame")
+      // must not dump its entire contents into both; only Game.ini actually
+      // uses "/script/shootergame..." sections, everything else is GUS.
+      const gusSections: Record<string, Record<string, string>> = {};
+      const gameSections: Record<string, Record<string, string>> = {};
+      for (const [name, kv] of Object.entries(sections)) {
+        if (name.toLowerCase().startsWith("/script/shootergame")) {
+          gameSections[name] = kv;
+        } else {
+          gusSections[name] = kv;
+        }
+      }
       setConfig((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
-          ...(isGus ? { gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...sections } } : {}),
-          ...(isGame ? { gameIni: { ...(prev.gameIni as Record<string, Record<string, string>>), ...sections } } : {}),
-          ...(!isGus && !isGame ? { gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...sections } } : {}),
+          gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...gusSections },
+          gameIni: { ...(prev.gameIni as Record<string, Record<string, string>>), ...gameSections },
         };
       });
       setIsDirty(true);
@@ -1606,13 +1611,25 @@ export function ConfigTab({ server }: Props) {
       }
       // Write to disk
       await tauriCmd.writeServerConfig(server.install_path, toSave);
-      // Persist to DB so Config tab loads our version next time, not the server's overwrite
-      await saveServerConfig(
-        server.id,
-        JSON.stringify(toSave.gameUserSettings),
-        JSON.stringify(toSave.gameIni),
-        JSON.stringify(toSave.launchArgs ?? {}),
-      );
+      // Persist to DB so Config tab loads our version next time, not the
+      // server's overwrite. This can't be made truly atomic with the disk
+      // write above (different systems), so on failure here we give a
+      // distinct message: the file IS already updated, only the DB record
+      // of it failed — the reload-from-DB path would otherwise silently
+      // revert the file back next time this tab loads.
+      try {
+        await saveServerConfig(
+          server.id,
+          JSON.stringify(toSave.gameUserSettings),
+          JSON.stringify(toSave.gameIni),
+          JSON.stringify(toSave.launchArgs ?? {}),
+        );
+      } catch (dbErr) {
+        throw new Error(
+          `Config was written to disk, but saving it to the app database failed: ${dbErr}. ` +
+          `Click Save again — your disk changes are already applied and will not be lost by retrying.`
+        );
+      }
 
       // admin_password is the single source of truth for both the INI value and
       // RCON auth. If this save changed ServerAdminPassword (e.g. via the raw
@@ -1627,8 +1644,7 @@ export function ConfigTab({ server }: Props) {
       }
 
       setIsDirty(false);
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 2000);
+      triggerSavedFlash();
 
       // Snapshot INI files into the backup system (best-effort, non-blocking)
       const backupDir = await getAppSetting("backup_dir").catch(() => null);
@@ -1670,6 +1686,7 @@ export function ConfigTab({ server }: Props) {
       await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, newMapData.mapPath);
       // Update the database
       await updateServerMap(server.id, newMapId);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       toast.success(`Map changed to ${newMapData.displayName}`);
     } catch (e) {
       toast.error(`Failed to change map: ${e}`);

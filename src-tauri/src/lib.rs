@@ -208,9 +208,8 @@ pub fn run() {
             // close button and hide to tray instead of exiting.
             // During setup or when close_to_tray=false, the X button exits normally.
             let handle_for_close = app.handle().clone();
-            app.get_webview_window("main")
-                .unwrap()
-                .on_window_event(move |event| {
+            if let Some(main_window) = app.get_webview_window("main") {
+                main_window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         let app_state = handle_for_close.state::<state::AppState>();
                         let setup_done = app_state
@@ -225,6 +224,9 @@ pub fn run() {
                         }
                     }
                 });
+            } else {
+                eprintln!("Warning: main window not found at setup — close-to-tray handler not attached.");
+            }
 
             // ── Scheduler background task ──────────────────────────────────
             let scheduler_handle = app.handle().clone();

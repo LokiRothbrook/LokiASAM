@@ -169,6 +169,23 @@ export function RconConsole({ server }: Props) {
     } catch { /* ignore */ }
   }, [server.install_path]);
 
+  // Ban/whitelist/unban/unwhitelist all schedule a delayed refreshLists() so
+  // the RCON server has time to apply the change first. Tracked here so they
+  // can be cleared on unmount instead of firing (and doing wasted IPC work)
+  // after the user has already navigated away.
+  const refreshTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const scheduleRefreshLists = useCallback(() => {
+    const id = setTimeout(() => {
+      refreshTimeoutsRef.current.delete(id);
+      refreshLists();
+    }, 500);
+    refreshTimeoutsRef.current.add(id);
+  }, [refreshLists]);
+  useEffect(() => () => {
+    refreshTimeoutsRef.current.forEach(clearTimeout);
+    refreshTimeoutsRef.current.clear();
+  }, []);
+
   // ── Manual reconnect (user presses "Reconnect" button) ───────────────────
   // RconManager handles auto-connect; this is only needed for the manual button.
   const connect = useCallback(async () => {
@@ -257,7 +274,7 @@ export function RconConsole({ server }: Props) {
     setSelectedPlayer(null);
     await sendCommand(cmd);
     if (action.label === "Ban" || action.label === "Whitelist") {
-      setTimeout(refreshLists, 500);
+      scheduleRefreshLists();
     }
   };
 
@@ -286,12 +303,12 @@ export function RconConsole({ server }: Props) {
 
   const unban = async (id: string) => {
     await sendCommand(`unbanplayer ${id}`);
-    setTimeout(refreshLists, 500);
+    scheduleRefreshLists();
   };
 
   const unwhitelist = async (id: string) => {
     await sendCommand(`disallowplayertojoinnocheck ${id}`);
-    setTimeout(refreshLists, 500);
+    scheduleRefreshLists();
   };
 
   // ── Layout ────────────────────────────────────────────────────────────────

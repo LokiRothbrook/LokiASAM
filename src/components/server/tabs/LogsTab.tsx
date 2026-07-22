@@ -229,6 +229,11 @@ function LivePanel({ server }: { server: ServerRow }) {
         cancelled = true;
         unlistenBackfill?.();
         unlistenLine?.();
+        // Stop the Rust-side file watcher too — without this, switching away
+        // from the Live tab (or navigating off the page) while the server is
+        // still running leaves it tailing the log file indefinitely, and
+        // reopening Live starts a second watcher on top of it.
+        tauriCmd.stopLogWatch(server.id).catch(() => null);
       };
     } else {
       tauriCmd.stopLogWatch(server.id).catch(() => null);
@@ -858,19 +863,28 @@ function PlayersPanel({ server }: { server: ServerRow }) {
     }
   }
 
+  // Guards against an older, slower-resolving fetch (e.g. from rapidly
+  // switching the selected player) overwriting a newer one's result if
+  // responses arrive out of order.
+  const playerReqIdRef = useRef(0);
   useEffect(() => {
     if (!selectedEosId) return;
     const eosId = selectedEosId;
+    const reqId = ++playerReqIdRef.current;
     Promise.all([
       getPlayerKnownIps(server.id, eosId),
       getPlayerConnectionHistory(server.id, eosId, 200),
       getPossibleAlts(server.id, eosId),
     ]).then(([ips, hist, altList]) => {
+      if (reqId !== playerReqIdRef.current) return;
       setKnownIps(ips);
       setHistory(hist);
       setAlts(altList);
       setLoadedEosId(eosId);
-    }).catch(() => { setLoadedEosId(eosId); });
+    }).catch(() => {
+      if (reqId !== playerReqIdRef.current) return;
+      setLoadedEosId(eosId);
+    });
   }, [server.id, selectedEosId]);
 
   const nameFor = (eosId: string) =>

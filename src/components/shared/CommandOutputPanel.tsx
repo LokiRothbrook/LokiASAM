@@ -10,9 +10,12 @@
  *
  * Buffer lifecycle:
  *   - Accumulates as events arrive, regardless of dialog state.
- *   - Cleared when the panel unmounts AND the process has completed (completed=true).
- *   - Also cleared on unmount when clearBufferOnUnmount=true (used by wizard "Go to Dashboard").
- *   - Buffer is NOT cleared on unmount while a process is still running.
+ *   - Cleared on unmount only when both `clearBufferOnClose` is true AND the
+ *     process had completed (via the `completed` prop) — by default neither
+ *     condition clears it, so callers that want cleanup must opt in.
+ *   - Callers may also clear a channel directly via `clearOutputBuffer(channel)`
+ *     at any point they know is safe (e.g. ServerCard does this once a
+ *     card — and thus its association with the channel — goes away).
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";

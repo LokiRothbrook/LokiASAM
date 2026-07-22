@@ -579,6 +579,13 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [modCount, setModCount]     = useState<number | null>(null);
   const [activeConfig, setActiveConfig] = useState<ActiveConfig | null>(null);
   const [lastBackup,  setLastBackup]  = useState<string | null>(null);
+
+  // Refresh the Last Backup tile when a scheduled (hourly) backup finishes —
+  // without this it stays stale (showing the pre-backup time) until this tab
+  // remounts, since it's otherwise only fetched once on mount below.
+  useTauriEvent(`backup://completed/${server.id}`, () => {
+    getLastBackupTime(server.id).then(setLastBackup).catch(() => {});
+  });
   const [nextRestart,   setNextRestart]   = useState<string | null>(null);
   const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
@@ -1057,6 +1064,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
                   });
                   const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
                   await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
+                  setLastBackup(record.createdAt);
                 })
                 .catch(() => null);
             }}

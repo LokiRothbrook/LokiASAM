@@ -361,6 +361,10 @@ export default function ClustersPage() {
 
   const refresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["clusters"] });
+    // Deleting a cluster detaches every member server (setServerCluster ->
+    // null) — without this, the dashboard and cluster-aware menus keep
+    // showing those servers as still belonging to the deleted cluster.
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
   }, [queryClient]);
 
   return (

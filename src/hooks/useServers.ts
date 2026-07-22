@@ -16,7 +16,9 @@ import { useAppStore } from "@/store/useAppStore";
  */
 export function useServers() {
   const queryClient = useQueryClient();
-  const { serverStartTimes, setServerStartTime, clearServerStartTime } = useAppStore();
+  const serverStartTimes = useAppStore((s) => s.serverStartTimes);
+  const setServerStartTime = useAppStore((s) => s.setServerStartTime);
+  const clearServerStartTime = useAppStore((s) => s.clearServerStartTime);
 
   useTauriEvent<ServerStatus>("server://any-change", async (payload) => {
     // Track when each server process first started so we can show uptime from

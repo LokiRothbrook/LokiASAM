@@ -177,6 +177,63 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io:
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Backup helpers — shared between backup.rs (manual/on-demand backups) and
+// backup_manager.rs (the hourly scheduled tick), which previously each had
+// their own copy of both of these.
+// ---------------------------------------------------------------------------
+
+/// Format a byte count as a human-readable "X.Y GB/MB/KB" string.
+pub fn fmt_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A2S_INFO parsing primitive — shared by system.rs's query_server (full
+// ServerQueryResult, 3s timeout, live UI display) and build_version.rs's
+// source_query_version (just the version string, 5s timeout, up to 2
+// challenge-response rounds). Those two differ enough in return type, retry
+// policy, and input slicing convention that only this lowest-level, most
+// fragile piece — walking null-terminated strings out of the byte buffer —
+// is shared; duplicating that specific logic was the actual maintenance risk.
+// ---------------------------------------------------------------------------
+
+/// Read a null-terminated UTF-8 string from `data` starting at `*cursor`,
+/// advancing `*cursor` past the null byte.
+pub fn read_cstring(data: &[u8], cursor: &mut usize) -> Result<String, String> {
+    let start = *cursor;
+    while *cursor < data.len() && data[*cursor] != 0 {
+        *cursor += 1;
+    }
+    if *cursor >= data.len() {
+        return Err("Unterminated string in A2S_INFO response".into());
+    }
+    let s = String::from_utf8_lossy(&data[start..*cursor]).into_owned();
+    *cursor += 1; // consume the null byte
+    Ok(s)
+}
+
+/// Build a filename tier suffix like "-DH" from a tiers string like "D,H" or
+/// "H", sorted into canonical priority order (M W D H).
+pub fn tier_suffix(tiers: &str) -> String {
+    if tiers.is_empty() {
+        return String::new();
+    }
+    const ORDER: [char; 4] = ['M', 'W', 'D', 'H'];
+    let flags: Vec<char> = tiers
+        .split(',')
+        .filter_map(|t| t.trim().chars().next())
+        .collect();
+    let sorted: String = ORDER.iter().filter(|c| flags.contains(c)).collect();
+    if sorted.is_empty() { String::new() } else { format!("-{sorted}") }
+}
+
 /// Async version of `copy_dir_recursive` — all I/O runs on the async executor.
 /// Runs in an infinite-depth recursion via `Box::pin`; suitable for smaller
 /// trees (mod directories).  For very large trees (server installs) prefer

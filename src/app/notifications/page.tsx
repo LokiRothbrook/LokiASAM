@@ -205,7 +205,11 @@ function NotificationsContent() {
   const handleDelete = useCallback(async (id: string) => {
     await deleteNotification(id);
     refetch();
-  }, [refetch]);
+    // Deleting an unread notification must also refresh the bell badge —
+    // that reads a separate ["notifications", "unread", ...] query this
+    // page's own `refetch` (scoped to the list query) doesn't touch.
+    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+  }, [refetch, queryClient]);
 
   const handleBulkDelete = useCallback(async (days?: number) => {
     const daysLabel = days ? `older than ${days} day${days === 1 ? "" : "s"}` : "all";
@@ -215,8 +219,9 @@ function NotificationsContent() {
       eventType: eventTypeFilter !== "all" ? eventTypeFilter : undefined,
     });
     refetch();
+    queryClient.invalidateQueries({ queryKey: ["notifications"] });
     toast.success(`Deleted ${daysLabel} notifications${severityFilter !== "all" || eventTypeFilter !== "all" ? " matching current filter" : ""}.`);
-  }, [refetch, severityFilter, eventTypeFilter]);
+  }, [refetch, severityFilter, eventTypeFilter, queryClient]);
 
   return (
     <div className="h-full overflow-hidden flex flex-col gap-6">

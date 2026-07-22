@@ -168,12 +168,14 @@ pub async fn steamcmd_app_update(
     let mut child2 = build_steamcmd_cmd(steamcmd_path, &base_args)
         .spawn()
         .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
+    // Don't pre-check the abort flag and bail before calling
+    // stream_process_abortable — that would skip its kill logic and leave
+    // this freshly-spawned process orphaned. stream_process_abortable checks
+    // the flag immediately on entry and kills the process tree if it's
+    // already set, so it's always safe to hand off to directly.
     let exit_code2 = match &abort {
-        Some(flag) => {
-            if flag.load(Ordering::Relaxed) { return Err("Aborted".into()); }
-            stream_process_abortable(app, &mut child2, channel, std::sync::Arc::clone(flag)).await?
-        }
-        None => stream_process(app, &mut child2, channel).await?,
+        Some(flag) => stream_process_abortable(app, &mut child2, channel, std::sync::Arc::clone(flag)).await?,
+        None       => stream_process(app, &mut child2, channel).await?,
     };
     if exit_code2 == 0 {
         Ok(())
@@ -326,10 +328,17 @@ async fn install_steamcmd_inner(
     emit_line(app_handle, channel, "stdout", &format!("Downloaded {} bytes. Extracting...", bytes.len()))?;
 
     if is_zip {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(cursor)
-            .map_err(|e| format!("Failed to open ZIP: {e}"))?;
-        archive.extract(dir).map_err(|e| format!("Failed to extract ZIP: {e}"))?;
+        // ZIP extraction is blocking (sync std I/O under the hood) — run it
+        // off the async executor like the tar.gz path below already does.
+        let dir_owned = dir.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let cursor = std::io::Cursor::new(bytes);
+            let mut archive = zip::ZipArchive::new(cursor)
+                .map_err(|e| format!("Failed to open ZIP: {e}"))?;
+            archive.extract(&dir_owned).map_err(|e| format!("Failed to extract ZIP: {e}"))
+        })
+        .await
+        .map_err(|e| format!("ZIP extraction task panicked: {e}"))??;
     } else {
         let dir_owned = dir.to_path_buf();
         let abort_extract = std::sync::Arc::clone(abort);

@@ -137,7 +137,10 @@ export async function syncSchedulesToRust(): Promise<void> {
 
     if ((isStartup || isLegacy) && steamcmdPath && baseDir && servers.length > 0) {
       const intervalMs = isStartupHourly || isLegacy ? 3_600_000 : 0;
-      let nextRunMs: number;
+      // null means "don't schedule a global check this sync" — this must
+      // never short-circuit the rest of the function (per-server auto-update
+      // entries below still need to be built and sent regardless).
+      let nextRunMs: number | null = null;
       if (!lastChecked) {
         // Never checked — fire 30 s after startup.
         nextRunMs = Date.now() + 30_000;
@@ -146,18 +149,15 @@ export async function syncSchedulesToRust(): Promise<void> {
         // If overdue, give a 30-second startup buffer before firing.
         nextRunMs = scheduled < Date.now() ? Date.now() + 30_000 : scheduled;
       } else {
-        // "startup" mode — only fire if we've never checked (handled above).
-        // If already checked today, skip.
+        // "startup" mode — only fire if we've never checked (handled above),
+        // or if it's been at least 24h since the last check.
         const sinceLastCheck = Date.now() - new Date(lastChecked).getTime();
-        if (sinceLastCheck < 24 * 3_600_000) {
-          // Checked within the last 24 h; don't fire again on this session.
-          await tauriCmd.syncSchedules(entries);
-          return;
+        if (sinceLastCheck >= 24 * 3_600_000) {
+          nextRunMs = Date.now() + 30_000;
         }
-        nextRunMs = Date.now() + 30_000;
       }
 
-      entries.push({
+      if (nextRunMs !== null) entries.push({
         scheduleId:   "global-update-check",
         serverId:     "global",
         serverName:   "ASA Cache",

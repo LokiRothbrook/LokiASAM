@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Folder, Terminal, Info, Archive, Copy,
   FolderOpen, CheckCircle2, AlertCircle, Loader2,
@@ -30,7 +31,7 @@ import {
 } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { useAutostart } from "@/hooks/useAutostart";
-import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -868,6 +869,7 @@ const AUTO_CHECK_OPTIONS = [
 ];
 
 function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void }) {
+  const queryClient = useQueryClient();
   const asaCacheOpLabel = useAppStore((s) => s.asaCacheOpLabel);
   const enqueueStartup = useAppStore((s) => s.enqueueStartup);
   const [checking, setChecking]       = useState(false);
@@ -945,46 +947,10 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
     try {
       const servers = await getServers();
       const outdated = servers.filter((s) => s.update_available === 1);
-      for (const server of outdated) {
-        const wasRunning = server.status === "running";
-        try {
-          await applyUpdateToServer(
-            server.id,
-            server.name,
-            server.install_path,
-            wasRunning,
-            true, // dialog promises running servers are restarted after the update
-            server.rcon_port,
-            server.admin_password,
-            {
-              warnPlayers: server.update_warn_players === 1,
-              warnMinutes: server.update_warn_minutes ?? 5,
-              warnMessage: server.update_message || "Server going down for update in {time}.",
-            },
-          );
-        } catch (err) {
-          // restartNeeded signal — server updated successfully, restart handled inside.
-          if (err && typeof err === "object" && "restartNeeded" in err) {
-            enqueueStartup([server.id]);
-            continue;
-          }
-          await dispatchNotification({
-            eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
-            serverId:   server.id,
-            serverName: server.name,
-            title:      `${server.name} Update Failed`,
-            body:       `Failed to update ${server.name}: ${err}`,
-            severity:   "error",
-          });
-        }
-      }
-      await dispatchNotification({
-        eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
-        serverId:   null,
-        serverName: "All Servers",
-        title:      `${outdated.length} Server${outdated.length !== 1 ? "s" : ""} Updated`,
-        body:       `${outdated.length} server${outdated.length !== 1 ? "s have" : " has"} been updated from the cache.`,
-        severity:   "success",
+      // dialog promises running servers are restarted after the update
+      await applyUpdateToAllServers(outdated, true, {
+        enqueueStartup,
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
     } catch (e) {
       await dispatchNotification({
@@ -997,6 +963,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
       });
     } finally {
       setApplyingAll(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 

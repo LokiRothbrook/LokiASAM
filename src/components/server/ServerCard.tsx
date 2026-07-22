@@ -189,6 +189,24 @@ export function ServerCard({ server }: Props) {
   const isStartFailed   = server.status === "start-failed";
   const isReinstallable = isInstallFailed || isStartFailed;
 
+  // Clear the steamcmd output buffer once this card goes away (navigating
+  // off the dashboard, or the server being removed) if nothing is actively
+  // installing/updating at that point — a fallback for the dialog-close
+  // cleanup below, which only fires if the user actually opens "View
+  // Progress" at least once. A server whose install was backgrounded from
+  // the creation wizard (same channel) and never inspected here would
+  // otherwise leave its buffer around for the rest of the session. Checking
+  // isActiveInstall only at actual unmount (not on every status change)
+  // avoids clearing it out from under a user who closes the dialog mid­
+  // install and reopens later to see the final output.
+  useEffect(() => {
+    return () => {
+      if (!isActiveInstall) {
+        clearOutputBuffer(`steamcmd://output/${server.id}`);
+      }
+    };
+  }, [server.id, isActiveInstall]);
+
   // Load secondary card data (mod count, backup, schedule, auto-check state).
   useEffect(() => {
     let cancelled = false;

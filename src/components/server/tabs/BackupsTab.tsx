@@ -643,9 +643,10 @@ function IniBackupSection({
 // ---------------------------------------------------------------------------
 
 function SyncConfirmDialog({
-  importCount, onConfirm, onCancel,
+  importCount, deleteCount, onConfirm, onCancel,
 }: {
   importCount: number;
+  deleteCount: number;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -666,20 +667,33 @@ function SyncConfirmDialog({
             Sync from Disk
           </h3>
         </div>
-        <p className="text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
-          Found{" "}
-          <span style={{ color: "var(--text-primary)" }}>
-            {importCount} file{importCount !== 1 ? "s" : ""}
-          </span>{" "}
-          to import.
-        </p>
+        <div className="text-sm leading-relaxed space-y-1.5" style={{ color: "var(--text-muted)" }}>
+          {importCount > 0 && (
+            <p>
+              Found{" "}
+              <span style={{ color: "var(--text-primary)" }}>
+                {importCount} file{importCount !== 1 ? "s" : ""}
+              </span>{" "}
+              to import.
+            </p>
+          )}
+          {deleteCount > 0 && (
+            <p>
+              <span style={{ color: "var(--neon-red)" }}>
+                {deleteCount} record{deleteCount !== 1 ? "s" : ""}
+              </span>{" "}
+              will be removed from history — their files were not found in the backup directory.
+              If the directory is temporarily unreachable, cancel and check it before continuing.
+            </p>
+          )}
+        </div>
         <div className="flex gap-3 pt-1">
           <Button variant="outline" className="flex-1 cursor-pointer"
             style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
             onClick={onCancel}>Cancel</Button>
           <Button className="flex-1 cursor-pointer"
             style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
-            onClick={onConfirm}>Import</Button>
+            onClick={onConfirm}>{importCount > 0 ? "Import" : "Continue"}</Button>
         </div>
       </div>
     </div>
@@ -713,7 +727,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const [fullEstimate,    setFullEstimate]    = useState(0);
   const [backupDir,       setBackupDir]       = useState("");
   const [baseDir,         setBaseDir]         = useState("");
-  const [syncPending,     setSyncPending]     = useState<{ toImport: BackupRecord[] } | null>(null);
+  const [syncPending,     setSyncPending]     = useState<{ toImport: BackupRecord[]; toDelete: string[] } | null>(null);
   const [syncing,         setSyncing]         = useState(false);
 
   const loadAll = useCallback(async () => {
@@ -913,23 +927,22 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       const diskPaths = new Set(diskRecords.map((r) => r.filePath));
       const dbPaths   = new Set(allDb.map((r) => r.file_path));
 
-      // Silently remove stale DB records (files no longer on disk).
-      for (const dbRec of allDb) {
-        if (!diskPaths.has(dbRec.file_path)) {
-          await deleteBackupRecord(dbRec.id).catch(() => {});
-        }
-      }
+      // DB records whose file wasn't found on disk — held for confirmation
+      // rather than deleted immediately. If the backup directory is briefly
+      // unreachable, a scan returning few/no files must not silently wipe
+      // history for files that are actually still there.
+      const toDelete = allDb.filter((r) => !diskPaths.has(r.file_path)).map((r) => r.id);
 
       // Find disk files not yet in DB.
       const toImport = diskRecords.filter((r) => !dbPaths.has(r.filePath));
 
-      if (toImport.length === 0) {
+      if (toImport.length === 0 && toDelete.length === 0) {
         toast.info("Backups are up to date.");
         await loadAll();
         return;
       }
 
-      setSyncPending({ toImport });
+      setSyncPending({ toImport, toDelete });
     } catch (e) {
       toast.error(`Scan failed: ${e}`);
     } finally {
@@ -939,10 +952,18 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
 
   async function handleSyncConfirmed() {
     if (!syncPending) return;
-    const { toImport } = syncPending;
+    const { toImport, toDelete } = syncPending;
     setSyncPending(null);
     setSyncing(true);
     try {
+      for (const id of toDelete) {
+        await deleteBackupRecord(id).catch(() => {});
+      }
+      if (toImport.length === 0) {
+        toast.success(`Removed ${toDelete.length} record${toDelete.length !== 1 ? "s" : ""} not found on disk.`);
+        await loadAll();
+        return;
+      }
       // Load existing records so we know which higher tiers are already covered.
       const [dbSrv, dbPlr, dbFul] = await Promise.all([
         getServerBackupsByType(server.id, "server"),
@@ -996,7 +1017,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         seenByType[rec.backupType] = seen;
       }
 
-      toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}.`);
+      const deletedNote = toDelete.length > 0 ? `, removed ${toDelete.length} not found on disk` : "";
+      toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}${deletedNote}.`);
       await loadAll();
     } catch (e) {
       toast.error(`Import failed: ${e}`);
@@ -1149,6 +1171,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       {syncPending && (
         <SyncConfirmDialog
           importCount={syncPending.toImport.length}
+          deleteCount={syncPending.toDelete.length}
           onConfirm={handleSyncConfirmed}
           onCancel={() => setSyncPending(null)}
         />

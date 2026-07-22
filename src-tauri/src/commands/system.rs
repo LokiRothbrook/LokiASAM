@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{Emitter, Manager};
 
-use super::utils::collect_subtree;
+use super::utils::{collect_subtree, read_cstring};
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -139,7 +139,16 @@ pub struct DirCheckResult {
 /// the wizard (via write_bootstrap / the actual install commands).
 #[tauri::command]
 pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
-    let p = Path::new(&path);
+    // Entirely synchronous filesystem/sysinfo work — run it off the async
+    // executor so it can't block other in-flight commands (RCON polling,
+    // log tailing) on the same worker thread pool.
+    tokio::task::spawn_blocking(move || check_dir_blocking(&path))
+        .await
+        .map_err(|e| format!("check_dir task panicked: {e}"))?
+}
+
+fn check_dir_blocking(path: &str) -> Result<DirCheckResult, String> {
+    let p = Path::new(path);
 
     // Whether the target path itself exists (vs. needing to be created).
     let is_new = !p.exists();
@@ -779,37 +788,44 @@ pub async fn move_base_dir(
         return Err("Destination is inside the source directory.".into());
     }
 
-    // Space check on the destination volume.
+    // Space check on the destination volume — the sysinfo Disks scan and
+    // directory read-dir below are blocking; run them off the async executor.
     {
         let check_against = new.parent().unwrap_or(&new).to_path_buf();
         let _ = tokio::fs::create_dir_all(&check_against).await;
-        let free_bytes = {
-            use sysinfo::Disks;
-            let disks = Disks::new_with_refreshed_list();
-            disks.iter()
-                .filter(|d| check_against.starts_with(d.mount_point()))
-                .max_by_key(|d| d.mount_point().components().count())
-                .map(|d| d.available_space())
-                .unwrap_or(0)
-        };
-        // Estimate source size by sampling (du-equivalent).
-        let src_size_est: u64 = {
-            let mut total = 0u64;
-            if let Ok(rd) = std::fs::read_dir(&old) {
-                for entry in rd.flatten() {
-                    if let Ok(meta) = entry.metadata() {
-                        total += meta.len();
+        let old_for_check = old.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let free_bytes = {
+                use sysinfo::Disks;
+                let disks = Disks::new_with_refreshed_list();
+                disks.iter()
+                    .filter(|d| check_against.starts_with(d.mount_point()))
+                    .max_by_key(|d| d.mount_point().components().count())
+                    .map(|d| d.available_space())
+                    .unwrap_or(0)
+            };
+            // Estimate source size by sampling (du-equivalent).
+            let src_size_est: u64 = {
+                let mut total = 0u64;
+                if let Ok(rd) = std::fs::read_dir(&old_for_check) {
+                    for entry in rd.flatten() {
+                        if let Ok(meta) = entry.metadata() {
+                            total += meta.len();
+                        }
                     }
                 }
+                total * 10 // rough multiplier for subdirs
+            };
+            if free_bytes > 0 && free_bytes < src_size_est {
+                return Err(format!(
+                    "Insufficient disk space at destination. Available: {:.1} GB",
+                    free_bytes as f64 / 1_073_741_824.0
+                ));
             }
-            total * 10 // rough multiplier for subdirs
-        };
-        if free_bytes > 0 && free_bytes < src_size_est {
-            return Err(format!(
-                "Insufficient disk space at destination. Available: {:.1} GB",
-                free_bytes as f64 / 1_073_741_824.0
-            ));
-        }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Space check task panicked: {e}"))??;
     }
 
     emit_migrate(&app, "checking", "Space check passed.", 5);
@@ -963,21 +979,6 @@ fn parse_a2s_info(data: &[u8]) -> Result<ServerQueryResult, String> {
         max_players,
         version,
     })
-}
-
-/// Read a null-terminated UTF-8 string from `data` starting at `*cursor`,
-/// advancing `*cursor` past the null byte.
-fn read_cstring(data: &[u8], cursor: &mut usize) -> Result<String, String> {
-    let start = *cursor;
-    while *cursor < data.len() && data[*cursor] != 0 {
-        *cursor += 1;
-    }
-    if *cursor >= data.len() {
-        return Err("Unterminated string in A2S_INFO response".into());
-    }
-    let s = String::from_utf8_lossy(&data[start..*cursor]).into_owned();
-    *cursor += 1; // consume the null byte
-    Ok(s)
 }
 
 // ---------------------------------------------------------------------------

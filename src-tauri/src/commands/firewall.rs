@@ -72,22 +72,31 @@ mod windows_impl {
                 continue;
             }
 
-            let status = runas::Command::new("netsh")
-                .args(&[
-                    "advfirewall", "firewall", "add", "rule",
-                    &format!("name={name}"),
-                    "dir=in", "action=allow",
-                    &format!("protocol={proto}"),
-                    &format!("localport={port_str}"),
-                ])
-                .status()
-                .map_err(|e| format!("Failed to run elevated netsh for port {}: {e}", p.port))?;
+            let port = p.port;
+            // runas::Command::status() blocks the calling thread until the
+            // (possibly UAC-elevated) process exits — a user who leaves the
+            // UAC prompt unanswered would otherwise stall this tokio worker
+            // thread indefinitely, starving unrelated async work (RCON
+            // polling, log tailing) on the same small pool.
+            let status = tokio::task::spawn_blocking(move || {
+                runas::Command::new("netsh")
+                    .args(&[
+                        "advfirewall", "firewall", "add", "rule",
+                        &format!("name={name}"),
+                        "dir=in", "action=allow",
+                        &format!("protocol={proto}"),
+                        &format!("localport={port_str}"),
+                    ])
+                    .status()
+            })
+            .await
+            .map_err(|e| format!("spawn_blocking panicked for port {port}: {e}"))?
+            .map_err(|e| format!("Failed to run elevated netsh for port {port}: {e}"))?;
 
             if !status.success() {
                 return Err(format!(
-                    "netsh exited with code {} for port {}",
+                    "netsh exited with code {} for port {port}",
                     status.code().unwrap_or(-1),
-                    p.port
                 ));
             }
         }
@@ -97,17 +106,22 @@ mod windows_impl {
     pub async fn remove_rules(ports: &[PortDef]) -> Result<(), String> {
         for p in ports {
             let name = rule_name(p.port, &p.protocol);
-            let status = runas::Command::new("netsh")
-                .args(&[
-                    "advfirewall", "firewall", "delete", "rule",
-                    &format!("name={name}"),
-                ])
-                .status()
-                .map_err(|e| format!("Failed to run elevated netsh delete for port {}: {e}", p.port))?;
+            let port = p.port;
+            let status = tokio::task::spawn_blocking(move || {
+                runas::Command::new("netsh")
+                    .args(&[
+                        "advfirewall", "firewall", "delete", "rule",
+                        &format!("name={name}"),
+                    ])
+                    .status()
+            })
+            .await
+            .map_err(|e| format!("spawn_blocking panicked for port {port}: {e}"))?
+            .map_err(|e| format!("Failed to run elevated netsh delete for port {port}: {e}"))?;
 
             if !status.success() {
                 // Non-fatal: rule may already be gone
-                log::warn!("netsh delete exited {} for port {}", status.code().unwrap_or(-1), p.port);
+                log::warn!("netsh delete exited {} for port {port}", status.code().unwrap_or(-1));
             }
         }
         Ok(())
@@ -276,11 +290,16 @@ mod linux_impl {
             .map_err(|e| format!("Failed to write UFW temp profile: {e}"))?;
 
         let tmp_str = tmp_path.to_string_lossy();
-        // Copy profile first (`&&` ensures allow only runs if cp succeeded), then
-        // delete the old rule (`;` so allow still runs even if no rule existed yet),
-        // then re-allow from the updated profile.
+        // Copy profile first, then delete the old rule and re-allow from the
+        // updated profile. The delete+allow pair is grouped in `(...)` so `&&`
+        // gates the *whole group* on `cp` succeeding — without the group,
+        // `;` has lower precedence than `&&` and `ufw allow` would run
+        // unconditionally even when `cp` failed, applying rules from a stale
+        // or missing profile. Inside the group, `;` (not `&&`) separates
+        // delete from allow so allow still runs even if no prior rule existed
+        // to delete.
         let cmd = format!(
-            "cp '{tmp_str}' '{UFW_PROFILE_PATH}' && ufw delete allow '{UFW_APP_NAME}' ; ufw allow '{UFW_APP_NAME}'"
+            "cp '{tmp_str}' '{UFW_PROFILE_PATH}' && ( ufw delete allow '{UFW_APP_NAME}' ; ufw allow '{UFW_APP_NAME}' )"
         );
         let status = Command::new("pkexec")
             .args(["sh", "-c", &cmd])

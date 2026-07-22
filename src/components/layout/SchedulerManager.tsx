@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
-  updateScheduleRun, getScheduleById, setAppSetting,
+  updateScheduleRun, getScheduleById, setAppSetting, rollupOldStats,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
@@ -31,6 +31,12 @@ export function SchedulerManager() {
 
   useEffect(() => {
     syncSchedulesToRust();
+    // Roll up + prune server_stats_history on startup — this was previously
+    // dead code (never called anywhere), so raw stats samples accumulated
+    // unbounded for the life of the install. Cheap/idempotent to run once
+    // per app start; only does real work once ~daily since it only touches
+    // rows older than 30 days.
+    rollupOldStats().catch(() => {});
   }, []);
 
   // Background ASA cache/update results — fired for (1) the scheduled global
@@ -65,8 +71,14 @@ export function SchedulerManager() {
     const { scheduleId, serverName, scheduleType, success, error } = payload;
 
     if (scheduleType === "global_update_check") {
-      await setAppSetting("asa_last_checked", new Date().toISOString());
-      if (!success) toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
+      // On success this is already written by the asa://update-check handler
+      // above (which also carries the actual build-id result) — only write
+      // it here on failure, since fire_global_update_check returns before
+      // ever emitting that event if the check itself errors out.
+      if (!success) {
+        await setAppSetting("asa_last_checked", new Date().toISOString());
+        toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
+      }
       syncSchedulesToRust();
       return;
     }

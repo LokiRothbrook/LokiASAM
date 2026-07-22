@@ -306,8 +306,6 @@ export interface SchedulerFiredPayload {
   scheduleType: string;
   success: boolean;
   error?: string;
-  /** All backup records created by this firing (player backups produce one per player). */
-  backupRecords: BackupRecord[];
 }
 
 // ---------------------------------------------------------------------------

@@ -287,17 +287,6 @@ async function runMigrations(db: Database): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_stats_daily_server_day ON server_stats_daily(server_id, day_ts)"
   );
 
-  // Uptime sessions — one row per contiguous server run, for record/history display.
-  await db.execute(`CREATE TABLE IF NOT EXISTS server_uptime_sessions (
-    id         TEXT    PRIMARY KEY,
-    server_id  TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-    started_at INTEGER NOT NULL,
-    ended_at   INTEGER
-  )`);
-  await db.execute(
-    "CREATE INDEX IF NOT EXISTS idx_uptime_sessions_server ON server_uptime_sessions(server_id, started_at)"
-  );
-
   // ── Migration 008: backup system v2 ──────────────────────────────────────
   try { await db.execute("ALTER TABLE backups ADD COLUMN backup_type TEXT NOT NULL DEFAULT 'server'"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE backups ADD COLUMN tiers TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
@@ -553,6 +542,11 @@ async function runMigrations(db: Database): Promise<void> {
       );
     }
   }
+
+  // ── Migration 022: drop server_uptime_sessions — dead feature, never wired
+  // up to any UI (no reader or writer anywhere in the app). DROP is
+  // naturally idempotent, no done-flag needed.
+  await db.execute("DROP TABLE IF EXISTS server_uptime_sessions");
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,28 +1039,6 @@ export async function setServerAutoStart(id: string, autoStart: boolean): Promis
   );
 }
 
-/** Fetch all servers that have a given status value. */
-export async function getServersWithStatus(status: string): Promise<ServerRow[]> {
-  const db = await getDb();
-  return db.select<ServerRow[]>(
-    "SELECT * FROM servers WHERE status = ? ORDER BY name ASC",
-    [status]
-  );
-}
-
-/** Bulk-reset servers matching a given status to a new status. */
-export async function resetServersFromStatus(
-  fromStatus: string,
-  toStatus: string,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE servers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE status = ?",
-    [toStatus, fromStatus]
-  );
-}
-
-
 // ---------------------------------------------------------------------------
 // Aggregate helpers used by ServerCard
 // ---------------------------------------------------------------------------
@@ -1341,21 +1313,6 @@ export async function pruneManualBackups(
 // Player name map
 // ---------------------------------------------------------------------------
 
-/** Insert or update an EOS ID → player name mapping. */
-export async function upsertPlayerName(
-  serverId: string,
-  eosId: string,
-  playerName: string
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO player_name_map (server_id, eos_id, player_name, last_seen)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(server_id, eos_id) DO UPDATE SET player_name = excluded.player_name, last_seen = excluded.last_seen`,
-    [serverId, eosId, playerName, new Date().toISOString()]
-  );
-}
-
 /** Bulk upsert multiple players from a listplayers result. */
 export async function upsertPlayerNames(
   serverId: string,
@@ -1576,32 +1533,6 @@ export async function getPossibleAlts(
   return [...map.entries()].map(([id, ips]) => ({ eosId: id, sharedIps: [...new Set(ips)] }));
 }
 
-/** Count of login backups for a specific player (used for prune logic). */
-export async function getLoginBackupCount(
-  serverId: string,
-  eosId: string
-): Promise<number> {
-  const db = await getDb();
-  const rows = await db.select<{ n: number }[]>(
-    "SELECT COUNT(*) AS n FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login'",
-    [serverId, eosId]
-  );
-  return rows[0]?.n ?? 0;
-}
-
-/** Oldest login backup for a player — used to prune when over the keep limit. */
-export async function getOldestLoginBackup(
-  serverId: string,
-  eosId: string
-): Promise<import("./db").BackupRow | null> {
-  const db = await getDb();
-  const rows = await db.select<BackupRow[]>(
-    "SELECT * FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login' ORDER BY created_at ASC LIMIT 1",
-    [serverId, eosId]
-  );
-  return rows[0] ?? null;
-}
-
 /** Update the file_path for a backup record (used after tier-rename on disk). */
 export async function updateBackupFilePath(
   backupId: string,
@@ -1715,16 +1646,6 @@ export async function markAllNotificationsRead(): Promise<void> {
 export async function deleteNotification(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM in_app_notifications WHERE id = ?", [id]);
-}
-
-/** Delete notifications older than `days` days. */
-export async function pruneOldNotifications(days: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `DELETE FROM in_app_notifications
-     WHERE created_at < datetime('now', '-' || ? || ' days')`,
-    [days]
-  );
 }
 
 export interface PruneNotificationsFilter {
@@ -1863,13 +1784,6 @@ export interface ChartPoint {
   memMax: number | null;
   players: number | null;
   playersMax: number | null;
-}
-
-export interface UptimeSessionRow {
-  id: string;
-  server_id: string;
-  started_at: number;
-  ended_at: number | null;
 }
 
 /** Insert a single raw stat sample for a server. */
@@ -2014,54 +1928,6 @@ export async function rollupOldStats(): Promise<void> {
   await db.execute("DELETE FROM server_stats_daily WHERE day_ts < ?", [cutoff1y]);
 }
 
-// ---------------------------------------------------------------------------
-// Uptime Sessions
-// ---------------------------------------------------------------------------
-
-/**
- * Open a new uptime session for a server. Closes any orphaned open sessions
- * (e.g. from a previous app crash) before inserting the new row.
- */
-export async function openUptimeSession(
-  serverId: string,
-  sessionId: string,
-  startedAt: number,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE server_uptime_sessions SET ended_at = ? WHERE server_id = ? AND ended_at IS NULL",
-    [startedAt, serverId],
-  );
-  await db.execute(
-    "INSERT INTO server_uptime_sessions (id, server_id, started_at) VALUES (?, ?, ?)",
-    [sessionId, serverId, startedAt],
-  );
-}
-
-/** Close the open uptime session by ID. */
-export async function closeUptimeSession(
-  sessionId: string,
-  endedAt: number,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE server_uptime_sessions SET ended_at = ? WHERE id = ?",
-    [endedAt, sessionId],
-  );
-}
-
-/** Return uptime sessions for a server, newest first. */
-export async function getUptimeSessions(
-  serverId: string,
-  limit = 20,
-): Promise<UptimeSessionRow[]> {
-  const db = await getDb();
-  return db.select<UptimeSessionRow[]>(
-    "SELECT * FROM server_uptime_sessions WHERE server_id = ? ORDER BY started_at DESC LIMIT ?",
-    [serverId, limit],
-  );
-}
-
 /** Get a single global (server_id IS NULL) notification config by channel. */
 export async function getGlobalChannelConfig(
   channel: string
@@ -2130,15 +1996,6 @@ export async function getBuildVersionCache(): Promise<Map<string, BuildVersionRo
     "SELECT build_id, game_version, source FROM build_version_cache"
   );
   return new Map(rows.map((r) => [r.build_id, r]));
-}
-
-export async function getBuildVersion(buildId: string): Promise<BuildVersionRow | null> {
-  const db = await getDb();
-  const rows = await db.select<BuildVersionRow[]>(
-    "SELECT build_id, game_version, source FROM build_version_cache WHERE build_id = ?",
-    [buildId]
-  );
-  return rows[0] ?? null;
 }
 
 /** Format a build ID + optional version into a display string.

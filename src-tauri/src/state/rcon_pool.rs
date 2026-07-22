@@ -154,6 +154,19 @@ impl RconPool {
         }
         deque.push_back(line);
     }
+
+    /// Remove all in-memory RCON state for a server: its manager-task channel,
+    /// console log buffer, and cached player list. Call this on every path that
+    /// stops tracking a server (stop, restart, delete) — not just graceful
+    /// stop — so these maps don't grow unbounded over the app's lifetime as
+    /// servers are created and removed. Safe to call even if some/all entries
+    /// are already gone (e.g. a caller that already extracted `cmd_channels`
+    /// to signal a graceful disconnect before calling this).
+    pub async fn remove_server(&self, server_id: &str) {
+        self.cmd_channels.lock().await.remove(server_id);
+        self.log_buffer.lock().await.remove(server_id);
+        self.player_cache.lock().await.remove(server_id);
+    }
 }
 
 /// Returns the platform binary subdirectory within a server install path.

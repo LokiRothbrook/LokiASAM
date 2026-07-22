@@ -47,7 +47,7 @@ import {
   createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
   addServerMod, getServers, getServerMods, createClusterRecord,
   updateBackupBroadcastMessage, getServerConfig, setServerActiveEvent,
-  type ClusterRow, type ServerRow,
+  type ClusterRow,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -56,7 +56,7 @@ import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-command
 import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { useAppStore } from "@/store/useAppStore";
 import { cn } from "@/lib/utils";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 // ---------------------------------------------------------------------------
 // Wizard data model
@@ -850,10 +850,11 @@ function GameModeToggle({ label, description, value, onChange: onChangeFn, warn 
 }
 
 function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
-  const [existingServers, setExistingServers] = useState<ServerRow[]>([]);
+  // Shared ["servers"] cache — dedupes with other steps' getServers() reads
+  // (and the rest of the app) within React Query's staleTime window instead
+  // of each mounting step re-fetching independently.
+  const { data: existingServers = [] } = useQuery({ queryKey: ["servers"], queryFn: getServers });
   const [loadingCopy, setLoadingCopy] = useState(false);
-
-  useEffect(() => { getServers().then(setExistingServers).catch(() => {}); }, []);
 
   const handleCopyFrom = async (serverId: string) => {
     setLoadingCopy(true);
@@ -1677,12 +1678,22 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   const [portStatus, setPortStatus] = useState<Record<string, boolean | null>>({});
   const [checking, setChecking] = useState(false);
   const [conflicts, setConflicts] = useState<Record<string, string>>({});
+  const conflictDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped on every call so an older, slower-resolving request can never
+  // overwrite a newer one's result if responses arrive out of order.
+  const conflictReqIdRef = useRef(0);
+
+  useEffect(() => () => {
+    if (conflictDebounceRef.current) clearTimeout(conflictDebounceRef.current);
+  }, []);
 
   const updateConflicts = useCallback((
     game: number, query: number, rcon: number,
     usedMap?: Map<number, string>,
   ) => {
+    const reqId = ++conflictReqIdRef.current;
     getServers().then((servers) => {
+      if (reqId !== conflictReqIdRef.current) return;
       const used = usedMap ?? new Map(servers.flatMap((s) => [
         [s.port, s.name], [s.query_port, s.name], [s.rcon_port, s.name],
       ] as [number, string][]));
@@ -1748,7 +1759,10 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   const handlePortChange = (fieldKey: "port" | "queryPort" | "rconPort", val: number) => {
     const next = { ...{ port: data.port, queryPort: data.queryPort, rconPort: data.rconPort }, [fieldKey]: val };
     onChange({ [fieldKey]: val });
-    updateConflicts(next.port, next.queryPort, next.rconPort);
+    if (conflictDebounceRef.current) clearTimeout(conflictDebounceRef.current);
+    conflictDebounceRef.current = setTimeout(() => {
+      updateConflicts(next.port, next.queryPort, next.rconPort);
+    }, 400);
   };
 
   return (
@@ -2611,7 +2625,8 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const allMaps = useAllMaps();
   const [input, setInput] = useState("");
-  const [existingServers, setExistingServers] = useState<ServerRow[]>([]);
+  // Shared ["servers"] cache — see GameModeStep for why this isn't its own effect.
+  const { data: existingServers = [] } = useQuery({ queryKey: ["servers"], queryFn: getServers });
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const copyMenuRef = useRef<HTMLDivElement>(null);
 
@@ -2624,10 +2639,6 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
     if (copyMenuOpen) document.addEventListener("mousedown", onClickOut);
     return () => document.removeEventListener("mousedown", onClickOut);
   }, [copyMenuOpen]);
-
-  useEffect(() => {
-    getServers().then(setExistingServers).catch(() => {});
-  }, []);
 
   const modBrowserOpen      = useAppStore((s) => s.modBrowserOpen);
   const setModBrowserOpen   = useAppStore((s) => s.setModBrowserOpen);
@@ -2836,6 +2847,7 @@ function InstallStep({
   onGoToDashboard,
   onStatusChange,
   onCleanupReady,
+  onBackgroundReady,
 }: {
   data: WizardData;
   serverId: string;
@@ -2843,6 +2855,11 @@ function InstallStep({
   onGoToDashboard: () => void;
   onStatusChange: (status: string) => void;
   onCleanupReady: (fn: () => Promise<void>) => void;
+  /** Exposes a way for the parent (top-bar close button) to trigger the same
+   *  "continue in background" behavior as the in-panel button, so closing
+   *  mid-install can offer that as an explicit, confirmed choice instead of
+   *  silently doing it. */
+  onBackgroundReady: (fn: () => void) => void;
 }) {
   const allMaps = useAllMaps();
   const queryClient = useQueryClient();
@@ -2865,6 +2882,7 @@ function InstallStep({
   }, []);
 
   useEffect(() => { onStatusChange(status); }, [status, onStatusChange]);
+  useEffect(() => { onBackgroundReady(() => { backgroundRef.current = true; }); }, [onBackgroundReady]);
   useEffect(() => { if (status !== "idle") setTimeout(scrollToBottom, 100); }, [status, scrollToBottom]);
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -3365,6 +3383,8 @@ function InstallStep({
           if (dbSavedRef.current) {
             await deleteServerRecord(serverId).catch(() => {});
             dbSavedRef.current = false;
+            useAppStore.getState().clearNoRetryServer(serverId);
+            useAppStore.getState().setCountdown(serverId, null);
           }
           if (installPathRef.current) {
             await tauriCmd.deleteDirectory(installPathRef.current).catch(() => {});
@@ -3535,7 +3555,9 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
   const [nameValid, setNameValid] = useState(false);
   const [installStatus, setInstallStatus] = useState("idle");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [showBackgroundConfirm, setShowBackgroundConfirm] = useState(false);
   const cleanupFnRef = useRef<(() => Promise<void>) | null>(null);
+  const backgroundSignalRef = useRef<(() => void) | null>(null);
 
   const steps = useMemo(() => computeSteps(data.presetStyle, data.copyFromServerId), [data.presetStyle, data.copyFromServerId]);
 
@@ -3576,11 +3598,29 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
 
   const handleClose = () => {
     if (isInstallStep && installStatus === "error") { setShowCancelConfirm(true); return; }
+    // Install is actively running — ask whether to keep it going in the
+    // background or cancel it, rather than silently doing one of those
+    // (this used to behave like "Continue in Background" unconditionally,
+    // with no confirmation and no indication to the user that it was
+    // still running).
+    if (isInstallStep && installStatus === "installing") { setShowBackgroundConfirm(true); return; }
     onClose();
   };
 
   const handleConfirmCancel = async () => {
     setShowCancelConfirm(false);
+    await cleanupFnRef.current?.().catch(() => {});
+    onClose();
+  };
+
+  const handleContinueInBackground = () => {
+    setShowBackgroundConfirm(false);
+    backgroundSignalRef.current?.();
+    onClose();
+  };
+
+  const handleCancelFromBackgroundPrompt = async () => {
+    setShowBackgroundConfirm(false);
     await cleanupFnRef.current?.().catch(() => {});
     onClose();
   };
@@ -3610,6 +3650,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
           onGoToDashboard={onClose}
           onStatusChange={setInstallStatus}
           onCleanupReady={(fn) => { cleanupFnRef.current = fn; }}
+          onBackgroundReady={(fn) => { backgroundSignalRef.current = fn; }}
         />
       );
       default: return null;
@@ -3750,6 +3791,29 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
               </Button>
               <Button onClick={() => setShowCancelConfirm(false)} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
                 Keep Going
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close-mid-install overlay — install is still running */}
+      {showBackgroundConfirm && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)" }}>
+          <div className="rounded-xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}>
+            <div className="flex items-start gap-3">
+              <Info className="w-5 h-5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+              <div>
+                <p className="text-sm font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Installation Still Running</p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>You can close this and let it keep installing in the background, or cancel it now.</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <Button onClick={handleContinueInBackground} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
+                Continue in Background
+              </Button>
+              <Button onClick={handleCancelFromBackgroundPrompt} className="flex-1 text-sm" style={{ background: "rgba(255,0,85,0.08)", border: "1px solid rgba(255,0,85,0.35)", color: "var(--neon-red)" }}>
+                Cancel Install
               </Button>
             </div>
           </div>

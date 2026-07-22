@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { useOnMount } from "@/hooks/useOnMount";
+import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
@@ -577,7 +578,7 @@ function BackupTypeSection({
 
   const [tiers, setTiers] = useState<Record<BackupTier, TierState>>(buildState);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   // Re-derive tiers when the upstream schedules genuinely change, compared
   // during render (React's documented "adjusting state" pattern) rather than
@@ -627,8 +628,7 @@ function BackupTypeSection({
         await updateScheduleConfig(newId, cron, configJson, nextIso);
       }
 
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
@@ -701,7 +701,7 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
   const [keep,    setKeep]    = useState<number>((cfg.keep as number) ?? 3);
   const [enabled, setEnabled] = useState(existing ? existing.enabled === 1 : false);
   const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   // Re-derive keep/enabled when the upstream schedules genuinely change,
   // compared during render rather than via an effect.
@@ -729,8 +729,7 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
         await createSchedule({ id: newId, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson });
         await updateScheduleConfig(newId, cron, configJson, nextIso);
       }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
@@ -790,7 +789,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
   const [keep,    setKeep]    = useState(3);
   const [enabled, setEnabled] = useState(false);
   const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   useEffect(() => {
     getAppSetting(`login_backup_keep_${serverId}`).then((v) => {
@@ -804,8 +803,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
     setSaving(true);
     try {
       await setAppSetting(`login_backup_keep_${serverId}`, enabled ? String(keep) : "0");
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save login backup config: ${e}`);
     } finally {
@@ -868,7 +866,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
 function ManualBackupRow({ serverId }: { serverId: string }) {
   const [keep,   setKeep]   = useState(5);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   useEffect(() => {
     getAppSetting(`manual_backup_keep_${serverId}`).then((v) => {
@@ -881,8 +879,7 @@ function ManualBackupRow({ serverId }: { serverId: string }) {
     setSaving(true);
     try {
       await setAppSetting(`manual_backup_keep_${serverId}`, String(Math.max(1, keep)));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save manual backup config: ${e}`);
     } finally {
@@ -986,7 +983,7 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
   const [automation, setAutomation] = useState<UpdateAutomation>(DEFAULT_UPDATE_AUTOMATION);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   useEffect(() => {
     (async () => {
@@ -1002,14 +999,18 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
   }, [server.id, server.update_automation_json]);
 
   const handleSave = async (patch: Partial<UpdateAutomation>) => {
+    const prev = automation;
     const next = { ...automation, ...patch };
     setAutomation(next);
     setSaving(true);
     try {
       await setServerUpdateAutomation(server.id, next);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
+      // Revert the optimistic update — otherwise the card keeps showing the
+      // unsaved change as if it persisted, silently diverging from the DB
+      // (and thus from what automation actually does) until remount.
+      setAutomation(prev);
       toast.error(`Failed to save update automation: ${e}`);
     } finally {
       setSaving(false);

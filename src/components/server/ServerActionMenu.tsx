@@ -40,6 +40,7 @@ import {
   getServers,
 } from "@/lib/db";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAppStore } from "@/store/useAppStore";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import { getExclusivePorts as computeExclusivePorts, getServerFirewallPorts } from "@/lib/firewall-utils";
@@ -100,6 +101,8 @@ function DeleteDialog({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
+  const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
+  const setCountdown = useAppStore((s) => s.setCountdown);
   const [deleteFiles, setDeleteFiles]     = useState(true);
   const [deleteBackups, setDeleteBackups] = useState(true);
   const [deleteLogs, setDeleteLogs]       = useState(true);
@@ -186,6 +189,11 @@ function DeleteDialog({
         deleteSaves,
       );
       await deleteServerRecord(server.id);
+      // These are keyed by server id in the global store and never pruned
+      // elsewhere — without this, deleting and recreating servers over a
+      // long session accumulates stale entries indefinitely.
+      clearNoRetryServer(server.id);
+      setCountdown(server.id, null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       onClose();
     } catch (err) {

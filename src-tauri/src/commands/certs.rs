@@ -165,8 +165,15 @@ async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) ->
         ));
     }
 
-    // Write marker so future checks are instant.
-    let _ = tokio::fs::write(&marker, b"1").await;
+    // Write marker so future checks are instant. This must not be silently
+    // discarded: Linux has no direct way to query Wine's cert store, so
+    // check_amazon_root_ca_installed relies entirely on this file — if the
+    // write fails, a future check would report "not installed" forever even
+    // though wine certutil above genuinely succeeded. Surface the failure so
+    // the caller knows to retry rather than silently mismatching.
+    tokio::fs::write(&marker, b"1").await.map_err(|e| {
+        format!("Certificate installed, but failed to write install marker: {e}. Please try installing again.")
+    })?;
 
     Ok(())
 }
