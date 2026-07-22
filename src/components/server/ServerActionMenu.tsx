@@ -48,6 +48,8 @@ const uuidv4 = () => crypto.randomUUID();
 
 interface Props {
   server: ServerRow;
+  /** Called after a manual "Backup Now" completes, so callers can refresh their own backup-status display. */
+  onBackupComplete?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +463,7 @@ function CloneDialog({
 // ServerActionMenu
 // ---------------------------------------------------------------------------
 
-export function ServerActionMenu({ server }: Props) {
+export function ServerActionMenu({ server, onBackupComplete }: Props) {
   const [deleteOpen, setDeleteOpen]   = useState(false);
   const [cloneOpen,  setCloneOpen]    = useState(false);
   const [backingUp,  setBackingUp]    = useState(false);
@@ -503,6 +505,7 @@ export function ServerActionMenu({ server }: Props) {
       const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
       await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
       toast.success(`Backup of "${server.name}" completed.`);
+      onBackupComplete?.();
     } catch (err) {
       toast.error(`Backup failed: ${err}`);
     } finally {

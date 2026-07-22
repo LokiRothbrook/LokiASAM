@@ -146,9 +146,11 @@ export function ServerCard({ server }: Props) {
     }
   );
 
-  // Clear progress bar when Rust confirms the backup is fully recorded in DB.
+  // Clear progress bar when Rust confirms the backup is fully recorded in DB,
+  // and refresh the displayed "Last Backup" time to match.
   useTauriEvent(`backup://completed/${server.id}`, () => {
     setBackupProgress({ active: false, percent: 0, label: "" });
+    getLastBackupTime(server.id).then(setLastBackup).catch(() => {});
   });
 
   // Fallback: clear stale progress bar if no update received in 30s.
@@ -510,7 +512,10 @@ export function ServerCard({ server }: Props) {
             )}
           </div>
         </div>
-        <ServerActionMenu server={server} />
+        <ServerActionMenu
+          server={server}
+          onBackupComplete={() => { getLastBackupTime(server.id).then(setLastBackup).catch(() => {}); }}
+        />
       </div>
 
       {/* ── Stats grid ── */}

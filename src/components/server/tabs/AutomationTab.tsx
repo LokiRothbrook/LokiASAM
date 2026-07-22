@@ -1091,9 +1091,10 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
             style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}>
             <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
             <span>
-              Automated triggers are coming in a future update once proper RCON shutdown is implemented.
-              Settings are saved now so configuration is ready when the feature ships. Use the{" "}
-              <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards for manual updates.
+              Updates apply automatically once an update is detected — this requires the ASA cache
+              check in <strong style={{ color: "var(--text-primary)" }}>Settings → ASA Server Updates</strong>{" "}
+              to be set to On Startup or On Startup + Hourly. Applying an update uses the same graceful
+              shutdown as the <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards.
             </span>
           </div>
         )}

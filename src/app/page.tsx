@@ -18,16 +18,14 @@ import { StatCard } from "@/components/shared/StatCard";
 import { ServerCard } from "@/components/server/ServerCard";
 import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
-import { getAppSetting, setAppSetting, updateServerStatus } from "@/lib/db";
-import { tauriCmd, type UpdateCheckResult } from "@/lib/tauri-commands";
+import { getAppSetting, updateServerStatus } from "@/lib/db";
+import { tauriCmd } from "@/lib/tauri-commands";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToServer, type ServerUpdateInfo } from "@/lib/update-utils";
 import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
-import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { useOnMount } from "@/hooks/useOnMount";
 import { toast } from "sonner";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { formatServerVersion } from "@/lib/db";
@@ -46,41 +44,11 @@ interface UpdateStatusChipProps {
 function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: UpdateStatusChipProps) {
   const queryClient             = useQueryClient();
   const [checking, setChecking] = useState(false);
-  const [latestBuild, setLatestBuild] = useState("");
-  const [cachedBuild, setCachedBuild] = useState("");
 
-  const load = useCallback(async () => {
-    const [cached, latest] = await Promise.all([
-      getAppSetting("asa_cached_build_id"),
-      getAppSetting("asa_latest_build_id"),
-    ]);
-    setCachedBuild(cached ?? "");
-    setLatestBuild(latest ?? "");
-  }, []);
-
-  useOnMount(load);
-
-  // Background check result — refresh state + run per-server check (with toasts).
-  useTauriEvent<UpdateCheckResult | { updateApplied?: boolean }>("asa://update-check", async (payload) => {
-    if ("updateApplied" in payload && payload.updateApplied) {
-      await setAppSetting("asa_update_available", "false");
-      await setAppSetting("asa_cached_build_id", latestBuild || cachedBuild);
-      load();
-      return;
-    }
-    if ("updateAvailable" in payload) {
-      const r = payload as UpdateCheckResult;
-      const now = new Date().toISOString();
-      await setAppSetting("asa_update_available", String(r.updateAvailable));
-      await setAppSetting("asa_cached_build_id", r.cachedBuildId);
-      await setAppSetting("asa_latest_build_id", r.latestBuildId);
-      await setAppSetting("asa_last_checked", now);
-      load();
-      // Background check: toasts fire per-server, no dialog.
-      await runPerServerUpdateCheck(false);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-    }
-  });
+  // Background checks (scheduled or per-server auto-apply) are handled
+  // globally in SchedulerManager, which invalidates the ["servers"] query —
+  // this component just re-renders from the refreshed `servers` prop, so it
+  // doesn't need its own asa://update-check listener.
 
   const handleCheck = async () => {
     setChecking(true);
@@ -94,7 +62,6 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
       // Manual check: silent mode suppresses per-server toasts; we show dialog.
       const summary = await runPerServerUpdateCheck(true);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      load();
 
       if (summary.allWithUpdates.length > 0) {
         // Show the updates-found dialog to the user.
