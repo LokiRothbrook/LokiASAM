@@ -21,7 +21,7 @@ import { useServers } from "@/hooks/useServers";
 import { getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate, type ServerUpdateInfo } from "@/lib/update-utils";
-import { buildStartParams } from "@/lib/server-utils";
+import { restartServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
@@ -226,7 +226,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
 
         {manualUpdates.length < updates.length && (
           <p className="text-xs px-1" style={{ color: "var(--text-muted)" }}>
-            Servers marked "Auto-updating" have When Found automation enabled and will update on their own —
+            Servers marked &quot;Auto-updating&quot; have When Found automation enabled and will update on their own —
             no action needed.
           </p>
         )}
@@ -522,46 +522,9 @@ export default function DashboardPage() {
     if (running.length === 0) return;
 
     for (const s of running) {
-      (async () => {
-        if (s.restart_warn_players) {
-          try {
-            // Show a visible transition immediately, same as the non-warn
-            // branch below and Stop All — otherwise the card sits on
-            // "running" with no feedback until the warning countdown
-            // finishes and the restart actually completes.
-            await updateServerStatus(s.id, "stopping", s.pid);
-            queryClient.invalidateQueries({ queryKey: ["servers"] });
-            const startParams = await buildStartParams(s);
-            await tauriCmd.startGracefulRestart({
-              serverId:      s.id,
-              warnSeconds:   (s.restart_warn_minutes ?? 5) * 60,
-              rconPort:      s.rcon_port,
-              rconPassword:  s.admin_password,
-              message:       s.restart_message || "Server restarting in {time}.",
-              cancelMessage: s.restart_cancel_message || "Restart has been canceled.",
-              startParams,
-            });
-          } catch (e) {
-            toast.error(`Failed to restart ${s.name}: ${e}`);
-          }
-          return;
-        }
-        try {
-          await updateServerStatus(s.id, "stopping", s.pid);
-          queryClient.invalidateQueries({ queryKey: ["servers"] });
-          const params = await buildStartParams(s);
-          // Stops the server then hands off to the staggered startup queue —
-          // avoids cold-booting every running server at once. The
-          // "startup_queued" → "starting" → "running" transitions arrive via
-          // the usual server://any-change events, same as a single restart.
-          await tauriCmd.restartServer(params, true);
-        } catch (e) {
-          toast.error(`Failed to restart ${s.name}: ${e}`);
-          await updateServerStatus(s.id, "error", null);
-        } finally {
-          queryClient.invalidateQueries({ queryKey: ["servers"] });
-        }
-      })();
+      restartServerGracefully(s, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      }).catch((e) => toast.error(`Failed to restart ${s.name}: ${e}`));
     }
     toast.info(`Queuing restart for ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, restartCountdownServers, queryClient]);

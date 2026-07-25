@@ -5,8 +5,9 @@
  * other callers can build start params without duplicating the logic.
  */
 
-import { getServerConfig, getServerMods, getAppSetting, getCluster } from "@/lib/db";
+import { getServerConfig, getServerMods, getAppSetting, getCluster, updateServerStatus } from "@/lib/db";
 import { ARK_MAPS, ARK_EVENTS, LAUNCH_PARAMETERS } from "@/data/game-data";
+import { tauriCmd } from "@/lib/tauri-commands";
 import type { StartServerParams } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 
@@ -75,6 +76,55 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
   }
 
   return params;
+}
+
+/**
+ * Restart a single running server: builds start params, then either runs the
+ * warn-players countdown (`start_graceful_restart`) or stops it directly and
+ * hands off to the staggered startup queue (`restart_server`), depending on
+ * the server's own `restart_warn_players` setting.
+ *
+ * Shared by the per-server Restart button and the dashboard's Restart All
+ * bulk action so the two can't drift out of sync with each other.
+ *
+ * On failure of the non-warn path, reverts the server's status to "error" —
+ * the warn path leaves status alone since Rust already reverts it to
+ * "running" itself if the countdown gets cancelled.
+ */
+export async function restartServerGracefully(
+  server: ServerRow,
+  opts: { onInvalidate: () => void },
+): Promise<void> {
+  // Visible transition immediately — otherwise the card sits on "running"
+  // with no feedback until the countdown/restart actually completes.
+  await updateServerStatus(server.id, "stopping", server.pid);
+  opts.onInvalidate();
+
+  const startParams = await buildStartParams(server);
+
+  if (server.restart_warn_players) {
+    await tauriCmd.startGracefulRestart({
+      serverId:      server.id,
+      warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
+      rconPort:      server.rcon_port,
+      rconPassword:  server.admin_password,
+      message:       server.restart_message || "Server restarting in {time}.",
+      cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
+      startParams,
+    });
+    return;
+  }
+
+  try {
+    // Stops the server then hands off to the staggered startup queue — the
+    // "startup_queued" → "starting" → "running" transitions arrive via the
+    // usual server://any-change events.
+    await tauriCmd.restartServer(startParams, true);
+  } catch (err) {
+    await updateServerStatus(server.id, "error", null).catch(() => {});
+    opts.onInvalidate();
+    throw err;
+  }
 }
 
 /**

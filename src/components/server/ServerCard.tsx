@@ -53,7 +53,7 @@ import { applyUpdateToServer, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
-import { buildStartParams } from "@/lib/server-utils";
+import { buildStartParams, restartServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
@@ -339,43 +339,18 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleRestart = async () => {
-    if (server.restart_warn_players) {
-      // Show a visible transition immediately — otherwise the card sits on
-      // "running" with no feedback until the warning countdown finishes.
-      // Rust reverts this back to "running" if the countdown gets cancelled.
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      const startParams = await buildStartParams(server);
-      tauriCmd.startGracefulRestart({
-        serverId:      server.id,
-        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
-        rconPort:      server.rcon_port,
-        rconPassword:  server.admin_password,
-        message:       server.restart_message || "Server restarting in {time}.",
-        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
-        startParams,
-      }).catch((err) => toast.error(`Restart failed: ${err}`));
-      return;
-    }
-
-    setActionPending(true);
+    // Only the plain (non-warn) path is a quick stop+handoff worth a pending
+    // spinner — the warn path runs a countdown that can last minutes.
+    const isWarnRestart = !!server.restart_warn_players;
+    if (!isWarnRestart) setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-
-      const params = await buildStartParams(server);
-      // Stops the server then hands off to the staggered startup queue —
-      // does not restart directly, so there's no pid to record here. The
-      // "startup_queued" → "starting" → "running" transitions arrive via
-      // the usual server://any-change events.
-      await tauriCmd.restartServer(params, true);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await restartServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to restart ${server.name}`, { description: String(err) });
-      await updateServerStatus(server.id, "error", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
     } finally {
-      setActionPending(false);
+      if (!isWarnRestart) setActionPending(false);
     }
   };
 

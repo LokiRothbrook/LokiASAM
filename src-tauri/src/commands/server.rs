@@ -207,6 +207,14 @@ pub async fn graceful_shutdown_via_rcon(
 ) {
     use tokio::time::{sleep, Duration};
 
+    // Mark intentional before sending doexit, not after polling confirms the
+    // process is gone — the exit watcher can resolve within milliseconds of
+    // doexit, and it decides "stopped" vs "crashed" by checking this set. Every
+    // other stop path marks it before touching the process; this one used to
+    // mark it only at the very end (via inner_stop_server), so a fast exit
+    // would already be reported as a crash by the time we got there.
+    app.state::<AppState>().stopping_servers.lock().unwrap().insert(server_id.to_string());
+
     let _ = super::rcon::transient_rcon_command(rcon_port, rcon_password, "saveworld").await;
     sleep(Duration::from_secs(3)).await;
     let _ = super::rcon::transient_rcon_command(rcon_port, rcon_password, "doexit").await;
