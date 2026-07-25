@@ -299,9 +299,14 @@ pub async fn start_graceful_restart(
         deregister_countdown(&state2, &params.server_id);
 
         if matches!(result, CountdownResult::Proceed) {
+            let notify = state2.register_stop_handoff(&params.server_id);
             super::server::graceful_shutdown_via_rcon(
                 &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
+            // Wait for the watcher's own cleanup to finish before emitting
+            // our next status — otherwise its delayed "stopped" can race in
+            // afterward and silently overwrite it.
+            state2.wait_for_stop_handoff(&params.server_id, notify).await;
             // Hand off to the staggered startup queue instead of restarting
             // directly — same reason fire_restart/inner_restart_server do,
             // so several servers warn-restarting together (e.g. Restart All)
@@ -382,11 +387,16 @@ pub async fn start_graceful_update(
 
         if !proceed { return; }
 
-        // Stop the server gracefully if it was running.
+        // Stop the server gracefully if it was running, and wait for the
+        // watcher's own cleanup to finish before proceeding — otherwise its
+        // delayed "stopped" can race in after our own status emissions below
+        // (updating / startup_queued / stopped) and silently overwrite them.
         if was_running {
+            let notify = state2.register_stop_handoff(&params.server_id);
             super::server::graceful_shutdown_via_rcon(
                 &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
+            state2.wait_for_stop_handoff(&params.server_id, notify).await;
         }
 
         // Emit "updating" status so server card shows spinner.

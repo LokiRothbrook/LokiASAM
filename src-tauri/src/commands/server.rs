@@ -481,14 +481,21 @@ async fn inner_start_server_with_state(
             app_state.running_servers.lock().unwrap().remove(&sid);
             handle_clone.state::<RconPool>().remove_server(&sid).await;
             LogManagerState::archive_all_server_logs(&handle_clone, &sid, &install_path_watcher).await;
-            crate::commands::notifications::dispatch_notification(
-                &handle_clone, "server_stopped", Some(&sid), &server_name_notif,
-                &format!("{} stopped", server_name_notif), "Server has shut down.", "info",
-            ).await;
-            emit_status(&handle_clone, &ServerStatus {
-                server_id: sid, status: "stopped".into(),
-                pid: None, uptime_seconds: None, error: None,
-            });
+
+            // If a restart/update flow is waiting on this stop, wake it now
+            // that cleanup above is actually done — it'll emit whatever
+            // comes next (startup_queued, updating, etc.) itself. Otherwise
+            // this is a plain stop: report "stopped" ourselves.
+            if !app_state.handoff_stop_to_restart_flow(&sid) {
+                crate::commands::notifications::dispatch_notification(
+                    &handle_clone, "server_stopped", Some(&sid), &server_name_notif,
+                    &format!("{} stopped", server_name_notif), "Server has shut down.", "info",
+                ).await;
+                emit_status(&handle_clone, &ServerStatus {
+                    server_id: sid, status: "stopped".into(),
+                    pid: None, uptime_seconds: None, error: None,
+                });
+            }
             return;
         }
 
@@ -882,17 +889,18 @@ pub async fn inner_restart_server(
     params: StartServerParams,
     graceful: bool,
 ) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+
     let running_info = {
-        let state = app_handle.state::<AppState>();
         let registry = state.running_servers.lock().unwrap();
         registry.get(&params.server_id).map(|rs| (rs.pid, rs.install_path.clone()))
     };
 
     if let Some((pid, install_path)) = running_info {
-        {
-            let state = app_handle.state::<AppState>();
-            state.stopping_servers.lock().unwrap().insert(params.server_id.clone());
-        }
+        // Register before killing — the exit watcher can resolve almost
+        // immediately, so this must be visible before the process actually dies.
+        let notify = state.register_stop_handoff(&params.server_id);
+        state.stopping_servers.lock().unwrap().insert(params.server_id.clone());
 
         if graceful {
             // Graceful path: ask the server to save and exit via RCON so it
@@ -909,8 +917,13 @@ pub async fn inner_restart_server(
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
 
-        // Clean up state (the watcher task may have already done this, that's fine).
-        let state = app_handle.state::<AppState>();
+        // Wait for the watcher task to confirm its own cleanup (registry,
+        // RCON pool, log rotation) is actually done before we proceed —
+        // otherwise its delayed "stopped" report can race in after our
+        // "startup_queued" below and silently overwrite it.
+        state.wait_for_stop_handoff(&params.server_id, notify).await;
+
+        // Fallback cleanup in case the watcher's handoff timed out.
         state.stopping_servers.lock().unwrap().remove(&params.server_id);
         state.running_servers.lock().unwrap().remove(&params.server_id);
         // Drop any RCON state tied to the process we just killed — the new
@@ -1056,20 +1069,27 @@ pub async fn scan_running_servers(
                         // frontend can display the archived last-session log immediately.
                         LogManagerState::archive_all_server_logs(&handle, &sid, &install_path_watcher).await;
 
-                        let status = if was_intentional { "stopped" } else { "crashed" };
-                        let payload = ServerStatus {
-                            server_id: sid.clone(),
-                            status: status.into(),
-                            pid: None,
-                            uptime_seconds: None,
-                            error: None,
-                        };
+                        // If a restart/update flow is waiting on this stop,
+                        // wake it now that cleanup above is actually done —
+                        // it'll emit whatever comes next itself. See the same
+                        // handoff in inner_start_server's watcher task.
+                        let handed_off = was_intentional && app_state.handoff_stop_to_restart_flow(&sid);
+                        if !handed_off {
+                            let status = if was_intentional { "stopped" } else { "crashed" };
+                            let payload = ServerStatus {
+                                server_id: sid.clone(),
+                                status: status.into(),
+                                pid: None,
+                                uptime_seconds: None,
+                                error: None,
+                            };
 
-                        let _ = handle.emit(
-                            &events::server_event(events::SERVER_STATUS, &sid),
-                            payload.clone(),
-                        );
-                        let _ = handle.emit(events::SERVER_ANY_CHANGE, payload);
+                            let _ = handle.emit(
+                                &events::server_event(events::SERVER_STATUS, &sid),
+                                payload.clone(),
+                            );
+                            let _ = handle.emit(events::SERVER_ANY_CHANGE, payload);
+                        }
                         break;
                     }
                 }

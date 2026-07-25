@@ -40,7 +40,10 @@ export function StartupQueueManager() {
   const dequeueNextStartup    = useAppStore((s) => s.dequeueNextStartup);
   const enqueueStartup        = useAppStore((s) => s.enqueueStartup);
   const setNoRetryServer      = useAppStore((s) => s.setNoRetryServer);
-  const startingRef           = useRef(false);
+  // Tracks the id currently being processed (not just a boolean) so the
+  // reconciliation effect below can tell "already being handled" apart from
+  // "genuinely missing" for this one server.
+  const startingIdRef         = useRef<string | null>(null);
 
   // Self-heal: the DB status column is the source of truth for "wants to
   // start via the queue" — the in-memory Zustand array is only an ordering
@@ -51,9 +54,16 @@ export function StartupQueueManager() {
   // it up. Reconcile on every servers refresh so that can't get permanently
   // stuck — this is the same fix StartupRecoveryManager already does once at
   // launch, just kept running for the rest of the session too.
+  //
+  // Excludes whatever's currently being processed: the main effect below
+  // dequeues a server synchronously before its DB status actually flips away
+  // from "startup_queued" (that write happens moments later, after an async
+  // round-trip) — without this exclusion, this effect sees the stale cached
+  // status, decides the server it just popped is "missing", and re-queues a
+  // duplicate for it.
   useEffect(() => {
     const missing = servers
-      .filter((s) => s.status === "startup_queued" && !startupQueue.includes(s.id))
+      .filter((s) => s.status === "startup_queued" && !startupQueue.includes(s.id) && s.id !== startingIdRef.current)
       .map((s) => s.id);
     if (missing.length > 0) enqueueStartup(missing);
   }, [servers, startupQueue, enqueueStartup]);
@@ -62,7 +72,7 @@ export function StartupQueueManager() {
     // Guard: don't start another server while one is already starting,
     // or if the queue is empty.
     const anyStarting = servers.some((s) => s.status === "starting");
-    if (anyStarting || startupQueue.length === 0 || startingRef.current) return;
+    if (anyStarting || startupQueue.length === 0 || startingIdRef.current) return;
 
     const nextId = startupQueue[0];
 
@@ -72,7 +82,7 @@ export function StartupQueueManager() {
       return;
     }
 
-    startingRef.current = true;
+    startingIdRef.current = nextId;
     dequeueNextStartup();
 
     (async () => {
@@ -133,7 +143,7 @@ export function StartupQueueManager() {
           severity:   "error",
         });
       } finally {
-        startingRef.current = false;
+        startingIdRef.current = null;
         queryClient.invalidateQueries({ queryKey: ["servers"] });
       }
     })();

@@ -66,6 +66,19 @@ pub struct AppState {
     /// (a restart/update killing or overwriting files mid-backup can produce
     /// a silently-incomplete archive). Acquire via `try_lock_server`.
     pub busy_servers: Mutex<HashSet<String>>,
+    /// Server IDs whose current stop is being orchestrated by a restart/update
+    /// flow rather than a plain Stop. The process-exit watcher spawned back
+    /// when the server was originally started predates that flow and
+    /// independently notices the same exit — a time-based marker isn't enough
+    /// to avoid the race (the watcher's own cleanup, e.g. archiving logs, can
+    /// take longer than the restart flow's, so a marker cleared when the
+    /// restart flow finishes can already be gone by the time the watcher
+    /// checks it). Instead, the restart flow registers a `Notify` here before
+    /// killing the process; the watcher, once its *own* cleanup is done,
+    /// fires the notification instead of emitting "stopped" itself, and the
+    /// restart flow awaits it before emitting whatever comes next — a real
+    /// happens-before relationship instead of two tasks racing a shared flag.
+    pub restart_handoff: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 }
 
 /// RAII guard returned by `AppState::try_lock_server` — releases the lock
@@ -81,6 +94,7 @@ impl Drop for ServerLockGuard<'_> {
         self.state.busy_servers.lock().unwrap().remove(&self.server_id);
     }
 }
+
 
 impl AppState {
     pub fn new() -> Self {
@@ -98,6 +112,7 @@ impl AppState {
             countdowns: Mutex::new(HashMap::new()),
             db_path: Mutex::new(None),
             busy_servers: Mutex::new(HashSet::new()),
+            restart_handoff: Mutex::new(HashMap::new()),
         }
     }
 
@@ -134,5 +149,47 @@ impl AppState {
     /// Clear the abort flag for `op_id` (called when the operation finishes or is aborted).
     pub fn clear_abort(&self, op_id: &str) {
         self.abort_flags.lock().unwrap().remove(op_id);
+    }
+
+    /// Register that `server_id`'s upcoming stop is being orchestrated by a
+    /// restart/update flow. Call this *before* killing the process. Returns
+    /// the `Notify` the caller should `.notified().await` (with a timeout —
+    /// see `wait_for_stop_handoff`) after triggering the kill, to block until
+    /// the process-exit watcher's own cleanup has actually finished.
+    pub fn register_stop_handoff(&self, server_id: &str) -> Arc<tokio::sync::Notify> {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        self.restart_handoff.lock().unwrap().insert(server_id.to_string(), Arc::clone(&notify));
+        notify
+    }
+
+    /// Wait (up to 30s) for the process-exit watcher to confirm it has
+    /// finished handling this server's stop. Always returns — the timeout
+    /// is a safety net so a restart/update flow can't hang forever if the
+    /// watcher is unusually slow (e.g. archiving logs for several servers
+    /// concurrently during a bulk restart can easily exceed 30s under disk
+    /// contention). Deliberately does NOT remove the registration itself:
+    /// the watcher may still be working and must find it whenever it does
+    /// finish, however much later, so it hands off silently instead of
+    /// reporting a stale "stopped" after we've already moved on. Only the
+    /// watcher (via `handoff_stop_to_restart_flow`) ever removes the entry.
+    pub async fn wait_for_stop_handoff(&self, _server_id: &str, notify: Arc<tokio::sync::Notify>) {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), notify.notified()).await;
+    }
+
+    /// Called by the process-exit watcher once its own cleanup (registry,
+    /// RCON pool, log rotation) is done. If a restart/update flow registered
+    /// this server (via `register_stop_handoff`), consumes that registration
+    /// and wakes it — instead of the watcher emitting its own "stopped"
+    /// status — returning true so the watcher knows to skip that emission.
+    /// This is the only place the registration is ever removed, so it stays
+    /// valid for however long this watcher takes to get here, even well past
+    /// the waiter's own 30s timeout.
+    pub fn handoff_stop_to_restart_flow(&self, server_id: &str) -> bool {
+        if let Some(notify) = self.restart_handoff.lock().unwrap().remove(server_id) {
+            notify.notify_one();
+            true
+        } else {
+            false
+        }
     }
 }

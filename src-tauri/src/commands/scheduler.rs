@@ -187,12 +187,21 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
             return Ok(());
         }
 
+        // Registered immediately before the kill (not earlier — cancelling
+        // above never touches the process, so registering any sooner would
+        // leak a handoff entry nothing will ever wait on or clear).
+        let notify = state.register_stop_handoff(&entry.server_id);
         super::server::graceful_shutdown_via_rcon(app, &entry.server_id, entry.rcon_port, &entry.rcon_password).await;
+        // Wait for the watcher's own cleanup to finish before we emit our
+        // next status below, so its delayed "stopped" can't race in after.
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
     } else {
         // Nothing loaded to save, no players connected yet — go straight to a
         // synchronous hard kill rather than waiting out an RCON handshake
         // that isn't up yet.
+        let notify = state.register_stop_handoff(&entry.server_id);
         let _ = super::server::inner_stop_server(app, &entry.server_id, false);
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
     }
 
     // Hand off to the frontend's staggered startup queue instead of starting
@@ -329,7 +338,12 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         // anyway. Skip straight to it. SIGKILL (not SIGTERM) specifically,
         // since it's synchronous — sync_cache_to_server below must never race
         // a process that might still be exiting.
+        let notify = state.register_stop_handoff(&entry.server_id);
         let _ = super::server::inner_stop_server(app, &entry.server_id, false);
+        // Wait for the watcher's own cleanup to finish before proceeding —
+        // otherwise its delayed "stopped" can race in after our own status
+        // emissions below and silently overwrite them.
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
     } else if is_confirmed_running {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
         {
@@ -365,7 +379,12 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             return Ok(());
         }
 
+        // Registered immediately before the kill (not earlier — cancelling
+        // above never touches the process, so registering any sooner would
+        // leak a handoff entry nothing will ever wait on or clear).
+        let notify = state.register_stop_handoff(&entry.server_id);
         super::server::graceful_shutdown_via_rcon(app, &entry.server_id, entry.rcon_port, &entry.rcon_password).await;
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
     }
 
     // Emit "updating" so the server card shows the spinner.
