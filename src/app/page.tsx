@@ -525,6 +525,12 @@ export default function DashboardPage() {
       (async () => {
         if (s.restart_warn_players) {
           try {
+            // Show a visible transition immediately, same as the non-warn
+            // branch below and Stop All — otherwise the card sits on
+            // "running" with no feedback until the warning countdown
+            // finishes and the restart actually completes.
+            await updateServerStatus(s.id, "stopping", s.pid);
+            queryClient.invalidateQueries({ queryKey: ["servers"] });
             const startParams = await buildStartParams(s);
             await tauriCmd.startGracefulRestart({
               serverId:      s.id,

@@ -1614,9 +1614,14 @@ export async function getNotifications(
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
 
+  // created_at only has millisecond resolution, so a burst of notifications
+  // logged in the same millisecond (common during bulk operations like
+  // "Update All") tie on the primary sort key — rowid (insertion order) as a
+  // tiebreaker keeps the list deterministically newest-first instead of
+  // falling back to whatever order SQLite happens to return ties in.
   return db.select<InAppNotificationRow[]>(
     `SELECT * FROM in_app_notifications ${where}
-     ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+     ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
 }

@@ -340,6 +340,11 @@ export function ServerCard({ server }: Props) {
 
   const handleRestart = async () => {
     if (server.restart_warn_players) {
+      // Show a visible transition immediately — otherwise the card sits on
+      // "running" with no feedback until the warning countdown finishes.
+      // Rust reverts this back to "running" if the countdown gets cancelled.
+      await updateServerStatus(server.id, "stopping", server.pid);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       const startParams = await buildStartParams(server);
       tauriCmd.startGracefulRestart({
         serverId:      server.id,
@@ -386,6 +391,12 @@ export function ServerCard({ server }: Props) {
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
       const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
+
+      // Show a visible transition immediately — otherwise the card sits on
+      // "running" with no feedback until the warning countdown finishes.
+      // Rust reverts this back to "running" if the countdown gets cancelled.
+      await updateServerStatus(server.id, "stopping", server.pid);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
 
       tauriCmd.startGracefulUpdate({
         serverId:      server.id,

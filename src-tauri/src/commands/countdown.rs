@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 use crate::state::CountdownSignal;
-use super::server::StartServerParams;
+use super::server::{emit_status, ServerStatus, StartServerParams};
 
 // ---------------------------------------------------------------------------
 // Tauri event payload
@@ -108,10 +108,16 @@ pub async fn run_countdown(
                 total_secs,
             });
             emit_clear(app, server_id);
+            // With no countdown badge ever shown (nothing to warn anyone
+            // about), the card would otherwise sit on "running" right up
+            // until the final post-restart status — emit an explicit
+            // "stopping" so there's a visible transition in the meantime.
+            emit_stopping(app, server_id);
             return CountdownResult::Proceed;
         }
     } else {
         emit_clear(app, server_id);
+        emit_stopping(app, server_id);
         return CountdownResult::Proceed;
     }
 
@@ -167,6 +173,25 @@ pub async fn run_countdown(
                             rcon_send(rcon_port, rcon_password, &format!("ServerChat {cancel_message}")).await;
                         }
                         emit_clear(app, server_id);
+                        // Callers that write "stopping" up front (Restart
+                        // All, the manual Restart/Update-now buttons) need
+                        // this reverted — the server was never actually
+                        // touched. Every run_countdown caller only starts a
+                        // countdown for an already-running server, so
+                        // reverting to "running" is always correct here.
+                        // Keep the real pid — it's still the same live
+                        // process, nulling it out would break anything keyed
+                        // off server.pid (RCON, stats polling, Stop button).
+                        let pid = app.state::<AppState>()
+                            .running_servers.lock().unwrap()
+                            .get(server_id).map(|rs| rs.pid);
+                        emit_status(app, &ServerStatus {
+                            server_id: server_id.to_string(),
+                            status: "running".into(),
+                            pid,
+                            uptime_seconds: None,
+                            error: None,
+                        });
                         return CountdownResult::Cancel;
                     }
                 }
@@ -184,6 +209,20 @@ fn emit_clear(app: &AppHandle, server_id: &str) {
         action: None,
         remaining_secs: 0,
         total_secs: 0,
+    });
+}
+
+/// Emit a "stopping" status update. Used when a countdown is skipped
+/// entirely (no players online, or a zero-length warning) so the UI still
+/// shows a visible transition instead of sitting on the prior status right
+/// up until the restart/update's final result arrives.
+fn emit_stopping(app: &AppHandle, server_id: &str) {
+    emit_status(app, &ServerStatus {
+        server_id: server_id.to_string(),
+        status: "stopping".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
     });
 }
 
@@ -267,8 +306,6 @@ pub async fn start_graceful_restart(
             // directly — same reason fire_restart/inner_restart_server do,
             // so several servers warn-restarting together (e.g. Restart All)
             // don't all cold-boot at once.
-            use crate::commands::server::emit_status;
-            use crate::commands::server::ServerStatus;
             emit_status(&app2, &ServerStatus {
                 server_id: params.server_id.clone(),
                 status: "startup_queued".into(),
@@ -353,8 +390,6 @@ pub async fn start_graceful_update(
         }
 
         // Emit "updating" status so server card shows spinner.
-        use crate::commands::server::emit_status;
-        use crate::commands::server::ServerStatus;
         emit_status(&app2, &ServerStatus {
             server_id: params.server_id.clone(),
             status: "updating".into(),
