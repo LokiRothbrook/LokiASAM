@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -483,13 +484,13 @@ function ToolPathField({
         toast.error(invalidLabel);
       }
     } catch (e) {
-      if (onInstallOffer) {
-        setInstallError(null);
-        setShowInstallDialog(true);
-      } else {
-        setValid(false);
-        toast.error(`Verification failed: ${e}`);
-      }
+      // validateFn threw (permission error, transient IPC failure, malformed
+      // path) — a genuine unexpected error, not "not found". Only route to
+      // the install-offer dialog when validateFn actually reports "not
+      // found" (the `ok === false` branch above); otherwise show what
+      // actually went wrong instead of offering an install that won't fix it.
+      setValid(false);
+      toast.error(`Verification failed: ${e}`);
     } finally {
       setVerifying(false);
     }
@@ -879,6 +880,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
   const [showApplyAll, setShowApplyAll] = useState(false);
   const [applyAllInfo, setApplyAllInfo] = useState<{ total: number; running: number }>({ total: 0, running: 0 });
   const [applyingAll, setApplyingAll] = useState(false);
+  const [restartAfterApplyAll, setRestartAfterApplyAll] = useState(true);
 
   const load = useCallback(async () => {
     const [cached, checked, hours] = await Promise.all([
@@ -900,8 +902,11 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
 
       const cacheUpdated = newBuild !== oldBuild;
 
-      // Run per-server check now that the cache build ID is current.
-      await runPerServerUpdateCheck();
+      // Run per-server check now that the cache build ID is current. Silent
+      // (matches the dashboard's manual check) — this section shows its own
+      // dialog below, so the internal consolidated notification would just
+      // be a duplicate.
+      await runPerServerUpdateCheck(true);
 
       const servers = await getServers();
       const outdated = servers.filter((s) => s.update_available === 1);
@@ -953,8 +958,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
     try {
       const servers = await getServers();
       const outdated = servers.filter((s) => s.update_available === 1 && !isAutoUpdateImmediate(s));
-      // dialog promises running servers are restarted after the update
-      await applyUpdateToAllServers(outdated, true, {
+      await applyUpdateToAllServers(outdated, restartAfterApplyAll, {
         enqueueStartup,
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
@@ -1043,10 +1047,25 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
             <DialogDescription>
               {applyAllInfo.total} server{applyAllInfo.total !== 1 ? "s are" : " is"} behind the cache.
               {applyAllInfo.running > 0 && (
-                <> {applyAllInfo.running} currently running server{applyAllInfo.running !== 1 ? "s" : ""} will be stopped and restarted after the update.</>
+                <> {applyAllInfo.running} currently running server{applyAllInfo.running !== 1 ? "s" : ""} will be stopped to apply the update.</>
               )}
             </DialogDescription>
           </DialogHeader>
+          {applyAllInfo.running > 0 && (
+            <div
+              className="flex items-center gap-3 px-1 py-2 rounded-lg"
+              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            >
+              <Switch
+                id="settings-apply-all-restart-toggle"
+                checked={restartAfterApplyAll}
+                onCheckedChange={setRestartAfterApplyAll}
+              />
+              <Label htmlFor="settings-apply-all-restart-toggle" className="text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+                Restart running servers after update
+              </Label>
+            </div>
+          )}
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowApplyAll(false)}
               style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
@@ -1246,7 +1265,15 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
     setPhase("running");
     try {
       if (op === "reinstall") {
-        await tauriCmd.deleteDirectory(getCacheDir(baseDir)).catch(() => {});
+        try {
+          await tauriCmd.deleteDirectory(getCacheDir(baseDir));
+        } catch (e) {
+          // Old directory couldn't be cleared (e.g. a file still locked) —
+          // don't silently proceed to install on top of stale leftovers.
+          toast.error(`Couldn't clear the existing cache directory: ${e}`);
+          setPhase("error");
+          return;
+        }
         await setAppSetting("asa_cached_build_id", "");
       }
       const newBuild = await runAsaCacheUpdate(CACHE_OP_LABELS[op]);
@@ -1510,7 +1537,9 @@ function ProtonGeInstallRow() {
     setProtonOpDone(false);
     try {
       if (reinstall && protonPath) {
-        await tauriCmd.deleteDirectory(protonPath).catch(() => {});
+        // Let a delete failure fall through to the catch below instead of
+        // silently proceeding to download on top of stale leftover files.
+        await tauriCmd.deleteDirectory(protonPath);
       }
       const newPath = await tauriCmd.downloadProtonGe(targetDir);
       await setAppSetting("proton_path", newPath);
@@ -2442,7 +2471,15 @@ function CloseToTraySection() {
   const handleToggle = async (enabled: boolean) => {
     setCloseToTrayState(enabled);
     await setAppSetting("close_to_tray", String(enabled));
-    tauriCmd.setCloseToTray(enabled).catch(() => {});
+    try {
+      await tauriCmd.setCloseToTray(enabled);
+    } catch (e) {
+      // Backend didn't pick up the change — revert the toggle rather than
+      // leaving the UI showing a state that diverges from actual behavior.
+      setCloseToTrayState(!enabled);
+      await setAppSetting("close_to_tray", String(!enabled));
+      toast.error(`Failed to update close-to-tray setting: ${e}`);
+    }
   };
 
   return (

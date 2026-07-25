@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useAppStore } from "@/store/useAppStore";
 import type { ChartPoint } from "@/lib/db";
 
@@ -24,29 +23,18 @@ interface LiveStatEvent {
 export function ServerStatsRecorderProvider() {
   const addLiveSample = useAppStore((s) => s.addLiveSample);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-
-    listen<LiveStatEvent>("stats://live", ({ payload }) => {
-      const point: ChartPoint = {
-        ts:         payload.ts,
-        cpu:        payload.cpu,
-        cpuMax:     payload.cpu,
-        mem:        payload.mem,
-        memMax:     payload.mem,
-        players:    payload.players,
-        playersMax: payload.players,
-      };
-      addLiveSample(payload.serverId, point);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-
-    return () => {
-      unlisten?.();
+  useTauriEvent<LiveStatEvent>("stats://live", (payload) => {
+    const point: ChartPoint = {
+      ts:         payload.ts,
+      cpu:        payload.cpu,
+      cpuMax:     payload.cpu,
+      mem:        payload.mem,
+      memMax:     payload.mem,
+      players:    payload.players,
+      playersMax: payload.players,
     };
-  // addLiveSample is stable (Zustand action reference never changes)
-  }, [addLiveSample]);
+    addLiveSample(payload.serverId, point);
+  });
 
   return null;
 }

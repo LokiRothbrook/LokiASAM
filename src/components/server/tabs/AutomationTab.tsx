@@ -966,6 +966,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
         server.update_message || "Server going down for update in {time}.",
         server.update_cancel_message || "Update has been canceled.",
       );
+      syncSchedulesToRust();
     } catch (e) {
       setUpdateWarnPlayers(!checked);
       toast.error(`Failed to save: ${e}`);

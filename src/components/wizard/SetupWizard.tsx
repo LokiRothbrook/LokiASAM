@@ -1130,9 +1130,11 @@ function BaseDirStep() {
 
   const pickDir = async () => {
     const selected = await open({ directory: true, multiple: false, title: "Select LokiASAM Installation Directory" });
+    // handleChange already schedules a debounced validateDir — an explicit
+    // second call here just double-runs the same check on every picker
+    // selection.
     if (typeof selected === "string" && selected) {
       handleChange(selected);
-      await validateDir(selected);
     }
   };
 
@@ -1469,9 +1471,11 @@ function BackupDirStep() {
 
   const pickDir = async () => {
     const selected = await open({ directory: true, multiple: false, title: "Select Backup Storage Directory" });
+    // handleChange already schedules a debounced validateDir — an explicit
+    // second call here just double-runs the same check on every picker
+    // selection.
     if (typeof selected === "string" && selected) {
       handleChange(selected);
-      await validateDir(selected);
     }
   };
 

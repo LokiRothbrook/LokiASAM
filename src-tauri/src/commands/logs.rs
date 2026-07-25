@@ -556,8 +556,6 @@ fn extract_timestamp_from_filename(name: &str) -> String {
     name.trim_start_matches("ShooterGame_")
         .trim_end_matches(".log")
         .replace('_', " ")
-        .replace('-', if name.contains("_") { "-" } else { "-" })
-        .to_string()
 }
 
 /// Convert a UE5 crash folder name (e.g. `UE5-ShooterGame-Win64-2026.06.08-14.30.00`) to a readable string.

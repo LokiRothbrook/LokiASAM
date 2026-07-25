@@ -107,10 +107,11 @@ function ReinstallCard({ server }: Props) {
     setConfirming(false);
     queryClient.invalidateQueries({ queryKey: ["servers"] });
     try {
+      // reinstallServer already dispatches a success/failure notification
+      // (which shows its own toast) — no need to show a second one here.
       await reinstallServer(server);
-      toast.success(`${server.name} reinstalled successfully.`);
-    } catch (e) {
-      toast.error(`Reinstall failed: ${e}`);
+    } catch {
+      // Failure notification already dispatched by reinstallServer.
     } finally {
       setReinstalling(false);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -252,7 +253,7 @@ function ImportSavesCard({ server }: Props) {
 
   const openImportDialog = async () => {
     const all = await getServers();
-    setImportServers(all.filter((s) => s.id !== server.id && s.status === "stopped"));
+    setImportServers(all.filter((s) => s.id !== server.id && s.status === "stopped" && s.map_id === server.map_id));
     setImportSourceId("");
     setShowImport(true);
   };

@@ -765,12 +765,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "configparser"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e57e3272f0190c3f1584272d613719ba5fc7df7f4942fe542e63d949cf3a649b"
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2770,7 +2764,6 @@ dependencies = [
 name = "lokiasam"
 version = "0.14.1"
 dependencies = [
- "configparser",
  "flate2",
  "junction",
  "lettre",

@@ -30,7 +30,7 @@ import {
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
   pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
-import { buildLaunchCommandPreview, buildStartParams } from "@/lib/server-utils";
+import { buildLaunchCommandPreview, buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { applyUpdateToServer } from "@/lib/update-utils";
 import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
@@ -705,16 +705,9 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const handleStop = async () => {
     setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      await tauriCmd.gracefulStopServer(
-        server.id,
-        server.rcon_port,
-        server.admin_password,
-        server.shutdown_warn_players !== 0,
-        server.shutdown_warn_minutes ?? 5,
-        server.shutdown_message || "Server will shut down in {time}.",
-      );
+      await stopServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to stop ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
@@ -737,40 +730,18 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   };
 
   const handleRestart = async () => {
-    if (server.restart_warn_players) {
-      // Show a visible transition immediately — otherwise the card sits on
-      // "running" with no feedback until the warning countdown finishes.
-      // Rust reverts this back to "running" if the countdown gets cancelled.
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      const startParams = await buildStartParams(server);
-      tauriCmd.startGracefulRestart({
-        serverId:      server.id,
-        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
-        rconPort:      server.rcon_port,
-        rconPassword:  server.admin_password,
-        message:       server.restart_message || "Server restarting in {time}.",
-        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
-        startParams,
-      }).catch((err) => toast.error(`Restart failed: ${err}`));
-      return;
-    }
-
-    setActionPending(true);
+    // Only the plain (non-warn) path is a quick stop+handoff worth a pending
+    // spinner — the warn path runs a countdown that can last minutes.
+    const isWarnRestart = !!server.restart_warn_players;
+    if (!isWarnRestart) setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      const params = await buildStartParams(server);
-      // Stops the server then hands off to the staggered startup queue —
-      // the "startup_queued" → "starting" → "running" transitions arrive via
-      // the usual server://any-change events.
-      await tauriCmd.restartServer(params, true);
+      await restartServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to restart ${server.name}`, { description: String(err) });
-      await updateServerStatus(server.id, "error", null);
     } finally {
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      setActionPending(false);
+      if (!isWarnRestart) setActionPending(false);
     }
   };
 
@@ -952,14 +923,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             </>
           ) : server.status === "stopping" ? (
             <Button
-              size="sm" onClick={handleForceStop} className="gap-1.5"
+              size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
             </Button>
           ) : server.status === "starting" ? (
             <Button
-              size="sm" onClick={handleForceStop} className="gap-1.5"
+              size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
             >
               <X className="w-3.5 h-3.5" /> Cancel Startup

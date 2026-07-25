@@ -230,10 +230,20 @@ fn emit_stopping(app: &AppHandle, server_id: &str) {
 // Register / deregister countdown channels in AppState
 // ---------------------------------------------------------------------------
 
-fn register_countdown(state: &AppState, server_id: &str) -> mpsc::Receiver<CountdownSignal> {
+/// Atomically checks for and registers a countdown in one lock acquisition —
+/// checking `contains_key` and inserting under two separate locks (as this
+/// used to do) leaves a window where two near-simultaneous callers for the
+/// same server_id can both pass the check before either inserts, silently
+/// overwriting one Sender with the other and leaving the first countdown
+/// un-cancellable and running unsupervised.
+fn try_register_countdown(state: &AppState, server_id: &str) -> Result<mpsc::Receiver<CountdownSignal>, String> {
     let (tx, rx) = mpsc::channel::<CountdownSignal>(1);
-    state.countdowns.lock().unwrap().insert(server_id.to_string(), tx);
-    rx
+    let mut cd = state.countdowns.lock().unwrap();
+    if cd.contains_key(server_id) {
+        return Err(format!("A countdown is already in progress for {server_id}"));
+    }
+    cd.insert(server_id.to_string(), tx);
+    Ok(rx)
 }
 
 fn deregister_countdown(state: &AppState, server_id: &str) {
@@ -270,15 +280,8 @@ pub async fn start_graceful_restart(
         }
     }
 
-    // Guard: no concurrent countdown.
-    {
-        let cd = state.countdowns.lock().unwrap();
-        if cd.contains_key(&params.server_id) {
-            return Err("A countdown is already in progress for this server".into());
-        }
-    }
-
-    let mut rx = register_countdown(&state, &params.server_id);
+    // Guard: no concurrent countdown (checked and registered atomically).
+    let mut rx = try_register_countdown(&state, &params.server_id)?;
     let app2 = app.clone();
 
     // Spawn so the command returns immediately.
@@ -351,16 +354,9 @@ pub async fn start_graceful_update(
     state: State<'_, AppState>,
     params: GracefulUpdateParams,
 ) -> Result<(), String> {
-    // Guard: no concurrent countdown.
-    {
-        let cd = state.countdowns.lock().unwrap();
-        if cd.contains_key(&params.server_id) {
-            return Err("A countdown is already in progress for this server".into());
-        }
-    }
-
     let was_running = state.running_servers.lock().unwrap().contains_key(&params.server_id);
-    let mut rx = register_countdown(&state, &params.server_id);
+    // Guard: no concurrent countdown (checked and registered atomically).
+    let mut rx = try_register_countdown(&state, &params.server_id)?;
     let app2 = app.clone();
 
     tauri::async_runtime::spawn(async move {

@@ -14,6 +14,31 @@ import type { ServerRow } from "@/lib/db";
 export const isLinux =
   typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
 
+/**
+ * Convert the per-server `launch_args_json` record into CLI argv tokens.
+ * Shared by every place that turns saved launch-arg settings into a real
+ * argv (starting a server, scheduled restarts/updates, the launch-command
+ * preview) — this used to be reimplemented separately in three places, and
+ * two of the three copies (here and scheduler-sync.ts) had no special case
+ * for `_customCli`, so it fell through to the generic `-{key}={value}`
+ * templating and was sent as one broken argv token containing an embedded
+ * space instead of the user's actual flags.
+ *
+ * `_customCli` is free-text (not a real LAUNCH_PARAMETERS entry) — its value
+ * is split on whitespace and pushed as separate argv tokens verbatim.
+ */
+export function launchArgsToExtraArgs(launchArgs: Record<string, string>): string[] {
+  return Object.entries(launchArgs).flatMap(([k, v]) => {
+    if (!v || v === "false" || v === "0") return [];
+    if (k === "_customCli") return v.split(/\s+/).filter(Boolean);
+    const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
+    if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
+    if (param) return v ? [`${param.flag}${v}`] : [];
+    if (k.startsWith("_")) return []; // other internal keys, not real CLI flags
+    return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
+  });
+}
+
 export async function buildStartParams(server: ServerRow): Promise<StartServerParams> {
   const [config, mods] = await Promise.all([
     getServerConfig(server.id),
@@ -24,13 +49,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     ? JSON.parse(config.launch_args_json)
     : {};
 
-  const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
-    if (!v || v === "false" || v === "0") return [];
-    const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-    if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-    if (param) return v ? [`${param.flag}${v}`] : [];
-    return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-  });
+  const extraArgs = launchArgsToExtraArgs(launchArgs);
 
   const map = ARK_MAPS.find((m) => m.id === server.map_id);
   const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
@@ -128,6 +147,28 @@ export async function restartServerGracefully(
 }
 
 /**
+ * Stop a single running server gracefully (SaveWorld + doexit via RCON, with
+ * an optional in-game warning countdown first) — shared by the per-server
+ * Stop button and the dashboard's Stop All bulk action so the two can't
+ * drift out of sync with each other (mirrors `restartServerGracefully`).
+ */
+export async function stopServerGracefully(
+  server: ServerRow,
+  opts: { onInvalidate: () => void },
+): Promise<void> {
+  await updateServerStatus(server.id, "stopping", server.pid);
+  opts.onInvalidate();
+  await tauriCmd.gracefulStopServer(
+    server.id,
+    server.rcon_port,
+    server.admin_password,
+    server.shutdown_warn_players !== 0,
+    server.shutdown_warn_minutes ?? 5,
+    server.shutdown_message || "Server will shut down in {time}.",
+  );
+}
+
+/**
  * Build a human-readable preview of the full launch command for display.
  * Does NOT start the server. Fetches mods + cluster from DB.
  */
@@ -139,14 +180,7 @@ export async function buildLaunchCommandPreview(
   const map = ARK_MAPS.find((m) => m.id === server.map_id);
   const mapPath = map?.mapPath ?? "TheIsland_WP";
 
-  const extraArgs: string[] = Object.entries(launchArgs).flatMap(([k, v]) => {
-    if (!v || v === "false" || v === "0") return [];
-    const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-    if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-    if (param) return v ? [`${param.flag}${v}`] : [];
-    if (k.startsWith("_")) return []; // internal keys
-    return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-  });
+  const extraArgs: string[] = launchArgsToExtraArgs(launchArgs);
 
 
   if (server.active_event) {

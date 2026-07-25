@@ -210,7 +210,7 @@ export default function ServerDetailPage() {
       {/* ── Tab content ── */}
       {(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? (
         <div className="flex-1 min-h-0 overflow-hidden">
-          {activeTab === "rcon" && <RconTab  server={server} />}
+          {activeTab === "rcon" && <RconTab key={server.id} server={server} />}
           {activeTab === "logs" && <LogsTab  server={server} />}
           {activeTab === "mods" && <ModsTab  server={server} />}
         </div>

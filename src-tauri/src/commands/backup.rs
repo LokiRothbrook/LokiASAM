@@ -566,6 +566,17 @@ async fn create_server_backup_impl(
                     let _ = tokio::fs::remove_file(&archive_path).await;
                     continue;
                 }
+                if skipped > 0 {
+                    // Ran out of retries with files still vanishing mid-compression —
+                    // accept the archive (better than no backup) but say so, instead
+                    // of reporting it identically to a clean run.
+                    crate::commands::notifications::dispatch_notification(
+                        &app, "backup_completed", Some(&server_id), server_name,
+                        &format!("{server_name} Backup Incomplete"),
+                        &format!("Backup created, but {skipped} file(s) changed during compression and were skipped."),
+                        "warning",
+                    ).await;
+                }
                 // Clean run, or last attempt — accept the archive
                 emit_progress(&app, &server_id, 100.0, &archive_name, "Done");
                 let file_size = fs::metadata(&archive_path)
@@ -1242,8 +1253,23 @@ pub async fn restore_server_backup(
         return Err("server_id and map_path must not be empty".to_string());
     }
 
-    // Step 1: Clear existing save locations
-    emit_progress(&app, &server_id, 10.0, "", "Clearing existing saves…");
+    // Step 1: Extract backup to a temp directory FIRST — validating the archive
+    // before touching any live save data. A corrupt/truncated/missing archive
+    // must fail here, before Step 2 clears the real SavedArks/SaveGames
+    // directories, or a bad restore destroys the only copy of the save.
+    // The temp dir is UUID-suffixed (not just keyed by server_id) so a second
+    // restore for the same server started before this one finishes can't
+    // delete this one's in-progress extraction out from under it.
+    emit_progress(&app, &server_id, 10.0, "", "Extracting backup…");
+    let temp_dir = std::env::temp_dir().join(format!("lokiasam-restore-{}-{}", server_id, Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    sevenz_rust::decompress_file(&backup_file_path, &temp_dir)
+        .map_err(|e| { let _ = fs::remove_dir_all(&temp_dir); e.to_string() })?;
+
+    // Step 2: Clear existing save locations — only now that the archive is
+    // known-good.
+    emit_progress(&app, &server_id, 40.0, "", "Clearing existing saves…");
     let saved_arks_path = PathBuf::from(&base_dir).join("saves").join(&server_id).join("SavedArks").join(&save_folder);
     if saved_arks_path.exists() {
         fs::remove_dir_all(&saved_arks_path).map_err(|e| format!("Failed to clear SavedArks: {e}"))?;
@@ -1253,17 +1279,6 @@ pub async fn restore_server_backup(
     if mods_saves_path.exists() {
         fs::remove_dir_all(&mods_saves_path).map_err(|e| format!("Failed to clear SaveGames: {e}"))?;
     }
-
-    // Step 2: Extract backup to temp directory
-    emit_progress(&app, &server_id, 20.0, "", "Extracting backup…");
-    let temp_dir = std::env::temp_dir().join(format!("lokiasam-restore-{}", server_id));
-    if temp_dir.exists() {
-        fs::remove_dir_all(&temp_dir).ok();
-    }
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
-    sevenz_rust::decompress_file(&backup_file_path, &temp_dir)
-        .map_err(|e| e.to_string())?;
 
     // Step 3: Move extracted files to correct locations
     emit_progress(&app, &server_id, 50.0, "", "Moving files to correct locations…");

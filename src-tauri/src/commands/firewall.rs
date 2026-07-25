@@ -11,6 +11,18 @@ pub struct PortDef {
     pub protocol: String, // "tcp" | "udp"
 }
 
+/// Drop any entry whose `protocol` isn't exactly "tcp"/"udp". `protocol` is
+/// only constrained to those two values at the TypeScript type level, which
+/// isn't enforced across the IPC boundary — on Linux, `add_iptables` and
+/// `add_firewalld` interpolate `protocol` directly into a shell command
+/// string run via `pkexec`, so an unvalidated value here would be arbitrary
+/// root command injection. Filtering (rather than erroring) fails closed:
+/// a malformed entry is silently excluded from the firewall-open set instead
+/// of blocking every other legitimate port in the batch.
+fn sanitize_ports(ports: Vec<PortDef>) -> Vec<PortDef> {
+    ports.into_iter().filter(|p| p.protocol == "tcp" || p.protocol == "udp").collect()
+}
+
 #[derive(Debug, Serialize)]
 pub struct PortStatus {
     pub port: u16,
@@ -469,14 +481,14 @@ pub async fn check_firewall_ports(ports: Vec<PortDef>) -> Result<FirewallStatus,
         match detect().await {
             FirewallKind::Ufw      => Ok(check_ufw(&ports).await),
             FirewallKind::Firewalld => Ok(check_firewalld(&ports).await),
-            FirewallKind::Iptables | FirewallKind::None => {
+            kind @ (FirewallKind::Iptables | FirewallKind::None) => {
                 // For iptables we rely on DB state (checked by the frontend).
                 // Return active:false so the frontend falls back to DB.
                 let statuses = ports.iter().map(|p| PortStatus {
                     port: p.port, protocol: p.protocol.clone(), covered: false,
                 }).collect();
                 Ok(FirewallStatus {
-                    firewall_type: if matches!(detect().await, FirewallKind::Iptables) {
+                    firewall_type: if matches!(kind, FirewallKind::Iptables) {
                         "iptables".into()
                     } else {
                         "none".into()
@@ -503,6 +515,7 @@ pub async fn check_firewall_ports(ports: Vec<PortDef>) -> Result<FirewallStatus,
 /// list as the authoritative state so stale entries from deleted servers are removed.
 #[tauri::command]
 pub async fn add_firewall_rules(ports: Vec<PortDef>, _proton_path: Option<String>) -> Result<(), String> {
+    let ports = sanitize_ports(ports);
     #[cfg(target_os = "windows")]
     {
         windows_impl::add_rules(&ports).await
@@ -531,6 +544,7 @@ pub async fn add_firewall_rules(ports: Vec<PortDef>, _proton_path: Option<String
 /// list are removed; ports that are still needed are left untouched.
 #[tauri::command]
 pub async fn remove_firewall_rules(ports: Vec<PortDef>) -> Result<(), String> {
+    let ports = sanitize_ports(ports);
     #[cfg(target_os = "windows")]
     {
         // On Windows, remove_rules takes ports-to-remove, so we can't use the

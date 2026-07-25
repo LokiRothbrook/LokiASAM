@@ -84,6 +84,8 @@ export default function ModMapsPage() {
     }
   };
 
+  const [deleteTarget, setDeleteTarget] = useState<CustomMapRow | null>(null);
+
   const handleDelete = async (map: CustomMapRow) => {
     try {
       await deleteCustomMap(map.id);
@@ -91,6 +93,8 @@ export default function ModMapsPage() {
       toast.success(`"${map.display_name}" removed.`);
     } catch (e) {
       toast.error(`Failed to delete map: ${e}`);
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -279,7 +283,7 @@ export default function ModMapsPage() {
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => handleDelete(m)}
+                          onClick={() => setDeleteTarget(m)}
                           className="p-1.5 rounded-lg transition-colors hover:bg-red-500/10"
                           style={{ color: "rgba(255,0,85,0.6)" }}
                           title={`Remove ${m.display_name}`}
@@ -295,6 +299,31 @@ export default function ModMapsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Delete confirmation ── */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove Mod Map?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            Remove &quot;{deleteTarget?.display_name}&quot; from the mod maps list? This does not uninstall the mod itself.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => deleteTarget && handleDelete(deleteTarget)}
+              className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

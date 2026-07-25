@@ -13,6 +13,7 @@ import {
 import { TriangleAlert } from "lucide-react";
 import { getServers, getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 // How long to wait for aborted operations to actually stop before force-quitting.
 const GRACE_PERIOD_MS = 15_000;
@@ -63,13 +64,26 @@ export function CloseWarningManager() {
     return false;
   }, []);
 
+  useTauriEvent<unknown>("tray-quit-requested", async () => {
+    const warned = await checkAndWarn();
+    if (!warned) {
+      await tauriCmd.forceQuit();
+    }
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    // Guards against the window closing/remounting before the async
+    // getCurrentWindow() + onCloseRequested() registration resolves — without
+    // it, cleanup can run while `unlistenClose` is still undefined (a no-op),
+    // and the registration that resolves afterward leaks with nothing left
+    // to ever call it, leaving a duplicate close handler on a later remount.
+    let cancelled = false;
     let unlistenClose: (() => void) | undefined;
-    let unlistenTrayQuit: (() => void) | undefined;
 
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      if (cancelled) return;
       getCurrentWindow()
         .onCloseRequested(async (event) => {
           // Always prevent the auto-destroy() that the onCloseRequested wrapper
@@ -95,21 +109,15 @@ export function CloseWarningManager() {
             await tauriCmd.forceQuit();
           }
         })
-        .then((fn) => { unlistenClose = fn; });
-    });
-
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen<unknown>("tray-quit-requested", async () => {
-        const warned = await checkAndWarn();
-        if (!warned) {
-          await tauriCmd.forceQuit();
-        }
-      }).then((fn) => { unlistenTrayQuit = fn; });
+        .then((fn) => {
+          if (cancelled) fn();
+          else unlistenClose = fn;
+        });
     });
 
     return () => {
+      cancelled = true;
       unlistenClose?.();
-      unlistenTrayQuit?.();
     };
   }, [checkAndWarn]);
 

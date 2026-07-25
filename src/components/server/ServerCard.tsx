@@ -53,7 +53,7 @@ import { applyUpdateToServer, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
-import { buildStartParams, restartServerGracefully } from "@/lib/server-utils";
+import { buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
@@ -302,6 +302,8 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "startup_queued", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       enqueueStartup([server.id]);
+    } catch (err) {
+      toast.error(`Failed to queue ${server.name} to start`, { description: String(err) });
     } finally {
       setActionPending(false);
     }
@@ -310,16 +312,9 @@ export function ServerCard({ server }: Props) {
   const handleStop = async () => {
     setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      await tauriCmd.gracefulStopServer(
-        server.id,
-        server.rcon_port,
-        server.admin_password,
-        server.shutdown_warn_players !== 0,
-        server.shutdown_warn_minutes ?? 5,
-        server.shutdown_message || "Server will shut down in {time}.",
-      );
+      await stopServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to stop ${server.name}`, { description: String(err) });
     } finally {
@@ -748,14 +743,14 @@ export function ServerCard({ server }: Props) {
               {/* Primary status button — always flex-1 so width is consistent */}
               {server.status === "stopping" ? (
                 <Button
-                  size="sm" onClick={handleForceStop} className="gap-1.5 flex-1"
+                  size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
                   style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
                 >
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
                 </Button>
               ) : isStarting ? (
                 <Button
-                  size="sm" onClick={handleForceStop} className="gap-1.5 flex-1"
+                  size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
                   style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
                 >
                   <X className="w-3.5 h-3.5" /> Cancel Startup

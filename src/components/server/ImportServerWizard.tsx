@@ -257,7 +257,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}
       >
         <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
-        A new RCON password will be generated. Save data, configs, and mods are left untouched — only a database record is created.
+        The admin password above is reused for RCON — it must match the server&apos;s existing ServerAdminPassword. Save data, configs, and mods are left untouched — only a database record is created.
       </div>
 
       <div className="flex gap-3">

@@ -507,10 +507,11 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
     setReinstallOpen(false);
     queryClient.invalidateQueries({ queryKey: ["servers"] });
     try {
+      // reinstallServer already dispatches a success/failure notification
+      // (which shows its own toast) — no need to show a second one here.
       await reinstallServer(server);
-      toast.success(`${server.name} reinstalled successfully.`);
-    } catch (err) {
-      toast.error(`Reinstall failed: ${err}`);
+    } catch {
+      // Failure notification already dispatched by reinstallServer.
     } finally {
       setReinstalling(false);
       queryClient.invalidateQueries({ queryKey: ["servers"] });

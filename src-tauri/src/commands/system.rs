@@ -272,125 +272,13 @@ pub async fn wipe_lokiasam_dir(path: String, full_wipe: bool) -> Result<(), Stri
     Ok(())
 }
 
-/// Return CPU % and RSS memory (MB) for a server process and ALL its descendants.
-///
-/// On Linux the tracked PID is the Proton launcher.  When Steam is installed,
-/// Proton uses `steam-runtime-launcher-interface-0` to run Wine inside the Steam
-/// Runtime container daemon; Wine processes are children of that *daemon service*
-/// rather than of the Proton PID, so a pure subtree walk returns only ~60 MB
-/// (the Python script itself).  We supplement the BFS with a cmdline scan using
-/// `install_path`, which is unique per server instance and present in every Wine
-/// process's argv.
-///
-/// CPU usage requires two sysinfo samples separated by a short delay;
-/// the 200 ms sleep inside this command is intentional and negligible.
-#[tauri::command]
-pub async fn get_process_stats(pid: u32, install_path: Option<String>) -> Result<ProcessStats, String> {
-    use sysinfo::{Pid, ProcessesToUpdate, System};
-    use std::collections::HashSet;
-
-    let root = Pid::from_u32(pid);
-    let mut sys = System::new();
-
-    // First sample — establishes the CPU time baseline for ALL processes.
-    // This must cover Wine processes too, so we always refresh everything.
-    sys.refresh_processes(ProcessesToUpdate::All, false);
-
-    // Build the initial PID set from the subtree walk.
-    let mut all_pids: HashSet<Pid> = collect_subtree(&sys, root).into_iter().collect();
-
-    // On Linux, supplement with processes found via install-path cmdline search.
-    #[cfg(target_os = "linux")]
-    if let Some(ref path) = install_path {
-        use super::utils::collect_by_install_path;
-        for extra_root in collect_by_install_path(&sys, path) {
-            if all_pids.insert(extra_root) {
-                for sp in collect_subtree(&sys, extra_root) {
-                    all_pids.insert(sp);
-                }
-            }
-        }
-    }
-
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Second sample — CPU deltas are now meaningful for every process seen above.
-    sys.refresh_processes(ProcessesToUpdate::All, false);
-
-    // On Linux, re-run the install-path search against the fresh snapshot so
-    // we catch any Wine processes that appeared between the two samples.
-    #[cfg(target_os = "linux")]
-    if let Some(ref path) = install_path {
-        use super::utils::collect_by_install_path;
-        for extra_root in collect_by_install_path(&sys, path) {
-            if all_pids.insert(extra_root) {
-                for sp in collect_subtree(&sys, extra_root) {
-                    all_pids.insert(sp);
-                }
-            }
-        }
-    }
-
-    // On Linux, the Proton launcher (the tracked root PID) often exits before the
-    // game does — the Steam Runtime container re-parents Wine processes to PID 1.
-    // Only fail if there are genuinely no live processes in our collected set.
-    let root_alive = sys.process(root).is_some();
-    if !root_alive {
-        let any_live = all_pids.iter().any(|p| sys.process(*p).is_some());
-        if !any_live {
-            return Err(format!("Process {pid} not found or no longer running"));
-        }
-    }
-
-    let mut total_cpu = 0.0f32;
-    let mut total_mem_bytes = 0u64;
-
-    for p in &all_pids {
-        // CPU still comes from sysinfo (needs the two-sample delta calculation).
-        if let Some(proc) = sys.process(*p) {
-            total_cpu += proc.cpu_usage();
-        }
-
-        // Memory via procfs PSS — only for process leaders (Tgid == Pid).
-        // Threads share the same virtual address space; counting each TID's
-        // smaps_rollup separately would multiply the true footprint by the
-        // thread count (e.g. 50 threads × 7 GB = 350 GB).
-        #[cfg(target_os = "linux")]
-        if super::utils::is_process_leader(p.as_u32()) {
-            total_mem_bytes += super::utils::read_proc_pss_bytes(p.as_u32());
-        }
-        #[cfg(not(target_os = "linux"))]
-        if let Some(proc) = sys.process(*p) {
-            total_mem_bytes += proc.memory();
-        }
-    }
-
-    // On Linux, sysinfo reports cpu_usage() as % of ONE logical core, so a
-    // process fully occupying two of sixteen cores shows 200 %.  Divide by the
-    // number of available cores to normalise to 0–100 % of total CPU capacity.
-    #[cfg(not(target_os = "windows"))]
-    let cpu_percent = {
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get() as f32)
-            .unwrap_or(1.0);
-        total_cpu / cores
-    };
-    #[cfg(target_os = "windows")]
-    let cpu_percent = total_cpu;
-
-    Ok(ProcessStats {
-        cpu_percent,
-        memory_mb: total_mem_bytes as f32 / 1_048_576.0,
-        pid,
-    })
-}
-
 // ---------------------------------------------------------------------------
-// Centralized stats collection — batch counterpart to get_process_stats
+// Centralized stats collection
 // ---------------------------------------------------------------------------
 //
-// The stats-recorder background task in lib.rs used to call get_process_stats
-// once per running server, every 5 s. Each call did its own full-system
+// The stats-recorder background task in lib.rs used to call a per-server
+// get_process_stats command once per running server, every 5 s. Each call did
+// its own full-system
 // sysinfo refresh AND (on Linux) its own full /proc cmdline scan — meaning N
 // running servers meant N independent full-system scans every tick, all doing
 // synchronous/blocking file I/O directly on the async runtime's worker
@@ -405,9 +293,13 @@ pub async fn get_process_stats(pid: u32, install_path: Option<String>) -> Result
 // install-path PID discovery so it only re-scans /proc periodically instead
 // of every single tick.
 
-/// Per-server cache of install-path-matched "extra root" PIDs (Linux only —
-/// see get_process_stats' doc comment for why this scan exists). Rediscovery
-/// via a full /proc cmdline scan is the expensive part, so it's only redone
+/// Per-server cache of install-path-matched "extra root" PIDs. On Linux, when
+/// Steam is installed, Proton uses `steam-runtime-launcher-interface-0` to run
+/// Wine inside the Steam Runtime container daemon; Wine processes are children
+/// of that daemon service rather than of the tracked Proton PID, so a pure
+/// subtree walk misses them — this cmdline scan by `install_path` (unique per
+/// server, present in every Wine process's argv) finds them instead.
+/// Rediscovery via a full /proc cmdline scan is the expensive part, so it's only redone
 /// every `REDISCOVERY_INTERVAL_TICKS` ticks; in between we just re-walk the
 /// subtree of the previously-found roots against the freshly refreshed
 /// snapshot, which touches no files and is effectively free.

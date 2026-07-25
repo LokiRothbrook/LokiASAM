@@ -43,6 +43,7 @@ export function useTauriEvent<T = unknown>(
 
   useEffect(() => {
     if (
+      !event ||
       typeof window === "undefined" ||
       !(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
     ) {

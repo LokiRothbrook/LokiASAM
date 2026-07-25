@@ -91,18 +91,7 @@ pub async fn dispatch_notification(
                     serde_json::from_str(&cfg.config_json).unwrap_or_default();
                 if let Some(url) = cfg_json.get("webhookUrl").and_then(|u| u.as_str()) {
                     let state = app.state::<AppState>();
-                    let payload = serde_json::json!({
-                        "embeds": [{
-                            "title": title,
-                            "description": body,
-                            "color": severity_color(severity),
-                            "fields": [
-                                { "name": "Event",  "value": event_type,  "inline": true },
-                                { "name": "Server", "value": server_name, "inline": true }
-                            ],
-                            "footer": { "text": "LokiASAM" }
-                        }]
-                    });
+                    let payload = build_discord_embed(title, body, severity_color(severity), event_type, server_name);
                     let client = state.http_client.clone();
                     let url = url.to_string();
                     tauri::async_runtime::spawn(async move {
@@ -143,6 +132,24 @@ pub async fn dispatch_notification(
         "serverId": server_id,
         "unread":   show_unread,
     }));
+}
+
+/// Build the Discord embed JSON body shared by the auto-dispatch "discord"
+/// channel and the manual `send_discord_notification` command, so the two
+/// can't drift out of sync with each other.
+fn build_discord_embed(title: &str, description: &str, color: u32, event_type: &str, server_name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "embeds": [{
+            "title": title,
+            "description": description,
+            "color": color,
+            "fields": [
+                { "name": "Event",  "value": event_type,  "inline": true },
+                { "name": "Server", "value": server_name, "inline": true }
+            ],
+            "footer": { "text": "LokiASAM" }
+        }]
+    })
 }
 
 fn severity_color(severity: &str) -> u32 {
@@ -198,18 +205,7 @@ pub async fn send_discord_notification(
     webhook_url: String,
     payload: DiscordPayload,
 ) -> Result<(), String> {
-    let body = serde_json::json!({
-        "embeds": [{
-            "title": payload.title,
-            "description": payload.description,
-            "color": payload.color,
-            "fields": [
-                { "name": "Event",  "value": payload.event_type,  "inline": true },
-                { "name": "Server", "value": payload.server_name, "inline": true }
-            ],
-            "footer": { "text": "LokiASAM" }
-        }]
-    });
+    let body = build_discord_embed(&payload.title, &payload.description, payload.color, &payload.event_type, &payload.server_name);
 
     let response = state
         .http_client

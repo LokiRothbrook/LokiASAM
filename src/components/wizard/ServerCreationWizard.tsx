@@ -392,6 +392,7 @@ function BasicInfoStep({
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const nameDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nameReqIdRef = useRef(0);
   const [showAdminPw,      setShowAdminPw]      = useState(false);
   const [showAdminConfirm, setShowAdminConfirm] = useState(false);
   const [showServerPw,     setShowServerPw]     = useState(false);
@@ -417,18 +418,24 @@ function BasicInfoStep({
       onNameValidated(false);
       return;
     }
+    // Debounce only prevents overlapping *scheduled* checks — a slow
+    // in-flight request for an older name could still resolve after a newer
+    // one. Drop the result if a newer check has started since.
+    const reqId = ++nameReqIdRef.current;
     setCheckingName(true);
     try {
       const taken = await isServerNameTaken(name.trim());
+      if (reqId !== nameReqIdRef.current) return;
       setNameError(taken ? "A server with this name already exists." : "");
       setNameChecked(true);
       onNameValidated(!taken);
     } catch {
+      if (reqId !== nameReqIdRef.current) return;
       setNameError("");
       setNameChecked(true);
       onNameValidated(true);
     } finally {
-      setCheckingName(false);
+      if (reqId === nameReqIdRef.current) setCheckingName(false);
     }
   }, [onNameValidated]);
 
@@ -1682,6 +1689,9 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   // Bumped on every call so an older, slower-resolving request can never
   // overwrite a newer one's result if responses arrive out of order.
   const conflictReqIdRef = useRef(0);
+  // Same idea per-field for checkPort — keyed since game/query/rcon ports
+  // can each have an independent check in flight at once.
+  const portReqIdRef = useRef<Record<string, number>>({});
 
   useEffect(() => () => {
     if (conflictDebounceRef.current) clearTimeout(conflictDebounceRef.current);
@@ -1745,11 +1755,18 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   useOnMount(suggestPorts);
 
   const checkPort = async (portKey: string, port: number) => {
+    // Guards against editing+blurring the same field twice in quick
+    // succession — an older, slower response could otherwise overwrite the
+    // correct newer status.
+    const reqId = (portReqIdRef.current[portKey] ?? 0) + 1;
+    portReqIdRef.current[portKey] = reqId;
     setChecking(true);
     try {
       const available = await tauriCmd.checkPortAvailable(port);
+      if (portReqIdRef.current[portKey] !== reqId) return;
       setPortStatus((prev) => ({ ...prev, [portKey]: available }));
     } catch {
+      if (portReqIdRef.current[portKey] !== reqId) return;
       setPortStatus((prev) => ({ ...prev, [portKey]: null }));
     } finally {
       setChecking(false);

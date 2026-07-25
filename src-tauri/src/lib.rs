@@ -584,7 +584,6 @@ pub fn run() {
             commands::system::delete_directory,
             commands::system::move_base_dir,
             commands::system::abort_operation,
-            commands::system::get_process_stats,
             commands::system::get_platform,
             commands::system::set_setup_complete,
             commands::system::set_close_to_tray,

@@ -102,12 +102,6 @@ export interface ProtonUpdateInfo {
   downloadUrl: string;
 }
 
-export interface ProcessStats {
-  cpuPercent: number;
-  memoryMb: number;
-  pid: number;
-}
-
 export interface ServerQueryResult {
   name: string;
   map: string;
@@ -682,7 +676,6 @@ export const tauriCmd = {
    */
   moveBaseDir: (oldDir: string, newDir: string, createBackup: boolean) =>
     invoke<string>("move_base_dir", { oldDir, newDir, createBackup }),
-  getProcessStats:    (pid: number, installPath?: string) => invoke<ProcessStats>("get_process_stats", { pid, installPath: installPath ?? null }),
   getPlatform:        () => invoke<string>("get_platform"),
   /** Open the Rust-side stats recorder DB connection at the given absolute path.
    *  Must be called after initDb() has run all migrations on the same file. */

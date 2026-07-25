@@ -413,12 +413,3 @@ pub fn signal_pid(pid: u32, graceful: bool) {
     unsafe { kill(pid as i32, sig); }
 }
 
-/// Wrapper kept for callers in server.rs / system.rs that already pass `sys`.
-/// Delegates to the procfs-based /proc reader — sysinfo is not used.
-#[cfg(target_os = "linux")]
-pub fn collect_by_install_path(_sys: &sysinfo::System, install_path: &str) -> Vec<sysinfo::Pid> {
-    find_pids_by_install_path(install_path)
-        .into_iter()
-        .map(sysinfo::Pid::from_u32)
-        .collect()
-}

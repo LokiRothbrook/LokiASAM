@@ -292,13 +292,6 @@ async function runMigrations(db: Database): Promise<void> {
   try { await db.execute("ALTER TABLE backups ADD COLUMN tiers TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE backups ADD COLUMN player_eosid TEXT"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE backups ADD COLUMN player_name TEXT"); } catch { /* exists */ }
-  await db.execute(`CREATE TABLE IF NOT EXISTS player_name_map (
-    server_id   TEXT NOT NULL,
-    eos_id      TEXT NOT NULL,
-    player_name TEXT NOT NULL,
-    last_seen   TEXT NOT NULL,
-    PRIMARY KEY (server_id, eos_id)
-  )`);
   // Rename old generic "backup" schedule rows to the new typed name.
   await db.execute("UPDATE schedules SET schedule_type = 'backup_server' WHERE schedule_type = 'backup'");
   try { await db.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('full_backup_warning_dismissed', 'false')"); } catch { /* exists */ }
@@ -1301,10 +1294,16 @@ export async function pruneManualBackups(
     [serverId, backupType],
   );
   const toDelete = rows.slice(keep);
+  const { tauriCmd } = await import("@/lib/tauri-commands");
   for (const row of toDelete) {
-    await import("@/lib/tauri-commands").then(({ tauriCmd }) =>
-      tauriCmd.deleteBackup(row.file_path).catch(() => {})
-    );
+    try {
+      await tauriCmd.deleteBackup(row.file_path);
+    } catch {
+      // File delete failed (locked, permissions, unreachable share) — leave
+      // the DB row in place so a future prune retries, rather than losing
+      // track of a backup file that's still sitting on disk.
+      continue;
+    }
     await db.execute("DELETE FROM backups WHERE id = ?", [row.id]);
   }
 }

@@ -21,7 +21,7 @@ import { useServers } from "@/hooks/useServers";
 import { getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate, type ServerUpdateInfo } from "@/lib/update-utils";
-import { restartServerGracefully } from "@/lib/server-utils";
+import { restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
@@ -477,32 +477,26 @@ export default function DashboardPage() {
     if (stoppingServers.length > 0) {
       // Force: hard-kill everything still in its graceful stop window — no
       // RCON save, matches the per-server Force Stop button.
-      for (const s of stoppingServers) {
+      setGlobalActionPending(true);
+      const jobs = stoppingServers.map((s) =>
         tauriCmd.stopServer(s.id, false)
           .catch((e) => toast.error(`Failed to force stop ${s.name}: ${e}`))
-          .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
-      }
+          .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }))
+      );
+      Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
       toast.info(`Force stopping ${stoppingServers.length} server${stoppingServers.length === 1 ? "" : "s"}…`);
       return;
     }
 
     const running = servers.filter((s) => s.status === "running" || s.status === "starting");
     if (running.length === 0) return;
-    for (const s of running) {
-      updateServerStatus(s.id, "stopping", s.pid)
-        .then(() => queryClient.invalidateQueries({ queryKey: ["servers"] }))
-        .catch(() => {});
-      tauriCmd.gracefulStopServer(
-        s.id,
-        s.rcon_port,
-        s.admin_password,
-        s.shutdown_warn_players !== 0,
-        s.shutdown_warn_minutes ?? 5,
-        s.shutdown_message || "Server will shut down in {time}.",
-      )
-        .catch((e) => toast.error(`Failed to stop ${s.name}: ${e}`))
-        .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
-    }
+    setGlobalActionPending(true);
+    const jobs = running.map((s) =>
+      stopServerGracefully(s, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      }).catch((e) => toast.error(`Failed to stop ${s.name}: ${e}`))
+    );
+    Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
     toast.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, stoppingServers, queryClient]);
 
@@ -511,9 +505,11 @@ export default function DashboardPage() {
       // Force: skip the remaining warning wait, but still let the graceful
       // RCON SaveWorld+doexit the countdown ends with proceed normally —
       // same as the per-server "Restart Now" button.
-      for (const s of restartCountdownServers) {
-        tauriCmd.proceedNow(s.id).catch((e) => toast.error(`Failed to skip wait for ${s.name}: ${e}`));
-      }
+      setGlobalActionPending(true);
+      const jobs = restartCountdownServers.map((s) =>
+        tauriCmd.proceedNow(s.id).catch((e) => toast.error(`Failed to skip wait for ${s.name}: ${e}`))
+      );
+      Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
       toast.info(`Skipping wait for ${restartCountdownServers.length} server${restartCountdownServers.length === 1 ? "" : "s"}…`);
       return;
     }
@@ -521,11 +517,13 @@ export default function DashboardPage() {
     const running = servers.filter((s) => s.status === "running");
     if (running.length === 0) return;
 
-    for (const s of running) {
+    setGlobalActionPending(true);
+    const jobs = running.map((s) =>
       restartServerGracefully(s, {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
-      }).catch((e) => toast.error(`Failed to restart ${s.name}: ${e}`));
-    }
+      }).catch((e) => toast.error(`Failed to restart ${s.name}: ${e}`))
+    );
+    Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
     toast.info(`Queuing restart for ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, restartCountdownServers, queryClient]);
 
@@ -589,7 +587,7 @@ export default function DashboardPage() {
               >
                 <Play className="w-3.5 h-3.5" /> Start All
               </Button>
-              <Button size="sm" variant="outline"
+              <Button size="sm" variant="outline" disabled={globalActionPending}
                 onClick={handleStopAll}
                 title={stoppingServers.length > 0
                   ? "Force-kill all servers still stopping (no world save)"
@@ -599,7 +597,7 @@ export default function DashboardPage() {
               >
                 <Square className="w-3.5 h-3.5" /> {stoppingServers.length > 0 ? "Force Stop All" : "Stop All"}
               </Button>
-              <Button size="sm" variant="outline"
+              <Button size="sm" variant="outline" disabled={globalActionPending}
                 onClick={handleRestartAll}
                 title={restartCountdownServers.length > 0
                   ? "Skip the remaining warning wait and restart now"
@@ -634,11 +632,11 @@ export default function DashboardPage() {
 
       <div className="flex-1 min-h-0 overflow-y-auto pr-6">
       {/* ── Needs Attention warning — only shown when servers are in a bad state ── */}
-      {total > 0 && servers.some((s) => s.status === "crashed" || s.status === "error") && (
+      {total > 0 && servers.some((s) => s.status === "crashed" || s.status === "error" || s.status === "start-failed") && (
         <div className="flex flex-wrap gap-3">
           <StatCard
             label="Needs Attention"
-            value={servers.filter((s) => s.status === "crashed" || s.status === "error").length}
+            value={servers.filter((s) => s.status === "crashed" || s.status === "error" || s.status === "start-failed").length}
             icon={Activity}
             color="var(--neon-red)"
           />
