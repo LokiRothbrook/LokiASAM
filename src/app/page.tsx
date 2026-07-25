@@ -452,21 +452,15 @@ export default function DashboardPage() {
     if (stopped.length === 0) return;
     setGlobalActionPending(true);
     try {
-      for (const s of stopped) {
-        await updateServerStatus(s.id, "starting", null);
-        const params = await buildStartParams(s);
-        tauriCmd.startServer(params)
-          .then((pid) => updateServerStatus(s.id, "starting", pid))
-          .catch(async (e) => {
-            await updateServerStatus(s.id, "start-failed", null);
-            toast.error(`Failed to start ${s.name}: ${e}`);
-          })
-          .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
-      }
+      // Hand off to the staggered startup queue instead of starting every
+      // server directly/concurrently — same reason the manual per-server
+      // Start button queues now, just avoided at a bigger scale here.
+      await Promise.all(stopped.map((s) => updateServerStatus(s.id, "startup_queued", null)));
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.info(`Starting ${stopped.length} server${stopped.length === 1 ? "" : "s"}…`);
+      enqueueStartup(stopped.map((s) => s.id));
+      toast.info(`Queued ${stopped.length} server${stopped.length === 1 ? "" : "s"} to start…`);
     } finally { setGlobalActionPending(false); }
-  }, [servers, queryClient]);
+  }, [servers, queryClient, enqueueStartup]);
 
   // Any server still in its graceful-stop warning/RCON-save window — a second
   // click on Stop All targets exactly these for a hard kill. Derived from live
@@ -550,8 +544,11 @@ export default function DashboardPage() {
           await updateServerStatus(s.id, "stopping", s.pid);
           queryClient.invalidateQueries({ queryKey: ["servers"] });
           const params = await buildStartParams(s);
-          const newPid = await tauriCmd.restartServer(params, true);
-          await updateServerStatus(s.id, "running", newPid);
+          // Stops the server then hands off to the staggered startup queue —
+          // avoids cold-booting every running server at once. The
+          // "startup_queued" → "starting" → "running" transitions arrive via
+          // the usual server://any-change events, same as a single restart.
+          await tauriCmd.restartServer(params, true);
         } catch (e) {
           toast.error(`Failed to restart ${s.name}: ${e}`);
           await updateServerStatus(s.id, "error", null);
@@ -560,7 +557,7 @@ export default function DashboardPage() {
         }
       })();
     }
-    toast.info(`Restarting ${running.length} server${running.length === 1 ? "" : "s"}…`);
+    toast.info(`Queuing restart for ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, restartCountdownServers, queryClient]);
 
   // ── Update All handler ────────────────────────────────────────────────────

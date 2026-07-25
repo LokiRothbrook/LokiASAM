@@ -862,16 +862,17 @@ pub async fn stop_server(
 }
 
 /// Restart a server: kill the current process (gracefully if requested),
-/// wait up to 15 s for it to exit, then re-spawn with the same params.
-///
-/// Returns the new process ID.
+/// wait up to 15 s for it to exit, then hand off to the staggered startup
+/// queue rather than re-spawning directly — so a batch of restarts (Restart
+/// All, or several servers hitting their memory limit around the same time)
+/// doesn't cold-boot all of them at once.
 #[tauri::command]
 pub async fn restart_server(
     app_handle: tauri::AppHandle,
     _state: tauri::State<'_, AppState>,
     params: StartServerParams,
     graceful: bool,
-) -> Result<u32, String> {
+) -> Result<(), String> {
     inner_restart_server(app_handle, params, graceful).await
 }
 
@@ -880,7 +881,7 @@ pub async fn inner_restart_server(
     app_handle: tauri::AppHandle,
     params: StartServerParams,
     graceful: bool,
-) -> Result<u32, String> {
+) -> Result<(), String> {
     let running_info = {
         let state = app_handle.state::<AppState>();
         let registry = state.running_servers.lock().unwrap();
@@ -918,7 +919,16 @@ pub async fn inner_restart_server(
         app_handle.state::<RconPool>().remove_server(&params.server_id).await;
     }
 
-    inner_start_server(app_handle, params).await
+    // Hand off to the frontend's staggered startup queue instead of starting
+    // directly — the "server://any-change" listener re-enqueues on this status.
+    emit_status(&app_handle, &ServerStatus {
+        server_id: params.server_id.clone(),
+        status: "startup_queued".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
+    Ok(())
 }
 
 /// Return the current runtime status of a server.

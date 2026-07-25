@@ -378,15 +378,21 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         error: None,
     });
 
-    // Update shared cache via SteamCMD.
+    // Sync the shared cache to the server directory (preserving Saved/). The
+    // cache itself is NOT re-validated/re-downloaded here — it was already
+    // brought current by the global check that flagged this server as
+    // outdated in the first place (same as the manual/bulk apply path, which
+    // only ever calls apply_cache_to_server, never steamcmd_app_update).
+    // Re-running a full SteamCMD app_update per server was not just redundant
+    // but actively unsafe: when several servers' "When Found" automation
+    // fires in the same tick, each spawned its own SteamCMD process against
+    // this same shared cache directory concurrently, which SteamCMD does not
+    // handle safely (lock contention/hangs between instances) — this was the
+    // actual cause of updates appearing to stall the startup queue.
     let channel = format!("steamcmd://output/{}", entry.server_id);
     tokio::fs::create_dir_all(&cache_dir)
         .await
         .map_err(|e| format!("Failed to create cache dir: {e}"))?;
-
-    crate::commands::steamcmd::steamcmd_app_update(
-        app, &entry.steamcmd_path, &cache_dir, false, &channel, None,
-    ).await?;
 
     // Sync updated files to the server directory (preserving Saved/).
     let cache_path  = std::path::PathBuf::from(&cache_dir);

@@ -9,7 +9,15 @@
  * to avoid overloading the host machine.
  *
  * Queue entries have status = "startup_queued" in the DB so the badge shows.
- * When a server is manually started by the user it bypasses this queue entirely.
+ * Manual Start, Start All, and the Rust scheduler's post-update/restart
+ * hand-off all route through this queue rather than starting directly.
+ * "Skip Queue" on a queued server's card is the one deliberate bypass.
+ *
+ * The DB status column is treated as the source of truth: a separate effect
+ * below reconciles any server sitting at "startup_queued" that isn't in the
+ * in-memory Zustand array back into it, so a missed/raced enqueueStartup call
+ * anywhere else can't leave a server stuck showing "queued" with nothing ever
+ * picking it up.
  */
 
 import { useEffect, useRef } from "react";
@@ -30,8 +38,25 @@ export function StartupQueueManager() {
   const { data: servers = [] } = useServers();
   const startupQueue          = useAppStore((s) => s.startupQueue);
   const dequeueNextStartup    = useAppStore((s) => s.dequeueNextStartup);
+  const enqueueStartup        = useAppStore((s) => s.enqueueStartup);
   const setNoRetryServer      = useAppStore((s) => s.setNoRetryServer);
   const startingRef           = useRef(false);
+
+  // Self-heal: the DB status column is the source of truth for "wants to
+  // start via the queue" — the in-memory Zustand array is only an ordering
+  // hint on top of it, populated from several call sites (manual Start,
+  // Start All, the Rust scheduler's post-update/restart hand-off, etc). If
+  // any of those ever fails to call enqueueStartup (a missed event, a race),
+  // a server can be left showing "startup_queued" with nothing ever picking
+  // it up. Reconcile on every servers refresh so that can't get permanently
+  // stuck — this is the same fix StartupRecoveryManager already does once at
+  // launch, just kept running for the rest of the session too.
+  useEffect(() => {
+    const missing = servers
+      .filter((s) => s.status === "startup_queued" && !startupQueue.includes(s.id))
+      .map((s) => s.id);
+    if (missing.length > 0) enqueueStartup(missing);
+  }, [servers, startupQueue, enqueueStartup]);
 
   useEffect(() => {
     // Guard: don't start another server while one is already starting,

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 use crate::state::CountdownSignal;
-use super::server::{inner_start_server, StartServerParams};
+use super::server::StartServerParams;
 
 // ---------------------------------------------------------------------------
 // Tauri event payload
@@ -263,7 +263,19 @@ pub async fn start_graceful_restart(
             super::server::graceful_shutdown_via_rcon(
                 &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
-            let _ = inner_start_server(app2, params.start_params).await;
+            // Hand off to the staggered startup queue instead of restarting
+            // directly — same reason fire_restart/inner_restart_server do,
+            // so several servers warn-restarting together (e.g. Restart All)
+            // don't all cold-boot at once.
+            use crate::commands::server::emit_status;
+            use crate::commands::server::ServerStatus;
+            emit_status(&app2, &ServerStatus {
+                server_id: params.server_id.clone(),
+                status: "startup_queued".into(),
+                pid: None,
+                uptime_seconds: None,
+                error: None,
+            });
         }
     });
 
@@ -402,12 +414,18 @@ pub async fn start_graceful_update(
             }
         }
 
-        // Restart if requested and we have start params.
-        if params.restart_after {
-            if let Some(sp) = params.start_params {
-                let _ = inner_start_server(app2, sp).await;
-                return;
-            }
+        // Restart if requested — hand off to the staggered startup queue
+        // rather than starting directly, same as the scheduler's post-update
+        // restart and the plain graceful-restart command above.
+        if params.restart_after && params.start_params.is_some() {
+            emit_status(&app2, &ServerStatus {
+                server_id: params.server_id.clone(),
+                status: "startup_queued".into(),
+                pid: None,
+                uptime_seconds: None,
+                error: None,
+            });
+            return;
         }
 
         emit_status(&app2, &ServerStatus {

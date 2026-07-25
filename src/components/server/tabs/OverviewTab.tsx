@@ -756,8 +756,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       await updateServerStatus(server.id, "stopping", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       const params = await buildStartParams(server);
-      const pid = await tauriCmd.restartServer(params, true);
-      await updateServerStatus(server.id, "running", pid);
+      // Stops the server then hands off to the staggered startup queue —
+      // the "startup_queued" → "starting" → "running" transitions arrive via
+      // the usual server://any-change events.
+      await tauriCmd.restartServer(params, true);
     } catch (err) {
       toast.error(`Failed to restart ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);

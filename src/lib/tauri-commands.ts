@@ -319,9 +319,11 @@ export const tauriCmd = {
     invoke<number>("start_server", { params }),
   stopServer: (serverId: string, graceful: boolean) =>
     invoke<void>("stop_server", { serverId, graceful }),
-  /** Restart with the same params. Returns the new PID. */
+  /** Stops the server, then hands off to the staggered startup queue rather
+   *  than restarting directly — the caller should not expect the server to
+   *  be running by the time this resolves. */
   restartServer: (params: StartServerParams, graceful: boolean) =>
-    invoke<number>("restart_server", { params, graceful }),
+    invoke<void>("restart_server", { params, graceful }),
   getServerStatus: (serverId: string) =>
     invoke<ServerStatus>("get_server_status", { serverId }),
   /** Scan for running ASA server processes by install path. Returns the live
