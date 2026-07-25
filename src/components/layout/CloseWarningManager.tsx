@@ -14,6 +14,10 @@ import { TriangleAlert } from "lucide-react";
 import { getServers, getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 
+// How long to wait for aborted operations to actually stop before force-quitting.
+const GRACE_PERIOD_MS = 15_000;
+const GRACE_POLL_INTERVAL_MS = 500;
+
 const TOOL_OP_LABELS: Record<string, string> = {
   check:            "ASA Server Cache install",
   steamcmd_install: "SteamCMD install",
@@ -111,10 +115,26 @@ export function CloseWarningManager() {
 
   const handleAbortAndClose = async () => {
     setAborting(true);
+    const abortedKeys = [
+      ...installingIds.current.map((id) => `server_${id}`),
+      ...toolOps,
+    ];
     await Promise.allSettled([
       ...installingIds.current.map((id) => tauriCmd.abortOperation(`server_${id}`)),
       ...toolOps.map((op) => tauriCmd.abortOperation(op)),
     ]);
+
+    // Give aborted operations a short grace period to actually finish (e.g. the
+    // in-flight file copy reaching a clean stopping point) before force-quitting —
+    // instantly killing the process mid-copy can leave a server's install files
+    // truncated while the DB still thinks the update applied cleanly.
+    const graceDeadline = Date.now() + GRACE_PERIOD_MS;
+    while (Date.now() < graceDeadline) {
+      const running = await tauriCmd.getRunningOps().catch(() => [] as string[]);
+      if (!abortedKeys.some((k) => running.includes(k))) break;
+      await new Promise((resolve) => setTimeout(resolve, GRACE_POLL_INTERVAL_MS));
+    }
+
     setShowWarning(false);
     allowClose.current = true;
     await tauriCmd.forceQuit();

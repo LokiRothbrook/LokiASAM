@@ -19,6 +19,7 @@ export function useServers() {
   const serverStartTimes = useAppStore((s) => s.serverStartTimes);
   const setServerStartTime = useAppStore((s) => s.setServerStartTime);
   const clearServerStartTime = useAppStore((s) => s.clearServerStartTime);
+  const enqueueStartup = useAppStore((s) => s.enqueueStartup);
 
   useTauriEvent<ServerStatus>("server://any-change", async (payload) => {
     // Track when each server process first started so we can show uptime from
@@ -29,6 +30,12 @@ export function useServers() {
       }
     } else if (payload.status === "stopped" || payload.status === "crashed") {
       clearServerStartTime(payload.serverId);
+    } else if (payload.status === "startup_queued") {
+      // Rust emits this when a scheduled auto-update interrupts a server that
+      // was mid-boot or already queued to start — hand it back to the
+      // staggered startup queue instead of restarting it directly.
+      // enqueueStartup dedupes, so this is a no-op if already queued.
+      enqueueStartup([payload.serverId]);
     }
 
     // Write the new status into SQLite immediately so the cache stays in sync

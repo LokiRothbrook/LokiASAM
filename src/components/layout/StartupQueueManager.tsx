@@ -16,10 +16,11 @@ import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useServers } from "@/hooks/useServers";
 import { useAppStore } from "@/store/useAppStore";
-import { getServer, updateServerStatus } from "@/lib/db";
+import { getServer, getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { buildStartParams } from "@/lib/server-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
+import { ARK_MAPS } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { toast } from "sonner";
@@ -63,6 +64,20 @@ export function StartupQueueManager() {
 
         await updateServerStatus(server.id, "starting", null);
         queryClient.invalidateQueries({ queryKey: ["servers"] });
+
+        // Ensure both save symlinks/junctions are in place before launching —
+        // same repair step the manual Start button runs, now also needed here
+        // since manual starts route through this queue too.
+        const baseDir = await getAppSetting("base_dir").catch(() => null);
+        if (baseDir) {
+          const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+          await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+            console.warn("createSaveLink failed on queued start:", e);
+          });
+          await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+            console.warn("createModsSavesLink failed on queued start:", e);
+          });
+        }
 
         await warnIfFirewallMissing(server);
         const params = await buildStartParams(server);

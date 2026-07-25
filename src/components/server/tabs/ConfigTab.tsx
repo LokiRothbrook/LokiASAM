@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
   Settings2, X, ToggleLeft, ToggleRight, Terminal,
-  HelpCircle, Upload, FileText, Clipboard, Wand2, Clock, Package,
+  HelpCircle, Upload, FileText, Clipboard, Wand2, Sparkles, Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -916,19 +916,20 @@ function QuickSetupModal({
 // Active Event card
 // ---------------------------------------------------------------------------
 
-function EventCard({ server }: { server: ServerRow }) {
+function ActiveEventCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
   const [activeEventId, setActiveEventId] = useState<string | null>(server.active_event ?? null);
   const [saving, setSaving] = useState(false);
-  const [saved, triggerSaved] = useSavedFlash();
 
   const currentEvent = ARK_EVENTS.find((e) => e.id === activeEventId) ?? null;
 
-  const handleSelect = async (eventId: string | null) => {
-    setActiveEventId(eventId);
+  const handleSelect = async (val: string) => {
+    const newId = val === "none" ? null : val;
+    setActiveEventId(newId);
     setSaving(true);
     try {
-      await setServerActiveEvent(server.id, eventId);
-      triggerSaved();
+      await setServerActiveEvent(server.id, newId);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (e) {
       toast.error(`Failed to save event: ${e}`);
     } finally {
@@ -938,55 +939,39 @@ function EventCard({ server }: { server: ServerRow }) {
 
   return (
     <div
+      id="settings-active-event"
       className="glass-card rounded-xl p-4 space-y-3"
       style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-base">🎃</span>
-          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</h3>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <Sparkles className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Loads the event mod and passes <span className="font-mono">-ActiveEvent=</span> on next server start.
+            </p>
+          </div>
         </div>
-        {saved && <span className="text-xs" style={{ color: "var(--neon-green)" }}>Saved</span>}
-        {saving && !saved && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Saving…</span>}
+        <div className="flex items-center gap-2 shrink-0">
+          {saving && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Saving…</span>}
+          <Select value={activeEventId ?? "none"} onValueChange={handleSelect}>
+            <SelectTrigger className="w-52 text-sm" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}>
+              <SelectValue placeholder="No Event" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No Event</SelectItem>
+              {ARK_EVENTS.map((evt) => (
+                <SelectItem key={evt.id} value={evt.id}>{evt.displayName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
-
-      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Activating an event auto-loads its mod on server start and passes <span className="font-mono" style={{ color: "var(--neon-cyan)" }}>-ActiveEvent=</span> to the launcher.
-        The mod will be locked in the mod list while the event is active.
-      </p>
-
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => handleSelect(null)}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-          style={!activeEventId
-            ? { background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)" }
-            : { background: "rgba(10,10,30,0.5)", color: "var(--text-muted)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-        >
-          No Event
-        </button>
-        {ARK_EVENTS.map((evt) => (
-          <button
-            key={evt.id}
-            onClick={() => handleSelect(evt.id)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={activeEventId === evt.id
-              ? { background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)" }
-              : { background: "rgba(10,10,30,0.5)", color: "var(--text-muted)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-          >
-            {evt.displayName}
-          </button>
-        ))}
-      </div>
-
       {currentEvent && (
-        <div
-          className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-          style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
-        >
-          <span style={{ color: "var(--neon-purple)" }}>{currentEvent.description}</span>
-          <span className="ml-auto shrink-0 font-mono" style={{ color: "var(--text-subtle)" }}>Mod: {currentEvent.modId}</span>
-        </div>
+        <p className="text-xs pl-6" style={{ color: "var(--text-muted)" }}>
+          {currentEvent.description} <span className="font-mono ml-1" style={{ color: "var(--text-subtle)" }}>Mod: {currentEvent.modId}</span>
+        </p>
       )}
     </div>
   );
@@ -1020,8 +1005,11 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
     >
       <div className="flex items-center gap-2">
         <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Graceful Shutdown</h3>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Shutdown Warning</h3>
       </div>
+      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>
+        Used by the manual Stop button. There is no scheduled/automated shutdown.
+      </p>
 
       <label className="flex items-center gap-2 cursor-pointer select-none">
         <input
@@ -1103,6 +1091,7 @@ function RestartSettingsCard({ server }: { server: ServerRow }) {
 
   return (
     <div
+      id="restart-warning-section"
       className="glass-card rounded-xl p-4 space-y-4"
       style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
@@ -1110,6 +1099,9 @@ function RestartSettingsCard({ server }: { server: ServerRow }) {
         <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Restart Warning</h3>
       </div>
+      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>
+        Shared by the manual Restart button and scheduled Auto-Restart (Automation tab) — one warning message either way.
+      </p>
 
       <label className="flex items-center gap-2 cursor-pointer select-none">
         <input
@@ -1201,6 +1193,7 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
 
   return (
     <div
+      id="update-warning-section"
       className="glass-card rounded-xl p-4 space-y-4"
       style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
@@ -1208,6 +1201,9 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
         <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Update Warning</h3>
       </div>
+      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>
+        Shared by the manual Apply Update button and Auto-Update (Automation tab) — one warning message either way.
+      </p>
 
       <label className="flex items-center gap-2 cursor-pointer select-none">
         <input
@@ -1431,7 +1427,7 @@ export function ConfigTab({ server }: Props) {
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
-  const [activeTab, setActiveTab] = useState<"automation" | "structured" | "mods" | "advanced" | "raw">("structured");
+  const [activeTab, setActiveTab] = useState<"settings" | "mods" | "advanced" | "raw">("settings");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
@@ -1720,22 +1716,13 @@ export function ConfigTab({ server }: Props) {
         {/* Tab selectors */}
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setActiveTab("automation")}
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("settings"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={activeTab === "automation"
-              ? { background: "rgba(0,200,120,0.1)", color: "rgba(0,200,120,0.9)", border: "1px solid rgba(0,200,120,0.35)" }
-              : { color: "var(--text-muted)", border: "1px solid transparent" }}
-          >
-            <Clock className="w-3.5 h-3.5" /> Automation
-          </button>
-          <button
-            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("structured"); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={activeTab === "structured"
+            style={activeTab === "settings"
               ? { background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
-            <LayoutList className="w-3.5 h-3.5" /> Structured
+            <LayoutList className="w-3.5 h-3.5" /> Settings
           </button>
           <button
             onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("mods"); }}
@@ -1835,18 +1822,8 @@ export function ConfigTab({ server }: Props) {
         </div>
       )}
 
-      {/* ── Automation tab ────────────────────────────────────────────────── */}
-      {activeTab === "automation" && (
-        <div className="flex flex-col gap-4">
-          <EventCard server={server} />
-          <ShutdownSettingsCard server={server} />
-          <RestartSettingsCard server={server} />
-          <UpdateSettingsCard server={server} />
-        </div>
-      )}
-
-      {/* ── Structured view — all INI field groups ────────────────────────── */}
-      {activeTab === "structured" && config && (
+      {/* ── Settings view — all INI field groups plus session/warning settings ── */}
+      {activeTab === "settings" && config && (
         <div className="flex flex-col gap-4">
           {/* Map Selector */}
           <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-cyan-rgb),0.2)" }}>
@@ -1877,18 +1854,31 @@ export function ConfigTab({ server }: Props) {
             </Select>
           </div>
 
-          {/* INI Field Groups */}
+          {/* INI Field Groups — Active Event slots in right after Session, since
+              it's session-scoped state (like the map/name/password above it)
+              even though it isn't an INI field. */}
           {INI_FIELD_GROUPS.map((g, idx) => (
-            <SectionGroup
-              key={g.id}
-              title={g.title}
-              fields={g.fields}
-              config={config}
-              onChange={handleFieldChange}
-              defaultOpen={idx < 3}
-            />
+            <Fragment key={g.id}>
+              <SectionGroup
+                title={g.title}
+                fields={g.fields}
+                config={config}
+                onChange={handleFieldChange}
+                defaultOpen={idx < 3}
+              />
+              {g.id === "session" && <ActiveEventCard server={server} />}
+            </Fragment>
           ))}
           <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />
+
+          {/* Warnings — governs both the manual action buttons and (for
+              restart/update) their scheduled counterparts in the Automation tab. */}
+          <div className="pt-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Warnings</h3>
+          </div>
+          <ShutdownSettingsCard server={server} />
+          <RestartSettingsCard server={server} />
+          <UpdateSettingsCard server={server} />
         </div>
       )}
 

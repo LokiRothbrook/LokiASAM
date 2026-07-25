@@ -112,7 +112,18 @@ export async function syncSchedulesToRust(): Promise<void> {
           backupDir: backupDir ?? "",
           scheduleType: schedule.schedule_type,
           enabled: true,
-          configJson: schedule.config_json ?? "{}",
+          // Restart schedules no longer carry their own warning config — they
+          // share the server's restart_warn_* fields with the manual Restart
+          // button (same pattern the per-server Auto-Update entry below already
+          // uses), so there's one warning message regardless of trigger.
+          configJson: schedule.schedule_type === "restart"
+            ? JSON.stringify({
+                broadcastWarning: server.restart_warn_players === 1,
+                warningMinutes:   server.restart_warn_minutes ?? 5,
+                message:          server.restart_message || "Server restarting in {time}.",
+                cancelMessage:    server.restart_cancel_message || "Restart has been canceled.",
+              })
+            : schedule.config_json ?? "{}",
           nextRunMs,
         });
       }

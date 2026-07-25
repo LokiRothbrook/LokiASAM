@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Server, LayoutDashboard, Settings2, Terminal,
-  ScrollText, Package, Archive, CalendarClock,
+  ScrollText, Package, Archive, CalendarClock, Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +18,7 @@ import { LogsTab } from "@/components/server/tabs/LogsTab";
 import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
+import { MaintenanceTab } from "@/components/server/tabs/MaintenanceTab";
 import { getServer, formatServerVersion } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -28,13 +29,14 @@ import type { ServerStatus } from "@/lib/tauri-commands";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 const TABS = [
-  { value: "overview",   label: "Overview",   icon: LayoutDashboard },
-  { value: "config",     label: "Config",     icon: Settings2 },
-  { value: "rcon",       label: "RCON",       icon: Terminal },
-  { value: "logs",       label: "Logs",       icon: ScrollText },
-  { value: "mods",       label: "Mods",       icon: Package },
-  { value: "backups",    label: "Backups",    icon: Archive },
-  { value: "automation", label: "Automation", icon: CalendarClock },
+  { value: "overview",    label: "Overview",    icon: LayoutDashboard },
+  { value: "config",      label: "Config",      icon: Settings2 },
+  { value: "rcon",        label: "RCON",        icon: Terminal },
+  { value: "logs",        label: "Logs",        icon: ScrollText },
+  { value: "mods",        label: "Mods",        icon: Package },
+  { value: "backups",     label: "Backups",     icon: Archive },
+  { value: "automation",  label: "Automation",  icon: CalendarClock },
+  { value: "maintenance", label: "Maintenance", icon: Wrench },
 ] as const;
 
 type TabValue = typeof TABS[number]["value"];
@@ -91,6 +93,16 @@ export default function ServerDetailPage() {
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
     window.history.replaceState(null, "", url.toString());
+  };
+
+  // Switch tabs, then (if given) scroll a target section into view once the
+  // new tab's content has mounted. Used by cross-tab "Configure →" / "Edit →"
+  // links (Overview's Active Event, Automation's warning-message links).
+  const navigateToTab = (tab: TabValue, anchor?: string) => {
+    handleTabChange(tab);
+    if (anchor) {
+      setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+    }
   };
 
   // ── Loading / error states ───────────────────────────────────────────────
@@ -204,10 +216,26 @@ export default function ServerDetailPage() {
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
-          {activeTab === "overview"   && <OverviewTab   server={server} />}
-          {activeTab === "config"     && <ConfigTab     server={server} />}
-          {activeTab === "backups"    && <BackupsTab    server={server} />}
-          {activeTab === "automation" && <AutomationTab server={server} />}
+          {activeTab === "overview" && (
+            <OverviewTab
+              server={server}
+              onNavigateToConfig={(anchor) => navigateToTab("config", anchor)}
+            />
+          )}
+          {activeTab === "config" && <ConfigTab server={server} />}
+          {activeTab === "backups" && (
+            <BackupsTab
+              server={server}
+              onNavigateToAutomation={() => navigateToTab("automation", "backup-schedules-section")}
+            />
+          )}
+          {activeTab === "automation" && (
+            <AutomationTab
+              server={server}
+              onNavigateToConfig={(anchor) => navigateToTab("config", anchor)}
+            />
+          )}
+          {activeTab === "maintenance" && <MaintenanceTab server={server} />}
         </div>
       )}
     </div>

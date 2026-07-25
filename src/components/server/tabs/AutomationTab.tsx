@@ -17,6 +17,7 @@ import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
   setServerUpdateAutomation, updateBackupBroadcastMessage,
+  updateServerRestartSettings, updateServerUpdateSettings,
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
@@ -30,12 +31,6 @@ import type { ServerRow } from "@/lib/db";
 
 type ScheduleType = "restart" | "broadcast" | "wipe_dinos";
 type AddMode = "minutes" | "hours" | "daily";
-
-interface RestartConfig {
-  broadcastWarning: boolean;
-  warningMinutes: number;
-  message: string;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -288,6 +283,7 @@ function ScheduleListRow({ row, type, onDelete, onToggle, onSave }: {
 // ---------------------------------------------------------------------------
 
 interface CardProps {
+  server: ServerRow;
   serverId: string;
   type: ScheduleType;
   icon: React.ElementType;
@@ -295,21 +291,12 @@ interface CardProps {
   description: string;
   existing: ScheduleRow[];
   onRefresh: () => void;
+  onNavigateToConfig?: (anchor?: string) => void;
 }
 
-const DEFAULT_RESTART_CFG: RestartConfig = {
-  broadcastWarning: true,
-  warningMinutes: 15,
-  message: "Server restarting in {minutes} minutes. Progress will be saved.",
-};
-
-function ScheduleCard({ serverId, type, icon: Icon, title, description, existing, onRefresh }: CardProps) {
-  const [config, setConfig] = useState<RestartConfig>(() => ({
-    ...DEFAULT_RESTART_CFG,
-    ...(parseCfg(existing[0]?.config_json) as Partial<RestartConfig>),
-  }));
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [savedConfig,  setSavedConfig]  = useState(false);
+function ScheduleCard({ server, serverId, type, icon: Icon, title, description, existing, onRefresh, onNavigateToConfig }: CardProps) {
+  const [restartWarnPlayers, setRestartWarnPlayers] = useState(server.restart_warn_players !== 0);
+  const [savingRestartWarn, setSavingRestartWarn] = useState(false);
 
   const [addMode, setAddMode] = useState<AddMode>("daily");
   const [addNum,  setAddNum]  = useState(6);
@@ -319,26 +306,22 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 
   const hasSchedules = existing.length > 0;
 
-  function patchConfig(patch: Partial<RestartConfig>) {
-    setConfig((c) => ({ ...c, ...patch }));
-  }
-
-  async function handleSaveConfig() {
-    setSavingConfig(true);
+  async function handleToggleRestartWarn(checked: boolean) {
+    setRestartWarnPlayers(checked);
+    setSavingRestartWarn(true);
     try {
-      for (const row of existing) {
-        const merged = { ...parseCfg(row.config_json), ...config };
-        const nextIso = getNextCronDate(row.cron_expression)?.toISOString() ?? new Date().toISOString();
-        await updateScheduleConfig(row.id, row.cron_expression, JSON.stringify(merged), nextIso);
-      }
-      setSavedConfig(true);
-      setTimeout(() => setSavedConfig(false), 2000);
-      onRefresh();
+      await updateServerRestartSettings(
+        server.id, checked,
+        server.restart_warn_minutes ?? 5,
+        server.restart_message || "Server restarting in {time}.",
+        server.restart_cancel_message || "Restart has been canceled.",
+      );
       syncSchedulesToRust();
     } catch (e) {
-      toast.error(`Failed to save config: ${e}`);
+      setRestartWarnPlayers(!checked);
+      toast.error(`Failed to save: ${e}`);
     } finally {
-      setSavingConfig(false);
+      setSavingRestartWarn(false);
     }
   }
 
@@ -346,9 +329,13 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
     setAdding(true);
     try {
       const cron = buildCronFromMode(addMode, addMode === "daily" ? addTime : addNum);
+      // Restart schedules no longer carry their own warning config — the
+      // Rust scheduler pulls warning message/timing from the server's
+      // restart_warn_* fields (same ones the manual Restart button uses) so
+      // there's one warning message regardless of trigger.
       const configJson = type === "broadcast"
         ? JSON.stringify({ message: addMsg })
-        : JSON.stringify(config);
+        : "{}";
       const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
       const newId = crypto.randomUUID();
       const input: CreateScheduleInput = { id: newId, serverId, scheduleType: type, cronExpression: cron, enabled: true, configJson };
@@ -385,8 +372,6 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
     syncSchedulesToRust();
   }
 
-  const c = config;
-
   return (
     <div
       className="glass-card rounded-xl p-4 space-y-4"
@@ -417,51 +402,35 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
         </div>
       </div>
 
-      {/* Restart shared config */}
+      {/* Restart warning — shared with the manual Restart button; edited in Settings */}
       {type === "restart" && (
         <div className="rounded-lg p-3 space-y-2"
           style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" checked={c.broadcastWarning ?? true}
-              onChange={(e) => patchConfig({ broadcastWarning: e.target.checked })}
-              className="w-3.5 h-3.5"
-              style={{ accentColor: "var(--neon-purple)" }} />
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Send in-game warning before restart
-            </span>
-          </label>
-          {c.broadcastWarning && (
-            <div className="flex gap-3 items-end pl-5">
-              <div className="space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Warning minutes</label>
-                <Input type="number" min={1} max={60} value={c.warningMinutes ?? 15}
-                  onChange={(e) => patchConfig({ warningMinutes: parseInt(e.target.value, 10) || 15 })}
-                  className="h-7 w-20 text-xs"
-                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
-              </div>
-              <div className="flex-1 space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Message <span style={{ color: "var(--text-subtle)" }}>({"{minutes}"} = countdown)</span>
-                </label>
-                <Input value={c.message ?? ""}
-                  onChange={(e) => patchConfig({ message: e.target.value })}
-                  placeholder="Server restarting in {minutes} minutes."
-                  className="h-7 text-xs"
-                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
-              </div>
-            </div>
-          )}
-          <Button size="sm" onClick={handleSaveConfig} disabled={savingConfig}
-            className="gap-1.5 cursor-pointer"
-            style={{
-              background: savedConfig ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border:     savedConfig ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
-              color:      savedConfig ? "var(--neon-green)" : "var(--neon-purple)",
-            }}>
-            {savingConfig ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-            : savedConfig  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
-            : "Save Config"}
-          </Button>
+          <div className="flex items-center justify-between gap-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={restartWarnPlayers}
+                disabled={savingRestartWarn}
+                onChange={(e) => handleToggleRestartWarn(e.target.checked)}
+                className="w-3.5 h-3.5"
+                style={{ accentColor: "var(--neon-purple)" }} />
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Warn players before restart
+              </span>
+            </label>
+            {restartWarnPlayers && (
+              <button
+                type="button"
+                onClick={() => onNavigateToConfig?.("restart-warning-section")}
+                className="text-xs shrink-0"
+                style={{ color: "var(--neon-cyan)" }}
+              >
+                Edit message →
+              </button>
+            )}
+          </div>
+          <p className="text-xs pl-5" style={{ color: "var(--text-subtle)" }}>
+            Same warning message and timing as the manual Restart button — edit it in Settings.
+          </p>
         </div>
       )}
 
@@ -979,16 +948,36 @@ const DEFAULT_UPDATE_AUTOMATION: UpdateAutomation = {
   only_if_running: true,
 };
 
-function UpdateAutomationCard({ server }: { server: ServerRow }) {
+function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRow; onNavigateToConfig?: (anchor?: string) => void }) {
   const [automation, setAutomation] = useState<UpdateAutomation>(DEFAULT_UPDATE_AUTOMATION);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, triggerSaved] = useSavedFlash();
+  const [updateWarnPlayers, setUpdateWarnPlayers] = useState(server.update_warn_players !== 0);
+  const [savingUpdateWarn, setSavingUpdateWarn] = useState(false);
+
+  const handleToggleUpdateWarn = async (checked: boolean) => {
+    setUpdateWarnPlayers(checked);
+    setSavingUpdateWarn(true);
+    try {
+      await updateServerUpdateSettings(
+        server.id, checked,
+        server.update_warn_minutes ?? 5,
+        server.update_message || "Server going down for update in {time}.",
+        server.update_cancel_message || "Update has been canceled.",
+      );
+    } catch (e) {
+      setUpdateWarnPlayers(!checked);
+      toast.error(`Failed to save: ${e}`);
+    } finally {
+      setSavingUpdateWarn(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
       const hours = await getAppSetting("asa_auto_check_hours");
-      setAutoCheckEnabled((hours ?? "0") !== "0");
+      setAutoCheckEnabled((hours ?? "disabled") !== "disabled");
       try {
         const raw = server.update_automation_json;
         if (raw && raw !== "{}") {
@@ -1006,6 +995,9 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
     try {
       await setServerUpdateAutomation(server.id, next);
       triggerSaved();
+      // Otherwise this change (e.g. enabling "When Found") sits inert until
+      // some unrelated schedule fire or app restart happens to resync.
+      syncSchedulesToRust();
     } catch (e) {
       // Revert the optimistic update — otherwise the card keeps showing the
       // unsaved change as if it persisted, silently diverging from the DB
@@ -1103,6 +1095,29 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
 
       {automation.mode !== "off" && (
         <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
+          <div className="flex items-center justify-between gap-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={updateWarnPlayers}
+                disabled={savingUpdateWarn}
+                onChange={(e) => handleToggleUpdateWarn(e.target.checked)}
+                className="w-3.5 h-3.5"
+                style={{ accentColor: "var(--neon-purple)" }} />
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warn players before update</span>
+            </label>
+            {updateWarnPlayers && (
+              <button
+                type="button"
+                onClick={() => onNavigateToConfig?.("update-warning-section")}
+                className="text-xs shrink-0"
+                style={{ color: "var(--neon-cyan)" }}
+              >
+                Edit message →
+              </button>
+            )}
+          </div>
+          <p className="text-xs pl-5" style={{ color: "var(--text-subtle)" }}>
+            Same warning message and timing as the manual Apply Update button — edit it in Settings.
+          </p>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" checked={automation.restart_after_update}
               onChange={(e) => handleSave({ restart_after_update: e.target.checked })}
@@ -1186,9 +1201,13 @@ const CARD_DEFS: { type: ScheduleType; icon: React.ElementType; title: string; d
 // AutomationTab
 // ---------------------------------------------------------------------------
 
-interface Props { server: ServerRow }
+interface Props {
+  server: ServerRow;
+  /** Switch the parent's active tab to Config; optionally pass a section id to scroll to. */
+  onNavigateToConfig?: (anchor?: string) => void;
+}
 
-export function AutomationTab({ server }: Props) {
+export function AutomationTab({ server, onNavigateToConfig }: Props) {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -1237,12 +1256,13 @@ export function AutomationTab({ server }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
-          <UpdateAutomationCard server={server} />
+          <UpdateAutomationCard server={server} onNavigateToConfig={onNavigateToConfig} />
           <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
           <BackupBroadcastCard server={server} />
           {CARD_DEFS.map((def) => (
             <ScheduleCard
               key={def.type}
+              server={server}
               serverId={server.id}
               type={def.type}
               icon={def.icon}
@@ -1250,6 +1270,7 @@ export function AutomationTab({ server }: Props) {
               description={def.description}
               existing={schedulesFor(def.type)}
               onRefresh={loadSchedules}
+              onNavigateToConfig={onNavigateToConfig}
             />
           ))}
         </div>

@@ -20,6 +20,7 @@ import {
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { runPerServerUpdateCheck } from "@/lib/update-utils";
+import { useAppStore } from "@/store/useAppStore";
 import type { SchedulerFiredPayload, UpdateCheckResult } from "@/lib/tauri-commands";
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,32 @@ import type { SchedulerFiredPayload, UpdateCheckResult } from "@/lib/tauri-comma
 
 export function SchedulerManager() {
   const queryClient = useQueryClient();
+  const setAsaCacheOpLabel = useAppStore((s) => s.setAsaCacheOpLabel);
+
+  // Scheduled background cache check start/stop — the manual "Check for
+  // Updates" flow sets this same TopBar spinner state directly from JS
+  // (runAsaCacheUpdate), but the background tick lives entirely in Rust, so
+  // it needs this event to make the spinner (and any disabled buttons keyed
+  // off it) reflect a check that's running in the background.
+  useTauriEvent<{ running: boolean }>("asa://update-check/running", (payload) => {
+    setAsaCacheOpLabel(payload.running ? "Checking ASA updates (background)…" : null);
+  });
+
+  // SteamCMD only actually pulls bytes for part of a "check" run — most of it
+  // is just validating manifests against Steam. Flip the TopBar label to make
+  // that visible instead of leaving "Checking…" up for however long a real
+  // download takes. Fires for every cache-check op regardless of who started
+  // it (manual dashboard/Settings check or the background scheduled tick) —
+  // they all stream through the shared "steamcmd://output/check" channel and
+  // all funnel through this one global asaCacheOpLabel.
+  useTauriEvent<{ line: string; stream: string }>("steamcmd://output/check", (payload) => {
+    if (!/downloading/i.test(payload.line)) return;
+    const current = useAppStore.getState().asaCacheOpLabel;
+    if (!current?.startsWith("Checking ASA updates")) return;
+    setAsaCacheOpLabel(
+      current.includes("background") ? "Downloading ASA update (background)…" : "Downloading ASA update…"
+    );
+  });
 
   useEffect(() => {
     syncSchedulesToRust();
@@ -47,8 +74,12 @@ export function SchedulerManager() {
     "asa://update-check",
     async (payload) => {
       if ("updateApplied" in payload && payload.updateApplied) {
-        // Rust already cleared update_available in the DB — just refresh the UI.
+        // Rust already cleared update_available in the DB — refresh the UI and
+        // drop any stale per-server auto-update entry left in the scheduler
+        // (e.g. a "Daily at Time" fire still queued for tonight), same reason
+        // applyUpdateToServer() resyncs after a manual apply.
         queryClient.invalidateQueries({ queryKey: ["servers"] });
+        syncSchedulesToRust();
         return;
       }
       if ("updateAvailable" in payload) {

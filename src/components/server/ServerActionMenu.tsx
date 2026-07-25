@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { MoreVertical, Trash2, Copy, FolderOpen, HardDrive, Loader2, ToggleLeft, ToggleRight } from "lucide-react";
+import { MoreVertical, Trash2, Copy, FolderOpen, HardDrive, Loader2, ToggleLeft, ToggleRight, ShieldCheck, RotateCcw } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { reinstallServer } from "@/lib/server-actions";
 import { ARK_MAPS, getSaveFolder } from "@/data/game-data";
 import {
   deleteServerRecord,
@@ -472,9 +473,49 @@ function CloneDialog({
 // ---------------------------------------------------------------------------
 
 export function ServerActionMenu({ server, onBackupComplete }: Props) {
+  const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen]   = useState(false);
   const [cloneOpen,  setCloneOpen]    = useState(false);
   const [backingUp,  setBackingUp]    = useState(false);
+  const [verifying,  setVerifying]    = useState(false);
+  const [reinstallOpen, setReinstallOpen] = useState(false);
+  const [reinstalling,  setReinstalling]  = useState(false);
+  const isBusy = server.status === "running" || server.status === "starting" || server.status === "installing" || server.status === "updating";
+
+  const handleVerifyFiles = async () => {
+    setVerifying(true);
+    try {
+      const [steamcmdPath, baseDir] = await Promise.all([
+        getAppSetting("steamcmd_path"),
+        getAppSetting("base_dir"),
+      ]);
+      if (!steamcmdPath) { toast.error("SteamCMD path not configured"); return; }
+      if (!baseDir) { toast.error("Base directory not configured"); return; }
+      const sep = baseDir.includes("\\") ? "\\" : "/";
+      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+      await tauriCmd.validateServerFiles(server.id, server.install_path, cacheDir, steamcmdPath);
+      toast.success(`Game files verified for "${server.name}".`);
+    } catch (err) {
+      toast.error(`Verification failed: ${err}`);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleReinstall = async () => {
+    setReinstalling(true);
+    setReinstallOpen(false);
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
+    try {
+      await reinstallServer(server);
+      toast.success(`${server.name} reinstalled successfully.`);
+    } catch (err) {
+      toast.error(`Reinstall failed: ${err}`);
+    } finally {
+      setReinstalling(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    }
+  };
 
   const handleBackupNow = async () => {
     setBackingUp(true);
@@ -571,6 +612,31 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="gap-2"
+            disabled={verifying || isBusy}
+            title={isBusy ? "Stop the server before verifying" : undefined}
+            onClick={handleVerifyFiles}
+          >
+            {verifying
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <ShieldCheck className="w-4 h-4" />
+            }
+            {verifying ? "Verifying…" : "Verify Files"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="gap-2"
+            disabled={reinstalling || isBusy}
+            title={isBusy ? "Stop the server before reinstalling" : undefined}
+            onClick={() => setReinstallOpen(true)}
+          >
+            {reinstalling
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <RotateCcw className="w-4 h-4" />
+            }
+            {reinstalling ? "Reinstalling…" : "Reinstall"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="gap-2"
             style={{ color: "var(--neon-red)" }}
             onClick={() => setDeleteOpen(true)}
           >
@@ -582,6 +648,27 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
 
       <DeleteDialog server={server} open={deleteOpen} onClose={() => setDeleteOpen(false)} />
       <CloneDialog  server={server} open={cloneOpen}  onClose={() => setCloneOpen(false)} />
+
+      <Dialog open={reinstallOpen} onOpenChange={(v) => !v && setReinstallOpen(false)}>
+        <DialogContent onClick={(e) => e.stopPropagation()}>
+          <DialogHeader>
+            <DialogTitle>Reinstall &ldquo;{server.name}&rdquo;?</DialogTitle>
+            <DialogDescription>
+              Re-copies the shared cache to this server&apos;s install folder. Preserves save data
+              (ShooterGame/Saved) — safe to run with existing saves.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 mt-2">
+            <Button variant="outline" onClick={() => setReinstallOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleReinstall}
+              style={{ background: "rgba(var(--neon-purple-rgb),0.15)", borderColor: "rgba(var(--neon-purple-rgb),0.5)", color: "var(--neon-purple)" }}
+            >
+              Reinstall
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

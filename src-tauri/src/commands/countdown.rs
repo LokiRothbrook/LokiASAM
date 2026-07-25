@@ -381,8 +381,12 @@ pub async fn start_graceful_update(
         // Sync updated cache to server directory.
         let cache_path  = std::path::PathBuf::from(&params.cache_dir);
         let server_path = std::path::PathBuf::from(&params.install_path);
+        let app_clone = app2.clone();
+        let channel_clone = channel.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path)
+            // Not individually cancellable from this countdown-triggered path — a never-set flag is correct here.
+            let no_abort = std::sync::atomic::AtomicBool::new(false);
+            crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &no_abort)
         }).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
             eprintln!("Cache sync failed: {e}");
         }

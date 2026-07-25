@@ -49,7 +49,8 @@ import {
   getHasBackupEnabled,
   getAppSetting,
 } from "@/lib/db";
-import { applyUpdateToServer } from "@/lib/update-utils";
+import { applyUpdateToServer, isAutoUpdateImmediate } from "@/lib/update-utils";
+import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
 import { buildStartParams } from "@/lib/server-utils";
@@ -136,6 +137,7 @@ export function ServerCard({ server }: Props) {
   });
   const backupProgressUpdatedAt = useRef<number>(0);
   const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
+  const enqueueStartup = useAppStore((s) => s.enqueueStartup);
 
   useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,
@@ -165,6 +167,9 @@ export function ServerCard({ server }: Props) {
   }, [backupProgress.active]);
 
   const hasUpdateAvailable  = server.update_available === 1;
+  // "When Found" automation applies this update within seconds of being
+  // flagged — the manual button would just race the scheduler, so disable it.
+  const autoUpdateImmediate = isAutoUpdateImmediate(server);
   const isUpdateQueued      = server.status === "update_queued";
   const isStartupQueued     = server.status === "startup_queued";
 
@@ -278,6 +283,25 @@ export function ServerCard({ server }: Props) {
         body:       userMsg,
         severity:   "error",
       });
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  // Default entry point for the manual "Start" button — hands off to the
+  // staggered startup queue instead of launching directly, so it never piles
+  // a second simultaneous boot on top of whatever's currently starting.
+  // StartupQueueManager starts it right away if nothing else is starting, so
+  // this is indistinguishable from an immediate start in the common case.
+  // "Skip Queue" (shown once this server is actually waiting) bypasses this
+  // and calls handleStart() directly.
+  const handleQueueStart = async () => {
+    setActionPending(true);
+    clearNoRetryServer(server.id);
+    try {
+      await updateServerStatus(server.id, "startup_queued", null);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      enqueueStartup([server.id]);
     } finally {
       setActionPending(false);
     }
@@ -418,55 +442,14 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleReinstall = async () => {
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
+    setShowProgress(true);
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-
-      await updateServerStatus(server.id, "installing", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      setShowProgress(true);
-
-      try {
-        await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
-
-        // Import ARK_MAPS for map path lookup
-        const { ARK_MAPS } = await import("@/data/game-data");
-        const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
-
-        await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
-          console.warn("createSaveLink failed after reinstall:", e);
-        });
-        await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
-          console.warn("createModsSavesLink failed after update:", e);
-        });
-        await updateServerStatus(server.id, "stopped", null);
-        dispatchNotification({
-          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_COMPLETE,
-          serverId:   server.id,
-          serverName: server.name,
-          title:      `${server.name} installed successfully`,
-          body:       "Server files are ready. You can start the server now.",
-          severity:   "success",
-        });
-      } catch {
-        await updateServerStatus(server.id, "install_failed", null).catch(() => {});
-        dispatchNotification({
-          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_FAILED,
-          serverId:   server.id,
-          serverName: server.name,
-          title:      `${server.name} install failed`,
-          body:       "The server installation was canceled or failed.",
-          severity:   "error",
-        });
-      }
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await reinstallServer(server);
     } catch {
-      // Settings unavailable — cannot reinstall
+      // reinstallServer already set install_failed status and dispatched the failure notification
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
@@ -726,13 +709,22 @@ export function ServerCard({ server }: Props) {
                 <Loader2 className="w-3 h-3" /> Startup queued
               </span>
               <Button
+                size="sm" disabled={actionPending}
+                onClick={() => { removeFromStartupQueue(server.id); handleStart(); }}
+                className="gap-1.5 ml-auto"
+                title="Start immediately, skipping the wait for its turn"
+                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+              >
+                <Play className="w-3.5 h-3.5" /> Skip Queue
+              </Button>
+              <Button
                 size="sm" variant="outline"
                 onClick={async () => {
                   removeFromStartupQueue(server.id);
                   await updateServerStatus(server.id, "stopped", null);
                   queryClient.invalidateQueries({ queryKey: ["servers"] });
                 }}
-                className="gap-1.5 ml-auto"
+                className="gap-1.5"
                 style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
               >
                 <Ban className="w-3.5 h-3.5" /> Cancel
@@ -789,7 +781,7 @@ export function ServerCard({ server }: Props) {
                 </Button>
               ) : (
                 <Button
-                  size="sm" disabled={actionPending} onClick={handleStart} className="gap-1.5 flex-1"
+                  size="sm" disabled={actionPending} onClick={handleQueueStart} className="gap-1.5 flex-1"
                   style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
                 >
                   <Play className="w-3.5 h-3.5" /> Start
@@ -808,17 +800,21 @@ export function ServerCard({ server }: Props) {
               {hasUpdateAvailable && (
                 <Button
                   size="sm"
-                  disabled={actionPending || !autoCheckEnabled || isTransitioning || isStarting}
-                  onClick={() => autoCheckEnabled && setShowUpdateConfirm(true)}
-                  title={!autoCheckEnabled ? "Enable auto update checks in Settings" : undefined}
+                  disabled={actionPending || !autoCheckEnabled || autoUpdateImmediate || isTransitioning || isStarting}
+                  onClick={() => autoCheckEnabled && !autoUpdateImmediate && setShowUpdateConfirm(true)}
+                  title={
+                    autoUpdateImmediate ? "This server's When Found automation will apply the update automatically shortly"
+                    : !autoCheckEnabled ? "Enable auto update checks in Settings"
+                    : undefined
+                  }
                   className="gap-1.5"
                   style={{
-                    background:   autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
-                    borderColor:  autoCheckEnabled ? "rgba(255,165,0,0.5)"  : "rgba(255,165,0,0.2)",
-                    color:        autoCheckEnabled ? "#ffa500"              : "rgba(255,165,0,0.4)",
+                    background:   autoCheckEnabled && !autoUpdateImmediate ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
+                    borderColor:  autoCheckEnabled && !autoUpdateImmediate ? "rgba(255,165,0,0.5)"  : "rgba(255,165,0,0.2)",
+                    color:        autoCheckEnabled && !autoUpdateImmediate ? "#ffa500"              : "rgba(255,165,0,0.4)",
                   }}
                 >
-                  <ArrowUp className="w-3.5 h-3.5" /> Update
+                  <ArrowUp className="w-3.5 h-3.5" /> {autoUpdateImmediate ? "Auto-updating" : "Update"}
                 </Button>
               )}
             </>

@@ -14,6 +14,7 @@ import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
+import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { toast } from "sonner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -24,6 +25,10 @@ export interface ServerUpdateInfo {
   status: string;
   installedBuild: string;
   cachedBuild: string;
+  /** True if this server's Auto-Update automation is set to "When Found" — it
+   *  will apply automatically within seconds, so manual-update UI should not
+   *  offer to double it up. */
+  autoUpdateImmediate: boolean;
 }
 
 export interface UpdateCheckSummary {
@@ -31,6 +36,18 @@ export interface UpdateCheckSummary {
   newlyAvailable: string[];
   /** All servers currently having an update available (newly + previously flagged). */
   allWithUpdates: ServerUpdateInfo[];
+}
+
+/** True if `server`'s Auto-Update automation is set to "When Found" mode —
+ *  it'll be picked up by the Rust scheduler within seconds of being flagged,
+ *  so manual-update affordances should treat it as already spoken for. */
+export function isAutoUpdateImmediate(server: Pick<ServerRow, "update_automation_json">): boolean {
+  try {
+    const cfg = JSON.parse(server.update_automation_json || "{}");
+    return cfg.mode === "immediately";
+  } catch {
+    return false;
+  }
 }
 
 // ── ASA cache update (shared across dashboard, settings, scheduler) ───────────
@@ -106,11 +123,12 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
 
         if (isOutdated) {
           allWithUpdates.push({
-            id:             server.id,
-            name:           server.name,
-            status:         server.status,
-            installedBuild: installed,
-            cachedBuild:    cachedBuildId,
+            id:                  server.id,
+            name:                server.name,
+            status:              server.status,
+            installedBuild:      installed,
+            cachedBuild:         cachedBuildId,
+            autoUpdateImmediate: isAutoUpdateImmediate(server),
           });
           if (!wasAlreadyFlagged) {
             newlyAvailable.push(server.id);
@@ -121,11 +139,12 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
         // If it was already flagged, include it in the summary.
         if (server.update_available === 1) {
           allWithUpdates.push({
-            id:             server.id,
-            name:           server.name,
-            status:         server.status,
-            installedBuild: "unknown",
-            cachedBuild:    cachedBuildId,
+            id:                  server.id,
+            name:                server.name,
+            status:              server.status,
+            installedBuild:      "unknown",
+            cachedBuild:         cachedBuildId,
+            autoUpdateImmediate: isAutoUpdateImmediate(server),
           });
         }
       }
@@ -156,6 +175,13 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
       severity:   "info",
     });
   }
+
+  // Re-push schedules to Rust so any per-server Auto-Update automation
+  // ("When Found" / "Daily at Time") picks up servers just flagged above —
+  // those entries are synthesized from update_available in syncSchedulesToRust
+  // and are otherwise never regenerated until the next unrelated schedule
+  // fires or the app restarts, which left automation never actually applying.
+  await syncSchedulesToRust();
 
   return { newlyAvailable, allWithUpdates };
 }
@@ -225,6 +251,11 @@ export async function applyUpdateToServer(
     await tauriCmd.applyCacheToServer(serverId, installPath, cacheDir);
 
     await setServerUpdateAvailable(serverId, false);
+    // Drop any stale per-server auto-update entry the Rust scheduler is still
+    // holding (e.g. a "Daily at Time" fire scheduled for tonight) now that this
+    // server no longer needs it — otherwise it fires anyway at the scheduled
+    // time, needlessly stopping/restarting an already-up-to-date server.
+    await syncSchedulesToRust();
 
     await dispatchNotification({
       eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,

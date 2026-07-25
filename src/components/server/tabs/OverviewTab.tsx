@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Settings2, Terminal, Skull, ShieldCheck, ChevronDown, ChevronRight, Sparkles,
+  Settings2, Terminal, Skull, ChevronDown, ChevronRight, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,16 +28,16 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerConfig, getServerModCount,
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
-  pruneManualBackups, setServerAutoStart, getServers,
+  pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
-import { buildLaunchCommandPreview, buildStartParams, isLinux } from "@/lib/server-utils";
+import { buildLaunchCommandPreview, buildStartParams } from "@/lib/server-utils";
 import { applyUpdateToServer } from "@/lib/update-utils";
+import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 import { toast } from "sonner";
-import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getMapById, getSaveFolder } from "@/data/game-data";
-import { setServerActiveEvent } from "@/lib/db";
+import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getSaveFolder } from "@/data/game-data";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -45,6 +45,8 @@ import { useOnMount } from "@/hooks/useOnMount";
 
 interface Props {
   server: ServerRow;
+  /** Switch the parent's active tab to Config; optionally pass a section id to scroll to. */
+  onNavigateToConfig?: (anchor?: string) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -568,7 +570,7 @@ function ActiveConfigPanel({
 
 // ── OverviewTab ───────────────────────────────────────────────────────────────
 
-export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigateToConfig?: () => void }) {
+export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
@@ -593,18 +595,11 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [playersLoading, setPlayersLoading] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
-  const [wipeConfirm, setWipeConfirm] = useState<"map" | "players" | "full" | null>(null);
-  const [wiping, setWiping] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [importSourceId, setImportSourceId] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importServers, setImportServers] = useState<ServerRow[]>([]);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const [launchCommand, setLaunchCommand] = useState("");
   const [wipingDinos, setWipingDinos] = useState(false);
-  const [validating, setValidating] = useState(false);
-  const [activeEventId, setActiveEventId] = useState<string | null>(server.active_event ?? null);
+  const activeEventId = server.active_event ?? null;
 
   // Per-tile timeframe selectors
   const [playersTf, setPlayersTf] = useState<Timeframe>("Live");
@@ -616,7 +611,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const isStarting    = server.status === "starting";
   const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
   const isStartFailed = server.status === "start-failed";
-  // isLinux imported from server-utils
 
   // Keep the uptime counter ticking while the server is active.
   const [, setTick] = useState(0);
@@ -665,6 +659,19 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     })();
     return () => { cancelled = true; };
   }, [server.id, server.install_path]);
+
+  const navigateToConfig = (anchor?: string) => {
+    if (onNavigateToConfig) {
+      onNavigateToConfig(anchor);
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "config");
+    router.push(url.pathname + url.search);
+    if (anchor) {
+      setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }), 300);
+    }
+  };
 
   // ── Action helpers ──────────────────────────────────────────────────────────
 
@@ -830,73 +837,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   };
 
   const handleReinstall = async () => {
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
+    router.push("/");
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      await updateServerStatus(server.id, "installing", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      router.push("/");
-
-      const { ARK_MAPS } = await import("@/data/game-data");
-      const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
-
-      tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath)
-        .then(() => tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
-          console.warn("createSaveLink failed after reinstall:", e);
-        }))
-        .then(() => tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
-          console.warn("createModsSavesLink failed after reinstall:", e);
-        }))
-        .then(() => updateServerStatus(server.id, "stopped", null))
-        .catch(() => updateServerStatus(server.id, "install_failed", null))
-        .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
+      await reinstallServer(server);
     } catch (err) {
-      toast.error(`Failed to start reinstall for ${server.name}`, { description: String(err) });
-    }
-  };
-
-  const handleWipe = async (tier: "map" | "players" | "full") => {
-    setWiping(true);
-    const mapDef = getMapById(server.map_id);
-    const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
-    try {
-      await tauriCmd.wipeServerSaves(server.install_path, saveFolder, tier);
-      setWipeConfirm(null);
-      toast.success(`Save wipe complete (${tier})`);
-    } catch (e) {
-      toast.error(`Save wipe failed: ${e}`);
+      toast.error(`Reinstall failed for ${server.name}`, { description: String(err) });
     } finally {
-      setWiping(false);
-    }
-  };
-
-  const openImportDialog = async () => {
-    const all = await getServers();
-    setImportServers(all.filter((s) => s.id !== server.id && s.status === "stopped"));
-    setImportSourceId("");
-    setShowImport(true);
-  };
-
-  const handleImport = async () => {
-    if (!importSourceId) return;
-    setImporting(true);
-    try {
-      const baseDir = await getAppSetting("base_dir");
-      if (!baseDir) throw new Error("Base directory not configured");
-      const mapDef = getMapById(server.map_id);
-      const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
-      await tauriCmd.importServerSaves(importSourceId, server.id, baseDir, saveFolder);
-      setShowImport(false);
-      toast.success("Save data imported successfully");
-    } catch (e) {
-      toast.error(`Import failed: ${e}`);
-    } finally {
-      setImporting(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
@@ -1141,7 +1089,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
 
       </div>
 
-      {/* ── Active Event selector ── */}
+      {/* ── Active Event (read-only — edit in Settings) ── */}
       <div
         className="glass-card rounded-xl p-4"
         style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
@@ -1152,33 +1100,16 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             <div>
               <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-                Loads the event mod and passes <span className="font-mono">-ActiveEvent=</span> on next server start.
+                {activeEventId
+                  ? (ARK_EVENTS.find((e) => e.id === activeEventId)?.displayName ?? activeEventId)
+                  : "No event active"}
               </p>
             </div>
           </div>
-          <Select
-            value={activeEventId ?? "none"}
-            onValueChange={async (val) => {
-              const newId = val === "none" ? null : val;
-              setActiveEventId(newId);
-              try {
-                await setServerActiveEvent(server.id, newId);
-                queryClient.invalidateQueries({ queryKey: ["servers"] });
-              } catch (e) {
-                toast.error(`Failed to set event: ${e}`);
-              }
-            }}
-          >
-            <SelectTrigger className="w-52 text-sm" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}>
-              <SelectValue placeholder="No Event" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">No Event</SelectItem>
-              {ARK_EVENTS.map((evt) => (
-                <SelectItem key={evt.id} value={evt.id}>{evt.displayName}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <button onClick={() => navigateToConfig("settings-active-event")} className="text-xs px-3 py-1 rounded-md shrink-0"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.08)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            {activeEventId ? "Change →" : "Configure →"}
+          </button>
         </div>
         {activeEventId && (() => {
           const evt = ARK_EVENTS.find((e) => e.id === activeEventId);
@@ -1195,15 +1126,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
         config={activeConfig}
         modCount={modCount}
         launchCommand={launchCommand}
-        onNavigateToConfig={() => {
-          if (onNavigateToConfig) {
-            onNavigateToConfig();
-          } else {
-            const url = new URL(window.location.href);
-            url.searchParams.set("tab", "config");
-            router.push(url.pathname + url.search);
-          }
-        }}
+        onNavigateToConfig={() => navigateToConfig()}
       />
 
       {/* ── Network / install info ── */}
@@ -1232,31 +1155,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           >
             <FolderOpen className="w-3.5 h-3.5 shrink-0" />
             Open Install Folder
-          </button>
-          <button
-            className="flex items-center gap-1.5 shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
-            disabled={validating || isRunning}
-            title={isRunning ? "Stop the server before validating" : "Verify game files via SteamCMD"}
-            style={{ background: "rgba(0,255,255,0.06)", border: "1px solid rgba(0,255,255,0.2)", color: validating ? "var(--text-muted)" : "var(--neon-cyan)", opacity: isRunning ? 0.5 : 1 }}
-            onClick={async () => {
-              setValidating(true);
-              try {
-                const [steamcmdPath, baseDir] = await Promise.all([
-                  getAppSetting("steamcmd_path"),
-                  getAppSetting("base_dir"),
-                ]);
-                if (!steamcmdPath) { toast.error("SteamCMD path not configured"); return; }
-                if (!baseDir) { toast.error("Base directory not configured"); return; }
-                const sep = isLinux ? "/" : "\\";
-                const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-                await tauriCmd.validateServerFiles(server.id, server.install_path, cacheDir, steamcmdPath);
-                toast.success("Game files verified");
-              } catch (e) { toast.error(`Validation failed: ${e}`); }
-              finally { setValidating(false); }
-            }}
-          >
-            {validating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5 shrink-0" />}
-            Verify Files
           </button>
         </div>
       </div>
@@ -1321,132 +1219,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           </button>
         </div>
       )}
-
-      {/* ── Wipe Saves card ── */}
-      {!isRunning && (
-        <div
-          className="glass-card rounded-xl p-4 space-y-3"
-          style={{ border: "1px solid rgba(255,0,85,0.2)" }}
-        >
-          <div className="flex items-center gap-2">
-            <X className="w-4 h-4" style={{ color: "var(--neon-red)" }} />
-            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Wipe Save Data</h3>
-          </div>
-          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Permanently delete save files. This cannot be undone. Take a backup first.
-          </p>
-
-          {wipeConfirm ? (
-            <div className="space-y-3 rounded-lg p-3" style={{ background: "rgba(255,0,85,0.06)", border: "1px solid rgba(255,0,85,0.3)" }}>
-              <p className="text-sm font-medium" style={{ color: "var(--neon-red)" }}>
-                {wipeConfirm === "map" && "Wipe Map Data — this will delete all world state (*.ark). Character and tribe data will be preserved."}
-                {wipeConfirm === "players" && "Wipe Player & Tribe Data — this will delete all character profiles and tribe records. World state will be preserved."}
-                {wipeConfirm === "full" && "Full Wipe — this will delete ALL save data including world, characters, tribes, and mod data. This is irreversible."}
-              </p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => setWipeConfirm(null)} disabled={wiping}
-                  style={{ color: "var(--text-muted)" }}>
-                  Cancel
-                </Button>
-                <Button size="sm" onClick={() => handleWipe(wipeConfirm)} disabled={wiping}
-                  style={{ background: "rgba(255,0,85,0.15)", borderColor: "rgba(255,0,85,0.5)", color: "var(--neon-red)" }}>
-                  {wiping ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <X className="w-3.5 h-3.5 mr-1.5" />}
-                  Confirm Wipe
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => setWipeConfirm("map")}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
-              >
-                Map Wipe
-              </button>
-              <button
-                onClick={() => setWipeConfirm("players")}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
-              >
-                Player & Tribe Reset
-              </button>
-              <button
-                onClick={() => setWipeConfirm("full")}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ background: "rgba(255,0,85,0.12)", color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.4)" }}
-              >
-                Full Wipe
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Import Saves card ── */}
-      {!isRunning && (
-        <div
-          className="glass-card rounded-xl p-4 space-y-3"
-          style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
-        >
-          <div className="flex items-center gap-2">
-            <Save className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Import Saves</h3>
-          </div>
-          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Copy the current map&apos;s save data from another stopped server into this one. Existing saves will be replaced.
-          </p>
-          <button
-            onClick={openImportDialog}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={{ background: "rgba(var(--neon-purple-rgb),0.08)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)" }}
-          >
-            Import from Another Server…
-          </button>
-        </div>
-      )}
-
-      {/* ── Import Saves dialog ── */}
-      <Dialog open={showImport} onOpenChange={(v) => !v && setShowImport(false)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Import Save Data</DialogTitle>
-            <DialogDescription>
-              Select a stopped server to copy its <strong>{getMapById(server.map_id)?.mapPath ?? server.map_id}</strong> save
-              folder into <strong>{server.name}</strong>. Only stopped servers with the same map are shown.
-              Existing saves will be overwritten.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 mt-1">
-            {importServers.length === 0 ? (
-              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                No other stopped servers found. Stop the source server before importing.
-              </p>
-            ) : (
-              <Select value={importSourceId} onValueChange={setImportSourceId}>
-                <SelectTrigger style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}>
-                  <SelectValue placeholder="Select source server…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {importServers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-          <DialogFooter className="gap-2 mt-2">
-            <Button variant="outline" onClick={() => setShowImport(false)} disabled={importing}>Cancel</Button>
-            <Button
-              disabled={importing || !importSourceId}
-              onClick={handleImport}
-              style={{ background: "rgba(var(--neon-purple-rgb),0.15)", borderColor: "rgba(var(--neon-purple-rgb),0.5)", color: "var(--neon-purple)" }}
-            >
-              {importing ? <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Importing…</> : "Import Saves"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* ── Update confirmation dialog ── */}
       <Dialog open={showUpdateConfirm} onOpenChange={setShowUpdateConfirm}>

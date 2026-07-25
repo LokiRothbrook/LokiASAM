@@ -20,7 +20,7 @@ import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
 import { getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
-import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, type ServerUpdateInfo } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate, type ServerUpdateInfo } from "@/lib/update-utils";
 import { buildStartParams } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -44,11 +44,14 @@ interface UpdateStatusChipProps {
 function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: UpdateStatusChipProps) {
   const queryClient             = useQueryClient();
   const [checking, setChecking] = useState(false);
+  const asaCacheOpLabel         = useAppStore((s) => s.asaCacheOpLabel);
 
   // Background checks (scheduled or per-server auto-apply) are handled
   // globally in SchedulerManager, which invalidates the ["servers"] query —
   // this component just re-renders from the refreshed `servers` prop, so it
-  // doesn't need its own asa://update-check listener.
+  // doesn't need its own asa://update-check listener. It does watch
+  // asaCacheOpLabel (also set by SchedulerManager for the background check)
+  // so the button disables and shows the same spinner state either way.
 
   const handleCheck = async () => {
     setChecking(true);
@@ -64,8 +67,15 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
       queryClient.invalidateQueries({ queryKey: ["servers"] });
 
       if (summary.allWithUpdates.length > 0) {
-        // Show the updates-found dialog to the user.
-        onUpdatesFound(summary.allWithUpdates);
+        const manualNeeded = summary.allWithUpdates.filter((s) => !s.autoUpdateImmediate);
+        if (manualNeeded.length > 0) {
+          // Show the updates-found dialog — includes auto-updating servers too
+          // (marked, non-actionable) so the list is a complete picture.
+          onUpdatesFound(summary.allWithUpdates);
+        } else {
+          const n = summary.allWithUpdates.length;
+          toast.info(`Update found — applying automatically to ${n} server${n === 1 ? "" : "s"}.`);
+        }
       } else {
         toast.success("All servers are up to date.");
       }
@@ -88,10 +98,12 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
     }
   };
 
-  const serversWithUpdates = (servers ?? []).filter((s) => s.update_available === 1);
-  const anyStarting        = (servers ?? []).some(
-    (s) => s.update_available === 1 && s.status === "starting"
+  // Servers with "When Found" automation are excluded here — nothing for a
+  // manual bulk action to do for them, they update themselves within seconds.
+  const serversWithUpdates = (servers ?? []).filter(
+    (s) => s.update_available === 1 && !isAutoUpdateImmediate(s)
   );
+  const anyStarting        = serversWithUpdates.some((s) => s.status === "starting");
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -116,15 +128,16 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
       <Button
         size="sm"
         variant="outline"
-        disabled={checking}
+        disabled={checking || !!asaCacheOpLabel}
+        title={!checking && asaCacheOpLabel ? asaCacheOpLabel : undefined}
         onClick={handleCheck}
         className="gap-1.5"
         style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
       >
-        {checking
+        {checking || asaCacheOpLabel
           ? <Loader2 className="w-3 h-3 animate-spin" />
           : <RefreshCw className="w-3 h-3" />}
-        Check for Updates
+        {!checking && asaCacheOpLabel ? "Checking…" : "Check for Updates"}
       </Button>
     </div>
   );
@@ -143,8 +156,13 @@ interface UpdatesFoundDialogProps {
 
 function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: UpdatesFoundDialogProps) {
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
-  const anyRunning = updates.some((s) => s.status === "running");
-  const anyStarting = updates.some((s) => s.status === "starting");
+  // Servers with "When Found" automation are handled by the scheduler within
+  // seconds — shown here for visibility, but excluded from the warnings and
+  // from what "Update All" actually targets (that filter lives in runUpdateAll,
+  // this just keeps the copy in this dialog honest about what it will do).
+  const manualUpdates = updates.filter((s) => !s.autoUpdateImmediate);
+  const anyRunning = manualUpdates.some((s) => s.status === "running");
+  const anyStarting = manualUpdates.some((s) => s.status === "starting");
   const versionCache = useBuildVersionCache();
 
   return (
@@ -166,7 +184,11 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
             <div
               key={s.id}
               className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
-              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+              style={{
+                background: "rgba(255,165,0,0.05)",
+                border: "1px solid rgba(255,165,0,0.15)",
+                opacity: s.autoUpdateImmediate ? 0.6 : 1,
+              }}
             >
               <div>
                 <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
@@ -176,22 +198,38 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
                   </span>
                 )}
               </div>
-              <span
-                className="text-xs px-1.5 py-0.5 rounded capitalize"
-                style={{
-                  color: s.status === "running" ? "var(--neon-green)"
-                       : s.status === "starting" ? "var(--neon-cyan)"
-                       : "var(--text-muted)",
-                  background: s.status === "running" ? "rgba(0,255,136,0.08)"
-                            : s.status === "starting" ? "rgba(0,255,255,0.08)"
-                            : "rgba(255,255,255,0.04)",
-                }}
-              >
-                {s.status}
-              </span>
+              {s.autoUpdateImmediate ? (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded"
+                  style={{ color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.1)" }}
+                >
+                  Auto-updating
+                </span>
+              ) : (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded capitalize"
+                  style={{
+                    color: s.status === "running" ? "var(--neon-green)"
+                         : s.status === "starting" ? "var(--neon-cyan)"
+                         : "var(--text-muted)",
+                    background: s.status === "running" ? "rgba(0,255,136,0.08)"
+                              : s.status === "starting" ? "rgba(0,255,255,0.08)"
+                              : "rgba(255,255,255,0.04)",
+                  }}
+                >
+                  {s.status}
+                </span>
+              )}
             </div>
           ))}
         </div>
+
+        {manualUpdates.length < updates.length && (
+          <p className="text-xs px-1" style={{ color: "var(--text-muted)" }}>
+            Servers marked "Auto-updating" have When Found automation enabled and will update on their own —
+            no action needed.
+          </p>
+        )}
 
         {/* Warnings */}
         {anyRunning && (
@@ -236,11 +274,14 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
             Not Now
           </Button>
           <Button
+            disabled={manualUpdates.length === 0}
             onClick={() => { onOpenChange(false); onUpdateAll(restartAfterUpdate); }}
             style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}
           >
             <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
-            Update All
+            {manualUpdates.length === updates.length
+              ? "Update All"
+              : `Update ${manualUpdates.length} Server${manualUpdates.length === 1 ? "" : "s"}`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -370,6 +411,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
 export default function DashboardPage() {
   const { data: servers = [], isLoading } = useServers();
   const { setShowNewServerWizard, enqueueStartup } = useAppStore();
+  const countdowns = useAppStore((s) => s.countdowns);
   const [showImport, setShowImport]               = useState(false);
   const [appVersion, setAppVersion]               = useState("");
 
@@ -384,15 +426,18 @@ export default function DashboardPage() {
 
   const total = servers.length;
 
-  // Build the ServerUpdateInfo list from the live servers data.
+  // Build the ServerUpdateInfo list from the live servers data. Servers with
+  // "When Found" automation are excluded — the header "Update All" button is
+  // a pure manual-bulk-action, and those servers update themselves already.
   const serversWithUpdates: ServerUpdateInfo[] = servers
-    .filter((s) => s.update_available === 1)
+    .filter((s) => s.update_available === 1 && !isAutoUpdateImmediate(s))
     .map((s) => ({
-      id:             s.id,
-      name:           s.name,
-      status:         s.status,
-      installedBuild: "—",
-      cachedBuild:    "—",
+      id:                  s.id,
+      name:                s.name,
+      status:              s.status,
+      installedBuild:      "—",
+      cachedBuild:         "—",
+      autoUpdateImmediate: false,
     }));
 
   const anyUpdatesStarting = serversWithUpdates.some((s) => s.status === "starting");
@@ -423,34 +468,84 @@ export default function DashboardPage() {
     } finally { setGlobalActionPending(false); }
   }, [servers, queryClient]);
 
-  const handleStopAll = useCallback(async () => {
+  // Any server still in its graceful-stop warning/RCON-save window — a second
+  // click on Stop All targets exactly these for a hard kill. Derived from live
+  // status rather than tracked separately, so it also picks up servers that
+  // were stopped individually (not just via a prior Stop All click).
+  const stoppingServers = servers.filter((s) => s.status === "stopping");
+  // Same idea for Restart All — servers currently sitting in a restart
+  // countdown (warning broadcast phase), regardless of what started it.
+  const restartCountdownServers = servers.filter(
+    (s) => s.status === "running" && countdowns[s.id]?.action === "restart"
+  );
+
+  const handleStopAll = useCallback(() => {
+    if (stoppingServers.length > 0) {
+      // Force: hard-kill everything still in its graceful stop window — no
+      // RCON save, matches the per-server Force Stop button.
+      for (const s of stoppingServers) {
+        tauriCmd.stopServer(s.id, false)
+          .catch((e) => toast.error(`Failed to force stop ${s.name}: ${e}`))
+          .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
+      }
+      toast.info(`Force stopping ${stoppingServers.length} server${stoppingServers.length === 1 ? "" : "s"}…`);
+      return;
+    }
+
     const running = servers.filter((s) => s.status === "running" || s.status === "starting");
     if (running.length === 0) return;
-    setGlobalActionPending(true);
-    try {
-      let failed = 0;
-      await Promise.all(running.map(async (s) => {
-        try {
-          await updateServerStatus(s.id, "stopping", s.pid);
-          await tauriCmd.stopServer(s.id, false);
-        } catch (e) {
-          failed += 1;
-          toast.error(`Failed to stop ${s.name}: ${e}`);
-        } finally {
-          queryClient.invalidateQueries({ queryKey: ["servers"] });
-        }
-      }));
-      const succeeded = running.length - failed;
-      if (succeeded > 0) toast.info(`Stopping ${succeeded} server${succeeded === 1 ? "" : "s"}…`);
-    } finally { setGlobalActionPending(false); }
-  }, [servers, queryClient]);
+    for (const s of running) {
+      updateServerStatus(s.id, "stopping", s.pid)
+        .then(() => queryClient.invalidateQueries({ queryKey: ["servers"] }))
+        .catch(() => {});
+      tauriCmd.gracefulStopServer(
+        s.id,
+        s.rcon_port,
+        s.admin_password,
+        s.shutdown_warn_players !== 0,
+        s.shutdown_warn_minutes ?? 5,
+        s.shutdown_message || "Server will shut down in {time}.",
+      )
+        .catch((e) => toast.error(`Failed to stop ${s.name}: ${e}`))
+        .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
+    }
+    toast.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
+  }, [servers, stoppingServers, queryClient]);
 
-  const handleRestartAll = useCallback(async () => {
+  const handleRestartAll = useCallback(() => {
+    if (restartCountdownServers.length > 0) {
+      // Force: skip the remaining warning wait, but still let the graceful
+      // RCON SaveWorld+doexit the countdown ends with proceed normally —
+      // same as the per-server "Restart Now" button.
+      for (const s of restartCountdownServers) {
+        tauriCmd.proceedNow(s.id).catch((e) => toast.error(`Failed to skip wait for ${s.name}: ${e}`));
+      }
+      toast.info(`Skipping wait for ${restartCountdownServers.length} server${restartCountdownServers.length === 1 ? "" : "s"}…`);
+      return;
+    }
+
     const running = servers.filter((s) => s.status === "running");
     if (running.length === 0) return;
-    setGlobalActionPending(true);
-    try {
-      await Promise.all(running.map(async (s) => {
+
+    for (const s of running) {
+      (async () => {
+        if (s.restart_warn_players) {
+          try {
+            const startParams = await buildStartParams(s);
+            await tauriCmd.startGracefulRestart({
+              serverId:      s.id,
+              warnSeconds:   (s.restart_warn_minutes ?? 5) * 60,
+              rconPort:      s.rcon_port,
+              rconPassword:  s.admin_password,
+              message:       s.restart_message || "Server restarting in {time}.",
+              cancelMessage: s.restart_cancel_message || "Restart has been canceled.",
+              startParams,
+            });
+          } catch (e) {
+            toast.error(`Failed to restart ${s.name}: ${e}`);
+          }
+          return;
+        }
         try {
           await updateServerStatus(s.id, "stopping", s.pid);
           queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -463,10 +558,10 @@ export default function DashboardPage() {
         } finally {
           queryClient.invalidateQueries({ queryKey: ["servers"] });
         }
-      }));
-      toast.info(`Restarting ${running.length} server${running.length === 1 ? "" : "s"}…`);
-    } finally { setGlobalActionPending(false); }
-  }, [servers, queryClient]);
+      })();
+    }
+    toast.info(`Restarting ${running.length} server${running.length === 1 ? "" : "s"}…`);
+  }, [servers, restartCountdownServers, queryClient]);
 
   // ── Update All handler ────────────────────────────────────────────────────
 
@@ -474,7 +569,9 @@ export default function DashboardPage() {
     if (updatingAll) return;
     setUpdatingAll(true);
 
-    const targets = servers.filter((s) => s.update_available === 1);
+    // Excludes servers with "When Found" automation — those are already
+    // being handled by the scheduler and shouldn't be double-applied here.
+    const targets = servers.filter((s) => s.update_available === 1 && !isAutoUpdateImmediate(s));
     if (targets.length === 0) { setUpdatingAll(false); return; }
 
     try {
@@ -526,21 +623,25 @@ export default function DashboardPage() {
               >
                 <Play className="w-3.5 h-3.5" /> Start All
               </Button>
-              <Button size="sm" variant="outline" disabled={globalActionPending}
+              <Button size="sm" variant="outline"
                 onClick={handleStopAll}
-                title="Stop all running servers"
+                title={stoppingServers.length > 0
+                  ? "Force-kill all servers still stopping (no world save)"
+                  : "Stop all running servers"}
                 className="gap-1.5"
                 style={{ borderColor: "rgba(255,0,85,0.3)", color: "rgba(255,0,85,0.85)", background: "rgba(255,0,85,0.05)" }}
               >
-                <Square className="w-3.5 h-3.5" /> Stop All
+                <Square className="w-3.5 h-3.5" /> {stoppingServers.length > 0 ? "Force Stop All" : "Stop All"}
               </Button>
-              <Button size="sm" variant="outline" disabled={globalActionPending}
+              <Button size="sm" variant="outline"
                 onClick={handleRestartAll}
-                title="Restart all running servers"
+                title={restartCountdownServers.length > 0
+                  ? "Skip the remaining warning wait and restart now"
+                  : "Restart all running servers"}
                 className="gap-1.5"
                 style={{ borderColor: "rgba(0,255,255,0.3)", color: "var(--neon-cyan)", background: "rgba(0,255,255,0.05)" }}
               >
-                <RotateCcw className="w-3.5 h-3.5" /> Restart All
+                <RotateCcw className="w-3.5 h-3.5" /> {restartCountdownServers.length > 0 ? "Restart All Now" : "Restart All"}
               </Button>
             </>
           )}

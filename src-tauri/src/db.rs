@@ -124,6 +124,19 @@ pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
     .unwrap_or_default()
 }
 
+/// Read a server's current `status` column directly — used by the scheduler
+/// to detect a server that was sitting in the startup queue (not yet spawned)
+/// when its auto-update fired, which `running_servers` alone can't tell it,
+/// since that map only ever holds servers that have actually been spawned.
+pub fn get_server_status(conn: &Connection, server_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT status FROM servers WHERE id = ?1",
+        [server_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
 /// Clear the update_available flag after a scheduled update has been applied,
 /// so the UI stops showing "Update Available" and the auto-update scheduler
 /// (which only fires while this flag is set) doesn't keep re-firing.

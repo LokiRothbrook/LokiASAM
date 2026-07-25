@@ -31,7 +31,7 @@ import {
 } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { useAutostart } from "@/hooks/useAutostart";
-import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -922,10 +922,16 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
         toast.success(`Cache is up to date (build ${newBuild}).`);
       }
 
-      if (outdated.length > 0) {
-        const running = outdated.filter((s) => s.status === "running").length;
-        setApplyAllInfo({ total: outdated.length, running });
+      // Servers with "When Found" automation apply themselves within seconds —
+      // exclude them so this confirm isn't offering to double-apply, and skip
+      // the confirm entirely (just a toast) if that's every outdated server.
+      const manualOutdated = outdated.filter((s) => !isAutoUpdateImmediate(s));
+      if (manualOutdated.length > 0) {
+        const running = manualOutdated.filter((s) => s.status === "running").length;
+        setApplyAllInfo({ total: manualOutdated.length, running });
         setShowApplyAll(true);
+      } else if (outdated.length > 0) {
+        toast.info(`Update found — applying automatically to ${outdated.length} server${outdated.length === 1 ? "" : "s"}.`);
       }
     } catch (e) {
       await dispatchNotification({
@@ -946,7 +952,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
     setApplyingAll(true);
     try {
       const servers = await getServers();
-      const outdated = servers.filter((s) => s.update_available === 1);
+      const outdated = servers.filter((s) => s.update_available === 1 && !isAutoUpdateImmediate(s));
       // dialog promises running servers are restarted after the update
       await applyUpdateToAllServers(outdated, true, {
         enqueueStartup,

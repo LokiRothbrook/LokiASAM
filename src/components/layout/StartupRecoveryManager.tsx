@@ -41,8 +41,15 @@ export function StartupRecoveryManager() {
         enqueueStartup(startupQueued.map((s) => s.id));
       }
 
-      // --- 2. Resume update_queued servers sequentially ----------------------
-      const updateQueued = servers.filter((s) => s.status === "update_queued");
+      // --- 2. Resume update_queued servers, and re-apply "updating" servers --
+      // "updating" here means the previous session was killed (crash, force-quit)
+      // while a server was actively mid-update — re-running applyUpdateToServer
+      // re-syncs the cache to the server, which is safe to repeat and completes
+      // whatever the interrupted copy left unfinished, matching the same
+      // preserved-Saved/ safety the original update used.
+      const updateQueued = servers.filter(
+        (s) => s.status === "update_queued" || s.status === "updating",
+      );
       if (updateQueued.length > 0) {
         const count = updateQueued.length;
         toast.info(
