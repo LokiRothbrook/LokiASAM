@@ -154,9 +154,23 @@ pub async fn stream_process_abortable(
 /// Recursively copy `src` into `dst`, skipping any top-level entry whose name
 /// case-insensitively matches a name in `skip_rel`.
 /// Creates `dst` if it doesn't exist; existing files in `dst` are overwritten.
-pub fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io::Result<()> {
+/// `abort`, when given, is checked before copying each entry (files and
+/// directories alike, not just once per top-level call) — the recursive
+/// calls each check it too, so cancelling actually takes effect within a
+/// single file/subdirectory of the largest copy (e.g. ShooterGame/) instead
+/// of only between top-level entries.
+pub fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    skip_rel: &[&str],
+    abort: Option<&std::sync::atomic::AtomicBool>,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
+        if abort.is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "Aborted"));
+        }
+
         let entry = entry?;
         let file_name = entry.file_name();
         let name_str = file_name.to_string_lossy();
@@ -169,7 +183,7 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io:
         let dst_path = dst.join(&file_name);
 
         if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path, &[])?;
+            copy_dir_recursive(&src_path, &dst_path, &[], abort)?;
         } else {
             std::fs::copy(&src_path, &dst_path)?;
         }
@@ -182,6 +196,43 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path, skip_rel: &[&str]) -> std::io:
 // backup_manager.rs (the hourly scheduled tick), which previously each had
 // their own copy of both of these.
 // ---------------------------------------------------------------------------
+
+/// Current UTC time as `YYYY-MM-DDTHH:MM:SS.sssZ` — the same shape
+/// JavaScript's `Date.prototype.toISOString()` produces. Rows inserted from
+/// Rust (e.g. `db::log_notification`) must use this rather than relying on
+/// SQLite's `CURRENT_TIMESTAMP` default (`YYYY-MM-DD HH:MM:SS`, no `T`/`Z`,
+/// second precision): the two formats are both valid-looking timestamps but
+/// sort lexicographically out of true chronological order when interleaved
+/// in the same `ORDER BY created_at DESC` — a space (0x20) sorts before `T`
+/// (0x54), so every JS-inserted row for a given day would sort as "newer"
+/// than every Rust-inserted row from that same day regardless of actual time.
+pub fn now_iso_utc() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_ms = now.as_millis();
+    let secs = (total_ms / 1000) as u64;
+    let ms = total_ms % 1000;
+
+    // Howard Hinnant's civil_from_days algorithm — same approach used
+    // elsewhere in this codebase for turning a day count into y/m/d.
+    let days = secs / 86_400;
+    let day_secs = secs % 86_400;
+    let (hh, mm, ss) = (day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60);
+
+    let z = days as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z")
+}
 
 /// Format a byte count as a human-readable "X.Y GB/MB/KB" string.
 pub fn fmt_size(bytes: u64) -> String {
@@ -353,23 +404,56 @@ pub fn find_pids_by_install_path(install_path: &str) -> Vec<u32> {
     if install_path.is_empty() {
         return Vec::new();
     }
-    let base         = install_path.trim_end_matches('/').to_lowercase();
-    let needle_linux = format!("{}/", base);
-    let needle_wine  = format!("z:{}\\" , base.replace('/', "\\"));
+    find_pids_by_install_paths_batch(&[install_path])
+        .remove(install_path)
+        .unwrap_or_default()
+}
 
-    let Ok(procs) = procfs::process::all_processes() else { return Vec::new(); };
-    let mut out = Vec::new();
+/// Batched form of `find_pids_by_install_path` — does a single `/proc` walk
+/// and matches every process's cmdline against all `install_paths` at once,
+/// instead of one full walk per path. Used by the stats-recorder's periodic
+/// PID rediscovery: servers due for rescan tend to land on the same tick
+/// (they usually all started around the same time), so calling the
+/// single-path version once per due server was reproducing an N-scans burst
+/// every rediscovery interval instead of the one shared pass the batching
+/// elsewhere in this file was meant to achieve.
+#[cfg(target_os = "linux")]
+pub fn find_pids_by_install_paths_batch(
+    install_paths: &[&str],
+) -> std::collections::HashMap<String, Vec<u32>> {
+    let mut out: std::collections::HashMap<String, Vec<u32>> =
+        install_paths.iter().map(|p| (p.to_string(), Vec::new())).collect();
+
+    let needles: Vec<(&str, String, String)> = install_paths.iter()
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let base = p.trim_end_matches('/').to_lowercase();
+            let needle_linux = format!("{}/", base);
+            let needle_wine  = format!("z:{}\\", base.replace('/', "\\"));
+            (*p, needle_linux, needle_wine)
+        })
+        .collect();
+    if needles.is_empty() {
+        return out;
+    }
+
+    let Ok(procs) = procfs::process::all_processes() else { return out; };
 
     for proc_result in procs {
         let Ok(proc) = proc_result else { continue };
         let Ok(cmd)  = proc.cmdline() else { continue };
         let flat = cmd.join("\0").to_lowercase();
 
-        if !flat.contains(&needle_linux) && !flat.contains(&needle_wine) { continue; }
+        for (install_path, needle_linux, needle_wine) in &needles {
+            if !flat.contains(needle_linux) && !flat.contains(needle_wine) { continue; }
 
-        let Ok(status) = proc.status() else { continue };
-        if status.pid == status.tgid {
-            out.push(proc.pid as u32);
+            let Ok(status) = proc.status() else { continue };
+            if status.pid == status.tgid {
+                out.entry(install_path.to_string()).or_default().push(proc.pid as u32);
+            }
+            // A process's cmdline can only belong to one server's install
+            // path in practice — stop checking the rest once matched.
+            break;
         }
     }
     out

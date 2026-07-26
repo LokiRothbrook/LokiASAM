@@ -146,9 +146,20 @@ impl AppState {
         flag
     }
 
-    /// Clear the abort flag for `op_id` (called when the operation finishes or is aborted).
-    pub fn clear_abort(&self, op_id: &str) {
-        self.abort_flags.lock().unwrap().remove(op_id);
+    /// Clear the abort flag for `op_id` (called when the operation finishes or
+    /// is aborted). Only removes the entry if it's still the same `Arc` this
+    /// caller registered — if a second operation of the same kind (e.g. two
+    /// concurrent Proton-GE downloads, which share the static key
+    /// "proton_download") has since overwritten it, this leaves that second
+    /// operation's flag in place instead of deleting it out from under it.
+    /// Without this, the first operation to finish would silently disable the
+    /// second one's Cancel button and drop it from `get_running_ops`, even
+    /// though it's still running.
+    pub fn clear_abort(&self, op_id: &str, flag: &Arc<AtomicBool>) {
+        let mut flags = self.abort_flags.lock().unwrap();
+        if flags.get(op_id).is_some_and(|current| Arc::ptr_eq(current, flag)) {
+            flags.remove(op_id);
+        }
     }
 
     /// Register that `server_id`'s upcoming stop is being orchestrated by a

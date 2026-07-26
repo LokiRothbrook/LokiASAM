@@ -98,7 +98,7 @@ pub async fn download_proton_ge(
 ) -> Result<String, String> {
     let abort = state.register_abort("proton_download");
     let result = download_proton_ge_inner(&app_handle, &target_dir, &abort).await;
-    state.clear_abort("proton_download");
+    state.clear_abort("proton_download", &abort);
     result
 }
 

@@ -7,7 +7,7 @@
  */
 
 import {
-  getServers, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting,
+  getServers, getServer, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting,
   updateServerStatus, type ServerRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
@@ -320,7 +320,22 @@ export async function applyUpdateToAllServers(
     opts.onInvalidate();
   }
 
-  for (const server of targets) {
+  for (let i = 0; i < targets.length; i++) {
+    const server = targets[i];
+
+    // Re-check live status right before acting — a server's own Cancel
+    // button (while it's sitting in "update_queued") just writes status back
+    // to "stopped", and without this check this loop would reach it anyway
+    // moments later and update it regardless, silently overriding the
+    // cancel. Mirrors the same guard StartupQueueManager uses for the
+    // startup queue. Only applies to i > 0 — the first target never passes
+    // through "update_queued" (it starts updating immediately above), so
+    // there's no queued state for a cancel to have reverted it from.
+    if (i > 0) {
+      const current = await getServer(server.id);
+      if (!current || current.status !== "update_queued") continue;
+    }
+
     await updateServerStatus(server.id, "updating", null);
     opts.onInvalidate();
 

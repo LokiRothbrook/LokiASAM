@@ -3,13 +3,14 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 use tokio::time::{timeout, sleep, Duration};
 use uuid::Uuid;
 use sevenz_rust::{SevenZWriter, SevenZArchiveEntry};
 
 use crate::events;
+use crate::state::AppState;
 use crate::state::rcon_pool::{RconCmd, RconPool};
 use super::utils::{fmt_size, tier_suffix, copy_dir_recursive};
 
@@ -426,6 +427,9 @@ pub async fn create_server_backup(
     base_dir: String,
     pool: State<'_, RconPool>,
 ) -> Result<BackupRecord, String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let result = create_server_backup_inner(&app, &server_id, &server_name, &install_path, &map_path, &save_folder, &map_id, &backup_dir, &triggered_by, &tier, &pool, false, &base_dir).await;
     if let Ok(ref rec) = result {
         let size = fmt_size(rec.file_size_bytes);
@@ -680,6 +684,9 @@ pub async fn backup_all_players(
     backup_dir: String,
     triggered_by: String,
 ) -> Result<Vec<BackupRecord>, String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let result = backup_all_players_inner(&app, &server_id, &server_name, &install_path, &save_folder, &map_id, &backup_dir, &triggered_by).await;
     if let Ok(ref recs) = result {
         let count = recs.len();
@@ -787,6 +794,9 @@ pub async fn create_player_backup(
     triggered_by: String,
     tier: String,
 ) -> Result<BackupRecord, String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let result = create_player_backup_inner(
         &app, &server_id, &server_name, &install_path, &save_folder,
         &map_id, &backup_dir, &eos_id, &player_name, &triggered_by, &tier,
@@ -821,10 +831,14 @@ pub struct IniBackupRecord {
 /// timestamp folder and a new "current" copy is written.
 #[tauri::command]
 pub async fn create_ini_backup(
+    app: AppHandle,
     server_id: String,
     install_path: String,
     backup_dir: String,
 ) -> Result<IniBackupRecord, String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     // ASA ships only a Windows dedicated server binary. On Linux it runs under
     // Proton/Wine, so the server process always writes its config to the
     // WindowsServer subfolder regardless of the host OS running LokiASAM.
@@ -1019,10 +1033,15 @@ pub async fn create_mods_saves_link(
 /// The server MUST NOT be running when this is called (enforced on the frontend).
 #[tauri::command]
 pub async fn wipe_server_saves(
+    app: AppHandle,
+    server_id: String,
     install_path: String,
     save_folder: String,
     tier: String,
 ) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let saves_root = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("SavedArks")
         .join(&save_folder);
@@ -1088,6 +1107,7 @@ pub async fn wipe_server_saves(
 /// stopped before calling this.
 #[tauri::command]
 pub async fn import_server_saves(
+    app: AppHandle,
     source_server_id: String,
     target_server_id: String,
     base_dir: String,
@@ -1096,6 +1116,15 @@ pub async fn import_server_saves(
     if source_server_id == target_server_id {
         return Err("Source and target server must be different".to_string());
     }
+
+    // Locks both — the source is only read, but a concurrent backup reading
+    // it at the same time as this copy is exactly the same race this guards
+    // against everywhere else.
+    let state = app.state::<AppState>();
+    let _lock_source = state.try_lock_server(&source_server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {source_server_id} — try again in a moment"))?;
+    let _lock_target = state.try_lock_server(&target_server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {target_server_id} — try again in a moment"))?;
 
     let source = PathBuf::from(&base_dir)
         .join("saves").join(&source_server_id).join("SavedArks").join(&save_folder);
@@ -1113,7 +1142,7 @@ pub async fn import_server_saves(
     fs::create_dir_all(&target).map_err(|e| format!("Failed to create target save dir: {e}"))?;
 
     // Recursively copy everything from source into target
-    copy_dir_recursive(&source, &target, &[])
+    copy_dir_recursive(&source, &target, &[], None)
         .map_err(|e| format!("Failed to copy save files: {e}"))?;
     Ok(())
 }
@@ -1162,6 +1191,9 @@ pub async fn create_full_backup(
     triggered_by: String,
     tier: String,
 ) -> Result<BackupRecord, String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let install_dir = PathBuf::from(&install_path);
     if !install_dir.exists() {
         return Err(format!("Install path not found: {install_path}"));
@@ -1253,6 +1285,10 @@ pub async fn restore_server_backup(
         return Err("server_id and map_path must not be empty".to_string());
     }
 
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     // Step 1: Extract backup to a temp directory FIRST — validating the archive
     // before touching any live save data. A corrupt/truncated/missing archive
     // must fail here, before Step 2 clears the real SavedArks/SaveGames
@@ -1287,14 +1323,14 @@ pub async fn restore_server_backup(
     let temp_saved_arks = temp_dir.join("SavedArks").join(&save_folder);
     if temp_saved_arks.exists() {
         fs::create_dir_all(&saved_arks_path).map_err(|e| e.to_string())?;
-        copy_dir_recursive(&temp_saved_arks, &saved_arks_path, &[]).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&temp_saved_arks, &saved_arks_path, &[], None).map_err(|e| e.to_string())?;
     }
 
     // Process Mods/SaveGames files
     let temp_mods = temp_dir.join("Mods").join(&map_path).join("SaveGames");
     if temp_mods.exists() {
         fs::create_dir_all(&mods_saves_path).map_err(|e| e.to_string())?;
-        copy_dir_recursive(&temp_mods, &mods_saves_path, &[]).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&temp_mods, &mods_saves_path, &[], None).map_err(|e| e.to_string())?;
     }
 
     // Step 4: Recreate symlinks
@@ -1321,6 +1357,9 @@ pub async fn restore_player_backup(
     install_path: String,
     save_folder: String,
 ) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let target = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved")
         .join("SavedArks").join(&save_folder);
@@ -1335,9 +1374,14 @@ pub async fn restore_player_backup(
 /// regardless of the host OS running LokiASAM (see config.rs::config_dir).
 #[tauri::command]
 pub async fn restore_ini_backup(
+    app: AppHandle,
+    server_id: String,
     backup_folder_path: String,
     install_path: String,
 ) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let src_dir = PathBuf::from(&backup_folder_path);
     let dst_dir = PathBuf::from(&install_path)
         .join("ShooterGame").join("Saved").join("Config").join("WindowsServer");
@@ -1364,6 +1408,9 @@ pub async fn restore_full_backup(
     backup_file_path: String,
     install_path: String,
 ) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
     let target = PathBuf::from(&install_path);
     extract_7z_with_progress(&app, &server_id, &backup_file_path, &target, "Restoring full backup…").await
 }

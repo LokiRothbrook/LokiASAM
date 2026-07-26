@@ -195,6 +195,20 @@ function BaseDirMigrationSection() {
 
   const handleMigrate = async () => {
     if (!newDir.trim()) { toast.error("Please enter a destination directory."); return; }
+
+    // The warning text below says servers should be stopped first, but
+    // nothing actually enforced it — moving install files out from under a
+    // live process while the DB is rewritten to point elsewhere leaves that
+    // process and the new location out of sync.
+    const servers = await getServers();
+    const active = servers.filter((s) => s.status === "running" || s.status === "starting" || s.status === "stopping");
+    if (active.length > 0) {
+      toast.error(
+        `Stop ${active.length === 1 ? "this server" : "these servers"} before migrating: ${active.map((s) => s.name).join(", ")}`
+      );
+      return;
+    }
+
     setMigrating(true); setProgress(null); setMigrationDone(false);
 
     const unlisten = await listen<MigrateProgress>("base-dir://migrate-progress", (e) => {
@@ -1485,6 +1499,84 @@ function SteamcmdReinstallRow() {
 
 const PROTON_CHANNEL = "proton://output/download";
 
+/**
+ * "Unmanaged Proton-GE" warning box + "Allow management" confirm dialog —
+ * previously implemented twice, independently, by ProtonGeInstallRow and
+ * ProtonGeUpdateSection (identical copy, identical dialog), kept in sync
+ * only by remembering to edit both.
+ */
+function ProtonUnmanagedNotice({ extraText, alignRight, onManaged }: {
+  extraText?: string;
+  alignRight?: boolean;
+  onManaged: () => void;
+}) {
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const handleConfirm = async () => {
+    await setAppSetting("proton_ge_managed", "true");
+    setShowConfirm(false);
+    toast.success("LokiASAM will now manage Proton-GE updates.");
+    onManaged();
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
+        style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
+        <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
+        <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
+          Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
+          {extraText}
+        </p>
+      </div>
+      <div className={alignRight ? "flex justify-end" : undefined}>
+        <Button
+          variant="outline"
+          onClick={() => setShowConfirm(true)}
+          className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+          style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+        >
+          <TriangleAlert className="w-4 h-4" />
+          Allow LokiASAM to Manage This Proton Install
+        </Button>
+      </div>
+      <Dialog open={showConfirm} onOpenChange={(v) => { if (!v) setShowConfirm(false); }}>
+        <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+              <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
+            </DialogTitle>
+            <DialogDescription className="space-y-2 pt-1">
+              <span className="block">
+                Switching to managed mode gives LokiASAM full control over your Proton-GE installation — it may download new versions and replace the current one.
+              </span>
+              <span className="block font-medium" style={{ color: "var(--neon-red)" }}>
+                If this Proton-GE was installed by Steam, Lutris, or another tool, LokiASAM may overwrite it and break other applications that depend on it.
+              </span>
+              <span className="block">
+                For the safest experience, let LokiASAM download and install its own dedicated copy of Proton-GE instead.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button variant="outline"
+              className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+              onClick={handleConfirm}>
+              Allow Management
+            </Button>
+            <Button variant="outline" onClick={() => setShowConfirm(false)}
+              className="w-full hover:bg-(--surface-elevated)"
+              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 function ProtonGeInstallRow() {
   const protonOpLabel    = useAppStore((s) => s.protonOpLabel);
   const protonOpDone     = useAppStore((s) => s.protonOpDone);
@@ -1501,8 +1593,6 @@ function ProtonGeInstallRow() {
     if (protonOpDone) return "done";
     return "idle";
   });
-  const [showManagedConfirm, setShowManagedConfirm] = useState(false);
-
   useEffect(() => {
     Promise.all([
       getAppSetting("proton_path"),
@@ -1512,13 +1602,6 @@ function ProtonGeInstallRow() {
       setIsManaged(managed === "true");
     });
   }, []);
-
-  const handleConfirmManaged = async () => {
-    await setAppSetting("proton_ge_managed", "true");
-    setIsManaged(true);
-    setShowManagedConfirm(false);
-    toast.success("LokiASAM will now manage Proton-GE updates.");
-  };
 
   const hasInstall = !!protonPath;
   const busy = phase === "running";
@@ -1558,58 +1641,8 @@ function ProtonGeInstallRow() {
 
   if (!isManaged) {
     return (
-      <div className="space-y-3 pt-1">
-        <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
-          style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
-          <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
-          <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
-            Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
-          </p>
-        </div>
-        <div className="flex justify-end">
-          <Button
-            variant="outline"
-            onClick={() => setShowManagedConfirm(true)}
-            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
-          >
-            <TriangleAlert className="w-4 h-4" />
-            Allow LokiASAM to Manage This Proton Install
-          </Button>
-        </div>
-        <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
-          <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
-                <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
-              </DialogTitle>
-              <DialogDescription className="space-y-2 pt-1">
-                <span className="block">
-                  Switching to managed mode gives LokiASAM full control over your Proton-GE installation — it may download new versions and replace the current one.
-                </span>
-                <span className="block font-medium" style={{ color: "var(--neon-red)" }}>
-                  If this Proton-GE was installed by Steam, Lutris, or another tool, LokiASAM may overwrite it and break other applications that depend on it.
-                </span>
-                <span className="block">
-                  For the safest experience, let LokiASAM download and install its own dedicated copy of Proton-GE instead.
-                </span>
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter className="flex-col gap-2 sm:flex-col">
-              <Button variant="outline"
-                className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-                style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
-                onClick={handleConfirmManaged}>
-                Allow Management
-              </Button>
-              <Button variant="outline" onClick={() => setShowManagedConfirm(false)}
-                className="w-full hover:bg-(--surface-elevated)"
-                style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
-                Cancel
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+      <div className="pt-1">
+        <ProtonUnmanagedNotice alignRight onManaged={() => setIsManaged(true)} />
       </div>
     );
   }
@@ -1901,7 +1934,6 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
   const [downloading, setDownloading]       = useState(() => protonOpLabel !== null);
   const [downloadDone, setDownloadDone]     = useState(() => protonOpLabel === null && protonOpDone);
   const [checkMode, setCheckMode]           = useState("disabled");
-  const [showManagedConfirm, setShowManagedConfirm] = useState(false);
   const autoStartedRef = useRef(false);
   const sectionRef     = useRef<HTMLDivElement>(null);
 
@@ -1966,13 +1998,6 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
     finally { setDownloading(false); }
   }, [protonPath, setProtonOpLabel, setProtonOpDone]);
 
-  const handleConfirmManaged = async () => {
-    await setAppSetting("proton_ge_managed", "true");
-    setIsManaged(true);
-    setShowManagedConfirm(false);
-    toast.success("LokiASAM will now manage Proton-GE updates.");
-  };
-
   const handleCheckModeChange = async (value: string) => {
     setCheckMode(value);
     await setAppSetting("proton_ge_check_mode", value);
@@ -2011,25 +2036,10 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
 
       {/* Unmanaged notice — shown whenever isManaged is false */}
       {!isManaged && (
-        <div className="space-y-3">
-          <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
-            style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
-            <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
-            <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
-              Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
-              {looksExternal && " The current path is outside LokiASAM's managed directory."}
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            onClick={() => setShowManagedConfirm(true)}
-            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
-          >
-            <TriangleAlert className="w-4 h-4" />
-            Allow LokiASAM to Manage This Proton Install
-          </Button>
-        </div>
+        <ProtonUnmanagedNotice
+          extraText={looksExternal ? " The current path is outside LokiASAM's managed directory." : undefined}
+          onManaged={() => setIsManaged(true)}
+        />
       )}
 
       {/* Update check result */}
@@ -2110,41 +2120,6 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
           ))}
         </div>
       </div>
-
-      {/* Managed confirmation dialog */}
-      <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
-        <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
-              <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
-            </DialogTitle>
-            <DialogDescription className="space-y-2 pt-1">
-              <span className="block">
-                Switching to managed mode gives LokiASAM full control over your Proton-GE installation — it may download new versions and replace the current one.
-              </span>
-              <span className="block font-medium" style={{ color: "var(--neon-red)" }}>
-                If this Proton-GE was installed by Steam, Lutris, or another tool, LokiASAM may overwrite it and break other applications that depend on it.
-              </span>
-              <span className="block">
-                For the safest experience, let LokiASAM download and install its own dedicated copy of Proton-GE instead.
-              </span>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex-col gap-2 sm:flex-col">
-            <Button variant="outline"
-              className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
-              onClick={handleConfirmManaged}>
-              Allow Management
-            </Button>
-            <Button variant="outline" onClick={() => setShowManagedConfirm(false)}
-              className="w-full hover:bg-(--surface-elevated)"
-              style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
-              Cancel
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Download output */}
       {(downloading || downloadDone || hasOutputBuffer(PROTON_CHANNEL)) && (

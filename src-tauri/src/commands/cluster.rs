@@ -36,12 +36,29 @@ pub async fn create_cluster(
 
 /// Delete the cluster directory from disk when `delete_files` is true.
 /// The frontend removes the SQLite record and clears cluster_id on member servers.
+///
+/// `cluster_dir` can be a free-text user-entered override (see
+/// `create_cluster`) rather than an app-managed path, so before recursively
+/// deleting anything this requires the resolved path to actually be inside
+/// `base_dir` — otherwise a mistyped or overly broad override entered at
+/// cluster-creation time (e.g. pointing at a home folder) would let this
+/// silently `remove_dir_all` something far outside the app's own directories.
 #[tauri::command]
-pub async fn delete_cluster(cluster_dir: String, delete_files: bool) -> Result<(), String> {
+pub async fn delete_cluster(cluster_dir: String, base_dir: String, delete_files: bool) -> Result<(), String> {
     if delete_files && !cluster_dir.is_empty() {
         let p = std::path::Path::new(&cluster_dir);
         if p.exists() {
-            std::fs::remove_dir_all(p)
+            let resolved = std::fs::canonicalize(p)
+                .map_err(|e| format!("Failed to resolve cluster directory: {e}"))?;
+            let resolved_base = std::fs::canonicalize(&base_dir)
+                .map_err(|e| format!("Failed to resolve base directory: {e}"))?;
+            if !resolved.starts_with(&resolved_base) {
+                return Err(format!(
+                    "Refusing to delete '{}' — it is outside the configured base directory",
+                    cluster_dir
+                ));
+            }
+            std::fs::remove_dir_all(&resolved)
                 .map_err(|e| format!("Failed to delete cluster directory: {e}"))?;
         }
     }

@@ -416,12 +416,17 @@ pub struct NotifInsert<'a> {
 }
 
 pub fn log_notification(conn: &Connection, n: &NotifInsert) -> Result<(), String> {
+    // Explicit created_at (not SQLite's CURRENT_TIMESTAMP default) — must
+    // match the `YYYY-MM-DDTHH:MM:SS.sssZ` shape the frontend's own inserts
+    // use, or the two interleave out of chronological order under a plain
+    // text ORDER BY. See `commands::utils::now_iso_utc` for why.
     conn.execute(
         "INSERT INTO in_app_notifications \
-         (id, server_id, event_type, title, body, severity, read) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         (id, server_id, event_type, title, body, severity, read, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             n.id, n.server_id, n.event_type, n.title, n.body, n.severity, n.read,
+            crate::commands::utils::now_iso_utc(),
         ],
     )
     .map_err(|e| format!("log_notification failed: {e}"))?;

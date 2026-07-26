@@ -182,11 +182,12 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
     setBusy(true);
     try {
       const members = await getServersInCluster(cluster.id);
+      const baseDir = (await getAppSetting("base_dir")) ?? "";
       // Delete on the Rust side first — if this throws (permission error
       // removing the folder, etc.), no member has been detached yet and a
       // retry behaves identically to the first attempt, instead of leaving
       // members silently detached from a cluster that still exists.
-      await tauriCmd.deleteCluster(clusterDir, deleteFiles);
+      await tauriCmd.deleteCluster(clusterDir, baseDir, deleteFiles);
       for (const s of members) {
         await setServerCluster(s.id, null);
       }

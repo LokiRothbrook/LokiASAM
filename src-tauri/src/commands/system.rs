@@ -332,21 +332,46 @@ pub fn collect_all_server_stats(
 
     let mut out = std::collections::HashMap::new();
 
+    // Servers usually all started around the same time, so their rediscovery
+    // windows tend to land on the same tick — resolve every due server's
+    // install-path PIDs in one shared /proc walk instead of one walk each,
+    // which would reproduce the very "N scans per cycle" burst this whole
+    // cache exists to avoid (just every 30s instead of every 5s).
+    #[cfg(target_os = "linux")]
+    let rescanned_this_tick: HashSet<String> = {
+        let due: Vec<&(String, u32, String)> = servers.iter()
+            .filter(|(server_id, _, install_path)| {
+                !install_path.is_empty() && {
+                    let ticks = discovery.get(server_id).map(|c| c.ticks_since_scan).unwrap_or(0);
+                    ticks == 0 || ticks >= REDISCOVERY_INTERVAL_TICKS
+                }
+            })
+            .collect();
+
+        if due.is_empty() {
+            HashSet::new()
+        } else {
+            let due_paths: Vec<&str> = due.iter().map(|(_, _, p)| p.as_str()).collect();
+            let found = super::utils::find_pids_by_install_paths_batch(&due_paths);
+            due.iter().map(|(server_id, _, install_path)| {
+                let cache = discovery.entry(server_id.clone()).or_default();
+                cache.extra_roots = found.get(install_path.as_str())
+                    .map(|pids| pids.iter().map(|p| Pid::from_u32(*p)).collect())
+                    .unwrap_or_default();
+                cache.ticks_since_scan = 1;
+                server_id.clone()
+            }).collect()
+        }
+    };
+
     for (server_id, pid, install_path) in servers {
         let root = Pid::from_u32(*pid);
         let cache = discovery.entry(server_id.clone()).or_default();
 
         #[cfg(target_os = "linux")]
         {
-            let due_for_rescan = cache.ticks_since_scan == 0
-                || cache.ticks_since_scan >= REDISCOVERY_INTERVAL_TICKS;
-            if due_for_rescan && !install_path.is_empty() {
-                cache.extra_roots = super::utils::find_pids_by_install_path(install_path)
-                    .into_iter()
-                    .map(Pid::from_u32)
-                    .collect();
-                cache.ticks_since_scan = 1;
-            } else {
+            let _ = install_path;
+            if !rescanned_this_tick.contains(server_id) {
                 cache.ticks_since_scan += 1;
             }
         }

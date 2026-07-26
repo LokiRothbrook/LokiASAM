@@ -282,6 +282,19 @@ pub async fn start_graceful_restart(
 
     // Guard: no concurrent countdown (checked and registered atomically).
     let mut rx = try_register_countdown(&state, &params.server_id)?;
+
+    // Fail fast if a backup/update is already in progress for this server —
+    // held for the whole operation, including the countdown, since a backup
+    // that started mid-countdown and was still running when doexit fires
+    // would hit the same race this guards against. Not a `ServerLockGuard`
+    // (RAII) since that can't cross into the spawned 'static task below —
+    // released manually on every exit path instead, the same way
+    // `stopping_servers`/`countdowns` already span this spawn boundary.
+    if !state.busy_servers.lock().unwrap().insert(params.server_id.clone()) {
+        deregister_countdown(&state, &params.server_id);
+        return Err(format!("An operation is already in progress for {} — try again in a moment", params.server_id));
+    }
+
     let app2 = app.clone();
 
     // Spawn so the command returns immediately.
@@ -322,6 +335,7 @@ pub async fn start_graceful_restart(
                 error: None,
             });
         }
+        state2.busy_servers.lock().unwrap().remove(&params.server_id);
     });
 
     Ok(())
@@ -357,10 +371,27 @@ pub async fn start_graceful_update(
     let was_running = state.running_servers.lock().unwrap().contains_key(&params.server_id);
     // Guard: no concurrent countdown (checked and registered atomically).
     let mut rx = try_register_countdown(&state, &params.server_id)?;
+
+    // Fail fast if a backup/restart is already in progress for this server —
+    // see start_graceful_restart's comment for why this can't be a
+    // `ServerLockGuard` (RAII) across the spawn boundary below. Released by
+    // `ReleaseBusyOnDrop` inside the spawned task instead, since that task
+    // has several early-return exit points this needs to cover uniformly.
+    if !state.busy_servers.lock().unwrap().insert(params.server_id.clone()) {
+        deregister_countdown(&state, &params.server_id);
+        return Err(format!("An operation is already in progress for {} — try again in a moment", params.server_id));
+    }
+
     let app2 = app.clone();
 
     tauri::async_runtime::spawn(async move {
         let state2 = app2.state::<AppState>();
+        struct ReleaseBusyOnDrop<'a> { state: &'a AppState, server_id: &'a str }
+        impl Drop for ReleaseBusyOnDrop<'_> {
+            fn drop(&mut self) { self.state.busy_servers.lock().unwrap().remove(self.server_id); }
+        }
+        let _release_busy = ReleaseBusyOnDrop { state: &state2, server_id: &params.server_id };
+
         // Only run countdown if server is actually running.
         let proceed = if was_running {
             let r = run_countdown(

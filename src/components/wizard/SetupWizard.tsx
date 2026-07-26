@@ -489,7 +489,7 @@ function ImportVerifyPanel({
   };
   importDir: string;
 }) {
-  const { setSteamcmdPath, setSteamcmdValidated, setProtonPath, setProtonValidated, protonPath } = useSetupStore();
+  const { setSteamcmdPath, setSteamcmdValidated, setProtonPath, setProtonValidated, protonPath, setLoading } = useSetupStore();
   const [installingSteamcmd, setInstallingSteamcmd] = useState(false);
   const [steamcmdDone, setSteamcmdDone]             = useState(false);
   const [installingProton, setInstallingProton]     = useState(false);
@@ -511,6 +511,11 @@ function ImportVerifyPanel({
     const sep = importDir.includes("\\") ? "\\" : "/";
     const targetDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "steamcmd";
     setInstallingSteamcmd(true);
+    // Also drives the shared isLoading flag the rest of the wizard uses to
+    // block Back during an in-flight operation — this panel used to only
+    // track its own local state, so Back wasn't blocked while these installs
+    // were running, unlike every other install step in the wizard.
+    setLoading(true, "Installing SteamCMD…");
     try {
       await tauriCmd.installSteamcmd(targetDir);
       const exePath = targetDir + (navigator.userAgent.includes("Windows") ? sep + "steamcmd.exe" : sep + "steamcmd.sh");
@@ -519,7 +524,7 @@ function ImportVerifyPanel({
       setSteamcmdDone(true);
     } catch (e) {
       if (!String(e).includes("Aborted")) toast.error(`SteamCMD install failed: ${e}`);
-    } finally { setInstallingSteamcmd(false); }
+    } finally { setInstallingSteamcmd(false); setLoading(false); }
   };
 
   const handlePointSteamcmd = async () => {
@@ -537,6 +542,7 @@ function ImportVerifyPanel({
     const sep = importDir.includes("\\") ? "\\" : "/";
     const targetDir = importDir.replace(/[/\\]$/, "") + sep + "lokiasam" + sep + "proton";
     setInstallingProton(true);
+    setLoading(true, "Downloading Proton-GE…");
     try {
       const path = await tauriCmd.downloadProtonGe(targetDir);
       setProtonPath(path);
@@ -544,7 +550,7 @@ function ImportVerifyPanel({
       setProtonDone(true);
     } catch (e) {
       if (!String(e).includes("Aborted")) toast.error(`Proton-GE download failed: ${e}`);
-    } finally { setInstallingProton(false); }
+    } finally { setInstallingProton(false); setLoading(false); }
   };
 
   const handlePointProton = async () => {
@@ -560,6 +566,7 @@ function ImportVerifyPanel({
 
   const handleInstallCerts = async () => {
     setCertError("");
+    setLoading(true, "Installing certificate…");
     try {
       const tmp = await tempDir();
       setCertPhase("downloading");
@@ -580,7 +587,7 @@ function ImportVerifyPanel({
         setCertError(String(e));
         setCertPhase("error");
       }
-    }
+    } finally { setLoading(false); }
   };
 
   const handleCheckFirewall = useCallback(async () => {
@@ -628,6 +635,7 @@ function ImportVerifyPanel({
   const handleOpenFirewallPorts = async () => {
     if (!fwStatus) return;
     setFwPhase("opening");
+    setLoading(true, "Opening firewall ports…");
     try {
       const allPorts = fwStatus.ports.map((p) => ({
         port: p.port,
@@ -643,7 +651,7 @@ function ImportVerifyPanel({
     } catch (e) {
       setFwError(String(e));
       setFwPhase("error");
-    }
+    } finally { setLoading(false); }
   };
 
   // Auto-check firewall when servers data loads (doesn't require Proton-GE for checking)
@@ -1105,8 +1113,18 @@ function BaseDirStep() {
     }>;
   } | null>(null);
 
-  // Auto-fill with platform default on mount
+  // Auto-fill with platform default on first visit only — this step
+  // remounts every time the user navigates back to it (each step is a
+  // different array element under AnimatePresence), and this effect used to
+  // run unconditionally, silently overwriting a manually-typed or
+  // picker-selected baseDir (and a separately-customized backupDir) with the
+  // platform default on every revisit. On a return visit, just re-validate
+  // whatever is already there — mirrors BackupDirStep's own mount effect.
   useEffect(() => {
+    if (baseDir) {
+      validateDir(baseDir);
+      return;
+    }
     (async () => {
       try {
         const home = await homeDir();
@@ -1119,6 +1137,11 @@ function BaseDirStep() {
         // Outside Tauri (dev preview) — leave blank
       }
     })();
+    // Deliberately runs once per mount only (baseDir intentionally excluded
+    // from deps — it's read once to decide first-visit vs revisit, not
+    // watched for changes; watching it would re-trigger validateDir on every
+    // keystroke, which handleChange's own debounce already covers).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setBaseDir, setBackupDir, validateDir]);
 
   const handleChange = (value: string) => {
@@ -2767,6 +2790,13 @@ function AutoUpdateStep() {
   } = useSetupStore();
 
   const [showManagedConfirm, setShowManagedConfirm] = useState(false);
+  // Remembers the last non-"disabled" interval the user actually chose, so
+  // toggling protonMode off and back on restores it instead of always
+  // resetting to "startup" — silently discarding e.g. "startup_hourly".
+  const lastActiveIntervalRef = useRef<string>("startup");
+  useEffect(() => {
+    if (protonCheckMode !== "disabled") lastActiveIntervalRef.current = protonCheckMode;
+  }, [protonCheckMode]);
 
   // Keep proton check mode in sync with the managed/unmanaged choice
   useEffect(() => {
@@ -2774,7 +2804,7 @@ function AutoUpdateStep() {
     if (protonMode === "existing") {
       setProtonCheckMode("disabled");
     } else if (protonMode === "managed" && protonCheckMode === "disabled") {
-      setProtonCheckMode("startup");
+      setProtonCheckMode(lastActiveIntervalRef.current);
     }
   }, [protonMode, protonCheckMode, setProtonCheckMode]);
 

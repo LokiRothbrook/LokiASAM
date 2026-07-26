@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useOnMount } from "@/hooks/useOnMount";
+import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -19,13 +18,9 @@ import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
 import { MaintenanceTab } from "@/components/server/tabs/MaintenanceTab";
-import { getServer, formatServerVersion } from "@/lib/db";
+import { formatServerVersion } from "@/lib/db";
 import { ARK_MAPS } from "@/data/game-data";
-import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { useQueryClient } from "@tanstack/react-query";
-import { updateServerStatus } from "@/lib/db";
-import type { ServerRow } from "@/lib/db";
-import type { ServerStatus } from "@/lib/tauri-commands";
+import { useServers } from "@/hooks/useServers";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 const TABS = [
@@ -50,41 +45,28 @@ type TabValue = typeof TABS[number]["value"];
 export default function ServerDetailPage() {
   const params = useSearchParams();
   const router = useRouter();
-  const queryClient = useQueryClient();
 
   const serverId = params.get("id") ?? "";
   const tabParam = (params.get("tab") as TabValue | null) ?? "overview";
 
-  const [server, setServer] = useState<ServerRow | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
   const [activeTab, setActiveTab] = useState<TabValue>(tabParam);
   const versionCache = useBuildVersionCache();
 
-  // ── Load server row ──────────────────────────────────────────────────────
-  const reload = useCallback(async () => {
-    if (!serverId) return;
-    try {
-      const s = await getServer(serverId);
-      if (!s) { setNotFound(true); } else { setServer(s); }
-    } catch { setNotFound(true); }
-    finally { setLoading(false); }
-  }, [serverId]);
+  // Shares the same ["servers"] cache as the dashboard and every mutation
+  // across the app (Config/Automation saves, status events, etc. all
+  // invalidate this same key) — previously this page kept its own local copy
+  // of the row, refreshed only by its own narrow server://status/{id}
+  // listener, so a save from one tab (e.g. Config) wasn't reflected here
+  // until a later, unrelated status event happened to trigger a reload —
+  // in the meantime a second save from another tab (e.g. Automation) would
+  // silently overwrite the first using this page's stale copy as its base.
+  const { data: servers = [], isLoading } = useServers();
+  const server = servers.find((s) => s.id === serverId) ?? null;
+  const notFound = !isLoading && !server;
 
   useEffect(() => {
     if (!serverId) router.replace("/");
   }, [serverId, router]);
-  useOnMount(reload);
-
-  // ── Live status updates from backend ────────────────────────────────────
-  useTauriEvent<ServerStatus>(`server://status/${serverId}`, async (payload) => {
-    if (!serverId) return;
-    // Sync status + pid to SQLite then reload the row so UI reflects the change
-    await updateServerStatus(serverId, payload.status, payload.pid ?? null);
-    queryClient.invalidateQueries({ queryKey: ["servers"] });
-    const updated = await getServer(serverId);
-    if (updated) setServer(updated);
-  });
 
   // ── Tab change: keep ?tab= in sync ──────────────────────────────────────
   const handleTabChange = (value: string) => {
@@ -106,7 +88,7 @@ export default function ServerDetailPage() {
   };
 
   // ── Loading / error states ───────────────────────────────────────────────
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex flex-col gap-6">
         <Skeleton className="h-8 w-72" />

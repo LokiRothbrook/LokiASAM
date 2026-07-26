@@ -977,22 +977,46 @@ function ActiveEventCard({ server }: { server: ServerRow }) {
   );
 }
 
-function ShutdownSettingsCard({ server }: { server: ServerRow }) {
-  const [warnPlayers, setWarnPlayers] = useState(server.shutdown_warn_players !== 0);
-  const [warnMinutes, setWarnMinutes] = useState(server.shutdown_warn_minutes ?? 5);
-  const [message, setMessage]         = useState(
-    server.shutdown_message || "Server will shut down in {time}."
-  );
+/**
+ * Shared shape behind Shutdown/Restart/Update Warning cards — previously
+ * three independent ~90-line copies differing only in which
+ * `updateServer*Settings` DB call they made, their copy, and whether a
+ * Cancel Message field applies (Shutdown has no countdown to cancel).
+ */
+function WarningSettingsCard({
+  sectionId, title, description, warnLabel, messageLabel, messagePlaceholder,
+  cancelMessagePlaceholder, initialWarnPlayers, initialWarnMinutes, initialMessage,
+  initialCancelMessage, errorLabel, onSave,
+}: {
+  sectionId?: string;
+  title: string;
+  description: string;
+  warnLabel: string;
+  messageLabel: string;
+  messagePlaceholder: string;
+  /** Omit to hide the Cancel Message field. */
+  cancelMessagePlaceholder?: string;
+  initialWarnPlayers: boolean;
+  initialWarnMinutes: number;
+  initialMessage: string;
+  initialCancelMessage?: string;
+  errorLabel: string;
+  onSave: (params: { warnPlayers: boolean; warnMinutes: number; message: string; cancelMessage: string }) => Promise<void>;
+}) {
+  const [warnPlayers, setWarnPlayers] = useState(initialWarnPlayers);
+  const [warnMinutes, setWarnMinutes] = useState(initialWarnMinutes);
+  const [message, setMessage]         = useState(initialMessage);
+  const [cancelMessage, setCancelMessage] = useState(initialCancelMessage ?? "");
   const [saving, setSaving]   = useState(false);
   const [saved, triggerSaved] = useSavedFlash();
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateServerShutdownSettings(server.id, warnPlayers, warnMinutes, message);
+      await onSave({ warnPlayers, warnMinutes, message, cancelMessage });
       triggerSaved();
     } catch (e) {
-      toast.error(`Failed to save shutdown settings: ${e}`);
+      toast.error(`Failed to save ${errorLabel}: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -1000,16 +1024,15 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
 
   return (
     <div
+      id={sectionId}
       className="glass-card rounded-xl p-4 space-y-4"
       style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
       <div className="flex items-center gap-2">
         <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Shutdown Warning</h3>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h3>
       </div>
-      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>
-        Used by the manual Stop button. There is no scheduled/automated shutdown.
-      </p>
+      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>{description}</p>
 
       <label className="flex items-center gap-2 cursor-pointer select-none">
         <input
@@ -1019,9 +1042,7 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
           className="w-3.5 h-3.5"
           style={{ accentColor: "var(--neon-purple)" }}
         />
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Warn online players before shutdown
-        </span>
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>{warnLabel}</span>
       </label>
 
       <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
@@ -1037,16 +1058,28 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
         </div>
         <div className="space-y-1">
           <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Shutdown message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
+            {messageLabel} <span className="opacity-60">(&#123;time&#125; = countdown)</span>
           </Label>
           <Input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Server will shut down in {time}."
+            placeholder={messagePlaceholder}
             className="h-7 text-xs"
             style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
           />
         </div>
+        {cancelMessagePlaceholder !== undefined && (
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel message</Label>
+            <Input
+              value={cancelMessage}
+              onChange={(e) => setCancelMessage(e.target.value)}
+              placeholder={cancelMessagePlaceholder}
+              className="h-7 text-xs"
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+        )}
       </div>
 
       <Button
@@ -1065,207 +1098,72 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Restart Warning Settings Card
-// ---------------------------------------------------------------------------
+function ShutdownSettingsCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
+  return (
+    <WarningSettingsCard
+      title="Shutdown Warning"
+      description="Used by the manual Stop button. There is no scheduled/automated shutdown."
+      warnLabel="Warn online players before shutdown"
+      messageLabel="Shutdown message"
+      messagePlaceholder="Server will shut down in {time}."
+      initialWarnPlayers={server.shutdown_warn_players !== 0}
+      initialWarnMinutes={server.shutdown_warn_minutes ?? 5}
+      initialMessage={server.shutdown_message || "Server will shut down in {time}."}
+      errorLabel="shutdown settings"
+      onSave={async ({ warnPlayers, warnMinutes, message }) => {
+        await updateServerShutdownSettings(server.id, warnPlayers, warnMinutes, message);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }}
+    />
+  );
+}
 
 function RestartSettingsCard({ server }: { server: ServerRow }) {
-  const [warnPlayers, setWarnPlayers]       = useState(server.restart_warn_players !== 0);
-  const [warnMinutes, setWarnMinutes]       = useState(server.restart_warn_minutes ?? 5);
-  const [message, setMessage]               = useState(server.restart_message || "Server restarting in {time}.");
-  const [cancelMessage, setCancelMessage]   = useState(server.restart_cancel_message || "Restart has been canceled.");
-  const [saving, setSaving]                 = useState(false);
-  const [saved, triggerSaved] = useSavedFlash();
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await updateServerRestartSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
-      triggerSaved();
-    } catch (e) {
-      toast.error(`Failed to save restart settings: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  const queryClient = useQueryClient();
   return (
-    <div
-      id="restart-warning-section"
-      className="glass-card rounded-xl p-4 space-y-4"
-      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-    >
-      <div className="flex items-center gap-2">
-        <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Restart Warning</h3>
-      </div>
-      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>
-        Shared by the manual Restart button and scheduled Auto-Restart (Automation tab) — one warning message either way.
-      </p>
-
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={warnPlayers}
-          onChange={(e) => setWarnPlayers(e.target.checked)}
-          className="w-3.5 h-3.5"
-          style={{ accentColor: "var(--neon-purple)" }}
-        />
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Warn online players before restart
-        </span>
-      </label>
-
-      <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Warn time (minutes)</Label>
-          <Input
-            type="number" min={1} max={60}
-            value={warnMinutes}
-            onChange={(e) => setWarnMinutes(parseInt(e.target.value, 10) || 5)}
-            className="h-7 w-24 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Restart message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
-          </Label>
-          <Input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Server restarting in {time}."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel message</Label>
-          <Input
-            value={cancelMessage}
-            onChange={(e) => setCancelMessage(e.target.value)}
-            placeholder="Restart has been canceled."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-      </div>
-
-      <Button
-        size="sm"
-        onClick={handleSave}
-        disabled={saving}
-        style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
-          color: saved ? "var(--neon-green)" : "var(--neon-purple)",
-        }}
-      >
-        {saving ? "Saving…" : saved ? "Saved" : "Save"}
-      </Button>
-    </div>
+    <WarningSettingsCard
+      sectionId="restart-warning-section"
+      title="Restart Warning"
+      description="Shared by the manual Restart button and scheduled Auto-Restart (Automation tab) — one warning message either way."
+      warnLabel="Warn online players before restart"
+      messageLabel="Restart message"
+      messagePlaceholder="Server restarting in {time}."
+      cancelMessagePlaceholder="Restart has been canceled."
+      initialWarnPlayers={server.restart_warn_players !== 0}
+      initialWarnMinutes={server.restart_warn_minutes ?? 5}
+      initialMessage={server.restart_message || "Server restarting in {time}."}
+      initialCancelMessage={server.restart_cancel_message || "Restart has been canceled."}
+      errorLabel="restart settings"
+      onSave={async ({ warnPlayers, warnMinutes, message, cancelMessage }) => {
+        await updateServerRestartSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }}
+    />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Update Warning Settings Card
-// ---------------------------------------------------------------------------
-
 function UpdateSettingsCard({ server }: { server: ServerRow }) {
-  const [warnPlayers, setWarnPlayers]       = useState(server.update_warn_players !== 0);
-  const [warnMinutes, setWarnMinutes]       = useState(server.update_warn_minutes ?? 5);
-  const [message, setMessage]               = useState(server.update_message || "Server going down for update in {time}.");
-  const [cancelMessage, setCancelMessage]   = useState(server.update_cancel_message || "Update has been canceled.");
-  const [saving, setSaving]                 = useState(false);
-  const [saved, triggerSaved] = useSavedFlash();
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await updateServerUpdateSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
-      triggerSaved();
-    } catch (e) {
-      toast.error(`Failed to save update settings: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  const queryClient = useQueryClient();
   return (
-    <div
-      id="update-warning-section"
-      className="glass-card rounded-xl p-4 space-y-4"
-      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-    >
-      <div className="flex items-center gap-2">
-        <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Update Warning</h3>
-      </div>
-      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>
-        Shared by the manual Apply Update button and Auto-Update (Automation tab) — one warning message either way.
-      </p>
-
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={warnPlayers}
-          onChange={(e) => setWarnPlayers(e.target.checked)}
-          className="w-3.5 h-3.5"
-          style={{ accentColor: "var(--neon-purple)" }}
-        />
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Warn online players before update
-        </span>
-      </label>
-
-      <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Warn time (minutes)</Label>
-          <Input
-            type="number" min={1} max={60}
-            value={warnMinutes}
-            onChange={(e) => setWarnMinutes(parseInt(e.target.value, 10) || 5)}
-            className="h-7 w-24 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Update message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
-          </Label>
-          <Input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Server going down for update in {time}."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel message</Label>
-          <Input
-            value={cancelMessage}
-            onChange={(e) => setCancelMessage(e.target.value)}
-            placeholder="Update has been canceled."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-      </div>
-
-      <Button
-        size="sm"
-        onClick={handleSave}
-        disabled={saving}
-        style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
-          color: saved ? "var(--neon-green)" : "var(--neon-purple)",
-        }}
-      >
-        {saving ? "Saving…" : saved ? "Saved" : "Save"}
-      </Button>
-    </div>
+    <WarningSettingsCard
+      sectionId="update-warning-section"
+      title="Update Warning"
+      description="Shared by the manual Apply Update button and Auto-Update (Automation tab) — one warning message either way."
+      warnLabel="Warn online players before update"
+      messageLabel="Update message"
+      messagePlaceholder="Server going down for update in {time}."
+      cancelMessagePlaceholder="Update has been canceled."
+      initialWarnPlayers={server.update_warn_players !== 0}
+      initialWarnMinutes={server.update_warn_minutes ?? 5}
+      initialMessage={server.update_message || "Server going down for update in {time}."}
+      initialCancelMessage={server.update_cancel_message || "Update has been canceled."}
+      errorLabel="update settings"
+      onSave={async ({ warnPlayers, warnMinutes, message, cancelMessage }) => {
+        await updateServerUpdateSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }}
+    />
   );
 }
 

@@ -211,9 +211,9 @@ pub fn sync_cache_to_server(
 
         if src.is_dir() {
             if name_lower == "shootergame" {
-                sync_shootergame(&src, &dst)?;
+                sync_shootergame(&src, &dst, Some(abort))?;
             } else {
-                copy_dir_recursive(&src, &dst, &[])?;
+                copy_dir_recursive(&src, &dst, &[], Some(abort))?;
             }
         } else {
             std::fs::copy(&src, &dst)?;
@@ -223,9 +223,15 @@ pub fn sync_cache_to_server(
 }
 
 /// Recurse into `ShooterGame/`, skipping `Saved/` so player data is preserved.
-fn sync_shootergame(cache_sg: &Path, server_sg: &Path) -> std::io::Result<()> {
+/// `ShooterGame/` is the overwhelming majority of a server's install size, so
+/// checking `abort` here (not just once per top-level entry in the caller)
+/// is what actually makes Cancel responsive during the dominant copy phase.
+fn sync_shootergame(cache_sg: &Path, server_sg: &Path, abort: Option<&std::sync::atomic::AtomicBool>) -> std::io::Result<()> {
     std::fs::create_dir_all(server_sg)?;
     for entry in std::fs::read_dir(cache_sg)? {
+        if abort.is_some_and(|a| a.load(Ordering::Relaxed)) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "Aborted"));
+        }
         let entry = entry?;
         let name = entry.file_name();
         if name.to_string_lossy().to_lowercase() == "saved" {
@@ -234,7 +240,7 @@ fn sync_shootergame(cache_sg: &Path, server_sg: &Path) -> std::io::Result<()> {
         let src = entry.path();
         let dst = server_sg.join(&name);
         if src.is_dir() {
-            copy_dir_recursive(&src, &dst, &[])?;
+            copy_dir_recursive(&src, &dst, &[], abort)?;
         } else {
             std::fs::copy(&src, &dst)?;
         }
@@ -263,7 +269,7 @@ pub async fn install_steamcmd(
 
     let result = install_steamcmd_inner(&app_handle, &channel, dir, &abort).await;
 
-    state.clear_abort("steamcmd_install");
+    state.clear_abort("steamcmd_install", &abort);
 
     if result.is_err() {
         // Clean up on abort or error.
@@ -419,7 +425,7 @@ pub async fn validate_steamcmd(
 ) -> Result<bool, String> {
     let abort = state.register_abort("steamcmd_install");
     let result = validate_steamcmd_inner(&path, &app_handle, &abort).await;
-    state.clear_abort("steamcmd_install");
+    state.clear_abort("steamcmd_install", &abort);
     result
 }
 
@@ -487,6 +493,12 @@ pub async fn install_server(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    // Guards against a duplicate install trigger for the same server_id
+    // (double-click, a wizard retry) racing itself, and against a backup
+    // reading this server's files concurrently with a later re-install.
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     let op_key = format!("server_{server_id}");
     let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
@@ -512,8 +524,9 @@ pub async fn install_server(
 
         let src = std::path::PathBuf::from(&cache_dir);
         let dst = std::path::PathBuf::from(&install_path);
+        let abort_copy = std::sync::Arc::clone(&abort);
 
-        tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst, &[]))
+        tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst, &[], Some(&abort_copy)))
             .await
             .map_err(|e| format!("Copy task panicked: {e}"))?
             .map_err(|e| format!("Failed to copy server files: {e}"))?;
@@ -529,7 +542,7 @@ pub async fn install_server(
         Ok(())
     }.await;
 
-    state.clear_abort(&op_key);
+    state.clear_abort(&op_key, &abort);
     result
 }
 
@@ -544,6 +557,9 @@ pub async fn update_server(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     let op_key = format!("server_{server_id}");
     let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
@@ -585,7 +601,7 @@ pub async fn update_server(
         Ok(())
     }.await;
 
-    state.clear_abort(&op_key);
+    state.clear_abort(&op_key, &abort);
     result
 }
 
@@ -754,7 +770,7 @@ pub async fn update_cache_inner(
     }
     .await;
 
-    state.clear_abort(server_id);
+    state.clear_abort(server_id, &abort);
     result
 }
 
@@ -771,6 +787,14 @@ pub async fn apply_cache_to_server(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    // The key fix for the race between this (manual "Update All"/Settings
+    // apply-all/single-server update) and a server's own scheduled "at time"
+    // Auto-Update landing on the same server around the same moment — both
+    // used to sync the cache into the same install directory concurrently
+    // with no coordination at all.
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     let op_key = format!("server_{server_id}");
     let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
@@ -803,7 +827,7 @@ pub async fn apply_cache_to_server(
     }
     .await;
 
-    state.clear_abort(&op_key);
+    state.clear_abort(&op_key, &abort);
     result
 }
 

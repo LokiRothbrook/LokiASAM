@@ -442,20 +442,23 @@ function BasicInfoStep({
   const handleMapSelect = (map: ArkMap) => {
     const patch: Partial<WizardData> = { mapId: map.id };
 
+    // Start from whatever mods are currently selected, minus the previous
+    // map's required mod if it had one and it isn't also the new map's
+    // required mod — this used to only run in the "switching to a non-mod
+    // map" branch below, so mod-map → mod-map left the old map's mod
+    // installed and unlocked in the final server.
+    let modIds = data.modIds;
+    if (selectedMap?.isMod && selectedMap.requiredModId && selectedMap.requiredModId !== map.requiredModId) {
+      modIds = modIds.filter((id) => id !== selectedMap.requiredModId);
+    }
+
     if (map.isMod && map.requiredModId) {
       // Auto-add the required mod and lock it
-      const newModIds = data.modIds.includes(map.requiredModId)
-        ? data.modIds
-        : [...data.modIds, map.requiredModId];
-      patch.modIds = newModIds;
+      patch.modIds = modIds.includes(map.requiredModId) ? modIds : [...modIds, map.requiredModId];
       patch.lockedModIds = [map.requiredModId];
     } else {
-      if (selectedMap?.isMod && selectedMap.requiredModId) {
-        patch.modIds = data.modIds.filter((id) => id !== selectedMap.requiredModId);
-        patch.lockedModIds = [];
-      } else {
-        patch.lockedModIds = [];
-      }
+      patch.modIds = modIds;
+      patch.lockedModIds = [];
     }
     onChange(patch);
     setMapMenuOpen(false);
@@ -967,7 +970,19 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
                   </div>
                   <button
                     type="button"
-                    onClick={() => onChange({ copyFromServerId: "", presetStyle: "casual" })}
+                    onClick={() => onChange({
+                      copyFromServerId: "",
+                      presetStyle: "casual",
+                      // Reset every field handleCopyFrom populated — Clear
+                      // used to only reset the two above, silently leaving
+                      // the copied mods/launch-args/INI in place on a server
+                      // the user believed they'd reverted to blank.
+                      fullCustomGus: DEFAULT_DATA.fullCustomGus,
+                      fullCustomGameIni: DEFAULT_DATA.fullCustomGameIni,
+                      launchArgs: DEFAULT_DATA.launchArgs,
+                      modIds: DEFAULT_DATA.modIds,
+                      modNames: DEFAULT_DATA.modNames,
+                    })}
                     className="text-[10px] underline"
                     style={{ color: "var(--text-muted)" }}
                   >
@@ -3455,6 +3470,13 @@ function InstallStep({
     } catch (err) {
       const msg = String(err);
       if (msg === "Aborted") {
+        // Without this, the server's DB row stays at status "installing"
+        // indefinitely — the separate "Cancel Server Setup?" dialog's own
+        // cleanup path does clean this up, but the in-panel Cancel Install
+        // button (which lands here) previously didn't, leaving a phantom
+        // "installing" row until the user also closed the wizard.
+        await updateServerStatus(serverId, "install_failed", null).catch(() => {});
+        queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
         if (!backgroundRef.current) { setCanceled(true); setStatus("error"); }
       } else {
         await updateServerStatus(serverId, "install_failed", null).catch(() => {});

@@ -35,11 +35,14 @@ export function StartupRecoveryManager() {
     (async () => {
       const servers = await getServers();
 
-      // --- 1. Re-queue startup_queued servers --------------------------------
-      const startupQueued = servers.filter((s) => s.status === "startup_queued");
-      if (startupQueued.length > 0) {
-        enqueueStartup(startupQueued.map((s) => s.id));
-      }
+      // Re-queuing startup_queued servers used to be step 1 here, duplicating
+      // StartupQueueManager's own self-heal effect (which reconciles the same
+      // "startup_queued in DB but not in the in-memory queue" case, but keeps
+      // running for the rest of the session instead of just once at launch).
+      // That effect already re-runs as soon as the servers list refreshes
+      // after this scan completes, so it covers the launch case too —
+      // removed here rather than kept as a second implementation of the same
+      // reconciliation.
 
       // --- 2. Resume update_queued servers, and re-apply "updating" servers --
       // "updating" here means the previous session was killed (crash, force-quit)

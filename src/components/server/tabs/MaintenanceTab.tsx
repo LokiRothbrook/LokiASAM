@@ -170,7 +170,7 @@ function WipeSaveDataCard({ server }: Props) {
     const mapDef = getMapById(server.map_id);
     const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
     try {
-      await tauriCmd.wipeServerSaves(server.install_path, saveFolder, tier);
+      await tauriCmd.wipeServerSaves(server.id, server.install_path, saveFolder, tier);
       setWipeConfirm(null);
       toast.success(`Save wipe complete (${tier})`);
     } catch (e) {

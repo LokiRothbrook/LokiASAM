@@ -540,6 +540,23 @@ async function runMigrations(db: Database): Promise<void> {
   // up to any UI (no reader or writer anywhere in the app). DROP is
   // naturally idempotent, no done-flag needed.
   await db.execute("DROP TABLE IF EXISTS server_uptime_sessions");
+
+  // ── Migration 023: normalize in_app_notifications.created_at format ────────
+  // Rust's log_notification used to rely on SQLite's CURRENT_TIMESTAMP
+  // default ("YYYY-MM-DD HH:MM:SS"), while this file's own logNotification
+  // always wrote new Date().toISOString() ("YYYY-MM-DDTHH:MM:SS.sssZ"). The
+  // notifications list sorts by plain text ORDER BY created_at DESC, and
+  // those two formats interleave out of true chronological order — a space
+  // sorts before "T", so every JS-inserted row for a given day sorted above
+  // every Rust-inserted row from that same day regardless of actual time.
+  // Rust now writes the same ISO shape going forward; this backfills rows
+  // already in the DB from before that fix. WHERE excludes rows that already
+  // contain "T" so it's a no-op on repeat runs.
+  await db.execute(
+    `UPDATE in_app_notifications
+     SET created_at = REPLACE(created_at, ' ', 'T') || 'Z'
+     WHERE created_at NOT LIKE '%T%'`
+  );
 }
 
 // ---------------------------------------------------------------------------

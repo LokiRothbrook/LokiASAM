@@ -40,14 +40,19 @@ fn emit_mod_line(
 }
 
 /// Stream stdout + stderr from a child process to a Tauri event channel,
-/// tagging each line with an optional mod ID.
+/// tagging each line with an optional mod ID. Kills the full process tree
+/// and returns an "Aborted" error if `abort` is set before the process
+/// exits — mirrors `utils::stream_process_abortable`, which this can't reuse
+/// directly since lines here also carry a mod ID tag.
 async fn stream_process_mod(
     app: &tauri::AppHandle,
     child: &mut tokio::process::Child,
     channel: &str,
     mod_id: Option<&str>,
+    abort: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<i32, String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
+    use std::sync::atomic::Ordering;
 
     let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("failed to capture stderr")?;
@@ -73,9 +78,36 @@ async fn stream_process_mod(
         }
     });
 
-    let _ = tokio::join!(stdout_task, stderr_task);
-    let status = child.wait().await.map_err(|e| e.to_string())?;
-    Ok(status.code().unwrap_or(-1))
+    loop {
+        if abort.load(Ordering::Relaxed) {
+            // Kill the full process tree so SteamCMD's own child processes
+            // don't keep running after the parent is killed.
+            if let Some(raw_pid) = child.id() {
+                use sysinfo::{Pid, ProcessesToUpdate, System};
+                let mut sys = System::new();
+                sys.refresh_processes(ProcessesToUpdate::All, false);
+                let root = Pid::from_u32(raw_pid);
+                for pid in super::utils::collect_subtree(&sys, root) {
+                    if let Some(proc) = sys.process(pid) {
+                        proc.kill();
+                    }
+                }
+            }
+            stdout_task.abort();
+            stderr_task.abort();
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err("Aborted".into());
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(250), child.wait()).await {
+            Ok(Ok(status)) => {
+                let _ = tokio::join!(stdout_task, stderr_task);
+                return Ok(status.code().unwrap_or(-1));
+            }
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => { /* still running, loop */ }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +316,7 @@ pub async fn install_mods(
     install_path: String,
     mod_ids: Vec<String>,
     app: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
     let channel = format!("mods://progress/{}", server_id);
 
@@ -292,7 +325,30 @@ pub async fn install_mods(
         return Ok(());
     }
 
-    let steamcmd_dir = Path::new(&steamcmd_path)
+    // Registered so CloseWarningManager's running-ops check (and the manual
+    // Cancel action) can see and stop an in-flight mod download — previously
+    // this was invisible to both, so closing the app mid-download orphaned
+    // the SteamCMD process with no warning and no record the install was
+    // ever incomplete.
+    let op_key = format!("mods_{server_id}");
+    let abort = state.register_abort(&op_key);
+
+    let result = install_mods_body(&steamcmd_path, &base_dir, &install_path, &mod_ids, &app, &channel, &abort).await;
+
+    state.clear_abort(&op_key, &abort);
+    result
+}
+
+async fn install_mods_body(
+    steamcmd_path: &str,
+    base_dir: &str,
+    install_path: &str,
+    mod_ids: &[String],
+    app: &tauri::AppHandle,
+    channel: &str,
+    abort: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<(), String> {
+    let steamcmd_dir = Path::new(steamcmd_path)
         .parent()
         .ok_or("Cannot determine SteamCMD directory from path")?
         .to_path_buf();
@@ -305,7 +361,10 @@ pub async fn install_mods(
         None,
     );
 
-    for mod_id in &mod_ids {
+    for mod_id in mod_ids {
+        if abort.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("Aborted".into());
+        }
         emit_mod_line(
             &app,
             &channel,
@@ -328,7 +387,7 @@ pub async fn install_mods(
         .spawn()
         .map_err(|e| format!("Failed to launch SteamCMD: {e}"))?;
 
-        let exit_code = stream_process_mod(&app, &mut child, &channel, Some(mod_id)).await?;
+        let exit_code = stream_process_mod(app, &mut child, channel, Some(mod_id), abort).await?;
 
         if exit_code != 0 {
             let msg = format!(

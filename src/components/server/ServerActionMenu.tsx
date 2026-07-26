@@ -480,7 +480,14 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
   const [verifying,  setVerifying]    = useState(false);
   const [reinstallOpen, setReinstallOpen] = useState(false);
   const [reinstalling,  setReinstalling]  = useState(false);
-  const isBusy = server.status === "running" || server.status === "starting" || server.status === "installing" || server.status === "updating";
+  // "stopping" is included because the process is still alive and shutting
+  // down — Verify Files/Reinstall would otherwise race a still-writing
+  // process. The two queued states are included for the same reason
+  // Restart All errs safe: the server is about to become busy either way.
+  const isBusy = server.status === "running" || server.status === "starting"
+    || server.status === "stopping" || server.status === "installing"
+    || server.status === "updating" || server.status === "startup_queued"
+    || server.status === "update_queued";
 
   const handleVerifyFiles = async () => {
     setVerifying(true);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useOnMount } from "@/hooks/useOnMount";
 import {
   Archive, Plus, Trash2, RotateCcw, HardDrive, User, FileText,
@@ -14,6 +15,7 @@ import {
   type BackupRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { stopServerGracefully } from "@/lib/server-utils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { ARK_MAPS, getSaveFolder } from "@/data/game-data";
 import type { ServerRow } from "@/lib/db";
@@ -551,7 +553,7 @@ function IniBackupSection({
   async function handleRestore(timestamp: string) {
     onBusyChange(true);
     try {
-      await tauriCmd.restoreIniBackup(`${backupDir}/${serverId}/ini/${timestamp}`, installPath);
+      await tauriCmd.restoreIniBackup(serverId, `${backupDir}/${serverId}/ini/${timestamp}`, installPath);
       toast.success(`Config restored from ${timestamp}.`);
     } catch (e) {
       toast.error(`INI restore failed: ${e}`);
@@ -710,6 +712,7 @@ interface Props {
 }
 
 export function BackupsTab({ server, onNavigateToAutomation }: Props) {
+  const queryClient = useQueryClient();
   const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
   const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
   const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
@@ -879,8 +882,13 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     try {
       if (server.status === "running") {
         setProgress((p) => ({ ...p, label: "Stopping server…" }));
-        await tauriCmd.stopServer(server.id, true);
-        await new Promise((r) => setTimeout(r, 2000));
+        // Graceful (RCON SaveWorld + doexit, same as the Stop button) rather
+        // than a raw kill signal, and this only resolves once the process is
+        // actually confirmed dead — no arbitrary fixed sleep needed, and no
+        // risk of restoring over files a still-exiting process is writing.
+        await stopServerGracefully(server, {
+          onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+        });
       }
       if (target.backup_type === "server") {
         await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path, baseDir, mapPath, saveFolder);

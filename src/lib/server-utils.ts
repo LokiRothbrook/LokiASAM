@@ -5,11 +5,27 @@
  * other callers can build start params without duplicating the logic.
  */
 
-import { getServerConfig, getServerMods, getAppSetting, getCluster, updateServerStatus } from "@/lib/db";
+import { getServerConfig, getServerMods, getAppSetting, getCluster, updateServerStatus, getServers } from "@/lib/db";
 import { ARK_MAPS, ARK_EVENTS, LAUNCH_PARAMETERS } from "@/data/game-data";
 import { tauriCmd } from "@/lib/tauri-commands";
+import type { QueryClient } from "@tanstack/react-query";
 import type { StartServerParams } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
+
+/**
+ * Read the server list from the shared `["servers"]` React Query cache
+ * (the same one `useServers()` keeps warm and every mutation in the app
+ * invalidates), falling back to a real DB fetch only if it isn't populated
+ * yet. Several always-mounted managers (RCON, log watcher) each used to call
+ * `getServers()` directly on every `server://any-change` event — a
+ * redundant DB round-trip per listener per status change, when the data was
+ * already sitting in the query cache from `useServers()`.
+ */
+export async function getServersCached(queryClient: QueryClient): Promise<ServerRow[]> {
+  const cached = queryClient.getQueryData<ServerRow[]>(["servers"]);
+  if (cached) return cached;
+  return queryClient.fetchQuery({ queryKey: ["servers"], queryFn: getServers });
+}
 
 export const isLinux =
   typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");

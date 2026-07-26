@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
@@ -295,6 +296,7 @@ interface CardProps {
 }
 
 function ScheduleCard({ server, serverId, type, icon: Icon, title, description, existing, onRefresh, onNavigateToConfig }: CardProps) {
+  const queryClient = useQueryClient();
   const [restartWarnPlayers, setRestartWarnPlayers] = useState(server.restart_warn_players !== 0);
   const [savingRestartWarn, setSavingRestartWarn] = useState(false);
 
@@ -316,6 +318,7 @@ function ScheduleCard({ server, serverId, type, icon: Icon, title, description, 
         server.restart_message || "Server restarting in {time}.",
         server.restart_cancel_message || "Restart has been canceled.",
       );
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       syncSchedulesToRust();
     } catch (e) {
       setRestartWarnPlayers(!checked);
@@ -949,6 +952,7 @@ const DEFAULT_UPDATE_AUTOMATION: UpdateAutomation = {
 };
 
 function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRow; onNavigateToConfig?: (anchor?: string) => void }) {
+  const queryClient = useQueryClient();
   const [automation, setAutomation] = useState<UpdateAutomation>(DEFAULT_UPDATE_AUTOMATION);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -966,6 +970,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
         server.update_message || "Server going down for update in {time}.",
         server.update_cancel_message || "Update has been canceled.",
       );
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       syncSchedulesToRust();
     } catch (e) {
       setUpdateWarnPlayers(!checked);
@@ -995,6 +1000,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
     setSaving(true);
     try {
       await setServerUpdateAutomation(server.id, next);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       triggerSaved();
       // Otherwise this change (e.g. enabling "When Found") sits inert until
       // some unrelated schedule fire or app restart happens to resync.
@@ -1146,6 +1152,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
 // ---------------------------------------------------------------------------
 
 function BackupBroadcastCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
   const [message, setMessage] = useState(server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
   const [saving, setSaving] = useState(false);
   const dirty = message !== (server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
@@ -1154,6 +1161,7 @@ function BackupBroadcastCard({ server }: { server: ServerRow }) {
     setSaving(true);
     try {
       await updateBackupBroadcastMessage(server.id, message);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       toast.success("Backup message saved");
     } catch (e) {
       toast.error(`Failed to save: ${e}`);

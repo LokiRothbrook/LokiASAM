@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Settings2, Terminal, Skull, ChevronDown, ChevronRight, Sparkles,
+  Settings2, Terminal, Skull, ChevronDown, ChevronRight, Sparkles, Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -577,6 +577,11 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
   const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
+  const noRetry = useAppStore((s) => !!s.noRetryServerIds[server.id]);
+  const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
+  const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
+  const enqueueStartup = useAppStore((s) => s.enqueueStartup);
+  const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
 
   const [modCount, setModCount]     = useState<number | null>(null);
   const [activeConfig, setActiveConfig] = useState<ActiveConfig | null>(null);
@@ -609,8 +614,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const hasUpdateAvailable = server.update_available === 1;
   const isRunning     = server.status === "running";
   const isStarting    = server.status === "starting";
-  const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
+  const isTransitioning = ["starting", "stopping", "updating", "update_queued"].includes(server.status);
   const isStartFailed = server.status === "start-failed";
+  const isUpdateQueued  = server.status === "update_queued";
+  const isStartupQueued = server.status === "startup_queued";
 
   // Keep the uptime counter ticking while the server is active.
   const [, setTick] = useState(0);
@@ -677,15 +684,35 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
 
   const handleStart = async () => {
     setActionPending(true);
+    clearNoRetryServer(server.id);
     try {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
+
+      // Ensure both save symlinks/junctions are in place before launching —
+      // self-heals a server whose links were lost (e.g. after moving
+      // base_dir), same repair step the dashboard card's Start runs.
+      const baseDir = await getAppSetting("base_dir").catch(() => null);
+      if (baseDir) {
+        const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+        await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+          console.warn("createSaveLink failed on start:", e);
+        });
+        await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed on start:", e);
+        });
+      }
+
       await warnIfFirewallMissing(server);
       const params = await buildStartParams(server);
       const pid = await tauriCmd.startServer(params);
       await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
-      const errMsg = typeof e === "string" ? e : String(e);
+      const raw = typeof e === "string" ? e : String(e);
+      const isExeMissing = raw.startsWith("exe_missing:");
+      const errMsg = isExeMissing ? raw.slice("exe_missing: ".length) : raw;
+      if (isExeMissing) setNoRetryServer(server.id);
+
       await updateServerStatus(server.id, "start-failed", null);
       toast.error(`${server.name} failed to start — ${errMsg}`);
       await dispatchNotification({
@@ -698,6 +725,24 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
+      setActionPending(false);
+    }
+  };
+
+  // Default entry point for the manual "Start" button — hands off to the
+  // staggered startup queue instead of launching directly, matching the
+  // dashboard card's Start button, so starting from this tab can't pile a
+  // second simultaneous boot on top of whatever's currently starting.
+  const handleQueueStart = async () => {
+    setActionPending(true);
+    clearNoRetryServer(server.id);
+    try {
+      await updateServerStatus(server.id, "startup_queued", null);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      enqueueStartup([server.id]);
+    } catch (err) {
+      toast.error(`Failed to queue ${server.name} to start`, { description: String(err) });
+    } finally {
       setActionPending(false);
     }
   };
@@ -906,14 +951,60 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               Detecting...
             </Button>
-          ) : isStartFailed ? (
+          ) : isUpdateQueued ? (
             <>
+              <span className="text-xs flex items-center gap-1.5" style={{ color: "#ffa500" }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Update queued
+              </span>
               <Button
-                size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+                size="sm" variant="outline"
+                onClick={async () => {
+                  await updateServerStatus(server.id, "stopped", null);
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }}
+                className="gap-1.5"
+                style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
+              >
+                <Ban className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isStartupQueued ? (
+            <>
+              <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-cyan)" }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Startup queued
+              </span>
+              <Button
+                size="sm" disabled={actionPending}
+                onClick={() => { removeFromStartupQueue(server.id); handleStart(); }}
+                className="gap-1.5"
+                title="Start immediately, skipping the wait for its turn"
                 style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
               >
-                <Play className="w-3.5 h-3.5" /> Retry Start
+                <Play className="w-3.5 h-3.5" /> Skip Queue
               </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={async () => {
+                  removeFromStartupQueue(server.id);
+                  await updateServerStatus(server.id, "stopped", null);
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }}
+                className="gap-1.5"
+                style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
+              >
+                <Ban className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isStartFailed ? (
+            <>
+              {!noRetry && (
+                <Button
+                  size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                >
+                  <Play className="w-3.5 h-3.5" /> Retry Start
+                </Button>
+              )}
               <Button
                 size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5"
                 style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
@@ -944,7 +1035,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             </Button>
           ) : (
             <Button
-              size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+              size="sm" onClick={handleQueueStart} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
             >
               <Play className="w-3.5 h-3.5" /> Start

@@ -904,6 +904,18 @@ pub async fn inner_restart_server(
         registry.get(&params.server_id).map(|rs| (rs.pid, rs.install_path.clone()))
     };
 
+    // Fail fast rather than kill/restart a server whose files a scheduled
+    // backup is currently reading — held for the whole function so it also
+    // covers the memory-limit auto-restart path, which calls this directly,
+    // and guards against two concurrent restart triggers for the same
+    // server_id (manual + scheduled + memory-limit) stepping on each other.
+    let _lock = if running_info.is_some() {
+        Some(state.try_lock_server(&params.server_id)
+            .ok_or_else(|| format!("An operation is already in progress for {} — try again in a moment", params.server_id))?)
+    } else {
+        None
+    };
+
     if let Some((pid, install_path)) = running_info {
         // Register before killing — the exit watcher can resolve almost
         // immediately, so this must be visible before the process actually dies.
@@ -1256,12 +1268,21 @@ pub async fn delete_server(
     delete_logs: bool,
     delete_saves: bool,
 ) -> Result<(), String> {
+    // Held for the whole delete so a scheduled backup/update can't be
+    // touching this server's files at the same moment we start removing them.
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     // If the server is running, force-stop it first.
     let pid = {
         let registry = state.running_servers.lock().unwrap();
         registry.get(&server_id).map(|rs| rs.pid)
     };
     if let Some(pid) = pid {
+        // Register before killing so the exit watcher hands its cleanup off
+        // to us — otherwise it can independently recreate the log directory
+        // (via its own archive step) moments after we delete it below.
+        let notify = state.register_stop_handoff(&server_id);
         state
             .stopping_servers
             .lock()
@@ -1280,6 +1301,9 @@ pub async fn delete_server(
             kill_process_tree(pid, false, &install_path);
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
+        // Wait for the watcher's own cleanup (including log archiving) to
+        // actually finish before we proceed to delete files below.
+        state.wait_for_stop_handoff(&server_id, notify).await;
         state.running_servers.lock().unwrap().remove(&server_id);
         state.stopping_servers.lock().unwrap().remove(&server_id);
     }
@@ -1346,7 +1370,7 @@ pub async fn clone_server(
     }
 
     tokio::task::spawn_blocking(move || {
-        copy_dir_recursive(&src, &dst, &["Saved"])
+        copy_dir_recursive(&src, &dst, &["Saved"], None)
             .map_err(|e| format!("Failed to clone server files: {e}"))
     })
     .await
@@ -1384,14 +1408,24 @@ pub async fn graceful_stop_server(
     let state = app_handle.state::<AppState>();
     let pool = app_handle.state::<RconPool>();
 
-    let (pid, install_path) = {
+    // Held for the whole operation (including the player-warning countdown,
+    // which can run for several minutes) so a scheduled backup can't start
+    // mid-shutdown and produce a truncated archive.
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
+    let (pid, install_path, server_name) = {
         let registry = state.running_servers.lock().unwrap();
         registry
             .get(&server_id)
-            .map(|rs| (rs.pid, rs.install_path.clone()))
+            .map(|rs| (rs.pid, rs.install_path.clone(), rs.start_params.server_name.clone()))
             .ok_or_else(|| format!("Server {server_id} is not running"))?
     };
 
+    // Register before killing — see inner_restart_server for why. Ensures the
+    // exit watcher hands its cleanup off to us instead of emitting its own
+    // "stopped" (and notification) concurrently with what we emit below.
+    let notify = state.register_stop_handoff(&server_id);
     state.stopping_servers.lock().unwrap().insert(server_id.clone());
 
     emit_status(&app_handle, &ServerStatus {
@@ -1454,16 +1488,22 @@ pub async fn graceful_stop_server(
     // SaveWorld → wait → DoExit → poll for exit → force-kill if still alive.
     graceful_shutdown_via_rcon_pid(pid, &install_path, rcon_port, &rcon_password).await;
 
-    // Clean up state
+    // Wait for the exit watcher's own cleanup (registry, RCON pool, log
+    // archiving) to actually finish before we report "stopped" — otherwise
+    // its delayed completion could race in after we've already moved on.
+    state.wait_for_stop_handoff(&server_id, notify).await;
+
+    // Fallback cleanup in case the watcher's handoff timed out (30s) —
+    // log archiving isn't repeated here since the watcher always does that
+    // unconditionally as part of its own cleanup, handoff or not.
     state.stopping_servers.lock().unwrap().remove(&server_id);
     state.running_servers.lock().unwrap().remove(&server_id);
     pool.remove_server(&server_id).await;
 
-    // Rotate logs now that the process is confirmed dead. Covers servers that
-    // were found running at startup (watched by the scan watcher which exits
-    // cleanly when running_servers is cleared above, bypassing its rotation).
-    LogManagerState::archive_all_server_logs(&app_handle, &server_id, &install_path).await;
-
+    crate::commands::notifications::dispatch_notification(
+        &app_handle, "server_stopped", Some(&server_id), &server_name,
+        &format!("{server_name} stopped"), "Server has shut down.", "info",
+    ).await;
     emit_status(&app_handle, &ServerStatus {
         server_id,
         status: "stopped".into(),

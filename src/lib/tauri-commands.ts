@@ -553,8 +553,8 @@ export const tauriCmd = {
     invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir }),
   /** Wipe server save files. tier: "map" | "players" | "full". Server must be stopped.
    *  saveFolder is the real on-disk SavedArks folder name (e.g. TheIsland_WP). */
-  wipeServerSaves: (installPath: string, saveFolder: string, tier: "map" | "players" | "full") =>
-    invoke<void>("wipe_server_saves", { installPath, saveFolder, tier }),
+  wipeServerSaves: (serverId: string, installPath: string, saveFolder: string, tier: "map" | "players" | "full") =>
+    invoke<void>("wipe_server_saves", { serverId, installPath, saveFolder, tier }),
   /** Create a symlink (Linux) or NTFS junction (Windows) so that
    *  {installPath}/ShooterGame/Saved/SavedArks → {baseDir}/Saves/{serverId}/SavedArks */
   createSaveLink: (installPath: string, serverId: string, baseDir: string) =>
@@ -586,8 +586,8 @@ export const tauriCmd = {
     invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, saveFolder }),
 
   /** Restore an INI backup: copy loose INI files back to Config/WindowsServer. */
-  restoreIniBackup: (backupFolderPath: string, installPath: string) =>
-    invoke<void>("restore_ini_backup", { backupFolderPath, installPath }),
+  restoreIniBackup: (serverId: string, backupFolderPath: string, installPath: string) =>
+    invoke<void>("restore_ini_backup", { serverId, backupFolderPath, installPath }),
 
   /** Restore a full backup: extract 7z over the entire install_path. */
   restoreFullBackup: (serverId: string, backupFilePath: string, installPath: string) =>
@@ -717,7 +717,7 @@ export const tauriCmd = {
   // Clusters
   createCluster:          (name: string, baseDir: string, clusterDirOverride?: string) =>
     invoke<string>("create_cluster", { name, baseDir, clusterDirOverride }),
-  deleteCluster:          (clusterDir: string, deleteFiles: boolean) => invoke<void>("delete_cluster", { clusterDir, deleteFiles }),
+  deleteCluster:          (clusterDir: string, baseDir: string, deleteFiles: boolean) => invoke<void>("delete_cluster", { clusterDir, baseDir, deleteFiles }),
   addServerToCluster:     (serverId: string, clusterId: string) =>
     invoke<void>("add_server_to_cluster", { serverId, clusterId }),
   removeServerFromCluster: (serverId: string) =>

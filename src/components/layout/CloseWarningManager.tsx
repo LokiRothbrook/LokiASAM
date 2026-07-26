@@ -26,6 +26,7 @@ const TOOL_OP_LABELS: Record<string, string> = {
 };
 
 function toolOpLabel(key: string): string {
+  if (key.startsWith("mods_")) return "Mod download";
   return TOOL_OP_LABELS[key] ?? key;
 }
 
