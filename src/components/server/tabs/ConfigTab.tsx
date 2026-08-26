@@ -39,7 +39,7 @@ import {
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
 import { useAllMaps } from "@/hooks/useAllMaps";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, addServerMod, setModMapLock, type ServerRow } from "@/lib/db";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, addServerMod, removeServerMod, setModMapLock, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -1584,13 +1584,14 @@ export function ConfigTab({ server }: Props) {
       // Update the database
       await updateServerMap(server.id, newMapId);
 
-      // Swap the map-required mod lock: the old map's required mod is no
-      // longer pinned to this server (unless the new map needs the exact
-      // same mod), and the new map's required mod is added/locked so it
-      // can't be disabled or removed from the Mods tab while selected —
-      // mirrors the lock the creation wizard sets on the initial map pick.
+      // Swap the map-required mod: the old map's required mod is dropped
+      // from the list entirely (unless the new map needs the exact same
+      // mod) — mirrors the wizard's handleMapSelect, which drops the
+      // previous map's mod from the list the same way when switching maps
+      // pre-creation. The new map's required mod is added/locked so it
+      // can't be disabled or removed from the Mods tab while selected.
       if (oldMapData?.isMod && oldMapData.requiredModId && oldMapData.requiredModId !== newMapData.requiredModId) {
-        await setModMapLock(server.id, oldMapData.requiredModId, false);
+        await removeServerMod(server.id, oldMapData.requiredModId);
       }
       if (newMapData.isMod && newMapData.requiredModId) {
         // The map's required mod never goes through the "paste ID"

@@ -1071,10 +1071,11 @@ export interface ModRow {
 }
 
 /** Return all mods for a server ordered by install_order ascending. */
+/** The map's required mod (locked_by_map) always sorts first, then the rest by install_order. */
 export async function getServerMods(serverId: string): Promise<ModRow[]> {
   const db = await getDb();
   return db.select<ModRow[]>(
-    "SELECT * FROM server_mods WHERE server_id = ? ORDER BY install_order ASC",
+    "SELECT * FROM server_mods WHERE server_id = ? ORDER BY locked_by_map DESC, install_order ASC",
     [serverId]
   );
 }
