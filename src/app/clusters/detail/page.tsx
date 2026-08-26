@@ -35,7 +35,7 @@ import {
   type ClusterRow,
   type ServerRow,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import { ServerStatusBadge } from "@/components/server/ServerStatusBadge";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -157,7 +157,8 @@ interface MemberRowProps {
 
 function MemberRow({ server, onRemove }: MemberRowProps) {
   const router = useRouter();
-  const map = ARK_MAPS.find((m) => m.id === server.map_id);
+  const allMaps = useAllMaps();
+  const map = allMaps.find((m) => m.id === server.map_id);
   const versionCache = useBuildVersionCache();
 
   return (

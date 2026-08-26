@@ -35,10 +35,11 @@ import {
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import {
   INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
-  buildPresetConfig, ARK_EVENTS, ARK_MAPS,
+  buildPresetConfig, ARK_EVENTS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, type ServerRow } from "@/lib/db";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, addServerMod, setModMapLock, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -1322,6 +1323,7 @@ function AdvancedConfigTab({
 
 export function ConfigTab({ server }: Props) {
   const queryClient = useQueryClient();
+  const allMaps = useAllMaps();
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
@@ -1571,15 +1573,30 @@ export function ConfigTab({ server }: Props) {
         toast.error("Base directory not configured");
         return;
       }
-      const newMapData = ARK_MAPS.find((m) => m.id === newMapId);
+      const newMapData = allMaps.find((m) => m.id === newMapId);
       if (!newMapData) {
         toast.error("Map not found");
         return;
       }
+      const oldMapData = allMaps.find((m) => m.id === server.map_id);
       // Update the SaveGames symlink for the new map
       await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, newMapData.mapPath);
       // Update the database
       await updateServerMap(server.id, newMapId);
+
+      // Swap the map-required mod lock: the old map's required mod is no
+      // longer pinned to this server (unless the new map needs the exact
+      // same mod), and the new map's required mod is added/locked so it
+      // can't be disabled or removed from the Mods tab while selected —
+      // mirrors the lock the creation wizard sets on the initial map pick.
+      if (oldMapData?.isMod && oldMapData.requiredModId && oldMapData.requiredModId !== newMapData.requiredModId) {
+        await setModMapLock(server.id, oldMapData.requiredModId, false);
+      }
+      if (newMapData.isMod && newMapData.requiredModId) {
+        await addServerMod(server.id, newMapData.requiredModId, "Unknown Mod");
+        await setModMapLock(server.id, newMapData.requiredModId, true);
+      }
+
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       toast.success(`Map changed to ${newMapData.displayName}`);
     } catch (e) {
@@ -1729,7 +1746,7 @@ export function ConfigTab({ server }: Props) {
               <div>
                 <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Server Map</p>
                 <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
-                  Current map: <strong>{ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id}</strong>
+                  Current map: <strong>{allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id}</strong>
                 </p>
               </div>
               {server.status !== "stopped" && (
@@ -1743,7 +1760,7 @@ export function ConfigTab({ server }: Props) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ARK_MAPS.map((m) => (
+                {allMaps.map((m) => (
                   <SelectItem key={m.id} value={m.id}>
                     {m.displayName}
                   </SelectItem>

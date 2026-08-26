@@ -13,7 +13,7 @@ import { tauriCmd, type DetectedServerConfig } from "@/lib/tauri-commands";
 import {
   createServer, saveServerConfig, isServerNameTaken,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import { open } from "@tauri-apps/plugin-dialog";
 
 // ---------------------------------------------------------------------------
@@ -124,6 +124,7 @@ interface Step2Props {
 }
 
 function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
+  const allMaps = useAllMaps();
   const [name, setName]           = useState(detected.sessionName ?? "");
   const [mapId, setMapId]         = useState("theisland");
   const [port, setPort]           = useState(String(detected.port ?? 7777));
@@ -201,7 +202,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         <div className="space-y-1 sm:col-span-2">
           <Label style={{ color: "var(--text-primary)" }}>Map</Label>
           <div className="flex flex-wrap gap-2">
-            {ARK_MAPS.filter((m) => m.released).map((m) => (
+            {allMaps.filter((m) => m.released).map((m) => (
               <button
                 key={m.id}
                 onClick={() => setMapId(m.id)}

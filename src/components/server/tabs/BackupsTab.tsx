@@ -17,7 +17,8 @@ import {
 import { tauriCmd } from "@/lib/tauri-commands";
 import { stopServerGracefully } from "@/lib/server-utils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { ARK_MAPS, getSaveFolder } from "@/data/game-data";
+import { getSaveFolder } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 
@@ -713,7 +714,8 @@ interface Props {
 
 export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const queryClient = useQueryClient();
-  const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
+  const allMaps = useAllMaps();
+  const mapDef = allMaps.find((m) => m.id === server.map_id);
   const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
   const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
 

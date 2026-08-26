@@ -19,7 +19,7 @@ import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
 import { MaintenanceTab } from "@/components/server/tabs/MaintenanceTab";
 import { formatServerVersion } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import { useServers } from "@/hooks/useServers";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
@@ -51,6 +51,7 @@ export default function ServerDetailPage() {
 
   const [activeTab, setActiveTab] = useState<TabValue>(tabParam);
   const versionCache = useBuildVersionCache();
+  const allMaps = useAllMaps();
 
   // Shares the same ["servers"] cache as the dashboard and every mutation
   // across the app (Config/Automation saves, status events, etc. all
@@ -118,7 +119,7 @@ export default function ServerDetailPage() {
     );
   }
 
-  const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
+  const mapDisplay = allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   return (
     <div className="flex flex-col h-full overflow-hidden gap-6">

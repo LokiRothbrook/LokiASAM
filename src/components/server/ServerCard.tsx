@@ -52,7 +52,9 @@ import {
 import { applyUpdateToServer, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
-import { ARK_MAPS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
@@ -181,8 +183,9 @@ export function ServerCard({ server }: Props) {
     return () => clearInterval(id);
   }, [server.status]);
 
+  const allMaps = useAllMaps();
   const mapDisplay =
-    ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
+    allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   const isRunning       = server.status === "running";
   const isStarting      = server.status === "starting";
@@ -246,7 +249,8 @@ export function ServerCard({ server }: Props) {
       // Ensure both save symlinks/junctions are in place before launching
       const baseDir = await getAppSetting("base_dir").catch(() => null);
       if (baseDir) {
-        const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+        await ensureMapsCacheLoaded().catch(() => {});
+        const mapPath = findMapById(server.map_id)?.mapPath ?? "TheIsland_WP";
         await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
           console.warn("createSaveLink failed on start:", e);
         });

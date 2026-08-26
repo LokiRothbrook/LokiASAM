@@ -6,7 +6,8 @@
  */
 
 import { getServerConfig, getServerMods, getAppSetting, getCluster, updateServerStatus, getServers } from "@/lib/db";
-import { ARK_MAPS, ARK_EVENTS, LAUNCH_PARAMETERS } from "@/data/game-data";
+import { ARK_EVENTS, LAUNCH_PARAMETERS } from "@/data/game-data";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { tauriCmd } from "@/lib/tauri-commands";
 import type { QueryClient } from "@tanstack/react-query";
 import type { StartServerParams } from "@/lib/tauri-commands";
@@ -59,6 +60,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
   const [config, mods] = await Promise.all([
     getServerConfig(server.id),
     getServerMods(server.id),
+    ensureMapsCacheLoaded(),
   ]);
 
   const launchArgs: Record<string, string> = config
@@ -67,7 +69,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
 
   const extraArgs = launchArgsToExtraArgs(launchArgs);
 
-  const map = ARK_MAPS.find((m) => m.id === server.map_id);
+  const map = findMapById(server.map_id);
   const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
   // Inject the active event flag and its mod ID
@@ -192,8 +194,11 @@ export async function buildLaunchCommandPreview(
   server: ServerRow,
   launchArgs: Record<string, string>,
 ): Promise<string> {
-  const mods = await getServerMods(server.id).catch(() => []);
-  const map = ARK_MAPS.find((m) => m.id === server.map_id);
+  const [mods] = await Promise.all([
+    getServerMods(server.id).catch(() => []),
+    ensureMapsCacheLoaded(),
+  ]);
+  const map = findMapById(server.map_id);
   const mapPath = map?.mapPath ?? "TheIsland_WP";
 
   const extraArgs: string[] = launchArgsToExtraArgs(launchArgs);

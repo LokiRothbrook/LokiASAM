@@ -14,6 +14,7 @@
 ///   6. Emits `backup://completed/{serverId}` so the UI can refresh.
 
 use std::collections::HashMap;
+use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
@@ -30,7 +31,10 @@ use super::utils::{fmt_size, tier_suffix};
 // Map ID → ASA map path (matches ARK_MAPS in game-data.ts)
 // ---------------------------------------------------------------------------
 
-fn map_id_to_path(map_id: &str) -> &'static str {
+fn map_id_to_path(conn: &Connection, map_id: &str) -> String {
+    if let Some(custom_path) = db::get_custom_map_path(conn, map_id) {
+        return custom_path;
+    }
     match map_id {
         "theisland"   => "TheIsland_WP",
         "thecenter"   => "TheCenter_WP",
@@ -51,18 +55,20 @@ fn map_id_to_path(map_id: &str) -> &'static str {
         "clubark"     => "BobsMissions_WP",
         _             => "TheIsland_WP",
     }
+    .to_string()
 }
 
 /// Real on-disk `SavedArks/{X}` subfolder name for a map, when it differs from
 /// the launch/CLI map path returned by `map_id_to_path`. Club ARK (Bob's
-/// Missions) is the one known case: it launches as `BobsMissions_WP` and its
-/// save files keep that `_WP` prefix, but ASA creates the folder itself as
-/// just `SavedArks/BobsMissions/` (no `_WP`). Mirrors `saveFolder` on
-/// `ArkMap` in game-data.ts — keep both in sync.
-fn map_id_to_save_folder(map_id: &str) -> &'static str {
+/// Missions) is the one known built-in case: it launches as `BobsMissions_WP`
+/// and its save files keep that `_WP` prefix, but ASA creates the folder
+/// itself as just `SavedArks/BobsMissions/` (no `_WP`). User-added custom mod
+/// maps have no such override — they always use `map_path` verbatim. Mirrors
+/// `getSaveFolder`/`saveFolder` on `ArkMap` in game-data.ts — keep both in sync.
+fn map_id_to_save_folder(conn: &Connection, map_id: &str) -> String {
     match map_id {
-        "clubark" => "BobsMissions",
-        _         => map_id_to_path(map_id),
+        "clubark" => "BobsMissions".to_string(),
+        _         => map_id_to_path(conn, map_id),
     }
 }
 
@@ -377,7 +383,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         _ => return,
     };
 
-    let save_folder = map_id_to_save_folder(&server.map_id);
+    let save_folder = map_id_to_save_folder(&conn, &server.map_id);
 
     // Create the archive (eos_id used as player_name for the filename).
     let rec = match create_player_backup_inner(
@@ -385,7 +391,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         server_id,
         &server.name,
         &server.install_path,
-        save_folder,
+        &save_folder,
         &server.map_id,
         &backup_dir,
         eos_id,
@@ -490,8 +496,8 @@ pub async fn execute_tick(app: &AppHandle) {
         };
 
         let schedules = db::get_server_schedules(&conn, &server.id);
-        let map_path = map_id_to_path(&server.map_id);
-        let save_folder = map_id_to_save_folder(&server.map_id);
+        let map_path = map_id_to_path(&conn, &server.map_id);
+        let save_folder = map_id_to_save_folder(&conn, &server.map_id);
 
         // Parse both schedule configs up front so we can decide whether a
         // world save is needed before starting either backup.
@@ -529,8 +535,8 @@ pub async fn execute_tick(app: &AppHandle) {
                     &server.id,
                     &server.name,
                     &server.install_path,
-                    map_path,
-                    save_folder,
+                    &map_path,
+                    &save_folder,
                     &server.map_id,
                     &backup_dir,
                     "schedule",
@@ -563,7 +569,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     &server.id,
                     &server.name,
                     &server.install_path,
-                    save_folder,
+                    &save_folder,
                     &server.map_id,
                     &backup_dir,
                     "schedule",

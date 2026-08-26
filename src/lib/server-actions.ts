@@ -33,8 +33,9 @@ export async function reinstallServer(server: ServerRow): Promise<void> {
   try {
     await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
 
-    const { ARK_MAPS } = await import("@/data/game-data");
-    const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+    const { ensureMapsCacheLoaded, findMapById } = await import("@/lib/maps");
+    await ensureMapsCacheLoaded().catch(() => {});
+    const mapPath = findMapById(server.map_id)?.mapPath ?? "TheIsland_WP";
 
     await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
       console.warn("createSaveLink failed after reinstall:", e);

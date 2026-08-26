@@ -12,7 +12,7 @@ import { tauriCmd, type ScheduleEntry } from "@/lib/tauri-commands";
 import {
   getServers, getServerSchedules, getServerMods, getServerConfig, getAppSetting,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { launchArgsToExtraArgs } from "@/lib/server-utils";
 
@@ -32,6 +32,7 @@ export async function syncSchedulesToRust(): Promise<void> {
       getAppSetting("steamcmd_path"),
       getAppSetting("base_dir"),
       getAppSetting("backup_dir"),
+      ensureMapsCacheLoaded(),
     ]);
 
     const isLinux =
@@ -63,7 +64,7 @@ export async function syncSchedulesToRust(): Promise<void> {
 
       const modIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
-      const map = ARK_MAPS.find((m) => m.id === server.map_id);
+      const map = findMapById(server.map_id);
       const mapPath = map?.mapPath ?? "TheIsland_WP";
 
       // Backup schedules are handled by the hourly backup://tick task in Rust,
@@ -220,7 +221,7 @@ export async function syncSchedulesToRust(): Promise<void> {
         }
         if (nextRunMs === null) continue;
 
-        const map = ARK_MAPS.find((m) => m.id === server.map_id);
+        const map = findMapById(server.map_id);
         const mapPath = map?.mapPath ?? "TheIsland_WP";
 
         entries.push({

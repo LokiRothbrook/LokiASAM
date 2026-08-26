@@ -468,6 +468,21 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             uptime_seconds: None,
             error: None,
         });
+    } else {
+        // No restart is coming — the server was already stopped and the
+        // automation config says to leave it that way (or restart_after is
+        // off). Nothing else ever clears the "updating" status set above for
+        // this case, so without this the server sits stuck showing the
+        // in-progress spinner (Overview/dashboard) until the user manually
+        // Cancels and Reinstalls, even though the update itself succeeded.
+        use crate::commands::server::{emit_status, ServerStatus};
+        emit_status(app, &ServerStatus {
+            server_id: entry.server_id.clone(),
+            status: "stopped".into(),
+            pid: None,
+            uptime_seconds: None,
+            error: None,
+        });
     }
 
     Ok(())

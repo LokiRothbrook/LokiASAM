@@ -17,7 +17,8 @@ import {
 import { tauriCmd } from "@/lib/tauri-commands";
 import { getAppSetting, getServers } from "@/lib/db";
 import { reinstallServer } from "@/lib/server-actions";
-import { getMapById, getSaveFolder } from "@/data/game-data";
+import { getSaveFolder } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import type { ServerRow } from "@/lib/db";
 
 interface Props {
@@ -161,13 +162,14 @@ function ReinstallCard({ server }: Props) {
 // ---------------------------------------------------------------------------
 
 function WipeSaveDataCard({ server }: Props) {
+  const allMaps = useAllMaps();
   const [wipeConfirm, setWipeConfirm] = useState<"map" | "players" | "full" | null>(null);
   const [wiping, setWiping] = useState(false);
   const isRunning = server.status === "running";
 
   const handleWipe = async (tier: "map" | "players" | "full") => {
     setWiping(true);
-    const mapDef = getMapById(server.map_id);
+    const mapDef = allMaps.find((m) => m.id === server.map_id);
     const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
     try {
       await tauriCmd.wipeServerSaves(server.id, server.install_path, saveFolder, tier);
@@ -245,6 +247,7 @@ function WipeSaveDataCard({ server }: Props) {
 // ---------------------------------------------------------------------------
 
 function ImportSavesCard({ server }: Props) {
+  const allMaps = useAllMaps();
   const [showImport, setShowImport] = useState(false);
   const [importSourceId, setImportSourceId] = useState("");
   const [importing, setImporting] = useState(false);
@@ -264,7 +267,7 @@ function ImportSavesCard({ server }: Props) {
     try {
       const baseDir = await getAppSetting("base_dir");
       if (!baseDir) throw new Error("Base directory not configured");
-      const mapDef = getMapById(server.map_id);
+      const mapDef = allMaps.find((m) => m.id === server.map_id);
       const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
       await tauriCmd.importServerSaves(importSourceId, server.id, baseDir, saveFolder);
       setShowImport(false);
@@ -300,7 +303,7 @@ function ImportSavesCard({ server }: Props) {
           <DialogHeader>
             <DialogTitle>Import Save Data</DialogTitle>
             <DialogDescription>
-              Select a stopped server to copy its <strong>{getMapById(server.map_id)?.mapPath ?? server.map_id}</strong> save
+              Select a stopped server to copy its <strong>{allMaps.find((m) => m.id === server.map_id)?.mapPath ?? server.map_id}</strong> save
               folder into <strong>{server.name}</strong>. Only stopped servers with the same map are shown.
               Existing saves will be overwritten.
             </DialogDescription>

@@ -124,6 +124,21 @@ pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
     .unwrap_or_default()
 }
 
+/// Look up the on-disk map path for a user-added custom mod map, stored in
+/// the `custom_maps` table (see `ArkMap`/`useAllMaps` in game-data.ts —
+/// `map_id` values for custom maps are `custom_<uuid>`, where `<uuid>` is the
+/// `custom_maps.id` primary key). Returns `None` for a built-in map id or an
+/// id that no longer exists (map was deleted).
+pub fn get_custom_map_path(conn: &Connection, map_id: &str) -> Option<String> {
+    let raw_id = map_id.strip_prefix("custom_")?;
+    conn.query_row(
+        "SELECT map_path FROM custom_maps WHERE id = ?1",
+        [raw_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
 /// Read a server's current `status` column directly — used by the scheduler
 /// to detect a server that was sitting in the startup queue (not yet spawned)
 /// when its auto-update fired, which `running_servers` alone can't tell it,

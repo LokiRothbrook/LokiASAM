@@ -37,7 +37,9 @@ import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
 import { toast } from "sonner";
-import { ARK_MAPS, ARK_EVENTS, NOTIFICATION_EVENTS, getSaveFolder } from "@/data/game-data";
+import { ARK_EVENTS, NOTIFICATION_EVENTS, getSaveFolder } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -359,7 +361,8 @@ function ServerSummaryPanel({
       hour: "2-digit", minute: "2-digit",
     });
 
-  const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
+  const allMaps = useAllMaps();
+  const mapDisplay = allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   const items = [
     { label: "Started",       value: currentStartMs ? fmtDate(currentStartMs) : "—"   },
@@ -694,7 +697,8 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       // base_dir), same repair step the dashboard card's Start runs.
       const baseDir = await getAppSetting("base_dir").catch(() => null);
       if (baseDir) {
-        const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+        await ensureMapsCacheLoaded().catch(() => {});
+        const mapPath = findMapById(server.map_id)?.mapPath ?? "TheIsland_WP";
         await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
           console.warn("createSaveLink failed on start:", e);
         });
@@ -1074,7 +1078,8 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             onClick={async () => {
               const [backupDir, baseDir] = await Promise.all([getAppSetting("backup_dir"), getAppSetting("base_dir")]);
               if (!backupDir) return;
-              const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
+              await ensureMapsCacheLoaded().catch(() => {});
+              const mapDef = findMapById(server.map_id);
               const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
               const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
               tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, saveFolder, server.map_id, backupDir, "manual", "", baseDir ?? "")

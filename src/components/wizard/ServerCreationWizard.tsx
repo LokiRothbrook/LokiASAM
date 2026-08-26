@@ -865,6 +865,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
   // of each mounting step re-fetching independently.
   const { data: existingServers = [] } = useQuery({ queryKey: ["servers"], queryFn: getServers });
   const [loadingCopy, setLoadingCopy] = useState(false);
+  const allMaps = useAllMaps();
 
   const handleCopyFrom = async (serverId: string) => {
     setLoadingCopy(true);
@@ -881,9 +882,21 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
       const serverPVE = gus?.ServerSettings?.ServerPVE?.toLowerCase();
       const detectedMode: "pve" | "pvp" =
         serverPVE === "true" || source?.preset_id?.includes("pve") ? "pve" : "pvp";
-      const newModIds = mods.map((m) => m.mod_id);
-      const newModNames: Record<string, string> = {};
+      const newModNames: Record<string, string> = { ...data.modNames };
       for (const m of mods) newModNames[m.mod_id] = m.mod_name;
+      // Merge into the existing mod list rather than replacing it — a
+      // wholesale replace here used to silently drop the currently selected
+      // map's required mod (added earlier on the Basic Info step).
+      const modIds = [...data.modIds];
+      for (const m of mods) {
+        if (!modIds.includes(m.mod_id)) modIds.push(m.mod_id);
+      }
+      let lockedModIds = data.lockedModIds;
+      const selectedMap = allMaps.find((m) => m.id === data.mapId);
+      if (selectedMap?.isMod && selectedMap.requiredModId) {
+        if (!modIds.includes(selectedMap.requiredModId)) modIds.push(selectedMap.requiredModId);
+        lockedModIds = [selectedMap.requiredModId];
+      }
       onChange({
         copyFromServerId: serverId,
         gameMode: detectedMode,
@@ -891,9 +904,9 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
         fullCustomGus: gus,
         fullCustomGameIni: config?.game_ini_json ? JSON.parse(config.game_ini_json) : {},
         launchArgs: config?.launch_args_json ? JSON.parse(config.launch_args_json) : { NoBattlEye: "true", servergamelog: "true" },
-        modIds: newModIds,
+        modIds,
         modNames: newModNames,
-        lockedModIds: [],
+        lockedModIds,
       });
     } catch (e) {
       console.error("Copy from server failed:", e);
@@ -3329,13 +3342,24 @@ function InstallStep({
         await saveServerConfig(serverId, "{}", "{}", "{}");
 
         // Write mods to DB. Map mod is locked; all others are normal.
-        for (const modId of data.modIds) {
+        // Belt-and-suspenders: re-derive the selected map's required mod
+        // here rather than trusting data.modIds/lockedModIds blindly — an
+        // earlier step (e.g. "copy mods from server") could otherwise have
+        // dropped it from wizard state before we ever get here.
+        const selectedMap = allMaps.find((m) => m.id === data.mapId);
+        const modIds = new Set(data.modIds);
+        const lockedModIds = new Set(data.lockedModIds);
+        if (selectedMap?.isMod && selectedMap.requiredModId) {
+          modIds.add(selectedMap.requiredModId);
+          lockedModIds.add(selectedMap.requiredModId);
+        }
+        for (const modId of modIds) {
           await addServerMod(
             serverId,
             modId,
             data.modNames[modId] || "Unknown Mod",
           );
-          if (data.lockedModIds.includes(modId)) {
+          if (lockedModIds.has(modId)) {
             const { setModMapLock } = await import("@/lib/db");
             await setModMapLock(serverId, modId, true);
           }
@@ -3444,8 +3468,9 @@ function InstallStep({
 
       // Create SavedArks symlink/junction pointing to managed Saves/{serverId}/SavedArks/
       if (baseDirRef.current) {
-        const { ARK_MAPS } = await import("@/data/game-data");
-        const mapPath = ARK_MAPS.find((m) => m.id === data.mapId)?.mapPath ?? "TheIsland_WP";
+        const { ensureMapsCacheLoaded, findMapById } = await import("@/lib/maps");
+        await ensureMapsCacheLoaded().catch(() => {});
+        const mapPath = findMapById(data.mapId)?.mapPath ?? "TheIsland_WP";
 
         await tauriCmd.createSaveLink(installPath, serverId, baseDirRef.current).catch((e) => {
           console.warn("createSaveLink failed (non-fatal):", e);

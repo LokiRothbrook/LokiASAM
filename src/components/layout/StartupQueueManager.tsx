@@ -28,7 +28,7 @@ import { getServer, getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { buildStartParams } from "@/lib/server-utils";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
-import { ARK_MAPS } from "@/data/game-data";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { toast } from "sonner";
@@ -105,7 +105,8 @@ export function StartupQueueManager() {
         // since manual starts route through this queue too.
         const baseDir = await getAppSetting("base_dir").catch(() => null);
         if (baseDir) {
-          const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+          await ensureMapsCacheLoaded().catch(() => {});
+          const mapPath = findMapById(server.map_id)?.mapPath ?? "TheIsland_WP";
           await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
             console.warn("createSaveLink failed on queued start:", e);
           });

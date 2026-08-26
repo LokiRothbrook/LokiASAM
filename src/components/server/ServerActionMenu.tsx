@@ -23,7 +23,8 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { reinstallServer } from "@/lib/server-actions";
-import { ARK_MAPS, getSaveFolder } from "@/data/game-data";
+import { getSaveFolder } from "@/data/game-data";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import {
   deleteServerRecord,
   createServer,
@@ -531,7 +532,8 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
       const backupDir = await getAppSetting("backup_dir");
       if (!backupDir) { toast.error("Backup directory not configured. Check Settings."); return; }
 
-      const mapDef = ARK_MAPS.find((m) => m.id === server.map_id);
+      await ensureMapsCacheLoaded().catch(() => {});
+      const mapDef = findMapById(server.map_id);
       const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
       const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
       const record: BackupRecord = await tauriCmd.createServerBackup(

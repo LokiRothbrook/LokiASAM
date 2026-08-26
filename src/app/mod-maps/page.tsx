@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { getCustomMaps, insertCustomMap, updateCustomMap, deleteCustomMap, type CustomMapRow } from "@/lib/db";
+import { setCustomMapsCache } from "@/lib/maps";
 import { ARK_MAPS } from "@/data/game-data";
 
 const TH = ({ children }: { children: React.ReactNode }) => (
@@ -36,7 +37,9 @@ export default function ModMapsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setCustomMaps(await getCustomMaps());
+      const rows = await getCustomMaps();
+      setCustomMaps(rows);
+      setCustomMapsCache(rows);
     } catch (e) {
       toast.error(`Failed to load custom maps: ${e}`);
     } finally {
