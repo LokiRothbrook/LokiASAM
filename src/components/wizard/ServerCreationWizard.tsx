@@ -3354,10 +3354,17 @@ function InstallStep({
           lockedModIds.add(selectedMap.requiredModId);
         }
         for (const modId of modIds) {
+          // The map's required mod never goes through the "paste ID"
+          // CurseForge verification, so it has no real name available —
+          // fall back to the custom/mod map's own display name instead of a
+          // bare "Unknown Mod".
+          const fallbackName = selectedMap?.requiredModId === modId
+            ? selectedMap.displayName
+            : "Unknown Mod";
           await addServerMod(
             serverId,
             modId,
-            data.modNames[modId] || "Unknown Mod",
+            data.modNames[modId] || fallbackName,
           );
           if (lockedModIds.has(modId)) {
             const { setModMapLock } = await import("@/lib/db");

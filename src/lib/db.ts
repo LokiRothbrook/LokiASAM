@@ -1079,7 +1079,13 @@ export async function getServerMods(serverId: string): Promise<ModRow[]> {
   );
 }
 
-/** Add a mod to the server_mods table if it doesn't already exist. */
+/**
+ * Add a mod to the server_mods table, or (if it's already there) upgrade its
+ * stored name/thumbnail if this call has a real one. A manually pasted mod
+ * ID that CurseForge verification couldn't resolve is recorded as
+ * "Unknown Mod" (see `ModBrowserEventHandler.tsx`) — this never lets a later
+ * call downgrade an already-real name back to that placeholder.
+ */
 export async function addServerMod(
   serverId: string,
   modId: string,
@@ -1095,9 +1101,12 @@ export async function addServerMod(
   const nextOrder = (rows[0]?.max_order ?? -1) + 1;
   const id = crypto.randomUUID();
   await db.execute(
-    `INSERT OR IGNORE INTO server_mods
+    `INSERT INTO server_mods
        (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled, locked_by_map)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(server_id, mod_id) DO UPDATE SET
+       mod_name = CASE WHEN excluded.mod_name = 'Unknown Mod' THEN mod_name ELSE excluded.mod_name END,
+       mod_thumbnail_url = COALESCE(excluded.mod_thumbnail_url, mod_thumbnail_url)`,
     [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder, lockedByMap ? 1 : 0]
   );
 }

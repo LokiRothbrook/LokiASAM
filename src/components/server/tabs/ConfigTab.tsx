@@ -1593,7 +1593,11 @@ export function ConfigTab({ server }: Props) {
         await setModMapLock(server.id, oldMapData.requiredModId, false);
       }
       if (newMapData.isMod && newMapData.requiredModId) {
-        await addServerMod(server.id, newMapData.requiredModId, "Unknown Mod");
+        // The map's required mod never goes through the "paste ID"
+        // CurseForge verification, so it has no real name available — fall
+        // back to the custom/mod map's own display name instead of a bare
+        // "Unknown Mod".
+        await addServerMod(server.id, newMapData.requiredModId, newMapData.displayName);
         await setModMapLock(server.id, newMapData.requiredModId, true);
       }
 
