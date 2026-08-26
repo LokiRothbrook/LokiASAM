@@ -87,7 +87,7 @@ const TOUR_SLIDES = [
     description: "For players outside your local network to join, your server ports need to be reachable from the internet.",
     imagePlaceholder: "Diagram: Internet → Router/VPN → Port Forward → LokiASAM Server",
     bullets: [
-      "Forward three ports on your router: Game Port (UDP), Game Port+1 (UDP), and Query Port (UDP)",
+      "Forward two ports on your router: Game Port (UDP) and Query Port (UDP). RCON (TCP) only needs to be open if you use remote console tools.",
       "No router access? VPN port-forwarding services let you forward ports without touching your router — ideal for apartments, shared networks, or ISP restrictions",
       // TODO: Add affiliate links here for TorGuard / Mullvad / AirVPN — these let users support
       //       LokiASAM at no extra cost while solving their port forwarding needs.

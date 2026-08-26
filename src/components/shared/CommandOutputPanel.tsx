@@ -10,9 +10,12 @@
  *
  * Buffer lifecycle:
  *   - Accumulates as events arrive, regardless of dialog state.
- *   - Cleared when the panel unmounts AND the process has completed (completed=true).
- *   - Also cleared on unmount when clearBufferOnUnmount=true (used by wizard "Go to Dashboard").
- *   - Buffer is NOT cleared on unmount while a process is still running.
+ *   - Cleared on unmount only when both `clearBufferOnClose` is true AND the
+ *     process had completed (via the `completed` prop) — by default neither
+ *     condition clears it, so callers that want cleanup must opt in.
+ *   - Callers may also clear a channel directly via `clearOutputBuffer(channel)`
+ *     at any point they know is safe (e.g. ServerCard does this once a
+ *     card — and thus its association with the channel — goes away).
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -51,6 +54,10 @@ export function clearOutputBuffer(channel: string): void {
   _buffers.delete(channel);
 }
 
+export function hasOutputBuffer(channel: string): boolean {
+  return (_buffers.get(channel)?.length ?? 0) > 0;
+}
+
 export interface CommandOutputPanelProps {
   /** The Tauri event channel to subscribe to, e.g. "steamcmd://output/setup". */
   eventChannel: string;
@@ -87,7 +94,7 @@ export function CommandOutputPanel({
   canceled = false,
   clearBufferOnClose = false,
 }: CommandOutputPanelProps) {
-  const [lines, setLines] = useState<OutputLine[]>(() => _buffers.get(eventChannel) ?? []);
+  const [lines, setLines] = useState<OutputLine[]>(() => [...(_buffers.get(eventChannel) ?? [])]);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [copied, setCopied] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -98,16 +105,19 @@ export function CommandOutputPanel({
   const completedRef = useRef(false);
   const completedProp = useRef(completed);
 
-  // Keep ref in sync for the cleanup function
-  completedProp.current = completed;
+  // Keep ref in sync for the cleanup function — synced in its own effect
+  // (runs after every render) rather than during render itself.
+  useEffect(() => {
+    completedProp.current = completed;
+  });
 
-  // On mount: scroll to bottom if there are already lines from the buffer
+  // On mount (or channel change): scroll to bottom if there are already
+  // lines from the buffer.
   useEffect(() => {
     if (scrollRef.current && (_buffers.get(eventChannel)?.length ?? 0) > 0) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [eventChannel]);
 
   // On unmount: clear buffer if process is done (or clearBufferOnClose is set)
   useEffect(() => {
@@ -116,7 +126,6 @@ export function CommandOutputPanel({
         clearOutputBuffer(eventChannel);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventChannel, clearBufferOnClose]);
 
   // Subscribe to the Tauri event channel
@@ -143,12 +152,19 @@ export function CommandOutputPanel({
     }
   }, [lines, autoScroll]);
 
-  // Elapsed time counter — resets when the event channel changes.
+  // Elapsed time counter — resets when the event channel changes. The
+  // display resets (finalElapsed/elapsed) are compared during render rather
+  // than set synchronously at the top of the effect below.
+  const [prevEventChannel, setPrevEventChannel] = useState(eventChannel);
+  if (eventChannel !== prevEventChannel) {
+    setPrevEventChannel(eventChannel);
+    setFinalElapsed(null);
+    setElapsed("0s");
+  }
+
   useEffect(() => {
     startTimeRef.current = new Date();
     completedRef.current = false;
-    setFinalElapsed(null);
-    setElapsed("0s");
 
     const interval = setInterval(() => {
       if (completedRef.current) {
@@ -195,7 +211,7 @@ export function CommandOutputPanel({
       {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-2 border-b"
-        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "rgba(10,10,30,0.8)" }}
+        style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "var(--surface-elevated)" }}
       >
         <div className="flex items-center gap-2">
           <Terminal className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />

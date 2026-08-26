@@ -23,7 +23,7 @@ import { Toaster } from "sonner";
 
 const toasterOptions = {
   style: {
-    background: "rgba(10,10,30,0.95)",
+    background: "var(--popover)",
     border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
     color: "var(--text-primary)",
   },

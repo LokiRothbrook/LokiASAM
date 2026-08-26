@@ -12,7 +12,8 @@
  */
 
 import { useEffect } from "react";
-import { getServers } from "@/lib/db";
+import { useQueryClient } from "@tanstack/react-query";
+import { getServersCached } from "@/lib/server-utils";
 import { tauriCmd, type ServerStatus } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 
@@ -30,21 +31,23 @@ async function startWatcher(serverId: string, installPath: string) {
 }
 
 export function LogWatcherManager() {
+  const queryClient = useQueryClient();
+
   // ── Start watchers for all running/starting servers on mount ─────────────
   useEffect(() => {
-    getServers().then((servers) => {
+    getServersCached(queryClient).then((servers) => {
       for (const s of servers) {
         if (s.status === "running" || s.status === "starting") {
           startWatcher(s.id, s.install_path);
         }
       }
     }).catch(() => null);
-  }, []);
+  }, [queryClient]);
 
   // ── React to server lifecycle changes ────────────────────────────────────
   useTauriEvent<ServerStatus>("server://any-change", (payload) => {
     if (payload.status === "running" || payload.status === "starting") {
-      getServers().then((servers) => {
+      getServersCached(queryClient).then((servers) => {
         const s = servers.find((srv) => srv.id === payload.serverId);
         if (s) startWatcher(s.id, s.install_path);
       }).catch(() => null);

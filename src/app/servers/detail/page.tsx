@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Server, LayoutDashboard, Settings2, Terminal,
-  ScrollText, Package, Archive, CalendarClock,
+  ScrollText, Package, Archive, CalendarClock, Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,23 +17,21 @@ import { LogsTab } from "@/components/server/tabs/LogsTab";
 import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
-import { getServer, formatServerVersion } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
-import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { useQueryClient } from "@tanstack/react-query";
-import { updateServerStatus } from "@/lib/db";
-import type { ServerRow } from "@/lib/db";
-import type { ServerStatus } from "@/lib/tauri-commands";
+import { MaintenanceTab } from "@/components/server/tabs/MaintenanceTab";
+import { formatServerVersion } from "@/lib/db";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { useServers } from "@/hooks/useServers";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 
 const TABS = [
-  { value: "overview",   label: "Overview",   icon: LayoutDashboard },
-  { value: "config",     label: "Config",     icon: Settings2 },
-  { value: "rcon",       label: "RCON",       icon: Terminal },
-  { value: "logs",       label: "Logs",       icon: ScrollText },
-  { value: "mods",       label: "Mods",       icon: Package },
-  { value: "backups",    label: "Backups",    icon: Archive },
-  { value: "automation", label: "Automation", icon: CalendarClock },
+  { value: "overview",    label: "Overview",    icon: LayoutDashboard },
+  { value: "config",      label: "Config",      icon: Settings2 },
+  { value: "rcon",        label: "RCON",        icon: Terminal },
+  { value: "logs",        label: "Logs",        icon: ScrollText },
+  { value: "mods",        label: "Mods",        icon: Package },
+  { value: "backups",     label: "Backups",     icon: Archive },
+  { value: "automation",  label: "Automation",  icon: CalendarClock },
+  { value: "maintenance", label: "Maintenance", icon: Wrench },
 ] as const;
 
 type TabValue = typeof TABS[number]["value"];
@@ -47,42 +45,29 @@ type TabValue = typeof TABS[number]["value"];
 export default function ServerDetailPage() {
   const params = useSearchParams();
   const router = useRouter();
-  const queryClient = useQueryClient();
 
   const serverId = params.get("id") ?? "";
   const tabParam = (params.get("tab") as TabValue | null) ?? "overview";
 
-  const [server, setServer] = useState<ServerRow | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
   const [activeTab, setActiveTab] = useState<TabValue>(tabParam);
   const versionCache = useBuildVersionCache();
+  const allMaps = useAllMaps();
 
-  // ── Load server row ──────────────────────────────────────────────────────
-  const reload = async () => {
-    if (!serverId) return;
-    try {
-      const s = await getServer(serverId);
-      if (!s) { setNotFound(true); } else { setServer(s); }
-    } catch { setNotFound(true); }
-    finally { setLoading(false); }
-  };
+  // Shares the same ["servers"] cache as the dashboard and every mutation
+  // across the app (Config/Automation saves, status events, etc. all
+  // invalidate this same key) — previously this page kept its own local copy
+  // of the row, refreshed only by its own narrow server://status/{id}
+  // listener, so a save from one tab (e.g. Config) wasn't reflected here
+  // until a later, unrelated status event happened to trigger a reload —
+  // in the meantime a second save from another tab (e.g. Automation) would
+  // silently overwrite the first using this page's stale copy as its base.
+  const { data: servers = [], isLoading } = useServers();
+  const server = servers.find((s) => s.id === serverId) ?? null;
+  const notFound = !isLoading && !server;
 
   useEffect(() => {
-    if (!serverId) { router.replace("/"); return; }
-    reload();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId]);
-
-  // ── Live status updates from backend ────────────────────────────────────
-  useTauriEvent<ServerStatus>(`server://status/${serverId}`, async (payload) => {
-    if (!serverId) return;
-    // Sync status + pid to SQLite then reload the row so UI reflects the change
-    await updateServerStatus(serverId, payload.status, payload.pid ?? null);
-    queryClient.invalidateQueries({ queryKey: ["servers"] });
-    const updated = await getServer(serverId);
-    if (updated) setServer(updated);
-  });
+    if (!serverId) router.replace("/");
+  }, [serverId, router]);
 
   // ── Tab change: keep ?tab= in sync ──────────────────────────────────────
   const handleTabChange = (value: string) => {
@@ -93,8 +78,18 @@ export default function ServerDetailPage() {
     window.history.replaceState(null, "", url.toString());
   };
 
+  // Switch tabs, then (if given) scroll a target section into view once the
+  // new tab's content has mounted. Used by cross-tab "Configure →" / "Edit →"
+  // links (Overview's Active Event, Automation's warning-message links).
+  const navigateToTab = (tab: TabValue, anchor?: string) => {
+    handleTabChange(tab);
+    if (anchor) {
+      setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+    }
+  };
+
   // ── Loading / error states ───────────────────────────────────────────────
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex flex-col gap-6">
         <Skeleton className="h-8 w-72" />
@@ -124,7 +119,7 @@ export default function ServerDetailPage() {
     );
   }
 
-  const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
+  const mapDisplay = allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   return (
     <div className="flex flex-col h-full overflow-hidden gap-6">
@@ -198,16 +193,32 @@ export default function ServerDetailPage() {
       {/* ── Tab content ── */}
       {(activeTab === "rcon" || activeTab === "logs" || activeTab === "mods") ? (
         <div className="flex-1 min-h-0 overflow-hidden">
-          {activeTab === "rcon" && <RconTab  server={server} />}
+          {activeTab === "rcon" && <RconTab key={server.id} server={server} />}
           {activeTab === "logs" && <LogsTab  server={server} />}
           {activeTab === "mods" && <ModsTab  server={server} />}
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
-          {activeTab === "overview"   && <OverviewTab   server={server} />}
-          {activeTab === "config"     && <ConfigTab     server={server} />}
-          {activeTab === "backups"    && <BackupsTab    server={server} />}
-          {activeTab === "automation" && <AutomationTab server={server} />}
+          {activeTab === "overview" && (
+            <OverviewTab
+              server={server}
+              onNavigateToConfig={(anchor) => navigateToTab("config", anchor)}
+            />
+          )}
+          {activeTab === "config" && <ConfigTab server={server} />}
+          {activeTab === "backups" && (
+            <BackupsTab
+              server={server}
+              onNavigateToAutomation={() => navigateToTab("automation", "backup-schedules-section")}
+            />
+          )}
+          {activeTab === "automation" && (
+            <AutomationTab
+              server={server}
+              onNavigateToConfig={(anchor) => navigateToTab("config", anchor)}
+            />
+          )}
+          {activeTab === "maintenance" && <MaintenanceTab server={server} />}
         </div>
       )}
     </div>

@@ -12,7 +12,7 @@
  * passes children through immediately to avoid blocking development.
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 import { SetupWizard } from "@/components/wizard/SetupWizard";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { ServerCreationWizard } from "@/components/wizard/ServerCreationWizard";
@@ -27,17 +27,18 @@ interface SetupGuardProps {
   children: React.ReactNode;
 }
 
+// SSR-safe environment check — `window` is undefined during server render and
+// defined once hydrated on the client; this never changes after that, so it
+// doesn't need to be tracked as state.
+const isTauri =
+  typeof window !== "undefined" &&
+  !!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+
 export function SetupGuard({ children }: SetupGuardProps) {
   const { setupChecked, setupComplete, setSetupChecked, setSetupComplete, showNewServerWizard, setShowNewServerWizard } = useAppStore();
-  const [isTauri, setIsTauri] = useState(false);
 
   useEffect(() => {
-    const inTauri =
-      typeof window !== "undefined" &&
-      !!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-    setIsTauri(inTauri);
-
-    if (!inTauri) {
+    if (!isTauri) {
       // Not running in Tauri — skip setup check (dev mode / browser)
       setSetupChecked(true);
       setSetupComplete(true);
@@ -97,7 +98,7 @@ export function SetupGuard({ children }: SetupGuardProps) {
 
   // First-time tray-hide hint: show an OS notification once so the user knows
   // the app is still running in the background.
-  const handleTrayFirstHide = useCallback(async (_payload: unknown) => {
+  const handleTrayFirstHide = useCallback(async () => {
     try {
       const already = await getAppSetting("tray_hint_shown");
       if (already === "true") return;

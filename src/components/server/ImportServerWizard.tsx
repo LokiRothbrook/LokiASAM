@@ -11,9 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { tauriCmd, type DetectedServerConfig } from "@/lib/tauri-commands";
 import {
-  createServer, saveServerConfig, getAppSetting, isServerNameTaken,
+  createServer, saveServerConfig, isServerNameTaken,
 } from "@/lib/db";
-import { ARK_MAPS } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import { open } from "@tauri-apps/plugin-dialog";
 
 // ---------------------------------------------------------------------------
@@ -124,6 +124,7 @@ interface Step2Props {
 }
 
 function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
+  const allMaps = useAllMaps();
   const [name, setName]           = useState(detected.sessionName ?? "");
   const [mapId, setMapId]         = useState("theisland");
   const [port, setPort]           = useState(String(detected.port ?? 7777));
@@ -137,11 +138,14 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
   const handleImport = async () => {
     if (!name.trim()) { toast.error("Server name is required."); return; }
     if (await isServerNameTaken(name.trim())) { toast.error("A server with that name already exists."); return; }
+    // adminPass is now the only password used for RCON auth too — it must match
+    // whatever ServerAdminPassword the imported INI actually has, or RCON will
+    // never authenticate.
+    if (!adminPass.trim()) { toast.error("Admin password is required — it's also used to connect via RCON."); return; }
 
     setSaving(true);
     try {
       const id = crypto.randomUUID();
-      const rconPassword = crypto.randomUUID().slice(0, 12);
 
       await createServer({
         id,
@@ -151,7 +155,6 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         port: parseInt(port) || 7777,
         queryPort: parseInt(queryPort) || 27015,
         rconPort: parseInt(rconPort) || 27020,
-        rconPassword,
         maxPlayers: parseInt(maxPlayers) || 70,
         serverPassword: serverPass.trim() || undefined,
         adminPassword: adminPass.trim(),
@@ -199,7 +202,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         <div className="space-y-1 sm:col-span-2">
           <Label style={{ color: "var(--text-primary)" }}>Map</Label>
           <div className="flex flex-wrap gap-2">
-            {ARK_MAPS.filter((m) => m.released).map((m) => (
+            {allMaps.filter((m) => m.released).map((m) => (
               <button
                 key={m.id}
                 onClick={() => setMapId(m.id)}
@@ -255,7 +258,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}
       >
         <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
-        A new RCON password will be generated. Save data, configs, and mods are left untouched — only a database record is created.
+        The admin password above is reused for RCON — it must match the server&apos;s existing ServerAdminPassword. Save data, configs, and mods are left untouched — only a database record is created.
       </div>
 
       <div className="flex gap-3">

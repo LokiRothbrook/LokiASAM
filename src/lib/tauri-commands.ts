@@ -102,12 +102,6 @@ export interface ProtonUpdateInfo {
   downloadUrl: string;
 }
 
-export interface ProcessStats {
-  cpuPercent: number;
-  memoryMb: number;
-  pid: number;
-}
-
 export interface ServerQueryResult {
   name: string;
   map: string;
@@ -306,8 +300,6 @@ export interface SchedulerFiredPayload {
   scheduleType: string;
   success: boolean;
   error?: string;
-  /** All backup records created by this firing (player backups produce one per player). */
-  backupRecords: BackupRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -321,9 +313,11 @@ export const tauriCmd = {
     invoke<number>("start_server", { params }),
   stopServer: (serverId: string, graceful: boolean) =>
     invoke<void>("stop_server", { serverId, graceful }),
-  /** Restart with the same params. Returns the new PID. */
+  /** Stops the server, then hands off to the staggered startup queue rather
+   *  than restarting directly — the caller should not expect the server to
+   *  be running by the time this resolves. */
   restartServer: (params: StartServerParams, graceful: boolean) =>
-    invoke<number>("restart_server", { params, graceful }),
+    invoke<void>("restart_server", { params, graceful }),
   getServerStatus: (serverId: string) =>
     invoke<ServerStatus>("get_server_status", { serverId }),
   /** Scan for running ASA server processes by install path. Returns the live
@@ -337,9 +331,22 @@ export const tauriCmd = {
    */
   cloneServer: (sourceInstallPath: string, destInstallPath: string) =>
     invoke<void>("clone_server", { sourceInstallPath, destInstallPath }),
-  /** Delete server files from disk. DB record deletion is done separately via db.ts. */
-  deleteServer: (serverId: string, installPath: string, deleteFiles: boolean) =>
-    invoke<void>("delete_server", { serverId, installPath, deleteFiles }),
+  /** Delete server files and optional data from disk. DB record deletion is done separately via db.ts. */
+  deleteServer: (
+    serverId: string,
+    installPath: string,
+    backupDir: string,
+    baseDir: string,
+    deleteFiles: boolean,
+    deleteBackups: boolean,
+    deleteLogs: boolean,
+    deleteSaves: boolean,
+  ) => invoke<void>("delete_server", { serverId, installPath, backupDir, baseDir, deleteFiles, deleteBackups, deleteLogs, deleteSaves }),
+  /** Return on-disk byte counts for a server's backups, logs, and save data. */
+  getServerDiskUsage: (serverId: string, backupDir: string, baseDir: string) =>
+    invoke<{ backupBytes: number; logBytes: number; saveBytes: number }>("get_server_disk_usage", { serverId, backupDir, baseDir }),
+  /** Return the total size in bytes of any directory path. Returns 0 if path doesn't exist. */
+  getDirSize: (path: string) => invoke<number>("get_dir_size", { path }),
 
   // SteamCMD / installation
   /** Download and extract SteamCMD to targetDir. Streams to steamcmd://output/setup. */
@@ -515,36 +522,50 @@ export const tauriCmd = {
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
 
   // Backups
+  //
+  // `mapPath` is the launch/CLI map name (e.g. TheIsland_WP) — used for the
+  // Mods/{mapPath}/SaveGames archive convention, which is LokiASAM's own
+  // internal structure and never needs to change.
+  // `saveFolder` is the real on-disk SavedArks subfolder name — identical to
+  // mapPath for almost every map, except Club ARK (see getSaveFolder() /
+  // ArkMap.saveFolder in game-data.ts). Always compute it via getSaveFolder().
+
   /** Server backup: SaveWorld → cleanup ARK files → 7z SavedArks+SaveGames. */
   createServerBackup: (
-    serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string, tier = "", saveFolderName?: string,
-  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, tier, saveFolderName: saveFolderName ?? null }),
+    serverId: string, serverName: string, installPath: string, mapPath: string, saveFolder: string,
+    mapId: string, backupDir: string, triggeredBy: string, tier = "", baseDir = "",
+  ) => invoke<BackupRecord>("create_server_backup", { serverId, serverName, installPath, mapPath, saveFolder, mapId, backupDir, triggeredBy, tier, baseDir }),
 
   /** Player backup: 7z a single .arkprofile file. */
   createPlayerBackup: (
-    serverId: string, serverName: string, installPath: string, mapPath: string,
+    serverId: string, serverName: string, installPath: string, saveFolder: string,
     mapId: string, backupDir: string, eosId: string, playerName: string, triggeredBy: string, tier = "",
-  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, mapPath, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
+  ) => invoke<BackupRecord>("create_player_backup", { serverId, serverName, installPath, saveFolder, mapId, backupDir, eosId, playerName, triggeredBy, tier }),
 
-  /** Back up every .arkprofile in SavedArks/{mapPath}/ in one call. */
+  /** Back up every .arkprofile in SavedArks/{saveFolder}/ in one call. */
   backupAllPlayers: (
-    serverId: string, serverName: string, installPath: string, mapPath: string,
-    mapId: string, backupDir: string, triggeredBy: string, saveFolderName?: string,
-  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, mapPath, mapId, backupDir, triggeredBy, saveFolderName: saveFolderName ?? null }),
+    serverId: string, serverName: string, installPath: string, saveFolder: string,
+    mapId: string, backupDir: string, triggeredBy: string,
+  ) => invoke<BackupRecord[]>("backup_all_players", { serverId, serverName, installPath, saveFolder, mapId, backupDir, triggeredBy }),
 
   /** INI backup: copy loose INI files into a rotating timestamped folder. */
   createIniBackup: (serverId: string, installPath: string, backupDir: string) =>
     invoke<IniBackupRecord>("create_ini_backup", { serverId, installPath, backupDir }),
-  /** Wipe server save files. tier: "map" | "players" | "full". Server must be stopped. */
-  wipeServerSaves: (installPath: string, saveFolderName: string, tier: "map" | "players" | "full") =>
-    invoke<void>("wipe_server_saves", { installPath, saveFolderName, tier }),
-  /** Create a symlink (Linux) or NTFS junction point (Windows) from
-   *  {installPath}/ShooterGame/Saved/SavedArks/{saveFolderName}
-   *  → {baseDir}/Saves/{saveFolderName}/
-   *  so -SaveDirectoryOverride writes saves to the managed Saves folder. */
-  createSaveLink: (installPath: string, saveFolderName: string, baseDir: string) =>
-    invoke<void>("create_save_link", { installPath, saveFolderName, baseDir }),
+  /** Wipe server save files. tier: "map" | "players" | "full". Server must be stopped.
+   *  saveFolder is the real on-disk SavedArks folder name (e.g. TheIsland_WP). */
+  wipeServerSaves: (serverId: string, installPath: string, saveFolder: string, tier: "map" | "players" | "full") =>
+    invoke<void>("wipe_server_saves", { serverId, installPath, saveFolder, tier }),
+  /** Create a symlink (Linux) or NTFS junction (Windows) so that
+   *  {installPath}/ShooterGame/Saved/SavedArks → {baseDir}/Saves/{serverId}/SavedArks */
+  createSaveLink: (installPath: string, serverId: string, baseDir: string) =>
+    invoke<void>("create_save_link", { installPath, serverId, baseDir }),
+  /** Create a symlink (Linux) or NTFS junction (Windows) for mod saves so that
+   *  {installPath}/ShooterGame/Saved/SaveGames → {baseDir}/Saves/{serverId}/Mods/{mapPath}/SaveGames */
+  createModsSavesLink: (installPath: string, serverId: string, baseDir: string, mapPath: string) =>
+    invoke<void>("create_mods_saves_link", { installPath, serverId, baseDir, mapPath }),
+  /** Copy the current map's save subfolder from one server to another. Both servers must be stopped. */
+  importServerSaves: (sourceServerId: string, targetServerId: string, baseDir: string, saveFolder: string) =>
+    invoke<void>("import_server_saves", { sourceServerId, targetServerId, baseDir, saveFolder }),
 
   /** Full backup: 7z the entire install_path directory. */
   createFullBackup: (
@@ -556,17 +577,17 @@ export const tauriCmd = {
   listIniBackups: (serverId: string, backupDir: string) =>
     invoke<string[]>("list_ini_backups", { serverId, backupDir }),
 
-  /** Restore a server backup: extract 7z over SavedArks+SaveGames. */
-  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string) =>
-    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath }),
+  /** Restore a server backup: extract 7z to canonical locations and recreate symlinks. */
+  restoreServerBackup: (serverId: string, backupFilePath: string, installPath: string, baseDir: string, mapPath: string, saveFolder: string) =>
+    invoke<void>("restore_server_backup", { serverId, backupFilePath, installPath, baseDir, mapPath, saveFolder }),
 
-  /** Restore a player backup: extract 7z into SavedArks/{mapPath}. */
-  restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, mapPath: string) =>
-    invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, mapPath }),
+  /** Restore a player backup: extract 7z into SavedArks/{saveFolder}. */
+  restorePlayerBackup: (serverId: string, backupFilePath: string, installPath: string, saveFolder: string) =>
+    invoke<void>("restore_player_backup", { serverId, backupFilePath, installPath, saveFolder }),
 
-  /** Restore an INI backup: copy loose INI files back to Config/{platform}. */
-  restoreIniBackup: (backupFolderPath: string, installPath: string, platform: string) =>
-    invoke<void>("restore_ini_backup", { backupFolderPath, installPath, platform }),
+  /** Restore an INI backup: copy loose INI files back to Config/WindowsServer. */
+  restoreIniBackup: (serverId: string, backupFolderPath: string, installPath: string) =>
+    invoke<void>("restore_ini_backup", { serverId, backupFolderPath, installPath }),
 
   /** Restore a full backup: extract 7z over the entire install_path. */
   restoreFullBackup: (serverId: string, backupFilePath: string, installPath: string) =>
@@ -576,8 +597,8 @@ export const tauriCmd = {
   deleteBackup: (filePath: string) => invoke<void>("delete_backup", { filePath }),
 
   /** Delete ARK's own timestamped .ark backups and .profilebak files. */
-  cleanupArkOwnBackups: (installPath: string, mapPath: string) =>
-    invoke<number>("cleanup_ark_own_backups", { installPath, mapPath }),
+  cleanupArkOwnBackups: (installPath: string, mapPath: string, saveFolder: string) =>
+    invoke<number>("cleanup_ark_own_backups", { installPath, mapPath, saveFolder }),
 
   /** Estimate total uncompressed size of a directory in bytes. */
   estimateDirSize: (dirPath: string) => invoke<number>("estimate_dir_size", { dirPath }),
@@ -638,11 +659,15 @@ export const tauriCmd = {
   wipeLokiAsamDir: (path: string, fullWipe: boolean) => invoke<void>("wipe_lokiasam_dir", { path, fullWipe }),
   /** Recursively delete a directory. Idempotent — returns Ok if path doesn't exist. */
   deleteDirectory: (path: string) => invoke<void>("delete_directory", { path }),
+  /** Remap all paths in the database from old_base_dir to new_base_dir during import. */
+  remapImportPaths: (dbPath: string, oldBaseDir: string, newBaseDir: string) => invoke<void>("remap_import_paths", { dbPath, oldBaseDir, newBaseDir }),
   /**
    * Request cancellation of a running operation by key.
    * Known keys: "steamcmd_install", "proton_download", "server_{serverId}".
    */
   abortOperation: (opId: string) => invoke<void>("abort_operation", { opId }),
+  /** Returns the IDs of all currently active background operations. */
+  getRunningOps: () => invoke<string[]>("get_running_ops"),
   /**
    * Move the base directory from oldDir to newDir.
    * Tries an atomic rename first; falls back to copy+delete for cross-volume moves.
@@ -651,7 +676,6 @@ export const tauriCmd = {
    */
   moveBaseDir: (oldDir: string, newDir: string, createBackup: boolean) =>
     invoke<string>("move_base_dir", { oldDir, newDir, createBackup }),
-  getProcessStats:    (pid: number, installPath?: string) => invoke<ProcessStats>("get_process_stats", { pid, installPath: installPath ?? null }),
   getPlatform:        () => invoke<string>("get_platform"),
   /** Open the Rust-side stats recorder DB connection at the given absolute path.
    *  Must be called after initDb() has run all migrations on the same file. */
@@ -693,7 +717,7 @@ export const tauriCmd = {
   // Clusters
   createCluster:          (name: string, baseDir: string, clusterDirOverride?: string) =>
     invoke<string>("create_cluster", { name, baseDir, clusterDirOverride }),
-  deleteCluster:          (clusterId: string) => invoke<void>("delete_cluster", { clusterId }),
+  deleteCluster:          (clusterDir: string, baseDir: string, deleteFiles: boolean) => invoke<void>("delete_cluster", { clusterDir, baseDir, deleteFiles }),
   addServerToCluster:     (serverId: string, clusterId: string) =>
     invoke<void>("add_server_to_cluster", { serverId, clusterId }),
   removeServerFromCluster: (serverId: string) =>

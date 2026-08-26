@@ -135,7 +135,7 @@ const initialState = {
   closeToTray: true,
   asaAutoCheckHours: "startup",
   appUpdateCheckMode: "startup",
-  protonCheckMode: "startup_hourly",
+  protonCheckMode: "startup",
   themePreset: "storm",
   themeAccent: "blue",
   isLoading: false,
@@ -151,7 +151,15 @@ export const useSetupStore = create<SetupState>((set, get) => ({
   setImportMode: (importMode) => set({ importMode }),
   setImportDir: (importDir) => set({ importDir }),
   setImportValid: (importValid) => set({ importValid }),
-  setBaseDir: (baseDir) => set({ baseDir }),
+  // Resetting steamcmdValidated/protonValidated here (not just in BaseDirStep)
+  // means every caller that changes baseDir is automatically covered — going
+  // back and picking a different base directory after already validating
+  // SteamCMD/Proton for the old one used to leave both steps showing "Ready"
+  // (their validated flags didn't know they applied to a now-stale path),
+  // letting Finish write install paths that were never actually checked.
+  setBaseDir: (baseDir) => set((s) => (
+    baseDir === s.baseDir ? { baseDir } : { baseDir, steamcmdValidated: false, protonValidated: false }
+  )),
   setBaseDirWritable: (baseDirWritable) => set({ baseDirWritable }),
   setBackupDir: (backupDir) => set({ backupDir }),
   setBackupDirWritable: (backupDirWritable) => set({ backupDirWritable }),

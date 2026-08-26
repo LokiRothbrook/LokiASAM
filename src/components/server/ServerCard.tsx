@@ -40,21 +40,22 @@ import { CommandOutputPanel, clearOutputBuffer } from "@/components/shared/Comma
 import { ServerStatusBadge } from "./ServerStatusBadge";
 import { ServerActionMenu } from "./ServerActionMenu";
 import { useServerStats } from "@/hooks/useServerStats";
-import { tauriCmd, type StartServerParams } from "@/lib/tauri-commands";
+import { tauriCmd } from "@/lib/tauri-commands";
 import {
   updateServerStatus,
-  getServerConfig,
   getServerModCount,
-  getServerMods,
   getLastBackupTime,
   getNextScheduledRestart,
   getHasBackupEnabled,
   getAppSetting,
-  resetServersFromStatus,
 } from "@/lib/db";
-import { applyUpdateToServer } from "@/lib/update-utils";
+import { applyUpdateToServer, isAutoUpdateImmediate } from "@/lib/update-utils";
+import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
-import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
+import { buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
@@ -138,6 +139,7 @@ export function ServerCard({ server }: Props) {
   });
   const backupProgressUpdatedAt = useRef<number>(0);
   const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
+  const enqueueStartup = useAppStore((s) => s.enqueueStartup);
 
   useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,
@@ -148,9 +150,11 @@ export function ServerCard({ server }: Props) {
     }
   );
 
-  // Clear progress bar when Rust confirms the backup is fully recorded in DB.
+  // Clear progress bar when Rust confirms the backup is fully recorded in DB,
+  // and refresh the displayed "Last Backup" time to match.
   useTauriEvent(`backup://completed/${server.id}`, () => {
     setBackupProgress({ active: false, percent: 0, label: "" });
+    getLastBackupTime(server.id).then(setLastBackup).catch(() => {});
   });
 
   // Fallback: clear stale progress bar if no update received in 30s.
@@ -165,6 +169,9 @@ export function ServerCard({ server }: Props) {
   }, [backupProgress.active]);
 
   const hasUpdateAvailable  = server.update_available === 1;
+  // "When Found" automation applies this update within seconds of being
+  // flagged — the manual button would just race the scheduler, so disable it.
+  const autoUpdateImmediate = isAutoUpdateImmediate(server);
   const isUpdateQueued      = server.status === "update_queued";
   const isStartupQueued     = server.status === "startup_queued";
 
@@ -176,8 +183,9 @@ export function ServerCard({ server }: Props) {
     return () => clearInterval(id);
   }, [server.status]);
 
+  const allMaps = useAllMaps();
   const mapDisplay =
-    ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
+    allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   const isRunning       = server.status === "running";
   const isStarting      = server.status === "starting";
@@ -188,6 +196,24 @@ export function ServerCard({ server }: Props) {
   const isInstallFailed = server.status === "install_failed";
   const isStartFailed   = server.status === "start-failed";
   const isReinstallable = isInstallFailed || isStartFailed;
+
+  // Clear the steamcmd output buffer once this card goes away (navigating
+  // off the dashboard, or the server being removed) if nothing is actively
+  // installing/updating at that point — a fallback for the dialog-close
+  // cleanup below, which only fires if the user actually opens "View
+  // Progress" at least once. A server whose install was backgrounded from
+  // the creation wizard (same channel) and never inspected here would
+  // otherwise leave its buffer around for the rest of the session. Checking
+  // isActiveInstall only at actual unmount (not on every status change)
+  // avoids clearing it out from under a user who closes the dialog mid­
+  // install and reopens later to see the final output.
+  useEffect(() => {
+    return () => {
+      if (!isActiveInstall) {
+        clearOutputBuffer(`steamcmd://output/${server.id}`);
+      }
+    };
+  }, [server.id, isActiveInstall]);
 
   // Load secondary card data (mod count, backup, schedule, auto-check state).
   useEffect(() => {
@@ -213,50 +239,6 @@ export function ServerCard({ server }: Props) {
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
-  const isLinux =
-    typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows");
-
-  const buildStartParams = async (): Promise<StartServerParams> => {
-    const [config, mods] = await Promise.all([
-      getServerConfig(server.id),
-      getServerMods(server.id),
-    ]);
-    const launchArgs: Record<string, string> = config
-      ? JSON.parse(config.launch_args_json)
-      : {};
-
-    const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
-      if (!v || v === "false" || v === "0") return [];
-      const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-      if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-      if (param) return v ? [`${param.flag}${v}`] : [];
-      return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-    });
-
-    const map = ARK_MAPS.find((m) => m.id === server.map_id);
-    const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
-
-    const params: StartServerParams = {
-      serverId: server.id,
-      serverName: server.name,
-      installPath: server.install_path,
-      mapPath: map?.mapPath ?? "TheIsland_WP",
-      port: server.port,
-      queryPort: server.query_port,
-      rconPort: server.rcon_port,
-      rconPassword: server.rcon_password,
-      extraArgs,
-      modIds: enabledModIds,
-    };
-
-    if (isLinux) {
-      params.protonPath = (await getAppSetting("proton_path")) ?? undefined;
-      params.prefixPath = (await getAppSetting("proton_prefix_path")) ?? undefined;
-    }
-
-    return params;
-  };
-
   const handleStart = async () => {
     setActionPending(true);
     clearNoRetryServer(server.id);
@@ -264,8 +246,21 @@ export function ServerCard({ server }: Props) {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
 
+      // Ensure both save symlinks/junctions are in place before launching
+      const baseDir = await getAppSetting("base_dir").catch(() => null);
+      if (baseDir) {
+        await ensureMapsCacheLoaded().catch(() => {});
+        const mapPath = findMapById(server.map_id)?.mapPath ?? "TheIsland_WP";
+        await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+          console.warn("createSaveLink failed on start:", e);
+        });
+        await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed on start:", e);
+        });
+      }
+
       await warnIfFirewallMissing(server);
-      const params = await buildStartParams();
+      const params = await buildStartParams(server);
       const pid = await tauriCmd.startServer(params);
 
       // Stay "starting" — Rust backend emits server://status/{id} with "running"
@@ -297,19 +292,33 @@ export function ServerCard({ server }: Props) {
     }
   };
 
+  // Default entry point for the manual "Start" button — hands off to the
+  // staggered startup queue instead of launching directly, so it never piles
+  // a second simultaneous boot on top of whatever's currently starting.
+  // StartupQueueManager starts it right away if nothing else is starting, so
+  // this is indistinguishable from an immediate start in the common case.
+  // "Skip Queue" (shown once this server is actually waiting) bypasses this
+  // and calls handleStart() directly.
+  const handleQueueStart = async () => {
+    setActionPending(true);
+    clearNoRetryServer(server.id);
+    try {
+      await updateServerStatus(server.id, "startup_queued", null);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      enqueueStartup([server.id]);
+    } catch (err) {
+      toast.error(`Failed to queue ${server.name} to start`, { description: String(err) });
+    } finally {
+      setActionPending(false);
+    }
+  };
+
   const handleStop = async () => {
     setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      await tauriCmd.gracefulStopServer(
-        server.id,
-        server.rcon_port,
-        server.rcon_password,
-        server.shutdown_warn_players !== 0,
-        server.shutdown_warn_minutes ?? 5,
-        server.shutdown_message || "Server will shut down in {time}.",
-      );
+      await stopServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to stop ${server.name}`, { description: String(err) });
     } finally {
@@ -329,36 +338,18 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleRestart = async () => {
-    if (server.restart_warn_players) {
-      const startParams = await buildStartParams();
-      tauriCmd.startGracefulRestart({
-        serverId:      server.id,
-        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
-        rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
-        message:       server.restart_message || "Server restarting in {time}.",
-        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
-        startParams,
-      }).catch((err) => toast.error(`Restart failed: ${err}`));
-      return;
-    }
-
-    setActionPending(true);
+    // Only the plain (non-warn) path is a quick stop+handoff worth a pending
+    // spinner — the warn path runs a countdown that can last minutes.
+    const isWarnRestart = !!server.restart_warn_players;
+    if (!isWarnRestart) setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-
-      const params = await buildStartParams();
-      const newPid = await tauriCmd.restartServer(params, true);
-
-      await updateServerStatus(server.id, "running", newPid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await restartServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to restart ${server.name}`, { description: String(err) });
-      await updateServerStatus(server.id, "error", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
     } finally {
-      setActionPending(false);
+      if (!isWarnRestart) setActionPending(false);
     }
   };
 
@@ -373,14 +364,20 @@ export function ServerCard({ server }: Props) {
       if (!baseDir || !steamcmdPath) return;
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+      const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
+
+      // Show a visible transition immediately — otherwise the card sits on
+      // "running" with no feedback until the warning countdown finishes.
+      // Rust reverts this back to "running" if the countdown gets cancelled.
+      await updateServerStatus(server.id, "stopping", server.pid);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
 
       tauriCmd.startGracefulUpdate({
         serverId:      server.id,
         serverName:    server.name,
         warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
         rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
+        rconPassword:  server.admin_password,
         message:       server.update_message || "Server going down for update in {time}.",
         cancelMessage: server.update_cancel_message || "Update has been canceled.",
         installPath:   server.install_path,
@@ -402,9 +399,17 @@ export function ServerCard({ server }: Props) {
           server.install_path,
           wasRunning,
           restartAfterUpdate,
-          (msg) => toast.info(msg),
           server.rcon_port,
-          server.rcon_password,
+          server.admin_password,
+          {
+            // This branch only runs when the warn-players countdown path above
+            // wasn't taken (warn disabled, or server wasn't running) — still
+            // always saves the world and shuts down cleanly via RCON either way.
+            warnPlayers: false,
+            warnMinutes: server.update_warn_minutes ?? 5,
+            warnMessage: server.update_message || "Server going down for update in {time}.",
+          },
+          (msg) => toast.info(msg),
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -424,44 +429,14 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleReinstall = async () => {
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
+    setShowProgress(true);
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-
-      await updateServerStatus(server.id, "installing", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      setShowProgress(true);
-
-      try {
-        await tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath);
-        await updateServerStatus(server.id, "stopped", null);
-        dispatchNotification({
-          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_COMPLETE,
-          serverId:   server.id,
-          serverName: server.name,
-          title:      `${server.name} installed successfully`,
-          body:       "Server files are ready. You can start the server now.",
-          severity:   "success",
-        });
-      } catch {
-        await updateServerStatus(server.id, "install_failed", null).catch(() => {});
-        dispatchNotification({
-          eventType:  NOTIFICATION_EVENTS.SERVER_INSTALL_FAILED,
-          serverId:   server.id,
-          serverName: server.name,
-          title:      `${server.name} install failed`,
-          body:       "The server installation was canceled or failed.",
-          severity:   "error",
-        });
-      }
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await reinstallServer(server);
     } catch {
-      // Settings unavailable — cannot reinstall
+      // reinstallServer already set install_failed status and dispatched the failure notification
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
@@ -525,7 +500,10 @@ export function ServerCard({ server }: Props) {
             )}
           </div>
         </div>
-        <ServerActionMenu server={server} />
+        <ServerActionMenu
+          server={server}
+          onBackupComplete={() => { getLastBackupTime(server.id).then(setLastBackup).catch(() => {}); }}
+        />
       </div>
 
       {/* ── Stats grid ── */}
@@ -718,13 +696,22 @@ export function ServerCard({ server }: Props) {
                 <Loader2 className="w-3 h-3" /> Startup queued
               </span>
               <Button
+                size="sm" disabled={actionPending}
+                onClick={() => { removeFromStartupQueue(server.id); handleStart(); }}
+                className="gap-1.5 ml-auto"
+                title="Start immediately, skipping the wait for its turn"
+                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+              >
+                <Play className="w-3.5 h-3.5" /> Skip Queue
+              </Button>
+              <Button
                 size="sm" variant="outline"
                 onClick={async () => {
                   removeFromStartupQueue(server.id);
                   await updateServerStatus(server.id, "stopped", null);
                   queryClient.invalidateQueries({ queryKey: ["servers"] });
                 }}
-                className="gap-1.5 ml-auto"
+                className="gap-1.5"
                 style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
               >
                 <Ban className="w-3.5 h-3.5" /> Cancel
@@ -760,14 +747,14 @@ export function ServerCard({ server }: Props) {
               {/* Primary status button — always flex-1 so width is consistent */}
               {server.status === "stopping" ? (
                 <Button
-                  size="sm" onClick={handleForceStop} className="gap-1.5 flex-1"
+                  size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
                   style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
                 >
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
                 </Button>
               ) : isStarting ? (
                 <Button
-                  size="sm" onClick={handleForceStop} className="gap-1.5 flex-1"
+                  size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
                   style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
                 >
                   <X className="w-3.5 h-3.5" /> Cancel Startup
@@ -781,7 +768,7 @@ export function ServerCard({ server }: Props) {
                 </Button>
               ) : (
                 <Button
-                  size="sm" disabled={actionPending} onClick={handleStart} className="gap-1.5 flex-1"
+                  size="sm" disabled={actionPending} onClick={handleQueueStart} className="gap-1.5 flex-1"
                   style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
                 >
                   <Play className="w-3.5 h-3.5" /> Start
@@ -800,17 +787,21 @@ export function ServerCard({ server }: Props) {
               {hasUpdateAvailable && (
                 <Button
                   size="sm"
-                  disabled={actionPending || !autoCheckEnabled || isTransitioning || isStarting}
-                  onClick={() => autoCheckEnabled && setShowUpdateConfirm(true)}
-                  title={!autoCheckEnabled ? "Enable auto update checks in Settings" : undefined}
+                  disabled={actionPending || !autoCheckEnabled || autoUpdateImmediate || isTransitioning || isStarting}
+                  onClick={() => autoCheckEnabled && !autoUpdateImmediate && setShowUpdateConfirm(true)}
+                  title={
+                    autoUpdateImmediate ? "This server's When Found automation will apply the update automatically shortly"
+                    : !autoCheckEnabled ? "Enable auto update checks in Settings"
+                    : undefined
+                  }
                   className="gap-1.5"
                   style={{
-                    background:   autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
-                    borderColor:  autoCheckEnabled ? "rgba(255,165,0,0.5)"  : "rgba(255,165,0,0.2)",
-                    color:        autoCheckEnabled ? "#ffa500"              : "rgba(255,165,0,0.4)",
+                    background:   autoCheckEnabled && !autoUpdateImmediate ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
+                    borderColor:  autoCheckEnabled && !autoUpdateImmediate ? "rgba(255,165,0,0.5)"  : "rgba(255,165,0,0.2)",
+                    color:        autoCheckEnabled && !autoUpdateImmediate ? "#ffa500"              : "rgba(255,165,0,0.4)",
                   }}
                 >
-                  <ArrowUp className="w-3.5 h-3.5" /> Update
+                  <ArrowUp className="w-3.5 h-3.5" /> {autoUpdateImmediate ? "Auto-updating" : "Update"}
                 </Button>
               )}
             </>

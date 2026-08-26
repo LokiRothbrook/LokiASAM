@@ -78,14 +78,13 @@ pub struct ServerRow {
     pub name: String,
     pub map_id: String,
     pub install_path: String,
-    pub save_folder_name: Option<String>,
     pub backup_broadcast_message: Option<String>,
     pub memory_limit_gb: Option<f64>,
 }
 
 pub fn get_server(conn: &Connection, server_id: &str) -> Option<ServerRow> {
     conn.query_row(
-        "SELECT id, name, map_id, install_path, save_folder_name, backup_broadcast_message, memory_limit_gb FROM servers WHERE id = ?1",
+        "SELECT id, name, map_id, install_path, backup_broadcast_message, memory_limit_gb FROM servers WHERE id = ?1",
         [server_id],
         |row| {
             Ok(ServerRow {
@@ -93,9 +92,8 @@ pub fn get_server(conn: &Connection, server_id: &str) -> Option<ServerRow> {
                 name:                     row.get(1)?,
                 map_id:                   row.get(2)?,
                 install_path:             row.get(3)?,
-                save_folder_name:         row.get(4)?,
-                backup_broadcast_message: row.get(5)?,
-                memory_limit_gb:          row.get(6)?,
+                backup_broadcast_message: row.get(4)?,
+                memory_limit_gb:          row.get(5)?,
             })
         },
     )
@@ -104,7 +102,7 @@ pub fn get_server(conn: &Connection, server_id: &str) -> Option<ServerRow> {
 
 pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
     let mut stmt = match conn.prepare(
-        "SELECT id, name, map_id, install_path, save_folder_name, backup_broadcast_message, memory_limit_gb FROM servers",
+        "SELECT id, name, map_id, install_path, backup_broadcast_message, memory_limit_gb FROM servers",
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -118,13 +116,50 @@ pub fn get_servers(conn: &Connection) -> Vec<ServerRow> {
             name:                     row.get(1)?,
             map_id:                   row.get(2)?,
             install_path:             row.get(3)?,
-            save_folder_name:         row.get(4)?,
-            backup_broadcast_message: row.get(5)?,
-            memory_limit_gb:          row.get(6)?,
+            backup_broadcast_message: row.get(4)?,
+            memory_limit_gb:          row.get(5)?,
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())
     .unwrap_or_default()
+}
+
+/// Look up the on-disk map path for a user-added custom mod map, stored in
+/// the `custom_maps` table (see `ArkMap`/`useAllMaps` in game-data.ts —
+/// `map_id` values for custom maps are `custom_<uuid>`, where `<uuid>` is the
+/// `custom_maps.id` primary key). Returns `None` for a built-in map id or an
+/// id that no longer exists (map was deleted).
+pub fn get_custom_map_path(conn: &Connection, map_id: &str) -> Option<String> {
+    let raw_id = map_id.strip_prefix("custom_")?;
+    conn.query_row(
+        "SELECT map_path FROM custom_maps WHERE id = ?1",
+        [raw_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Read a server's current `status` column directly — used by the scheduler
+/// to detect a server that was sitting in the startup queue (not yet spawned)
+/// when its auto-update fired, which `running_servers` alone can't tell it,
+/// since that map only ever holds servers that have actually been spawned.
+pub fn get_server_status(conn: &Connection, server_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT status FROM servers WHERE id = ?1",
+        [server_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Clear the update_available flag after a scheduled update has been applied,
+/// so the UI stops showing "Update Available" and the auto-update scheduler
+/// (which only fires while this flag is set) doesn't keep re-firing.
+pub fn clear_update_available(conn: &Connection, server_id: &str) {
+    let _ = conn.execute(
+        "UPDATE servers SET update_available = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        [server_id],
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -396,12 +431,17 @@ pub struct NotifInsert<'a> {
 }
 
 pub fn log_notification(conn: &Connection, n: &NotifInsert) -> Result<(), String> {
+    // Explicit created_at (not SQLite's CURRENT_TIMESTAMP default) — must
+    // match the `YYYY-MM-DDTHH:MM:SS.sssZ` shape the frontend's own inserts
+    // use, or the two interleave out of chronological order under a plain
+    // text ORDER BY. See `commands::utils::now_iso_utc` for why.
     conn.execute(
         "INSERT INTO in_app_notifications \
-         (id, server_id, event_type, title, body, severity, read) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         (id, server_id, event_type, title, body, severity, read, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             n.id, n.server_id, n.event_type, n.title, n.body, n.severity, n.read,
+            crate::commands::utils::now_iso_utc(),
         ],
     )
     .map_err(|e| format!("log_notification failed: {e}"))?;

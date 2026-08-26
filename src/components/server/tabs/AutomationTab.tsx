@@ -1,21 +1,24 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
-  AlertTriangle, ChevronDown, ChevronUp,
+  AlertTriangle,
   ArrowUp, Clock, Zap, Skull, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
+import { useOnMount } from "@/hooks/useOnMount";
+import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
   setServerUpdateAutomation, updateBackupBroadcastMessage,
+  updateServerRestartSettings, updateServerUpdateSettings,
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
@@ -29,12 +32,6 @@ import type { ServerRow } from "@/lib/db";
 
 type ScheduleType = "restart" | "broadcast" | "wipe_dinos";
 type AddMode = "minutes" | "hours" | "daily";
-
-interface RestartConfig {
-  broadcastWarning: boolean;
-  warningMinutes: number;
-  message: string;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -287,6 +284,7 @@ function ScheduleListRow({ row, type, onDelete, onToggle, onSave }: {
 // ---------------------------------------------------------------------------
 
 interface CardProps {
+  server: ServerRow;
   serverId: string;
   type: ScheduleType;
   icon: React.ElementType;
@@ -294,21 +292,13 @@ interface CardProps {
   description: string;
   existing: ScheduleRow[];
   onRefresh: () => void;
+  onNavigateToConfig?: (anchor?: string) => void;
 }
 
-const DEFAULT_RESTART_CFG: RestartConfig = {
-  broadcastWarning: true,
-  warningMinutes: 15,
-  message: "Server restarting in {minutes} minutes. Progress will be saved.",
-};
-
-function ScheduleCard({ serverId, type, icon: Icon, title, description, existing, onRefresh }: CardProps) {
-  const [config, setConfig] = useState<RestartConfig>(() => ({
-    ...DEFAULT_RESTART_CFG,
-    ...(parseCfg(existing[0]?.config_json) as Partial<RestartConfig>),
-  }));
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [savedConfig,  setSavedConfig]  = useState(false);
+function ScheduleCard({ server, serverId, type, icon: Icon, title, description, existing, onRefresh, onNavigateToConfig }: CardProps) {
+  const queryClient = useQueryClient();
+  const [restartWarnPlayers, setRestartWarnPlayers] = useState(server.restart_warn_players !== 0);
+  const [savingRestartWarn, setSavingRestartWarn] = useState(false);
 
   const [addMode, setAddMode] = useState<AddMode>("daily");
   const [addNum,  setAddNum]  = useState(6);
@@ -318,26 +308,23 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
 
   const hasSchedules = existing.length > 0;
 
-  function patchConfig(patch: Partial<RestartConfig>) {
-    setConfig((c) => ({ ...c, ...patch }));
-  }
-
-  async function handleSaveConfig() {
-    setSavingConfig(true);
+  async function handleToggleRestartWarn(checked: boolean) {
+    setRestartWarnPlayers(checked);
+    setSavingRestartWarn(true);
     try {
-      for (const row of existing) {
-        const merged = { ...parseCfg(row.config_json), ...config };
-        const nextIso = getNextCronDate(row.cron_expression)?.toISOString() ?? new Date().toISOString();
-        await updateScheduleConfig(row.id, row.cron_expression, JSON.stringify(merged), nextIso);
-      }
-      setSavedConfig(true);
-      setTimeout(() => setSavedConfig(false), 2000);
-      onRefresh();
+      await updateServerRestartSettings(
+        server.id, checked,
+        server.restart_warn_minutes ?? 5,
+        server.restart_message || "Server restarting in {time}.",
+        server.restart_cancel_message || "Restart has been canceled.",
+      );
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       syncSchedulesToRust();
     } catch (e) {
-      toast.error(`Failed to save config: ${e}`);
+      setRestartWarnPlayers(!checked);
+      toast.error(`Failed to save: ${e}`);
     } finally {
-      setSavingConfig(false);
+      setSavingRestartWarn(false);
     }
   }
 
@@ -345,9 +332,13 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
     setAdding(true);
     try {
       const cron = buildCronFromMode(addMode, addMode === "daily" ? addTime : addNum);
+      // Restart schedules no longer carry their own warning config — the
+      // Rust scheduler pulls warning message/timing from the server's
+      // restart_warn_* fields (same ones the manual Restart button uses) so
+      // there's one warning message regardless of trigger.
       const configJson = type === "broadcast"
         ? JSON.stringify({ message: addMsg })
-        : JSON.stringify(config);
+        : "{}";
       const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
       const newId = crypto.randomUUID();
       const input: CreateScheduleInput = { id: newId, serverId, scheduleType: type, cronExpression: cron, enabled: true, configJson };
@@ -384,8 +375,6 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
     syncSchedulesToRust();
   }
 
-  const c = config;
-
   return (
     <div
       className="glass-card rounded-xl p-4 space-y-4"
@@ -416,51 +405,35 @@ function ScheduleCard({ serverId, type, icon: Icon, title, description, existing
         </div>
       </div>
 
-      {/* Restart shared config */}
+      {/* Restart warning — shared with the manual Restart button; edited in Settings */}
       {type === "restart" && (
         <div className="rounded-lg p-3 space-y-2"
           style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" checked={c.broadcastWarning ?? true}
-              onChange={(e) => patchConfig({ broadcastWarning: e.target.checked })}
-              className="w-3.5 h-3.5"
-              style={{ accentColor: "var(--neon-purple)" }} />
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Send in-game warning before restart
-            </span>
-          </label>
-          {c.broadcastWarning && (
-            <div className="flex gap-3 items-end pl-5">
-              <div className="space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>Warning minutes</label>
-                <Input type="number" min={1} max={60} value={c.warningMinutes ?? 15}
-                  onChange={(e) => patchConfig({ warningMinutes: parseInt(e.target.value, 10) || 15 })}
-                  className="h-7 w-20 text-xs"
-                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
-              </div>
-              <div className="flex-1 space-y-1">
-                <label className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Message <span style={{ color: "var(--text-subtle)" }}>({"{minutes}"} = countdown)</span>
-                </label>
-                <Input value={c.message ?? ""}
-                  onChange={(e) => patchConfig({ message: e.target.value })}
-                  placeholder="Server restarting in {minutes} minutes."
-                  className="h-7 text-xs"
-                  style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }} />
-              </div>
-            </div>
-          )}
-          <Button size="sm" onClick={handleSaveConfig} disabled={savingConfig}
-            className="gap-1.5 cursor-pointer"
-            style={{
-              background: savedConfig ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border:     savedConfig ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
-              color:      savedConfig ? "var(--neon-green)" : "var(--neon-purple)",
-            }}>
-            {savingConfig ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-            : savedConfig  ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
-            : "Save Config"}
-          </Button>
+          <div className="flex items-center justify-between gap-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={restartWarnPlayers}
+                disabled={savingRestartWarn}
+                onChange={(e) => handleToggleRestartWarn(e.target.checked)}
+                className="w-3.5 h-3.5"
+                style={{ accentColor: "var(--neon-purple)" }} />
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Warn players before restart
+              </span>
+            </label>
+            {restartWarnPlayers && (
+              <button
+                type="button"
+                onClick={() => onNavigateToConfig?.("restart-warning-section")}
+                className="text-xs shrink-0"
+                style={{ color: "var(--neon-cyan)" }}
+              >
+                Edit message →
+              </button>
+            )}
+          </div>
+          <p className="text-xs pl-5" style={{ color: "var(--text-subtle)" }}>
+            Same warning message and timing as the manual Restart button — edit it in Settings.
+          </p>
         </div>
       )}
 
@@ -523,11 +496,6 @@ function effectiveCron(tiers: Record<BackupTier, TierState>): string {
   return "0 * * * *";
 }
 
-/** Find the single consolidated backup schedule row for a given type. */
-function findBackupSchedule(schedules: ScheduleRow[], type: BackupScheduleType): ScheduleRow | null {
-  return schedules.find((s) => s.schedule_type === type) ?? null;
-}
-
 function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
   return schedules.find((s) => s.schedule_type === "backup_full") ?? null;
 }
@@ -537,14 +505,13 @@ function findFullSchedule(schedules: ScheduleRow[]): ScheduleRow | null {
 // ---------------------------------------------------------------------------
 
 function BackupTypeSection({
-  title, scheduleType, serverId, schedules, onRefresh, accentHex,
+  title, scheduleType, serverId, schedules, onRefresh,
 }: {
   title: string;
   scheduleType: BackupScheduleType;
   serverId: string;
   schedules: ScheduleRow[];
   onRefresh: () => void;
-  accentHex: string;
 }) {
   const buildState = (): Record<BackupTier, TierState> => {
     const s = {} as Record<BackupTier, TierState>;
@@ -583,9 +550,18 @@ function BackupTypeSection({
 
   const [tiers, setTiers] = useState<Record<BackupTier, TierState>>(buildState);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
-  useEffect(() => { setTiers(buildState()); }, [schedules.length, serverId, scheduleType]);
+  // Re-derive tiers when the upstream schedules genuinely change, compared
+  // during render (React's documented "adjusting state" pattern) rather than
+  // via an effect — buildState() is a pure computation from schedules/
+  // serverId/scheduleType, not an async fetch.
+  const tiersKey = `${serverId}:${scheduleType}:${schedules.length}`;
+  const [prevTiersKey, setPrevTiersKey] = useState(tiersKey);
+  if (tiersKey !== prevTiersKey) {
+    setPrevTiersKey(tiersKey);
+    setTiers(buildState());
+  }
 
   const patch = (tier: BackupTier, delta: Partial<TierState>) =>
     setTiers((s) => ({ ...s, [tier]: { ...s[tier], ...delta } }));
@@ -624,8 +600,7 @@ function BackupTypeSection({
         await updateScheduleConfig(newId, cron, configJson, nextIso);
       }
 
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
@@ -698,14 +673,19 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
   const [keep,    setKeep]    = useState<number>((cfg.keep as number) ?? 3);
   const [enabled, setEnabled] = useState(existing ? existing.enabled === 1 : false);
   const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
-  useEffect(() => {
+  // Re-derive keep/enabled when the upstream schedules genuinely change,
+  // compared during render rather than via an effect.
+  const fullKey = `${serverId}:${schedules.length}`;
+  const [prevFullKey, setPrevFullKey] = useState(fullKey);
+  if (fullKey !== prevFullKey) {
+    setPrevFullKey(fullKey);
     const row = findFullSchedule(schedules);
     const c = parseCfg(row?.config_json);
     setKeep((c.keep as number) ?? 3);
     setEnabled(row ? row.enabled === 1 : false);
-  }, [schedules.length, serverId]);
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -721,8 +701,7 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
         await createSchedule({ id: newId, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson });
         await updateScheduleConfig(newId, cron, configJson, nextIso);
       }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
@@ -782,7 +761,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
   const [keep,    setKeep]    = useState(3);
   const [enabled, setEnabled] = useState(false);
   const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   useEffect(() => {
     getAppSetting(`login_backup_keep_${serverId}`).then((v) => {
@@ -796,8 +775,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
     setSaving(true);
     try {
       await setAppSetting(`login_backup_keep_${serverId}`, enabled ? String(keep) : "0");
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save login backup config: ${e}`);
     } finally {
@@ -860,7 +838,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
 function ManualBackupRow({ serverId }: { serverId: string }) {
   const [keep,   setKeep]   = useState(5);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   useEffect(() => {
     getAppSetting(`manual_backup_keep_${serverId}`).then((v) => {
@@ -873,8 +851,7 @@ function ManualBackupRow({ serverId }: { serverId: string }) {
     setSaving(true);
     try {
       await setAppSetting(`manual_backup_keep_${serverId}`, String(Math.max(1, keep)));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      triggerSaved();
     } catch (e) {
       toast.error(`Failed to save manual backup config: ${e}`);
     } finally {
@@ -950,12 +927,10 @@ function BackupScheduleSection({ serverId, schedules, onRefresh }: {
 
       <div className="space-y-5 border-t pt-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.08)" }}>
         <BackupTypeSection title="Server Backups" scheduleType="backup_server"
-          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
-          accentHex="#bf00ff" />
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
         <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
         <BackupTypeSection title="Player Backups" scheduleType="backup_player"
-          serverId={serverId} schedules={schedules} onRefresh={onRefresh}
-          accentHex="#00ffff" />
+          serverId={serverId} schedules={schedules} onRefresh={onRefresh} />
         <LoginBackupRow serverId={serverId} />
         <ManualBackupRow serverId={serverId} />
         <div className="border-t" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
@@ -976,16 +951,39 @@ const DEFAULT_UPDATE_AUTOMATION: UpdateAutomation = {
   only_if_running: true,
 };
 
-function UpdateAutomationCard({ server }: { server: ServerRow }) {
+function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRow; onNavigateToConfig?: (anchor?: string) => void }) {
+  const queryClient = useQueryClient();
   const [automation, setAutomation] = useState<UpdateAutomation>(DEFAULT_UPDATE_AUTOMATION);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
+  const [updateWarnPlayers, setUpdateWarnPlayers] = useState(server.update_warn_players !== 0);
+  const [savingUpdateWarn, setSavingUpdateWarn] = useState(false);
+
+  const handleToggleUpdateWarn = async (checked: boolean) => {
+    setUpdateWarnPlayers(checked);
+    setSavingUpdateWarn(true);
+    try {
+      await updateServerUpdateSettings(
+        server.id, checked,
+        server.update_warn_minutes ?? 5,
+        server.update_message || "Server going down for update in {time}.",
+        server.update_cancel_message || "Update has been canceled.",
+      );
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      syncSchedulesToRust();
+    } catch (e) {
+      setUpdateWarnPlayers(!checked);
+      toast.error(`Failed to save: ${e}`);
+    } finally {
+      setSavingUpdateWarn(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
       const hours = await getAppSetting("asa_auto_check_hours");
-      setAutoCheckEnabled((hours ?? "0") !== "0");
+      setAutoCheckEnabled((hours ?? "disabled") !== "disabled");
       try {
         const raw = server.update_automation_json;
         if (raw && raw !== "{}") {
@@ -996,14 +994,22 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
   }, [server.id, server.update_automation_json]);
 
   const handleSave = async (patch: Partial<UpdateAutomation>) => {
+    const prev = automation;
     const next = { ...automation, ...patch };
     setAutomation(next);
     setSaving(true);
     try {
       await setServerUpdateAutomation(server.id, next);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      triggerSaved();
+      // Otherwise this change (e.g. enabling "When Found") sits inert until
+      // some unrelated schedule fire or app restart happens to resync.
+      syncSchedulesToRust();
     } catch (e) {
+      // Revert the optimistic update — otherwise the card keeps showing the
+      // unsaved change as if it persisted, silently diverging from the DB
+      // (and thus from what automation actually does) until remount.
+      setAutomation(prev);
       toast.error(`Failed to save update automation: ${e}`);
     } finally {
       setSaving(false);
@@ -1085,9 +1091,10 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
             style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)", color: "var(--text-muted)" }}>
             <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-cyan)" }} />
             <span>
-              Automated triggers are coming in a future update once proper RCON shutdown is implemented.
-              Settings are saved now so configuration is ready when the feature ships. Use the{" "}
-              <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards for manual updates.
+              Updates apply automatically once an update is detected — this requires the ASA cache
+              check in <strong style={{ color: "var(--text-primary)" }}>Settings → ASA Server Updates</strong>{" "}
+              to be set to On Startup or On Startup + Hourly. Applying an update uses the same graceful
+              shutdown as the <strong style={{ color: "var(--text-primary)" }}>Update</strong> button on server cards.
             </span>
           </div>
         )}
@@ -1095,6 +1102,29 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
 
       {automation.mode !== "off" && (
         <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
+          <div className="flex items-center justify-between gap-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={updateWarnPlayers}
+                disabled={savingUpdateWarn}
+                onChange={(e) => handleToggleUpdateWarn(e.target.checked)}
+                className="w-3.5 h-3.5"
+                style={{ accentColor: "var(--neon-purple)" }} />
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warn players before update</span>
+            </label>
+            {updateWarnPlayers && (
+              <button
+                type="button"
+                onClick={() => onNavigateToConfig?.("update-warning-section")}
+                className="text-xs shrink-0"
+                style={{ color: "var(--neon-cyan)" }}
+              >
+                Edit message →
+              </button>
+            )}
+          </div>
+          <p className="text-xs pl-5" style={{ color: "var(--text-subtle)" }}>
+            Same warning message and timing as the manual Apply Update button — edit it in Settings.
+          </p>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" checked={automation.restart_after_update}
               onChange={(e) => handleSave({ restart_after_update: e.target.checked })}
@@ -1122,6 +1152,7 @@ function UpdateAutomationCard({ server }: { server: ServerRow }) {
 // ---------------------------------------------------------------------------
 
 function BackupBroadcastCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
   const [message, setMessage] = useState(server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
   const [saving, setSaving] = useState(false);
   const dirty = message !== (server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
@@ -1130,6 +1161,7 @@ function BackupBroadcastCard({ server }: { server: ServerRow }) {
     setSaving(true);
     try {
       await updateBackupBroadcastMessage(server.id, message);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       toast.success("Backup message saved");
     } catch (e) {
       toast.error(`Failed to save: ${e}`);
@@ -1153,7 +1185,7 @@ function BackupBroadcastCard({ server }: { server: ServerRow }) {
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Backup message…"
           className="flex-1 text-xs"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
         />
         <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={handleSave}
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}>
@@ -1178,9 +1210,13 @@ const CARD_DEFS: { type: ScheduleType; icon: React.ElementType; title: string; d
 // AutomationTab
 // ---------------------------------------------------------------------------
 
-interface Props { server: ServerRow }
+interface Props {
+  server: ServerRow;
+  /** Switch the parent's active tab to Config; optionally pass a section id to scroll to. */
+  onNavigateToConfig?: (anchor?: string) => void;
+}
 
-export function AutomationTab({ server }: Props) {
+export function AutomationTab({ server, onNavigateToConfig }: Props) {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -1191,7 +1227,7 @@ export function AutomationTab({ server }: Props) {
     finally { setLoading(false); }
   }, [server.id]);
 
-  useEffect(() => { loadSchedules(); }, [loadSchedules]);
+  useOnMount(loadSchedules);
 
   function schedulesFor(type: ScheduleType): ScheduleRow[] {
     return schedules.filter((s) => s.schedule_type === type);
@@ -1229,12 +1265,13 @@ export function AutomationTab({ server }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
-          <UpdateAutomationCard server={server} />
+          <UpdateAutomationCard server={server} onNavigateToConfig={onNavigateToConfig} />
           <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
           <BackupBroadcastCard server={server} />
           {CARD_DEFS.map((def) => (
             <ScheduleCard
               key={def.type}
+              server={server}
               serverId={server.id}
               type={def.type}
               icon={def.icon}
@@ -1242,6 +1279,7 @@ export function AutomationTab({ server }: Props) {
               description={def.description}
               existing={schedulesFor(def.type)}
               onRefresh={loadSchedules}
+              onNavigateToConfig={onNavigateToConfig}
             />
           ))}
         </div>

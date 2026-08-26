@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{Emitter, Manager};
 
-use super::utils::collect_subtree;
+use super::utils::{collect_subtree, read_cstring};
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -139,7 +139,16 @@ pub struct DirCheckResult {
 /// the wizard (via write_bootstrap / the actual install commands).
 #[tauri::command]
 pub async fn check_dir(path: String) -> Result<DirCheckResult, String> {
-    let p = Path::new(&path);
+    // Entirely synchronous filesystem/sysinfo work — run it off the async
+    // executor so it can't block other in-flight commands (RCON polling,
+    // log tailing) on the same worker thread pool.
+    tokio::task::spawn_blocking(move || check_dir_blocking(&path))
+        .await
+        .map_err(|e| format!("check_dir task panicked: {e}"))?
+}
+
+fn check_dir_blocking(path: &str) -> Result<DirCheckResult, String> {
+    let p = Path::new(path);
 
     // Whether the target path itself exists (vs. needing to be created).
     let is_new = !p.exists();
@@ -263,117 +272,171 @@ pub async fn wipe_lokiasam_dir(path: String, full_wipe: bool) -> Result<(), Stri
     Ok(())
 }
 
-/// Return CPU % and RSS memory (MB) for a server process and ALL its descendants.
+// ---------------------------------------------------------------------------
+// Centralized stats collection
+// ---------------------------------------------------------------------------
+//
+// The stats-recorder background task in lib.rs used to call a per-server
+// get_process_stats command once per running server, every 5 s. Each call did
+// its own full-system
+// sysinfo refresh AND (on Linux) its own full /proc cmdline scan — meaning N
+// running servers meant N independent full-system scans every tick, all doing
+// synchronous/blocking file I/O directly on the async runtime's worker
+// threads (no spawn_blocking). That's both wasted CPU that scales with total
+// system process count and a real risk of starving every other command
+// (including the Quit button) behind that blocking work.
+//
+// `collect_all_server_stats` replaces that with one refresh + one blocking
+// pass covering every running server, using a `System` that persists across
+// ticks (so CPU deltas come from the natural 5 s tick interval instead of an
+// artificial extra sleep-and-refresh), and caching each server's expensive
+// install-path PID discovery so it only re-scans /proc periodically instead
+// of every single tick.
+
+/// Per-server cache of install-path-matched "extra root" PIDs. On Linux, when
+/// Steam is installed, Proton uses `steam-runtime-launcher-interface-0` to run
+/// Wine inside the Steam Runtime container daemon; Wine processes are children
+/// of that daemon service rather than of the tracked Proton PID, so a pure
+/// subtree walk misses them — this cmdline scan by `install_path` (unique per
+/// server, present in every Wine process's argv) finds them instead.
+/// Rediscovery via a full /proc cmdline scan is the expensive part, so it's only redone
+/// every `REDISCOVERY_INTERVAL_TICKS` ticks; in between we just re-walk the
+/// subtree of the previously-found roots against the freshly refreshed
+/// snapshot, which touches no files and is effectively free.
+#[derive(Default)]
+pub struct PidDiscoveryCache {
+    extra_roots: Vec<sysinfo::Pid>,
+    ticks_since_scan: u32,
+}
+
+const REDISCOVERY_INTERVAL_TICKS: u32 = 6; // ~30 s at the stats recorder's 5 s cadence
+
+/// Compute CPU%/memory for every currently-running server in a single pass.
 ///
-/// On Linux the tracked PID is the Proton launcher.  When Steam is installed,
-/// Proton uses `steam-runtime-launcher-interface-0` to run Wine inside the Steam
-/// Runtime container daemon; Wine processes are children of that *daemon service*
-/// rather than of the Proton PID, so a pure subtree walk returns only ~60 MB
-/// (the Python script itself).  We supplement the BFS with a cmdline scan using
-/// `install_path`, which is unique per server instance and present in every Wine
-/// process's argv.
-///
-/// CPU usage requires two sysinfo samples separated by a short delay;
-/// the 200 ms sleep inside this command is intentional and negligible.
-#[tauri::command]
-pub async fn get_process_stats(pid: u32, install_path: Option<String>) -> Result<ProcessStats, String> {
-    use sysinfo::{Pid, ProcessesToUpdate, System};
+/// Synchronous and blocking (sysinfo refresh + procfs reads) — callers must
+/// run this inside `tokio::task::spawn_blocking`. `sys` and `discovery`
+/// should be owned by the caller and threaded through call to call so the
+/// System and the discovery cache persist across ticks.
+pub fn collect_all_server_stats(
+    sys: &mut sysinfo::System,
+    discovery: &mut std::collections::HashMap<String, PidDiscoveryCache>,
+    servers: &[(String, u32, String)], // (server_id, pid, install_path)
+) -> std::collections::HashMap<String, ProcessStats> {
+    use sysinfo::{Pid, ProcessesToUpdate};
     use std::collections::HashSet;
 
-    let root = Pid::from_u32(pid);
-    let mut sys = System::new();
+    // remove_dead_processes = true: unlike get_process_stats (which builds a
+    // fresh System per call), this System is long-lived across ticks, so
+    // dead PIDs must actually be pruned or they'd accumulate forever.
+    sys.refresh_processes(ProcessesToUpdate::All, true);
 
-    // First sample — establishes the CPU time baseline for ALL processes.
-    // This must cover Wine processes too, so we always refresh everything.
-    sys.refresh_processes(ProcessesToUpdate::All, false);
+    let mut out = std::collections::HashMap::new();
 
-    // Build the initial PID set from the subtree walk.
-    let mut all_pids: HashSet<Pid> = collect_subtree(&sys, root).into_iter().collect();
-
-    // On Linux, supplement with processes found via install-path cmdline search.
+    // Servers usually all started around the same time, so their rediscovery
+    // windows tend to land on the same tick — resolve every due server's
+    // install-path PIDs in one shared /proc walk instead of one walk each,
+    // which would reproduce the very "N scans per cycle" burst this whole
+    // cache exists to avoid (just every 30s instead of every 5s).
     #[cfg(target_os = "linux")]
-    if let Some(ref path) = install_path {
-        use super::utils::collect_by_install_path;
-        for extra_root in collect_by_install_path(&sys, path) {
-            if all_pids.insert(extra_root) {
-                for sp in collect_subtree(&sys, extra_root) {
-                    all_pids.insert(sp);
+    let rescanned_this_tick: HashSet<String> = {
+        let due: Vec<&(String, u32, String)> = servers.iter()
+            .filter(|(server_id, _, install_path)| {
+                !install_path.is_empty() && {
+                    let ticks = discovery.get(server_id).map(|c| c.ticks_since_scan).unwrap_or(0);
+                    ticks == 0 || ticks >= REDISCOVERY_INTERVAL_TICKS
                 }
-            }
+            })
+            .collect();
+
+        if due.is_empty() {
+            HashSet::new()
+        } else {
+            let due_paths: Vec<&str> = due.iter().map(|(_, _, p)| p.as_str()).collect();
+            let found = super::utils::find_pids_by_install_paths_batch(&due_paths);
+            due.iter().map(|(server_id, _, install_path)| {
+                let cache = discovery.entry(server_id.clone()).or_default();
+                cache.extra_roots = found.get(install_path.as_str())
+                    .map(|pids| pids.iter().map(|p| Pid::from_u32(*p)).collect())
+                    .unwrap_or_default();
+                cache.ticks_since_scan = 1;
+                server_id.clone()
+            }).collect()
         }
-    }
+    };
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    for (server_id, pid, install_path) in servers {
+        let root = Pid::from_u32(*pid);
+        let cache = discovery.entry(server_id.clone()).or_default();
 
-    // Second sample — CPU deltas are now meaningful for every process seen above.
-    sys.refresh_processes(ProcessesToUpdate::All, false);
-
-    // On Linux, re-run the install-path search against the fresh snapshot so
-    // we catch any Wine processes that appeared between the two samples.
-    #[cfg(target_os = "linux")]
-    if let Some(ref path) = install_path {
-        use super::utils::collect_by_install_path;
-        for extra_root in collect_by_install_path(&sys, path) {
-            if all_pids.insert(extra_root) {
-                for sp in collect_subtree(&sys, extra_root) {
-                    all_pids.insert(sp);
-                }
-            }
-        }
-    }
-
-    // On Linux, the Proton launcher (the tracked root PID) often exits before the
-    // game does — the Steam Runtime container re-parents Wine processes to PID 1.
-    // Only fail if there are genuinely no live processes in our collected set.
-    let root_alive = sys.process(root).is_some();
-    if !root_alive {
-        let any_live = all_pids.iter().any(|p| sys.process(*p).is_some());
-        if !any_live {
-            return Err(format!("Process {pid} not found or no longer running"));
-        }
-    }
-
-    let mut total_cpu = 0.0f32;
-    let mut total_mem_bytes = 0u64;
-
-    for p in &all_pids {
-        // CPU still comes from sysinfo (needs the two-sample delta calculation).
-        if let Some(proc) = sys.process(*p) {
-            total_cpu += proc.cpu_usage();
-        }
-
-        // Memory via procfs PSS — only for process leaders (Tgid == Pid).
-        // Threads share the same virtual address space; counting each TID's
-        // smaps_rollup separately would multiply the true footprint by the
-        // thread count (e.g. 50 threads × 7 GB = 350 GB).
         #[cfg(target_os = "linux")]
-        if super::utils::is_process_leader(p.as_u32()) {
-            total_mem_bytes += super::utils::read_proc_pss_bytes(p.as_u32());
+        {
+            let _ = install_path;
+            if !rescanned_this_tick.contains(server_id) {
+                cache.ticks_since_scan += 1;
+            }
         }
         #[cfg(not(target_os = "linux"))]
-        if let Some(proc) = sys.process(*p) {
-            total_mem_bytes += proc.memory();
+        {
+            let _ = install_path;
         }
+
+        // Rebuild the full PID set from the (possibly cached) roots against the
+        // freshly refreshed snapshot — cheap, no additional syscalls.
+        let mut all_pids: HashSet<Pid> = collect_subtree(sys, root).into_iter().collect();
+        for extra_root in &cache.extra_roots {
+            if all_pids.insert(*extra_root) {
+                for sp in collect_subtree(sys, *extra_root) {
+                    all_pids.insert(sp);
+                }
+            }
+        }
+
+        let root_alive = sys.process(root).is_some();
+        if !root_alive && !all_pids.iter().any(|p| sys.process(*p).is_some()) {
+            // Process genuinely gone this tick — skip it rather than failing
+            // the whole batch; the caller's own watchers handle crash/exit
+            // detection separately.
+            continue;
+        }
+
+        let mut total_cpu = 0.0f32;
+        let mut total_mem_bytes = 0u64;
+
+        for p in &all_pids {
+            if let Some(proc) = sys.process(*p) {
+                total_cpu += proc.cpu_usage();
+            }
+            #[cfg(target_os = "linux")]
+            if super::utils::is_process_leader(p.as_u32()) {
+                total_mem_bytes += super::utils::read_proc_pss_bytes(p.as_u32());
+            }
+            #[cfg(not(target_os = "linux"))]
+            if let Some(proc) = sys.process(*p) {
+                total_mem_bytes += proc.memory();
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        let cpu_percent = {
+            let cores = std::thread::available_parallelism()
+                .map(|n| n.get() as f32)
+                .unwrap_or(1.0);
+            total_cpu / cores
+        };
+        #[cfg(target_os = "windows")]
+        let cpu_percent = total_cpu;
+
+        out.insert(
+            server_id.clone(),
+            ProcessStats {
+                cpu_percent,
+                memory_mb: total_mem_bytes as f32 / 1_048_576.0,
+                pid: *pid,
+            },
+        );
     }
 
-    // On Linux, sysinfo reports cpu_usage() as % of ONE logical core, so a
-    // process fully occupying two of sixteen cores shows 200 %.  Divide by the
-    // number of available cores to normalise to 0–100 % of total CPU capacity.
-    #[cfg(not(target_os = "windows"))]
-    let cpu_percent = {
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get() as f32)
-            .unwrap_or(1.0);
-        total_cpu / cores
-    };
-    #[cfg(target_os = "windows")]
-    let cpu_percent = total_cpu;
-
-    Ok(ProcessStats {
-        cpu_percent,
-        memory_mb: total_mem_bytes as f32 / 1_048_576.0,
-        pid,
-    })
+    out
 }
 
 /// Send a Source Query UDP A2S_INFO packet to a game server and parse the response.
@@ -642,37 +705,44 @@ pub async fn move_base_dir(
         return Err("Destination is inside the source directory.".into());
     }
 
-    // Space check on the destination volume.
+    // Space check on the destination volume — the sysinfo Disks scan and
+    // directory read-dir below are blocking; run them off the async executor.
     {
         let check_against = new.parent().unwrap_or(&new).to_path_buf();
         let _ = tokio::fs::create_dir_all(&check_against).await;
-        let free_bytes = {
-            use sysinfo::Disks;
-            let disks = Disks::new_with_refreshed_list();
-            disks.iter()
-                .filter(|d| check_against.starts_with(d.mount_point()))
-                .max_by_key(|d| d.mount_point().components().count())
-                .map(|d| d.available_space())
-                .unwrap_or(0)
-        };
-        // Estimate source size by sampling (du-equivalent).
-        let src_size_est: u64 = {
-            let mut total = 0u64;
-            if let Ok(rd) = std::fs::read_dir(&old) {
-                for entry in rd.flatten() {
-                    if let Ok(meta) = entry.metadata() {
-                        total += meta.len();
+        let old_for_check = old.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let free_bytes = {
+                use sysinfo::Disks;
+                let disks = Disks::new_with_refreshed_list();
+                disks.iter()
+                    .filter(|d| check_against.starts_with(d.mount_point()))
+                    .max_by_key(|d| d.mount_point().components().count())
+                    .map(|d| d.available_space())
+                    .unwrap_or(0)
+            };
+            // Estimate source size by sampling (du-equivalent).
+            let src_size_est: u64 = {
+                let mut total = 0u64;
+                if let Ok(rd) = std::fs::read_dir(&old_for_check) {
+                    for entry in rd.flatten() {
+                        if let Ok(meta) = entry.metadata() {
+                            total += meta.len();
+                        }
                     }
                 }
+                total * 10 // rough multiplier for subdirs
+            };
+            if free_bytes > 0 && free_bytes < src_size_est {
+                return Err(format!(
+                    "Insufficient disk space at destination. Available: {:.1} GB",
+                    free_bytes as f64 / 1_073_741_824.0
+                ));
             }
-            total * 10 // rough multiplier for subdirs
-        };
-        if free_bytes > 0 && free_bytes < src_size_est {
-            return Err(format!(
-                "Insufficient disk space at destination. Available: {:.1} GB",
-                free_bytes as f64 / 1_073_741_824.0
-            ));
-        }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Space check task panicked: {e}"))??;
     }
 
     emit_migrate(&app, "checking", "Space check passed.", 5);
@@ -828,21 +898,6 @@ fn parse_a2s_info(data: &[u8]) -> Result<ServerQueryResult, String> {
     })
 }
 
-/// Read a null-terminated UTF-8 string from `data` starting at `*cursor`,
-/// advancing `*cursor` past the null byte.
-fn read_cstring(data: &[u8], cursor: &mut usize) -> Result<String, String> {
-    let start = *cursor;
-    while *cursor < data.len() && data[*cursor] != 0 {
-        *cursor += 1;
-    }
-    if *cursor >= data.len() {
-        return Err("Unterminated string in A2S_INFO response".into());
-    }
-    let s = String::from_utf8_lossy(&data[start..*cursor]).into_owned();
-    *cursor += 1; // consume the null byte
-    Ok(s)
-}
-
 // ---------------------------------------------------------------------------
 // AppImage desktop integration (Linux only)
 //
@@ -872,6 +927,14 @@ pub fn get_install_method() -> &'static str {
     }
     "binary"
 }
+
+/// Returns the IDs of all currently active background operations.
+/// An operation is active from `register_abort` until `clear_abort` is called.
+#[tauri::command]
+pub fn get_running_ops(state: tauri::State<'_, crate::state::AppState>) -> Vec<String> {
+    state.abort_flags.lock().unwrap().keys().cloned().collect()
+}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -978,6 +1041,69 @@ pub fn uninstall_appimage_integration() -> Result<(), String> {
     let _ = std::process::Command::new("gtk-update-icon-cache").args(["-f", "-t", &icon_theme_dir]).status();
     let _ = std::process::Command::new("kbuildsycoca6").arg("--incremental").status();
     let _ = std::process::Command::new("kbuildsycoca5").arg("--incremental").status();
+
+    Ok(())
+}
+
+/// Remap all paths in the database from old_base_dir to new_base_dir during import.
+/// Updates: app_settings (base_dir, backup_dir, steamcmd_path, proton_path, proton_prefix_path),
+/// servers (install_path), and backups (file_path).
+#[tauri::command]
+pub async fn remap_import_paths(
+    db_path: String,
+    old_base_dir: String,
+    new_base_dir: String,
+) -> Result<(), String> {
+    use rusqlite::Connection;
+
+    // Normalize paths (remove trailing slashes)
+    let old_base = old_base_dir.trim_end_matches('/').trim_end_matches('\\');
+    let new_base = new_base_dir.trim_end_matches('/').trim_end_matches('\\');
+
+    let conn = Connection::open(&db_path)
+        .map_err(|e| format!("Failed to open database '{}': {}", db_path, e))?;
+
+    // Update app_settings paths
+    let settings_to_update = vec![
+        "base_dir",
+        "backup_dir",
+        "steamcmd_path",
+        "proton_path",
+        "proton_prefix_path",
+    ];
+
+    for setting_key in settings_to_update {
+        let old_value: Option<String> = conn.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [setting_key],
+            |row| row.get(0),
+        ).ok();
+
+        if let Some(val) = old_value {
+            if val.contains(old_base) {
+                let new_value = val.replace(old_base, new_base);
+                conn.execute(
+                    "UPDATE app_settings SET value = ?1, updated_at = CURRENT_TIMESTAMP WHERE key = ?2",
+                    rusqlite::params![new_value, setting_key],
+                )
+                .map_err(|e| format!("Failed to update app_settings '{}': {}", setting_key, e))?;
+            }
+        }
+    }
+
+    // Update servers.install_path using simple REPLACE
+    conn.execute(
+        "UPDATE servers SET install_path = REPLACE(install_path, ?1, ?2)",
+        rusqlite::params![old_base, new_base],
+    )
+    .map_err(|e| format!("Failed to update server install_path: {}", e))?;
+
+    // Update backups.file_path using simple REPLACE
+    conn.execute(
+        "UPDATE backups SET file_path = REPLACE(file_path, ?1, ?2)",
+        rusqlite::params![old_base, new_base],
+    )
+    .map_err(|e| format!("Failed to update backup file_path: {}", e))?;
 
     Ok(())
 }

@@ -6,11 +6,16 @@
  * update_available column in the DB and optionally fires notifications.
  */
 
-import { getServers, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting } from "@/lib/db";
+import {
+  getServers, getServer, getAppSetting, setServerUpdateAvailable, setServerInstalledBuild, setAppSetting,
+  updateServerStatus, type ServerRow,
+} from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
+import { syncSchedulesToRust } from "@/lib/scheduler-sync";
+import { toast } from "sonner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -20,6 +25,10 @@ export interface ServerUpdateInfo {
   status: string;
   installedBuild: string;
   cachedBuild: string;
+  /** True if this server's Auto-Update automation is set to "When Found" — it
+   *  will apply automatically within seconds, so manual-update UI should not
+   *  offer to double it up. */
+  autoUpdateImmediate: boolean;
 }
 
 export interface UpdateCheckSummary {
@@ -29,17 +38,32 @@ export interface UpdateCheckSummary {
   allWithUpdates: ServerUpdateInfo[];
 }
 
+/** True if `server`'s Auto-Update automation is set to "When Found" mode —
+ *  it'll be picked up by the Rust scheduler within seconds of being flagged,
+ *  so manual-update affordances should treat it as already spoken for. */
+export function isAutoUpdateImmediate(server: Pick<ServerRow, "update_automation_json">): boolean {
+  try {
+    const cfg = JSON.parse(server.update_automation_json || "{}");
+    return cfg.mode === "immediately";
+  } catch {
+    return false;
+  }
+}
+
 // ── ASA cache update (shared across dashboard, settings, scheduler) ───────────
 
 /**
  * Run a full ASA cache update/check via SteamCMD.  Sets the global
- * `asaCacheUpdateInProgress` flag in Zustand so the TopBar spinner shows.
+ * `asaCacheOpLabel` in Zustand so the TopBar spinner shows the right label.
  *
+ * @param topBarLabel - Label shown in TopBar during the op (defaults to "Checking ASA updates…")
  * Returns the new build ID string, or null on error.
  */
-export async function runAsaCacheUpdate(): Promise<string | null> {
-  const { setAsaCacheUpdateInProgress } = useAppStore.getState();
-  setAsaCacheUpdateInProgress(true);
+export async function runAsaCacheUpdate(
+  topBarLabel = "Checking ASA updates…"
+): Promise<string | null> {
+  const { setAsaCacheOpLabel } = useAppStore.getState();
+  setAsaCacheOpLabel(topBarLabel);
   try {
     const [baseDir, steamcmdPath] = await Promise.all([
       getAppSetting("base_dir"),
@@ -57,7 +81,7 @@ export async function runAsaCacheUpdate(): Promise<string | null> {
     ]);
     return newBuild;
   } finally {
-    setAsaCacheUpdateInProgress(false);
+    setAsaCacheOpLabel(null);
   }
 }
 
@@ -99,11 +123,12 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
 
         if (isOutdated) {
           allWithUpdates.push({
-            id:             server.id,
-            name:           server.name,
-            status:         server.status,
-            installedBuild: installed,
-            cachedBuild:    cachedBuildId,
+            id:                  server.id,
+            name:                server.name,
+            status:              server.status,
+            installedBuild:      installed,
+            cachedBuild:         cachedBuildId,
+            autoUpdateImmediate: isAutoUpdateImmediate(server),
           });
           if (!wasAlreadyFlagged) {
             newlyAvailable.push(server.id);
@@ -114,11 +139,12 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
         // If it was already flagged, include it in the summary.
         if (server.update_available === 1) {
           allWithUpdates.push({
-            id:             server.id,
-            name:           server.name,
-            status:         server.status,
-            installedBuild: "unknown",
-            cachedBuild:    cachedBuildId,
+            id:                  server.id,
+            name:                server.name,
+            status:              server.status,
+            installedBuild:      "unknown",
+            cachedBuild:         cachedBuildId,
+            autoUpdateImmediate: isAutoUpdateImmediate(server),
           });
         }
       }
@@ -150,14 +176,31 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
     });
   }
 
+  // Re-push schedules to Rust so any per-server Auto-Update automation
+  // ("When Found" / "Daily at Time") picks up servers just flagged above —
+  // those entries are synthesized from update_available in syncSchedulesToRust
+  // and are otherwise never regenerated until the next unrelated schedule
+  // fires or the app restarts, which left automation never actually applying.
+  await syncSchedulesToRust();
+
   return { newlyAvailable, allWithUpdates };
 }
 
 // ── Single-server update apply ────────────────────────────────────────────────
 
+/** In-game warning to broadcast (if enabled) before a stop triggered by an update. */
+export interface UpdateShutdownWarn {
+  warnPlayers: boolean;
+  warnMinutes: number;
+  warnMessage: string;
+}
+
 /**
  * Apply the cached update to a single server:
- *   1. Stop the server if it is running.
+ *   1. Stop the server if it is running — always via graceful_stop_server, which
+ *      always issues SaveWorld + doexit over RCON first (same safe-shutdown path
+ *      the Stop button uses), and additionally broadcasts a countdown warning to
+ *      players when `shutdownWarn.warnPlayers` is set. This never force-kills.
  *   2. Apply the shared cache to the server's install directory.
  *   3. Restart the server if it was running AND restartAfterUpdate is true.
  *   4. Clear the update_available flag.
@@ -172,9 +215,10 @@ export async function applyUpdateToServer(
   installPath: string,
   wasRunning: boolean,
   restartAfterUpdate: boolean,
+  rconPort: number,
+  rconPassword: string,
+  shutdownWarn: UpdateShutdownWarn,
   onStatusChange?: (msg: string) => void,
-  rconPort?: number,
-  rconPassword?: string,
 ): Promise<void> {
   const [cacheBase, steamcmdPath] = await Promise.all([
     getAppSetting("base_dir"),
@@ -197,18 +241,21 @@ export async function applyUpdateToServer(
   try {
     if (wasRunning) {
       onStatusChange?.("Stopping server…");
-      if (rconPort !== undefined && rconPassword !== undefined) {
-        await tauriCmd.gracefulStopServer(serverId, rconPort, rconPassword, false, 0, "");
-      } else {
-        await tauriCmd.stopServer(serverId, false);
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+      await tauriCmd.gracefulStopServer(
+        serverId, rconPort, rconPassword,
+        shutdownWarn.warnPlayers, shutdownWarn.warnMinutes, shutdownWarn.warnMessage,
+      );
     }
 
     onStatusChange?.("Applying update…");
     await tauriCmd.applyCacheToServer(serverId, installPath, cacheDir);
 
     await setServerUpdateAvailable(serverId, false);
+    // Drop any stale per-server auto-update entry the Rust scheduler is still
+    // holding (e.g. a "Daily at Time" fire scheduled for tonight) now that this
+    // server no longer needs it — otherwise it fires anyway at the scheduled
+    // time, needlessly stopping/restarting an already-up-to-date server.
+    await syncSchedulesToRust();
 
     await dispatchNotification({
       eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
@@ -237,4 +284,110 @@ export async function applyUpdateToServer(
     });
     throw err;
   }
+}
+
+// ── Apply updates to every outdated server ────────────────────────────────────
+
+/**
+ * Apply the cached update to every server in `targets` (typically every
+ * server with `update_available === 1`), sequentially. Writes the correct
+ * status transition at each step (update_queued → updating → running/stopped,
+ * or startup_queued when a restart is needed) and calls `onInvalidate` after
+ * every write so callers never show stale state — this is the single shared
+ * implementation for both the Dashboard's "Update All" and Settings' "Apply
+ * Update to All Servers", which previously reimplemented this independently
+ * with diverging correctness (only one of the two kept the DB status column
+ * in sync).
+ */
+export async function applyUpdateToAllServers(
+  targets: ServerRow[],
+  restartAfterUpdate: boolean,
+  opts: {
+    enqueueStartup: (ids: string[]) => void;
+    onInvalidate: () => void;
+    /** Per-server progress text, e.g. for a toast keyed by server id. */
+    onProgress?: (serverId: string, msg: string) => void;
+  },
+): Promise<{ succeeded: number; failed: number }> {
+  let succeeded = 0;
+  let failed = 0;
+
+  // Everything after the first target starts as queued so the UI can show
+  // it's pending while the first one is actively updating.
+  const rest = targets.slice(1);
+  if (rest.length > 0) {
+    await Promise.all(rest.map((s) => updateServerStatus(s.id, "update_queued", null)));
+    opts.onInvalidate();
+  }
+
+  for (let i = 0; i < targets.length; i++) {
+    const server = targets[i];
+
+    // Re-check live status right before acting — a server's own Cancel
+    // button (while it's sitting in "update_queued") just writes status back
+    // to "stopped", and without this check this loop would reach it anyway
+    // moments later and update it regardless, silently overriding the
+    // cancel. Mirrors the same guard StartupQueueManager uses for the
+    // startup queue. Only applies to i > 0 — the first target never passes
+    // through "update_queued" (it starts updating immediately above), so
+    // there's no queued state for a cancel to have reverted it from.
+    if (i > 0) {
+      const current = await getServer(server.id);
+      if (!current || current.status !== "update_queued") continue;
+    }
+
+    await updateServerStatus(server.id, "updating", null);
+    opts.onInvalidate();
+
+    const wasRunning = server.status === "running" || server.status === "starting";
+
+    try {
+      await applyUpdateToServer(
+        server.id,
+        server.name,
+        server.install_path,
+        wasRunning,
+        restartAfterUpdate,
+        server.rcon_port,
+        server.admin_password,
+        {
+          warnPlayers: server.update_warn_players !== 0,
+          warnMinutes: server.update_warn_minutes ?? 5,
+          warnMessage: server.update_message || "Server going down for update in {time}.",
+        },
+        (msg) => opts.onProgress?.(server.id, msg),
+      );
+      succeeded += 1;
+    } catch (err) {
+      if (err && typeof err === "object" && "restartNeeded" in err) {
+        await updateServerStatus(server.id, "startup_queued", null);
+        opts.onInvalidate();
+        opts.enqueueStartup([server.id]);
+        succeeded += 1;
+        continue;
+      }
+      failed += 1;
+      toast.error(`Failed to update ${server.name}`, { description: String(err) });
+      await updateServerStatus(server.id, "stopped", null).catch(() => {});
+      opts.onInvalidate();
+      continue;
+    }
+
+    await updateServerStatus(server.id, "stopped", null).catch(() => {});
+    opts.onInvalidate();
+  }
+
+  if (succeeded > 0) {
+    toast.success(`Updated ${succeeded} server${succeeded === 1 ? "" : "s"} successfully.`);
+    await dispatchNotification({
+      eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
+      serverId:   null,
+      serverName: "All Servers",
+      title:      `${succeeded} Server${succeeded !== 1 ? "s" : ""} Updated`,
+      body:       `${succeeded} server${succeeded !== 1 ? "s have" : " has"} been updated from the cache.`,
+      severity:   "success",
+    });
+  }
+
+  return { succeeded, failed };
 }

@@ -29,16 +29,19 @@ const EMPTY: never[] = [];
  * cache-read fallback.  MaxPlayers is read once from GameUserSettings.ini.
  */
 export function useServerStats(server: ServerRow | null): ServerStats {
-  const [stats, setStats] = useState<ServerStats>({
-    cpuPercent: null,
-    memoryMb: null,
-    playersOnline: null,
-    maxPlayers: null,
-    version: null,
-  });
+  // playersOnline/maxPlayers are genuinely async-sourced (RCON events, a 30 s
+  // poll, and a one-time INI read) so they stay as state updated from effects.
+  // cpuPercent/memoryMb are pure derivations of the live buffer + status —
+  // computed directly below instead of mirrored into state via an effect.
+  const [asyncStats, setAsyncStats] = useState<{
+    playersOnline: number | null;
+    maxPlayers: number | null;
+  }>({ playersOnline: null, maxPlayers: null });
 
   const serverRef = useRef(server);
-  serverRef.current = server;
+  useEffect(() => {
+    serverRef.current = server;
+  });
 
   // ── CPU / RAM — read latest live-buffer sample ────────────────────────────
   // The Rust recorder emits "stats://live" every 5 s; ServerStatsRecorderProvider
@@ -48,23 +51,12 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     (s) =>
       server ? (s.statsLiveBuffers[server.id] ?? EMPTY) : EMPTY,
   );
-
-  useEffect(() => {
-    const latest = liveBuffer[liveBuffer.length - 1];
-    const active =
-      server?.status === "running" || server?.status === "starting";
-
-    if (!latest || !active) {
-      setStats((s) => ({ ...s, cpuPercent: null, memoryMb: null }));
-      return;
-    }
-
-    setStats((s) => ({
-      ...s,
-      cpuPercent: latest.cpu,
-      memoryMb:   latest.mem,
-    }));
-  }, [liveBuffer, server?.status]);
+  const isRunning = server?.status === "running";
+  const isActiveForStats =
+    server?.status === "running" || server?.status === "starting";
+  const latestSample = liveBuffer[liveBuffer.length - 1];
+  const cpuPercent = latestSample && isActiveForStats ? latestSample.cpu : null;
+  const memoryMb   = latestSample && isActiveForStats ? latestSample.mem : null;
 
   // ── MaxPlayers from INI ───────────────────────────────────────────────────
   useEffect(() => {
@@ -77,18 +69,17 @@ export function useServerStats(server: ServerRow | null): ServerStats {
       if (raw) {
         const n = parseInt(raw, 10);
         if (!isNaN(n) && n > 0) {
-          setStats((prev) => ({ ...prev, maxPlayers: n }));
+          setAsyncStats((prev) => ({ ...prev, maxPlayers: n }));
         }
       }
     }).catch(() => null);
-  }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [server?.id, server?.install_path]);
 
   // ── Player count — reactive via Tauri events ──────────────────────────────
   useTauriEvent<ArkPlayer[]>(
     server ? `rcon://players/${server.id}` : "",
     (players) => {
-      setStats((prev) => ({
-        ...prev,
+      setAsyncStats((prev) => ({
         playersOnline: players.length,
         maxPlayers: prev.maxPlayers ?? serverRef.current?.max_players ?? null,
       }));
@@ -96,17 +87,15 @@ export function useServerStats(server: ServerRow | null): ServerStats {
   );
 
   // ── Player count — 30 s cache fallback poll ───────────────────────────────
+  const serverId = server?.id;
+  const serverStatus = server?.status;
   useEffect(() => {
-    if (!server || server.status !== "running") {
-      setStats((s) => ({ ...s, playersOnline: null }));
-      return;
-    }
+    if (!serverId || serverStatus !== "running") return;
 
     const poll = () => {
-      tauriCmd.rconGetCachedPlayers(server.id).then((players) => {
+      tauriCmd.rconGetCachedPlayers(serverId).then((players) => {
         if (players === null) return;
-        setStats((prev) => ({
-          ...prev,
+        setAsyncStats((prev) => ({
           playersOnline: players.length,
           maxPlayers: prev.maxPlayers ?? serverRef.current?.max_players ?? null,
         }));
@@ -116,7 +105,15 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     poll();
     const id = setInterval(poll, 30_000);
     return () => clearInterval(id);
-  }, [server?.id, server?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [serverId, serverStatus]);
 
-  return stats;
+  return {
+    cpuPercent,
+    memoryMb,
+    // Masked to null while not running instead of being reset via an effect —
+    // the underlying async value is still cached in asyncStats for next time.
+    playersOnline: isRunning ? asyncStats.playersOnline : null,
+    maxPlayers: asyncStats.maxPlayers,
+    version: null,
+  };
 }

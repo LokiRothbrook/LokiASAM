@@ -7,7 +7,8 @@ import { useAppStore } from "@/store/useAppStore";
 
 export function TopBar() {
   const { data: servers = [] } = useServers();
-  const asaCacheUpdateInProgress = useAppStore((s) => s.asaCacheUpdateInProgress);
+  const asaCacheOpLabel = useAppStore((s) => s.asaCacheOpLabel);
+  const protonOpLabel   = useAppStore((s) => s.protonOpLabel);
   const statsLiveBuffers = useAppStore((s) => s.statsLiveBuffers);
 
   const total   = servers.length;
@@ -67,11 +68,19 @@ export function TopBar() {
           </div>
         ))}
 
-        {asaCacheUpdateInProgress && (
+        {asaCacheOpLabel && (
           <div className="flex items-center gap-1.5">
             <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--neon-purple)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Checking ASA updates…
+              {asaCacheOpLabel}
+            </span>
+          </div>
+        )}
+        {protonOpLabel && (
+          <div className="flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--neon-cyan)" }} />
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {protonOpLabel}
             </span>
           </div>
         )}

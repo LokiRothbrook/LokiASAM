@@ -168,12 +168,14 @@ pub async fn steamcmd_app_update(
     let mut child2 = build_steamcmd_cmd(steamcmd_path, &base_args)
         .spawn()
         .map_err(|e| format!("Failed to re-launch SteamCMD: {e}"))?;
+    // Don't pre-check the abort flag and bail before calling
+    // stream_process_abortable — that would skip its kill logic and leave
+    // this freshly-spawned process orphaned. stream_process_abortable checks
+    // the flag immediately on entry and kills the process tree if it's
+    // already set, so it's always safe to hand off to directly.
     let exit_code2 = match &abort {
-        Some(flag) => {
-            if flag.load(Ordering::Relaxed) { return Err("Aborted".into()); }
-            stream_process_abortable(app, &mut child2, channel, std::sync::Arc::clone(flag)).await?
-        }
-        None => stream_process(app, &mut child2, channel).await?,
+        Some(flag) => stream_process_abortable(app, &mut child2, channel, std::sync::Arc::clone(flag)).await?,
+        None       => stream_process(app, &mut child2, channel).await?,
     };
     if exit_code2 == 0 {
         Ok(())
@@ -184,20 +186,34 @@ pub async fn steamcmd_app_update(
 
 /// Copy from `cache` to `server`, skipping subdirectories that contain user
 /// data (ShooterGame/Saved).  Directory names are compared case-insensitively.
-pub fn sync_cache_to_server(cache: &Path, server: &Path) -> std::io::Result<()> {
+/// Emits a progress line per top-level entry and checks `abort` between them
+/// so a caller can cancel and so the operation isn't silently invisible for
+/// the many minutes a full ShooterGame/ copy can take.
+pub fn sync_cache_to_server(
+    cache: &Path,
+    server: &Path,
+    app: &tauri::AppHandle,
+    channel: &str,
+    abort: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(server)?;
     for entry in std::fs::read_dir(cache)? {
+        if abort.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "Aborted"));
+        }
         let entry = entry?;
         let name = entry.file_name();
         let name_lower = name.to_string_lossy().to_lowercase();
         let src = entry.path();
         let dst = server.join(&name);
 
+        let _ = emit_line(app, channel, "stdout", &format!("Syncing {}…", name.to_string_lossy()));
+
         if src.is_dir() {
             if name_lower == "shootergame" {
-                sync_shootergame(&src, &dst)?;
+                sync_shootergame(&src, &dst, Some(abort))?;
             } else {
-                copy_dir_recursive(&src, &dst, &[])?;
+                copy_dir_recursive(&src, &dst, &[], Some(abort))?;
             }
         } else {
             std::fs::copy(&src, &dst)?;
@@ -207,9 +223,15 @@ pub fn sync_cache_to_server(cache: &Path, server: &Path) -> std::io::Result<()> 
 }
 
 /// Recurse into `ShooterGame/`, skipping `Saved/` so player data is preserved.
-fn sync_shootergame(cache_sg: &Path, server_sg: &Path) -> std::io::Result<()> {
+/// `ShooterGame/` is the overwhelming majority of a server's install size, so
+/// checking `abort` here (not just once per top-level entry in the caller)
+/// is what actually makes Cancel responsive during the dominant copy phase.
+fn sync_shootergame(cache_sg: &Path, server_sg: &Path, abort: Option<&std::sync::atomic::AtomicBool>) -> std::io::Result<()> {
     std::fs::create_dir_all(server_sg)?;
     for entry in std::fs::read_dir(cache_sg)? {
+        if abort.is_some_and(|a| a.load(Ordering::Relaxed)) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "Aborted"));
+        }
         let entry = entry?;
         let name = entry.file_name();
         if name.to_string_lossy().to_lowercase() == "saved" {
@@ -218,7 +240,7 @@ fn sync_shootergame(cache_sg: &Path, server_sg: &Path) -> std::io::Result<()> {
         let src = entry.path();
         let dst = server_sg.join(&name);
         if src.is_dir() {
-            copy_dir_recursive(&src, &dst, &[])?;
+            copy_dir_recursive(&src, &dst, &[], abort)?;
         } else {
             std::fs::copy(&src, &dst)?;
         }
@@ -247,7 +269,7 @@ pub async fn install_steamcmd(
 
     let result = install_steamcmd_inner(&app_handle, &channel, dir, &abort).await;
 
-    state.clear_abort("steamcmd_install");
+    state.clear_abort("steamcmd_install", &abort);
 
     if result.is_err() {
         // Clean up on abort or error.
@@ -326,10 +348,17 @@ async fn install_steamcmd_inner(
     emit_line(app_handle, channel, "stdout", &format!("Downloaded {} bytes. Extracting...", bytes.len()))?;
 
     if is_zip {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(cursor)
-            .map_err(|e| format!("Failed to open ZIP: {e}"))?;
-        archive.extract(dir).map_err(|e| format!("Failed to extract ZIP: {e}"))?;
+        // ZIP extraction is blocking (sync std I/O under the hood) — run it
+        // off the async executor like the tar.gz path below already does.
+        let dir_owned = dir.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let cursor = std::io::Cursor::new(bytes);
+            let mut archive = zip::ZipArchive::new(cursor)
+                .map_err(|e| format!("Failed to open ZIP: {e}"))?;
+            archive.extract(&dir_owned).map_err(|e| format!("Failed to extract ZIP: {e}"))
+        })
+        .await
+        .map_err(|e| format!("ZIP extraction task panicked: {e}"))??;
     } else {
         let dir_owned = dir.to_path_buf();
         let abort_extract = std::sync::Arc::clone(abort);
@@ -396,7 +425,7 @@ pub async fn validate_steamcmd(
 ) -> Result<bool, String> {
     let abort = state.register_abort("steamcmd_install");
     let result = validate_steamcmd_inner(&path, &app_handle, &abort).await;
-    state.clear_abort("steamcmd_install");
+    state.clear_abort("steamcmd_install", &abort);
     result
 }
 
@@ -464,6 +493,12 @@ pub async fn install_server(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    // Guards against a duplicate install trigger for the same server_id
+    // (double-click, a wizard retry) racing itself, and against a backup
+    // reading this server's files concurrently with a later re-install.
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     let op_key = format!("server_{server_id}");
     let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
@@ -489,8 +524,9 @@ pub async fn install_server(
 
         let src = std::path::PathBuf::from(&cache_dir);
         let dst = std::path::PathBuf::from(&install_path);
+        let abort_copy = std::sync::Arc::clone(&abort);
 
-        tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst, &[]))
+        tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst, &[], Some(&abort_copy)))
             .await
             .map_err(|e| format!("Copy task panicked: {e}"))?
             .map_err(|e| format!("Failed to copy server files: {e}"))?;
@@ -506,7 +542,7 @@ pub async fn install_server(
         Ok(())
     }.await;
 
-    state.clear_abort(&op_key);
+    state.clear_abort(&op_key, &abort);
     result
 }
 
@@ -521,6 +557,9 @@ pub async fn update_server(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
     let op_key = format!("server_{server_id}");
     let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
@@ -540,11 +579,16 @@ pub async fn update_server(
 
         let cache_path = std::path::PathBuf::from(&cache_dir);
         let server_path = std::path::PathBuf::from(&install_path);
+        let app_clone = app_handle.clone();
+        let channel_clone = channel.clone();
+        let abort_clone = std::sync::Arc::clone(&abort);
 
-        tokio::task::spawn_blocking(move || sync_cache_to_server(&cache_path, &server_path))
-            .await
-            .map_err(|e| format!("Sync task panicked: {e}"))?
-            .map_err(|e| format!("Failed to sync server files: {e}"))?;
+        tokio::task::spawn_blocking(move || {
+            sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &abort_clone)
+        })
+        .await
+        .map_err(|e| format!("Sync task panicked: {e}"))?
+        .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
         emit_line(&app_handle, &channel, "stdout", "Server update complete.")?;
 
@@ -557,7 +601,7 @@ pub async fn update_server(
         Ok(())
     }.await;
 
-    state.clear_abort(&op_key);
+    state.clear_abort(&op_key, &abort);
     result
 }
 
@@ -581,10 +625,17 @@ pub async fn validate_server_files(
 
     let cache_path = std::path::PathBuf::from(&cache_dir);
     let server_path = std::path::PathBuf::from(&install_path);
-    tokio::task::spawn_blocking(move || sync_cache_to_server(&cache_path, &server_path))
-        .await
-        .map_err(|e| format!("Sync task panicked: {e}"))?
-        .map_err(|e| format!("Failed to sync after validate: {e}"))?;
+    let app_clone = app_handle.clone();
+    let channel_clone = channel.clone();
+    tokio::task::spawn_blocking(move || {
+        // No cancellation for this path today — there's no Cancel affordance
+        // wired up to the Verify Files button, so a never-set flag is correct.
+        let no_abort = std::sync::atomic::AtomicBool::new(false);
+        sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &no_abort)
+    })
+    .await
+    .map_err(|e| format!("Sync task panicked: {e}"))?
+    .map_err(|e| format!("Failed to sync after validate: {e}"))?;
 
     emit_line(&app_handle, &channel, "stdout", "Server files validated and synced.")?;
     Ok(())
@@ -651,6 +702,11 @@ pub async fn get_installed_build_id(install_path: String) -> Result<Option<Strin
     Ok(read_acf_build_id(&acf_path))
 }
 
+/// Abort/mutex key shared by the manual "Check for Updates" flow and the
+/// scheduled background check — both call `update_cache_inner` under this
+/// same key so only one SteamCMD cache check can ever run at a time.
+pub const ASA_CACHE_CHECK_KEY: &str = "check";
+
 /// Run SteamCMD to update the shared cache only. Returns the new build ID.
 /// Streams output to `steamcmd://output/{server_id}`.
 #[tauri::command]
@@ -658,61 +714,121 @@ pub async fn update_cache(
     server_id: String,
     cache_dir: String,
     steamcmd_path: String,
+    state: tauri::State<'_, crate::state::AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
+    update_cache_inner(&server_id, &cache_dir, &steamcmd_path, &state, &app_handle).await
+}
 
-    emit_line(&app_handle, &channel, "stdout", "Updating server cache from Steam…")?;
-    tokio::fs::create_dir_all(&cache_dir)
-        .await
-        .map_err(|e| format!("Failed to create cache directory: {e}"))?;
-
-    steamcmd_app_update(&app_handle, &steamcmd_path, &cache_dir, false, &channel, None).await?;
-
-    let acf_path = Path::new(&cache_dir).join(ACF_REL_PATH);
-    let build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());
-
-    emit_line(&app_handle, &channel, "stdout", &format!("Cache updated to build {build_id}."))?;
-
-    // Trigger internet version fetch for this build in the background
-    if build_id != "0" {
-        crate::commands::build_version::maybe_fetch_internet(&app_handle, &build_id);
+/// Shared implementation behind `update_cache` — extracted so the scheduled
+/// background check (`fire_global_update_check` in scheduler.rs) can reuse
+/// the exact same mutual-exclusion guard instead of running its own
+/// independent, un-coordinated SteamCMD invocation against the same cache dir.
+pub async fn update_cache_inner(
+    server_id: &str,
+    cache_dir: &str,
+    steamcmd_path: &str,
+    state: &crate::state::AppState,
+    app_handle: &tauri::AppHandle,
+) -> Result<String, String> {
+    {
+        let flags = state.abort_flags.lock().unwrap();
+        if flags.contains_key(server_id) {
+            return Err("An ASA update check is already in progress".into());
+        }
     }
 
-    Ok(build_id)
+    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
+    let abort = state.register_abort(server_id);
+
+    let result: Result<String, String> = async {
+        emit_line(app_handle, &channel, "stdout", "Updating server cache from Steam…")?;
+        tokio::fs::create_dir_all(&cache_dir)
+            .await
+            .map_err(|e| format!("Failed to create cache directory: {e}"))?;
+
+        steamcmd_app_update(
+            app_handle,
+            steamcmd_path,
+            cache_dir,
+            false,
+            &channel,
+            Some(std::sync::Arc::clone(&abort)),
+        )
+        .await?;
+
+        let acf_path = Path::new(cache_dir).join(ACF_REL_PATH);
+        let build_id = read_acf_build_id(&acf_path).unwrap_or_else(|| "0".to_string());
+
+        emit_line(app_handle, &channel, "stdout", &format!("Cache updated to build {build_id}."))?;
+
+        if build_id != "0" {
+            crate::commands::build_version::maybe_fetch_internet(app_handle, &build_id);
+        }
+
+        Ok(build_id)
+    }
+    .await;
+
+    state.clear_abort(server_id, &abort);
+    result
 }
 
 /// Copy the shared cache to a specific server directory without re-running SteamCMD.
 /// Preserves ShooterGame/Saved so player data is never overwritten.
 /// Streams output to `steamcmd://output/{server_id}`.
+/// Abort key: "server_{server_id}" — matches `install_server`/`update_server` so
+/// `get_running_ops` and `abort_operation` behave consistently across all three.
 #[tauri::command]
 pub async fn apply_cache_to_server(
     server_id: String,
     install_path: String,
     cache_dir: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
+    // The key fix for the race between this (manual "Update All"/Settings
+    // apply-all/single-server update) and a server's own scheduled "at time"
+    // Auto-Update landing on the same server around the same moment — both
+    // used to sync the cache into the same install directory concurrently
+    // with no coordination at all.
+    let _lock = state.try_lock_server(&server_id)
+        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+
+    let op_key = format!("server_{server_id}");
+    let abort = state.register_abort(&op_key);
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
 
-    emit_line(&app_handle, &channel, "stdout",
-        "Syncing updated files to server (preserving Saved/ data)…")?;
+    let result = async {
+        emit_line(&app_handle, &channel, "stdout",
+            "Syncing updated files to server (preserving Saved/ data)…")?;
 
-    let cache_path = std::path::PathBuf::from(&cache_dir);
-    let server_path = std::path::PathBuf::from(&install_path);
+        let cache_path = std::path::PathBuf::from(&cache_dir);
+        let server_path = std::path::PathBuf::from(&install_path);
+        let app_clone = app_handle.clone();
+        let channel_clone = channel.clone();
+        let abort_clone = std::sync::Arc::clone(&abort);
 
-    tokio::task::spawn_blocking(move || sync_cache_to_server(&cache_path, &server_path))
+        tokio::task::spawn_blocking(move || {
+            sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &abort_clone)
+        })
         .await
         .map_err(|e| format!("Sync task panicked: {e}"))?
         .map_err(|e| format!("Failed to sync server files: {e}"))?;
 
-    // Record updated build ID for version tracking
-    let acf = std::path::Path::new(&install_path).join(ACF_REL_PATH);
-    if let Some(build_id) = read_acf_build_id(&acf) {
-        crate::commands::build_version::record_install(&app_handle, &server_id, &build_id);
-    }
+        // Record updated build ID for version tracking
+        let acf = std::path::Path::new(&install_path).join(ACF_REL_PATH);
+        if let Some(build_id) = read_acf_build_id(&acf) {
+            crate::commands::build_version::record_install(&app_handle, &server_id, &build_id);
+        }
 
-    emit_line(&app_handle, &channel, "stdout", "Server update applied.")?;
-    Ok(())
+        emit_line(&app_handle, &channel, "stdout", "Server update applied.")?;
+        Ok(())
+    }
+    .await;
+
+    state.clear_abort(&op_key, &abort);
+    result
 }
 
 /// Inspect an existing installation folder: checks for the server executable and

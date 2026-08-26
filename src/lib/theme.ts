@@ -43,6 +43,8 @@ interface PresetTokens {
   surface:     string;
   surfaceEl:   string;
   glassBg:     string;
+  popoverBg:   string;
+  foreground:  string;
   textMuted:   string;
   textSubtle:  string;
   defaultAccent: ThemeAccent;
@@ -55,6 +57,8 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
     surface:      "rgba(20, 20, 52, 0.85)",
     surfaceEl:    "rgba(28, 28, 68, 0.92)",
     glassBg:      "rgba(18, 18, 50, 0.72)",
+    popoverBg:    "rgba(16, 16, 44, 0.97)",
+    foreground:   "#e8e4ff",
     textMuted:    "#5858a0",
     textSubtle:   "#3a3a70",
     defaultAccent: "purple",
@@ -65,6 +69,8 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
     surface:      "rgba(5, 12, 25, 0.75)",
     surfaceEl:    "rgba(8, 16, 35, 0.9)",
     glassBg:      "rgba(5, 12, 30, 0.6)",
+    popoverBg:    "rgba(10, 16, 30, 0.97)",
+    foreground:   "#dce4f6",
     textMuted:    "#384060",
     textSubtle:   "#263040",
     defaultAccent: "blue",
@@ -75,6 +81,8 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
     surface:      "rgba(8, 18, 8, 0.75)",
     surfaceEl:    "rgba(10, 24, 10, 0.9)",
     glassBg:      "rgba(8, 18, 8, 0.6)",
+    popoverBg:    "rgba(12, 20, 12, 0.97)",
+    foreground:   "#d8eedc",
     textMuted:    "#3a5040",
     textSubtle:   "#283530",
     defaultAccent: "green",
@@ -85,6 +93,8 @@ export const THEME_PRESETS: Record<ThemePreset, PresetTokens> = {
     surface:      "rgba(18, 22, 35, 0.8)",
     surfaceEl:    "rgba(24, 28, 44, 0.9)",
     glassBg:      "rgba(18, 22, 38, 0.65)",
+    popoverBg:    "rgba(18, 20, 32, 0.97)",
+    foreground:   "#dfe4f2",
     textMuted:    "#606880",
     textSubtle:   "#464e64",
     defaultAccent: "blue",
@@ -122,6 +132,11 @@ export function applyThemePreset(preset: string): void {
   root.style.setProperty("--surface",           p.surface);
   root.style.setProperty("--surface-elevated",  p.surfaceEl);
   root.style.setProperty("--glass-bg",          p.glassBg);
+  root.style.setProperty("--popover",           p.popoverBg);
+  root.style.setProperty("--foreground",        p.foreground);
+  root.style.setProperty("--text-primary",      p.foreground);
+  root.style.setProperty("--popover-foreground",p.foreground);
+  root.style.setProperty("--accent-foreground", p.foreground);
   root.style.setProperty("--text-muted",        p.textMuted);
   root.style.setProperty("--text-subtle",       p.textSubtle);
   root.dataset.preset = preset;

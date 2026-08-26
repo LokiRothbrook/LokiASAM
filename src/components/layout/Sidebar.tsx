@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "@/store/useAppStore";
 import Link from "next/link";
@@ -10,6 +10,7 @@ import {
   Network,
   ScrollText,
   Archive,
+  Map,
   Bell,
   Settings,
   HelpCircle,
@@ -30,6 +31,7 @@ const TOP_NAV: NavItem[] = [
   { href: "/clusters", icon: Network,         label: "Clusters" },
   { href: "/logs",     icon: ScrollText,      label: "Logs" },
   { href: "/backups",  icon: Archive,         label: "Backups" },
+  { href: "/mod-maps", icon: Map,             label: "Mod Maps" },
 ];
 
 const BOTTOM_NAV: NavItem[] = [
@@ -70,16 +72,15 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const [tourOpen, setTourOpen] = useState(false);
+  const [localTourOpen, setLocalTourOpen] = useState(false);
   const pendingTour   = useAppStore((s) => s.pendingTour);
   const setPendingTour = useAppStore((s) => s.setPendingTour);
-
-  useEffect(() => {
-    if (pendingTour) {
-      setPendingTour(false);
-      setTourOpen(true);
-    }
-  }, [pendingTour, setPendingTour]);
+  // Open whenever either the manual trigger or the store's pending-tour
+  // request is set — a pure derivation instead of mirroring the store flag
+  // into local state via an effect. Closing clears both, regardless of which
+  // one opened it.
+  const tourOpen = localTourOpen || pendingTour;
+  const closeTour = () => { setLocalTourOpen(false); setPendingTour(false); };
 
   return (
     <>
@@ -107,7 +108,7 @@ export function Sidebar() {
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              onClick={() => setTourOpen(true)}
+              onClick={() => setLocalTourOpen(true)}
               className="flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150 text-text-muted hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
               style={{ color: "var(--text-muted)" }}
               aria-label="Quick Start Guide"
@@ -129,7 +130,7 @@ export function Sidebar() {
     </aside>
 
     {tourOpen && createPortal(
-      <TourModal onClose={() => setTourOpen(false)} />,
+      <TourModal onClose={closeTour} />,
       document.body
     )}
     </>

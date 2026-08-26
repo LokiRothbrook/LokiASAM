@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,14 +10,33 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { TriangleAlert } from "lucide-react";
 import { getServers, getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
+
+// How long to wait for aborted operations to actually stop before force-quitting.
+const GRACE_PERIOD_MS = 15_000;
+const GRACE_POLL_INTERVAL_MS = 500;
+
+const TOOL_OP_LABELS: Record<string, string> = {
+  check:            "ASA Server Cache install",
+  steamcmd_install: "SteamCMD install",
+  proton_download:  "Proton-GE install",
+};
+
+function toolOpLabel(key: string): string {
+  if (key.startsWith("mods_")) return "Mod download";
+  return TOOL_OP_LABELS[key] ?? key;
+}
 
 export function CloseWarningManager() {
-  const [showWarning, setShowWarning] = useState(false);
+  const [showWarning, setShowWarning]     = useState(false);
   const [installingCount, setInstallingCount] = useState(0);
-  const installingIds = useRef<string[]>([]);
-  const allowClose = useRef(false);
+  const [toolOps, setToolOps]             = useState<string[]>([]);
+  const [aborting, setAborting]           = useState(false);
+  const installingIds  = useRef<string[]>([]);
+  const allowClose     = useRef(false);
 
   const checkActiveInstalls = async (): Promise<{ count: number; ids: string[] }> => {
     const servers = await getServers().catch(() => []);
@@ -27,13 +46,45 @@ export function CloseWarningManager() {
     return { count: active.length, ids: active.map((s) => s.id) };
   };
 
+  const checkAndWarn = useCallback(async (): Promise<boolean> => {
+    const [{ count, ids }, runningOps] = await Promise.all([
+      checkActiveInstalls(),
+      tauriCmd.getRunningOps().catch(() => [] as string[]),
+    ]);
+
+    const ops = runningOps.filter((k) => !k.startsWith("server_"));
+
+    if (count > 0 || ops.length > 0) {
+      installingIds.current = ids;
+      setInstallingCount(count);
+      setToolOps(ops);
+      setAborting(false);
+      setShowWarning(true);
+      return true;
+    }
+    return false;
+  }, []);
+
+  useTauriEvent<unknown>("tray-quit-requested", async () => {
+    const warned = await checkAndWarn();
+    if (!warned) {
+      await tauriCmd.forceQuit();
+    }
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    // Guards against the window closing/remounting before the async
+    // getCurrentWindow() + onCloseRequested() registration resolves — without
+    // it, cleanup can run while `unlistenClose` is still undefined (a no-op),
+    // and the registration that resolves afterward leaks with nothing left
+    // to ever call it, leaving a duplicate close handler on a later remount.
+    let cancelled = false;
     let unlistenClose: (() => void) | undefined;
-    let unlistenTrayQuit: (() => void) | undefined;
 
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      if (cancelled) return;
       getCurrentWindow()
         .onCloseRequested(async (event) => {
           // Always prevent the auto-destroy() that the onCloseRequested wrapper
@@ -50,48 +101,49 @@ export function CloseWarningManager() {
           ]);
 
           // If close-to-tray is active, the Rust handler already hid the window.
-          // Nothing more to do here — silently swallow the close event.
+          // Background tool operations can safely keep running — nothing to warn about.
           if (closeToTray !== "false" && setupDone === "true") return;
 
-          // close_to_tray is off (or setup not done): check for active installs.
-          const { count, ids } = await checkActiveInstalls();
-          if (count > 0) {
-            installingIds.current = ids;
-            setInstallingCount(count);
-            setShowWarning(true);
-            return;
+          // close_to_tray is off → app will actually exit. Warn if anything is running.
+          const warned = await checkAndWarn();
+          if (!warned) {
+            await tauriCmd.forceQuit();
           }
-
-          // No active installs, close_to_tray is off → exit the app.
-          await tauriCmd.forceQuit();
         })
-        .then((fn) => { unlistenClose = fn; });
-    });
-
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen<unknown>("tray-quit-requested", async () => {
-        const { count, ids } = await checkActiveInstalls();
-        if (count > 0) {
-          installingIds.current = ids;
-          setInstallingCount(count);
-          setShowWarning(true);
-        } else {
-          // No active installs — exit immediately
-          await tauriCmd.forceQuit();
-        }
-      }).then((fn) => { unlistenTrayQuit = fn; });
+        .then((fn) => {
+          if (cancelled) fn();
+          else unlistenClose = fn;
+        });
     });
 
     return () => {
+      cancelled = true;
       unlistenClose?.();
-      unlistenTrayQuit?.();
     };
-  }, []);
+  }, [checkAndWarn]);
 
-  const handleCancelAndExit = async () => {
-    for (const id of installingIds.current) {
-      await tauriCmd.abortOperation(`server_${id}`).catch(() => {});
+  const handleAbortAndClose = async () => {
+    setAborting(true);
+    const abortedKeys = [
+      ...installingIds.current.map((id) => `server_${id}`),
+      ...toolOps,
+    ];
+    await Promise.allSettled([
+      ...installingIds.current.map((id) => tauriCmd.abortOperation(`server_${id}`)),
+      ...toolOps.map((op) => tauriCmd.abortOperation(op)),
+    ]);
+
+    // Give aborted operations a short grace period to actually finish (e.g. the
+    // in-flight file copy reaching a clean stopping point) before force-quitting —
+    // instantly killing the process mid-copy can leave a server's install files
+    // truncated while the DB still thinks the update applied cleanly.
+    const graceDeadline = Date.now() + GRACE_PERIOD_MS;
+    while (Date.now() < graceDeadline) {
+      const running = await tauriCmd.getRunningOps().catch(() => [] as string[]);
+      if (!abortedKeys.some((k) => running.includes(k))) break;
+      await new Promise((resolve) => setTimeout(resolve, GRACE_POLL_INTERVAL_MS));
     }
+
     setShowWarning(false);
     allowClose.current = true;
     await tauriCmd.forceQuit();
@@ -101,34 +153,60 @@ export function CloseWarningManager() {
     setShowWarning(false);
   };
 
+  const hasServerInstalls = installingCount > 0;
+  const hasToolOps        = toolOps.length > 0;
+
   return (
-    <Dialog open={showWarning} onOpenChange={(open) => { if (!open) setShowWarning(false); }}>
-      <DialogContent showCloseButton={false} className="max-w-sm">
+    <Dialog open={showWarning} onOpenChange={(open) => { if (!open && !aborting) setShowWarning(false); }}>
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-md"
+        style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}
+      >
         <DialogHeader>
-          <DialogTitle>Install in Progress</DialogTitle>
-          <DialogDescription className="sr-only">
-            A server installation is running. Choose to cancel it and exit, or keep the app running.
+          <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
+            <TriangleAlert className="w-5 h-5" />
+            Operation{hasServerInstalls && hasToolOps ? "s" : installingCount + toolOps.length > 1 ? "s" : ""} In Progress
+          </DialogTitle>
+          <DialogDescription className="space-y-3 pt-1">
+            <span className="block">
+              Closing the app will abort the following and may leave files in an incomplete state:
+            </span>
+            <ul className="list-disc list-inside space-y-1">
+              {hasServerInstalls && (
+                <li style={{ color: "var(--text-primary)" }}>
+                  {installingCount === 1
+                    ? "1 server install / update"
+                    : `${installingCount} server installs / updates`}
+                </li>
+              )}
+              {toolOps.map((op) => (
+                <li key={op} style={{ color: "var(--text-primary)" }}>
+                  {toolOpLabel(op)}
+                </li>
+              ))}
+            </ul>
           </DialogDescription>
         </DialogHeader>
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          {installingCount === 1
-            ? "A server install is currently running in the background."
-            : `${installingCount} server installs are currently running in the background.`}{" "}
-          Closing the app will cancel {installingCount === 1 ? "it" : "them"}.
-        </p>
-        <DialogFooter>
-          <Button variant="outline" onClick={handleKeepRunning}>
+        <DialogFooter className="flex-col gap-2 sm:flex-col">
+          <Button
+            variant="outline"
+            onClick={handleKeepRunning}
+            disabled={aborting}
+            className="w-full hover:bg-(--surface-elevated)"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+          >
             Keep Running
           </Button>
           <Button
-            onClick={handleCancelAndExit}
-            style={{
-              background: "rgba(255,0,85,0.15)",
-              border: "1px solid rgba(255,0,85,0.4)",
-              color: "var(--neon-red)",
-            }}
+            variant="outline"
+            onClick={handleAbortAndClose}
+            disabled={aborting}
+            className="w-full gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
           >
-            Cancel Install &amp; Exit
+            <TriangleAlert className="w-4 h-4" />
+            {aborting ? "Aborting…" : "Abort & Close"}
           </Button>
         </DialogFooter>
       </DialogContent>

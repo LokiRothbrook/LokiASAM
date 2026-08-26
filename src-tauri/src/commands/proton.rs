@@ -98,7 +98,7 @@ pub async fn download_proton_ge(
 ) -> Result<String, String> {
     let abort = state.register_abort("proton_download");
     let result = download_proton_ge_inner(&app_handle, &target_dir, &abort).await;
-    state.clear_abort("proton_download");
+    state.clear_abort("proton_download", &abort);
     result
 }
 
@@ -141,10 +141,10 @@ async fn download_proton_ge_inner(
         .find(|a| {
             a["name"]
                 .as_str()
-                .map(|n| n.ends_with(".tar.gz"))
+                .map(|n| n.ends_with(".tar.gz") && !n.contains("aarch64"))
                 .unwrap_or(false)
         })
-        .ok_or("No .tar.gz asset found in release")?;
+        .ok_or("No x86_64 .tar.gz asset found in release")?;
 
     let asset_name = asset["name"]
         .as_str()
@@ -173,6 +173,23 @@ async fn download_proton_ge_inner(
     let tmp_path = target.join(format!("{asset_name}.tmp"));
     let tar_path = target.join(&asset_name);
 
+    // Removes the file on drop unless `.disarm()` is called — covers every
+    // early-return path (a genuine network/write/archive error via `?`, not
+    // just the explicit abort checks below) so a failed download doesn't
+    // leave a partial file behind permanently.
+    struct CleanupOnDrop(Option<PathBuf>);
+    impl CleanupOnDrop {
+        fn disarm(&mut self) { self.0 = None; }
+    }
+    impl Drop for CleanupOnDrop {
+        fn drop(&mut self) {
+            if let Some(p) = self.0.take() {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    let mut tmp_guard = CleanupOnDrop(Some(tmp_path.clone()));
+
     let mut response = client
         .get(&download_url)
         .send()
@@ -193,7 +210,7 @@ async fn download_proton_ge_inner(
     {
         if abort.load(Ordering::Relaxed) {
             drop(file);
-            let _ = tokio::fs::remove_file(&tmp_path).await;
+            // tmp_guard cleans up tmp_path on drop.
             return Err("Aborted".into());
         }
         file.write_all(&chunk)
@@ -223,6 +240,9 @@ async fn download_proton_ge_inner(
     tokio::fs::rename(&tmp_path, &tar_path)
         .await
         .map_err(|e| format!("Failed to finalize download: {e}"))?;
+    // tmp_path no longer exists (renamed to tar_path) — tar_path's own
+    // cleanup is handled inside the extraction block below.
+    tmp_guard.disarm();
 
     emit_download_line(&app_handle, "Download complete. Extracting archive...");
 
@@ -234,27 +254,42 @@ async fn download_proton_ge_inner(
         use flate2::read::GzDecoder;
         use tar::Archive;
 
-        let f = std::fs::File::open(&tar_path_clone)
-            .map_err(|e| format!("Failed to open archive: {e}"))?;
-        let gz = GzDecoder::new(f);
-        let mut archive = Archive::new(gz);
+        // Inner closure so every early-return `?` — not just the explicit
+        // abort check — funnels through the same cleanup below instead of
+        // leaving the downloaded archive (and any partially-extracted files)
+        // behind on a genuine extraction error.
+        let result: Result<(), String> = (|| {
+            let f = std::fs::File::open(&tar_path_clone)
+                .map_err(|e| format!("Failed to open archive: {e}"))?;
+            let gz = GzDecoder::new(f);
+            let mut archive = Archive::new(gz);
 
-        // Iterate entries one-by-one so we can check the abort flag between
-        // files. unpack() has no cancellation hook.
-        for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
-            if abort_extract.load(Ordering::Relaxed) {
+            // Iterate entries one-by-one so we can check the abort flag between
+            // files. unpack() has no cancellation hook.
+            for entry in archive.entries().map_err(|e| format!("Failed to read archive: {e}"))? {
+                if abort_extract.load(Ordering::Relaxed) {
+                    return Err("Aborted".into());
+                }
+                let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
+                entry
+                    .unpack_in(&target_clone)
+                    .map_err(|e| format!("Failed to extract entry: {e}"))?;
+            }
+            Ok(())
+        })();
+
+        match &result {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&tar_path_clone);
+            }
+            Err(_) => {
+                // Covers both "Aborted" and a genuine extraction error —
+                // either way the archive and any partial extraction are junk.
                 let _ = std::fs::remove_file(&tar_path_clone);
                 let _ = std::fs::remove_dir_all(target_clone.join(&tag_clone));
-                return Err("Aborted".into());
             }
-            let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
-            entry
-                .unpack_in(&target_clone)
-                .map_err(|e| format!("Failed to extract entry: {e}"))?;
         }
-
-        let _ = std::fs::remove_file(&tar_path_clone);
-        Ok::<(), String>(())
+        result
     })
     .await
     .map_err(|e| format!("Extraction task error: {e}"))??;
@@ -308,7 +343,7 @@ pub async fn check_proton_ge_update(current_path: String) -> Result<ProtonUpdate
             a.iter().find(|asset| {
                 asset["name"]
                     .as_str()
-                    .map(|n| n.ends_with(".tar.gz"))
+                    .map(|n| n.ends_with(".tar.gz") && !n.contains("aarch64"))
                     .unwrap_or(false)
             })
         })

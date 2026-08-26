@@ -35,14 +35,24 @@ export function StartupRecoveryManager() {
     (async () => {
       const servers = await getServers();
 
-      // --- 1. Re-queue startup_queued servers --------------------------------
-      const startupQueued = servers.filter((s) => s.status === "startup_queued");
-      if (startupQueued.length > 0) {
-        enqueueStartup(startupQueued.map((s) => s.id));
-      }
+      // Re-queuing startup_queued servers used to be step 1 here, duplicating
+      // StartupQueueManager's own self-heal effect (which reconciles the same
+      // "startup_queued in DB but not in the in-memory queue" case, but keeps
+      // running for the rest of the session instead of just once at launch).
+      // That effect already re-runs as soon as the servers list refreshes
+      // after this scan completes, so it covers the launch case too —
+      // removed here rather than kept as a second implementation of the same
+      // reconciliation.
 
-      // --- 2. Resume update_queued servers sequentially ----------------------
-      const updateQueued = servers.filter((s) => s.status === "update_queued");
+      // --- 2. Resume update_queued servers, and re-apply "updating" servers --
+      // "updating" here means the previous session was killed (crash, force-quit)
+      // while a server was actively mid-update — re-running applyUpdateToServer
+      // re-syncs the cache to the server, which is safe to repeat and completes
+      // whatever the interrupted copy left unfinished, matching the same
+      // preserved-Saved/ safety the original update used.
+      const updateQueued = servers.filter(
+        (s) => s.status === "update_queued" || s.status === "updating",
+      );
       if (updateQueued.length > 0) {
         const count = updateQueued.length;
         toast.info(
@@ -55,7 +65,11 @@ export function StartupRecoveryManager() {
             try {
               await updateServerStatus(server.id, "updating", null);
               queryClient.invalidateQueries({ queryKey: ["servers"] });
-              await applyUpdateToServer(server.id, server.name, server.install_path, false, false);
+              await applyUpdateToServer(
+                server.id, server.name, server.install_path, false, false,
+                server.rcon_port, server.admin_password,
+                { warnPlayers: false, warnMinutes: 0, warnMessage: "" },
+              );
             } catch {
               // applyUpdateToServer already dispatches a failure notification
             }
@@ -98,7 +112,7 @@ export function StartupRecoveryManager() {
       }
       // pref === "never" → do nothing
     })();
-  }, [isServerScanPending, preScanStatuses]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isServerScanPending, preScanStatuses, enqueueStartup, queryClient]);
 
   const handleLeaveOffline = async () => {
     setShowDownedDialog(false);
@@ -113,7 +127,7 @@ export function StartupRecoveryManager() {
 
   return (
     <Dialog open={showDownedDialog} onOpenChange={setShowDownedDialog}>
-      <DialogContent style={{ borderColor: "rgba(var(--neon-purple-rgb),0.25)", background: "rgba(10,10,30,0.97)" }}>
+      <DialogContent style={{ borderColor: "rgba(var(--neon-purple-rgb),0.25)", background: "var(--popover)" }}>
         <DialogHeader>
           <DialogTitle style={{ color: "var(--text-primary)" }}>Servers Went Offline</DialogTitle>
           <DialogDescription style={{ color: "var(--text-muted)" }}>

@@ -15,7 +15,9 @@
  */
 
 import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { getServers } from "@/lib/db";
+import { getServersCached } from "@/lib/server-utils";
 import { tauriCmd, type ServerStatus, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 
@@ -31,24 +33,26 @@ async function connectServer(serverId: string, host: string, rconPort: number, r
 }
 
 export function RconManager() {
+  const queryClient = useQueryClient();
+
   // ── Initial connect for all running servers on mount ──────────────────────
   useEffect(() => {
-    getServers().then((servers) => {
+    getServersCached(queryClient).then((servers) => {
       for (const s of servers) {
         if (s.status === "running") {
-          connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+          connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
         }
       }
     }).catch(() => null);
-  }, []);
+  }, [queryClient]);
 
   // ── React immediately when a server becomes "running" ─────────────────────
   useTauriEvent<ServerStatus>("server://any-change", (payload) => {
     if (payload.status === "running") {
-      // Fetch the server row to get rcon_port and rcon_password.
-      getServers().then((servers) => {
+      // Fetch the server row to get rcon_port and admin_password.
+      getServersCached(queryClient).then((servers) => {
         const s = servers.find((srv) => srv.id === payload.serverId);
-        if (s) connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+        if (s) connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
       }).catch(() => null);
     }
 
@@ -61,10 +65,10 @@ export function RconManager() {
   // ── Reconnect when the Rust manager reports a disconnection ───────────────
   useTauriEvent<RconStatusPayload>("rcon://status-any", (payload) => {
     if (payload.status !== "disconnected") return;
-    getServers().then((servers) => {
+    getServersCached(queryClient).then((servers) => {
       const s = servers.find((srv) => srv.id === payload.serverId);
       if (s && s.status === "running") {
-        connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+        connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
       }
     }).catch(() => null);
   });
@@ -72,12 +76,14 @@ export function RconManager() {
   // ── 60 s safety-net: reconnect any running server that lost its connection ─
   useEffect(() => {
     const id = setInterval(async () => {
+      // Deliberately NOT cached here — this interval exists specifically to
+      // catch missed/stale state, so it should always see the real DB.
       const servers = await getServers().catch(() => []);
       for (const s of servers) {
         if (s.status !== "running") continue;
         const connected = await tauriCmd.rconIsConnected(s.id).catch(() => false);
         if (!connected) {
-          connectServer(s.id, "127.0.0.1", s.rcon_port, s.rcon_password);
+          connectServer(s.id, "127.0.0.1", s.rcon_port, s.admin_password);
         }
       }
     }, SAFETY_NET_MS);

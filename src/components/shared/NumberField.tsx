@@ -5,7 +5,7 @@
  *
  * The slider is clamped to [min, max] (the "safe" range).
  * The text input is unconstrained, letting admins override beyond safe limits.
- * Colored dots with labels are shown above the track at 0 and at defaultValue.
+ * The "0" reference mark appears above the track; the "default" mark appears below.
  */
 
 import { useState, useRef, useEffect } from "react";
@@ -72,10 +72,14 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
   return (
     <div className="flex items-center gap-2">
       {/* Slider with reference markers */}
-      <div className="relative flex-1 pt-4">
-        {/* Tick marks */}
-        <div className="absolute top-0 left-0 right-0 pointer-events-none" style={{ height: "16px" }}>
-          {showZeroMark && zeroPct >= 0 && zeroPct <= 100 && (
+      <div className="relative flex-1 pt-4 pb-4">
+
+        {/* "0" mark ABOVE the track */}
+        {showZeroMark && zeroPct >= 0 && zeroPct <= 100 && (
+          <div
+            className="absolute top-0 left-0 right-0 pointer-events-none"
+            style={{ height: "16px" }}
+          >
             <div
               className="absolute flex flex-col items-center"
               style={{ left: markerLeft(zeroPct), transform: "translateX(-50%)" }}
@@ -83,17 +87,9 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
               <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>0</span>
               <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.25)" }} />
             </div>
-          )}
-          {defaultPct !== null && defaultPct >= 0 && defaultPct <= 100 && (
-            <div
-              className="absolute flex flex-col items-center"
-              style={{ left: markerLeft(defaultPct), transform: "translateX(-50%)" }}
-            >
-              <span className="text-[9px] font-mono leading-none mb-0.5" style={{ color: "rgba(var(--neon-purple-rgb),0.7)" }}>default</span>
-              <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(var(--neon-purple-rgb),0.6)" }} />
-            </div>
-          )}
-        </div>
+          </div>
+        )}
+
         <Slider
           min={min}
           max={max}
@@ -104,6 +100,26 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
             setRaw(String(v));
           }}
         />
+
+        {/* "default" mark BELOW the track — clickable to snap to default */}
+        {defaultPct !== null && defaultPct >= 0 && defaultPct <= 100 && (
+          <div
+            className="absolute bottom-0 left-0 right-0"
+            style={{ height: "16px" }}
+          >
+            <button
+              type="button"
+              className="absolute flex flex-col items-center"
+              style={{ left: markerLeft(defaultPct), transform: "translateX(-50%)", background: "none", border: "none", padding: 0, cursor: "pointer" }}
+              onClick={() => { onChange(defaultValue!); setRaw(String(defaultValue)); }}
+              title="Reset to default"
+            >
+              <div className="w-0.5 h-1.5 rounded-full" style={{ background: "rgba(var(--neon-purple-rgb),0.6)" }} />
+              <span className="text-[9px] font-mono leading-none mt-0.5" style={{ color: "rgba(var(--neon-purple-rgb),0.7)" }}>default</span>
+            </button>
+          </div>
+        )}
+
       </div>
 
       {/* Numeric input override */}
@@ -116,7 +132,7 @@ export function NumberField({ value, onChange, min, max, step = 0.1, defaultValu
         onBlur={handleInputBlur}
         className="w-20 h-7 text-xs font-mono text-right rounded px-2 shrink-0"
         style={{
-          background: "rgba(0,0,0,0.35)",
+          background: "var(--surface)",
           border: "1px solid rgba(var(--neon-purple-rgb),0.2)",
           color: "var(--text-primary)",
           outline: "none",

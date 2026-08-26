@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
-  Network, Plus, Trash2, ChevronRight, Server, Folder,
+  Network, Plus, Trash2, ChevronRight, Server, Folder, ToggleLeft, ToggleRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -84,7 +84,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
 
         <div className="flex flex-col gap-4 py-2">
           <div className="flex flex-col gap-1.5">
-            <Label style={{ color: "var(--text-muted)" }}>Cluster Name</Label>
+            <Label style={{ color: "var(--text-primary)" }}>Cluster Name</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -94,7 +94,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label style={{ color: "var(--text-muted)" }}>
+            <Label style={{ color: "var(--text-primary)" }}>
               Custom Cluster Directory{" "}
               <span style={{ color: "var(--text-subtle)", fontWeight: 400 }}>
                 (optional)
@@ -114,17 +114,15 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy} className="hover:bg-(--surface-elevated)" style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}>
             Cancel
           </Button>
           <Button
+            variant="outline"
             onClick={handleCreate}
             disabled={busy || !name.trim()}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
+            className="gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
           >
             {busy ? "Creating…" : "Create Cluster"}
           </Button>
@@ -144,19 +142,55 @@ interface DeleteDialogProps {
   onDeleted: () => void;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "empty";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy]               = useState(false);
+  const [deleteFiles, setDeleteFiles] = useState(true);
+  const [clusterDir, setClusterDir]   = useState("");
+  const [dirBytes, setDirBytes]       = useState<number | null>(null);
+
+  useEffect(() => {
+    // The parent mounts a fresh DeleteDialog (key={cluster.id}) per target,
+    // so deleteFiles/dirBytes already start at their useState initial values
+    // for each cluster — this effect only needs to resolve the async dir size.
+    if (!cluster) return;
+
+    let cancelled = false;
+    getAppSetting("base_dir").then((baseDir) => {
+      if (cancelled) return;
+      const dir = cluster.cluster_dir_override?.trim()
+        ? cluster.cluster_dir_override
+        : `${(baseDir ?? "").replace(/[/\\]$/, "")}/clusters/${cluster.id}`;
+      setClusterDir(dir);
+
+      return tauriCmd.getDirSize(dir)
+        .then((bytes) => { if (!cancelled) setDirBytes(bytes); })
+        .catch(() => { if (!cancelled) setDirBytes(-1); });
+    }).catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [cluster]);
 
   async function handleDelete() {
     if (!cluster) return;
     setBusy(true);
     try {
-      // Clear cluster_id on all member servers first
       const members = await getServersInCluster(cluster.id);
+      const baseDir = (await getAppSetting("base_dir")) ?? "";
+      // Delete on the Rust side first — if this throws (permission error
+      // removing the folder, etc.), no member has been detached yet and a
+      // retry behaves identically to the first attempt, instead of leaving
+      // members silently detached from a cluster that still exists.
+      await tauriCmd.deleteCluster(clusterDir, baseDir, deleteFiles);
       for (const s of members) {
         await setServerCluster(s.id, null);
       }
-      await tauriCmd.deleteCluster(cluster.id);
       await deleteClusterRecord(cluster.id);
       toast.success(`Cluster "${cluster.name}" deleted.`);
       onDeleted();
@@ -182,26 +216,48 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
           </DialogTitle>
           <DialogDescription className="sr-only">Confirm cluster deletion.</DialogDescription>
         </DialogHeader>
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          Are you sure you want to delete{" "}
-          <span className="font-semibold" style={{ color: "var(--text-primary)" }}>
-            {cluster?.name}
-          </span>
-          ? All member servers will be detached from the cluster. Server files are
-          not affected. The cluster directory on disk will not be deleted.
+
+        <p className="text-sm mb-3" style={{ color: "var(--text-muted)" }}>
+          All member servers will be detached. Server files are not affected.
         </p>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+
+        <div
+          className="flex items-center justify-between px-1 py-2 rounded-lg"
+          style={{ background: "rgba(255,0,85,0.05)", border: "1px solid rgba(255,0,85,0.15)" }}
+        >
+          <div className="min-w-0 pr-3">
+            <p className="text-sm" style={{ color: "var(--text-primary)" }}>
+              Delete cluster directory{dirBytes !== null && dirBytes >= 0 ? ` (${formatBytes(dirBytes)})` : dirBytes === null ? " (scanning…)" : ""}
+            </p>
+            <p className="text-xs mt-0.5 break-all" style={{ color: "var(--text-muted)" }}>{clusterDir || "…"}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDeleteFiles((v) => !v)}
+            className="shrink-0 flex items-center focus:outline-none"
+          >
+            {deleteFiles
+              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-red)" }} />
+              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />}
+          </button>
+        </div>
+
+        <DialogFooter className="mt-2">
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={busy}
+            className="hover:bg-(--surface-elevated)"
+            style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.25)" }}
+          >
             Cancel
           </Button>
           <Button
+            variant="outline"
             onClick={handleDelete}
             disabled={busy}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-red)",
-              color: "var(--neon-red)",
-            }}
+            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
+            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
           >
             {busy ? "Deleting…" : "Delete Cluster"}
           </Button>
@@ -225,7 +281,7 @@ function ClusterCard({ cluster, onDelete }: ClusterCardProps) {
 
   return (
     <div
-      className="glass-card flex flex-col gap-4 p-5 cursor-pointer transition-all duration-200 hover:border-[var(--neon-purple)]"
+      className="glass-card flex flex-col gap-4 p-5 cursor-pointer transition-all duration-200 hover:border-(--neon-purple)"
       onClick={() => router.push(`/clusters/detail?id=${cluster.id}`)}
       style={{
         border: "1px solid var(--border)",
@@ -262,7 +318,7 @@ function ClusterCard({ cluster, onDelete }: ClusterCardProps) {
               e.stopPropagation();
               onDelete(cluster);
             }}
-            style={{ color: "var(--text-muted)" }}
+            style={{ color: "var(--neon-red)" }}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </Button>
@@ -310,12 +366,16 @@ export default function ClustersPage() {
 
   const refresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["clusters"] });
+    // Deleting a cluster detaches every member server (setServerCluster ->
+    // null) — without this, the dashboard and cluster-aware menus keep
+    // showing those servers as still belonging to the deleted cluster.
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
   }, [queryClient]);
 
   return (
     <div className="h-full overflow-hidden flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between shrink-0">
+      <div className="flex items-start justify-between shrink-0">
         <div>
           <div className="flex items-center gap-3">
             <Network className="w-6 h-6 shrink-0" style={{ color: "var(--neon-purple)" }} />
@@ -331,14 +391,12 @@ export default function ClustersPage() {
           </p>
         </div>
         <Button
+          variant="outline"
           onClick={() => setShowNew(true)}
-          style={{
-            background: "transparent",
-            border: "1px solid var(--neon-purple)",
-            color: "var(--neon-purple)",
-          }}
+          className="gap-2"
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
         >
-          <Plus className="w-4 h-4 mr-2" />
+          <Plus className="w-4 h-4" />
           New Cluster
         </Button>
       </div>
@@ -352,30 +410,26 @@ export default function ClustersPage() {
           ))}
         </div>
       ) : clusters.length === 0 ? (
-        <div
-          className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center"
-          style={{ border: "1px solid var(--border)", borderRadius: "0.75rem" }}
-        >
-          <Network className="w-10 h-10" style={{ color: "var(--text-subtle)" }} />
+        <div className="glass-card flex flex-col items-center justify-center gap-4 py-24 text-center rounded-2xl">
+          <div
+            className="flex items-center justify-center w-16 h-16 rounded-full"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.05)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+          >
+            <Network className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+          </div>
           <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
-              No clusters yet
-            </p>
-            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+            <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>No clusters yet</h2>
+            <p className="text-sm mt-1 max-w-sm" style={{ color: "var(--text-muted)" }}>
               Create a cluster to enable cross-ARK travel between servers.
             </p>
           </div>
           <Button
+            variant="outline"
             onClick={() => setShowNew(true)}
-            size="sm"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
+            className="mt-2 gap-2"
+            style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Create First Cluster
+            <Plus className="w-4 h-4" /> New Cluster
           </Button>
         </div>
       ) : (
@@ -393,6 +447,7 @@ export default function ClustersPage() {
         onCreated={refresh}
       />
       <DeleteDialog
+        key={deleteTarget?.id}
         cluster={deleteTarget}
         onClose={() => setDeleteTarget(null)}
         onDeleted={refresh}

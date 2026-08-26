@@ -118,9 +118,19 @@ interface AppState {
   countdowns: Record<string, { action: 'restart' | 'update'; remainingSecs: number; totalSecs: number } | null>;
   setCountdown: (serverId: string, entry: { action: 'restart' | 'update'; remainingSecs: number; totalSecs: number } | null) => void;
 
-  /** True while an ASA cache update/check is running (shows spinner in TopBar). */
+  /** Label shown in TopBar while an ASA cache op is running; null when idle. */
+  asaCacheOpLabel: string | null;
+  setAsaCacheOpLabel: (v: string | null) => void;
+  /** @deprecated use asaCacheOpLabel !== null */
   asaCacheUpdateInProgress: boolean;
   setAsaCacheUpdateInProgress: (v: boolean) => void;
+
+  /** Label shown in TopBar while a Proton-GE op is running; null when idle. */
+  protonOpLabel: string | null;
+  setProtonOpLabel: (v: string | null) => void;
+  /** True after a Proton-GE op completes; cleared when the next op starts. */
+  protonOpDone: boolean;
+  setProtonOpDone: (v: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -210,6 +220,13 @@ export const useAppStore = create<AppState>((set) => ({
   setCountdown: (serverId, entry) =>
     set((s) => ({ countdowns: { ...s.countdowns, [serverId]: entry } })),
 
+  asaCacheOpLabel: null,
+  setAsaCacheOpLabel: (v) => set({ asaCacheOpLabel: v, asaCacheUpdateInProgress: v !== null }),
   asaCacheUpdateInProgress: false,
   setAsaCacheUpdateInProgress: (v) => set({ asaCacheUpdateInProgress: v }),
+
+  protonOpLabel: null,
+  setProtonOpLabel: (v) => set({ protonOpLabel: v }),
+  protonOpDone: false,
+  setProtonOpDone: (v) => set({ protonOpDone: v }),
 }));

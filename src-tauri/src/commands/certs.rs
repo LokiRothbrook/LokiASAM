@@ -104,7 +104,12 @@ async fn install_windows(cert_path: &str) -> Result<(), String> {
 #[cfg(target_os = "linux")]
 async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) -> Result<(), String> {
     let proton_script = format!("{proton_path}/proton");
-    let wine_bin      = format!("{proton_path}/files/bin/wine64");
+    // Wine 10 (GE-Proton 11+) unified wine64 into a single wine binary.
+    // Fall back to wine if wine64 is absent.
+    let wine_bin = {
+        let w64 = format!("{proton_path}/files/bin/wine64");
+        if PathBuf::from(&w64).exists() { w64 } else { format!("{proton_path}/files/bin/wine") }
+    };
     let wine_pfx      = format!("{prefix_path}/pfx");
     let marker        = PathBuf::from(prefix_path).join(CERT_MARKER_FILENAME);
 
@@ -160,8 +165,15 @@ async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) ->
         ));
     }
 
-    // Write marker so future checks are instant.
-    let _ = tokio::fs::write(&marker, b"1").await;
+    // Write marker so future checks are instant. This must not be silently
+    // discarded: Linux has no direct way to query Wine's cert store, so
+    // check_amazon_root_ca_installed relies entirely on this file — if the
+    // write fails, a future check would report "not installed" forever even
+    // though wine certutil above genuinely succeeded. Surface the failure so
+    // the caller knows to retry rather than silently mismatching.
+    tokio::fs::write(&marker, b"1").await.map_err(|e| {
+        format!("Certificate installed, but failed to write install marker: {e}. Please try installing again.")
+    })?;
 
     Ok(())
 }

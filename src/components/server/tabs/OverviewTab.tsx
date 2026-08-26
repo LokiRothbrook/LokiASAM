@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Users, Cpu, MemoryStick, Clock,
   Save, RefreshCw, ArrowUp, Loader2, X, BarChart2, FolderOpen,
-  Zap, Settings2, Terminal, Skull, CheckCircle2, ShieldCheck,
+  Settings2, Terminal, Skull, ChevronDown, ChevronRight, Sparkles, Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,29 +23,32 @@ import {
 } from "recharts";
 import { useServerStats } from "@/hooks/useServerStats";
 import { useServerStatsHistory, type Timeframe } from "@/hooks/useServerStatsHistory";
-import { tauriCmd, type StartServerParams, type ArkPlayer } from "@/lib/tauri-commands";
+import { tauriCmd, type ArkPlayer } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import {
-  updateServerStatus, getServerConfig, getServerModCount, getServerMods,
+  updateServerStatus, getServerConfig, getServerModCount,
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
   pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
-import { buildLaunchCommandPreview } from "@/lib/server-utils";
+import { buildLaunchCommandPreview, buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { applyUpdateToServer } from "@/lib/update-utils";
+import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
-import { formatServerVersion } from "@/lib/db";
-import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { toast } from "sonner";
-import { ARK_MAPS, LAUNCH_PARAMETERS, NOTIFICATION_EVENTS } from "@/data/game-data";
+import { ARK_EVENTS, NOTIFICATION_EVENTS, getSaveFolder } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { isLinux } from "@/lib/server-utils";
+import { useOnMount } from "@/hooks/useOnMount";
 
 interface Props {
   server: ServerRow;
+  /** Switch the parent's active tab to Config; optionally pass a section id to scroll to. */
+  onNavigateToConfig?: (anchor?: string) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -167,7 +170,7 @@ function ChartTooltip({
     <div
       className="rounded-lg px-3 py-2 text-xs"
       style={{
-        background: "rgba(10,10,30,0.95)",
+        background: "var(--popover)",
         border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
         color: "var(--text-primary)",
       }}
@@ -358,7 +361,8 @@ function ServerSummaryPanel({
       hour: "2-digit", minute: "2-digit",
     });
 
-  const mapDisplay = ARK_MAPS.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
+  const allMaps = useAllMaps();
+  const mapDisplay = allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id;
 
   const items = [
     { label: "Started",       value: currentStartMs ? fmtDate(currentStartMs) : "—"   },
@@ -495,6 +499,7 @@ function ActiveConfigPanel({
   launchCommand: string;
   onNavigateToConfig: () => void;
 }) {
+  const [cliExpanded, setCliExpanded] = useState(false);
   if (!config) return null;
 
   const pvp = gusVal(config, "ServerPVE") !== "True";
@@ -541,16 +546,25 @@ function ActiveConfigPanel({
         ))}
       </div>
 
-      {/* Launch command */}
+      {/* Launch command — collapsed by default */}
       {launchCommand && (
         <div>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Terminal className="w-3 h-3" style={{ color: "var(--text-muted)" }} />
+          <button
+            type="button"
+            onClick={() => setCliExpanded((v) => !v)}
+            className="flex items-center gap-1.5 w-full text-left"
+          >
+            {cliExpanded
+              ? <ChevronDown  className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />
+              : <ChevronRight className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />}
+            <Terminal className="w-3 h-3 shrink-0" style={{ color: "var(--text-muted)" }} />
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>Launch Command</span>
-          </div>
-          <div className="rounded-lg px-3 py-2 overflow-x-auto" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
-            <code className="text-xs font-mono whitespace-pre-wrap break-all" style={{ color: "var(--neon-cyan)" }}>{launchCommand}</code>
-          </div>
+          </button>
+          {cliExpanded && (
+            <div className="mt-1.5 rounded-lg px-3 py-2 overflow-x-auto" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+              <code className="text-xs font-mono whitespace-pre-wrap break-all" style={{ color: "var(--neon-cyan)" }}>{launchCommand}</code>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -559,18 +573,29 @@ function ActiveConfigPanel({
 
 // ── OverviewTab ───────────────────────────────────────────────────────────────
 
-export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigateToConfig?: () => void }) {
+export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const stats = useServerStats(server);
-  const versionCache = useBuildVersionCache();
   const startTime = useAppStore((s) => s.serverStartTimes[server.id]);
   const isServerScanPending = useAppStore((s) => s.isServerScanPending);
   const countdown = useAppStore((s) => s.countdowns[server.id] ?? null);
+  const noRetry = useAppStore((s) => !!s.noRetryServerIds[server.id]);
+  const setNoRetryServer = useAppStore((s) => s.setNoRetryServer);
+  const clearNoRetryServer = useAppStore((s) => s.clearNoRetryServer);
+  const enqueueStartup = useAppStore((s) => s.enqueueStartup);
+  const removeFromStartupQueue = useAppStore((s) => s.removeFromStartupQueue);
 
   const [modCount, setModCount]     = useState<number | null>(null);
   const [activeConfig, setActiveConfig] = useState<ActiveConfig | null>(null);
   const [lastBackup,  setLastBackup]  = useState<string | null>(null);
+
+  // Refresh the Last Backup tile when a scheduled (hourly) backup finishes —
+  // without this it stays stale (showing the pre-backup time) until this tab
+  // remounts, since it's otherwise only fetched once on mount below.
+  useTauriEvent(`backup://completed/${server.id}`, () => {
+    getLastBackupTime(server.id).then(setLastBackup).catch(() => {});
+  });
   const [nextRestart,   setNextRestart]   = useState<string | null>(null);
   const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
@@ -578,13 +603,11 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const [playersLoading, setPlayersLoading] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
-  const [wipeConfirm, setWipeConfirm] = useState<"map" | "players" | "full" | null>(null);
-  const [wiping, setWiping] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const [launchCommand, setLaunchCommand] = useState("");
   const [wipingDinos, setWipingDinos] = useState(false);
-  const [validating, setValidating] = useState(false);
+  const activeEventId = server.active_event ?? null;
 
   // Per-tile timeframe selectors
   const [playersTf, setPlayersTf] = useState<Timeframe>("Live");
@@ -594,9 +617,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   const hasUpdateAvailable = server.update_available === 1;
   const isRunning     = server.status === "running";
   const isStarting    = server.status === "starting";
-  const isTransitioning = ["starting", "stopping", "updating"].includes(server.status);
+  const isTransitioning = ["starting", "stopping", "updating", "update_queued"].includes(server.status);
   const isStartFailed = server.status === "start-failed";
-  // isLinux imported from server-utils
+  const isUpdateQueued  = server.status === "update_queued";
+  const isStartupQueued = server.status === "startup_queued";
 
   // Keep the uptime counter ticking while the server is active.
   const [, setTick] = useState(0);
@@ -605,6 +629,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
   }, [isRunning, isStarting]);
+
+  // server is read via a ref inside the effect below so unrelated re-renders
+  // (e.g. status polling) don't force server's full identity into that
+  // effect's deps — only an actual id/install_path change should refetch.
+  const serverRef = useRef(server);
+  useEffect(() => {
+    serverRef.current = server;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -627,7 +659,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             launchArgs,
           });
           // Build launch command preview (async, non-blocking)
-          buildLaunchCommandPreview(server, launchArgs).then(setLaunchCommand).catch(() => {});
+          buildLaunchCommandPreview(serverRef.current, launchArgs).then(setLaunchCommand).catch(() => {});
         }
         setLastBackup(lb);
         setNextRestart(nr);
@@ -638,53 +670,53 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     return () => { cancelled = true; };
   }, [server.id, server.install_path]);
 
-  // ── Action helpers ──────────────────────────────────────────────────────────
-
-  const buildStartParams = async (): Promise<StartServerParams> => {
-    const [config, mods] = await Promise.all([
-      getServerConfig(server.id),
-      getServerMods(server.id),
-    ]);
-    const launchArgs: Record<string, string> = config ? JSON.parse(config.launch_args_json) : {};
-    const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
-      if (!v || v === "false" || v === "0") return [];
-      const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-      if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-      if (param) return v ? [`${param.flag}${v}`] : [];
-      return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-    });
-    const map = ARK_MAPS.find((m) => m.id === server.map_id);
-    const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
-    const params: StartServerParams = {
-      serverId: server.id,
-      serverName: server.name,
-      installPath: server.install_path,
-      mapPath: map?.mapPath ?? "TheIsland_WP",
-      port: server.port,
-      queryPort: server.query_port,
-      rconPort: server.rcon_port,
-      rconPassword: server.rcon_password,
-      extraArgs,
-      modIds: enabledModIds,
-    };
-    if (isLinux) {
-      params.protonPath = (await getAppSetting("proton_path")) ?? undefined;
-      params.prefixPath = (await getAppSetting("proton_prefix_path")) ?? undefined;
+  const navigateToConfig = (anchor?: string) => {
+    if (onNavigateToConfig) {
+      onNavigateToConfig(anchor);
+      return;
     }
-    return params;
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "config");
+    router.push(url.pathname + url.search);
+    if (anchor) {
+      setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }), 300);
+    }
   };
+
+  // ── Action helpers ──────────────────────────────────────────────────────────
 
   const handleStart = async () => {
     setActionPending(true);
+    clearNoRetryServer(server.id);
     try {
       await updateServerStatus(server.id, "starting", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
+
+      // Ensure both save symlinks/junctions are in place before launching —
+      // self-heals a server whose links were lost (e.g. after moving
+      // base_dir), same repair step the dashboard card's Start runs.
+      const baseDir = await getAppSetting("base_dir").catch(() => null);
+      if (baseDir) {
+        await ensureMapsCacheLoaded().catch(() => {});
+        const mapPath = findMapById(server.map_id)?.mapPath ?? "TheIsland_WP";
+        await tauriCmd.createSaveLink(server.install_path, server.id, baseDir).catch((e) => {
+          console.warn("createSaveLink failed on start:", e);
+        });
+        await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, mapPath).catch((e) => {
+          console.warn("createModsSavesLink failed on start:", e);
+        });
+      }
+
       await warnIfFirewallMissing(server);
-      const params = await buildStartParams();
+      const params = await buildStartParams(server);
       const pid = await tauriCmd.startServer(params);
       await updateServerStatus(server.id, "starting", pid);
     } catch (e) {
-      const errMsg = typeof e === "string" ? e : String(e);
+      const raw = typeof e === "string" ? e : String(e);
+      const isExeMissing = raw.startsWith("exe_missing:");
+      const errMsg = isExeMissing ? raw.slice("exe_missing: ".length) : raw;
+      if (isExeMissing) setNoRetryServer(server.id);
+
       await updateServerStatus(server.id, "start-failed", null);
       toast.error(`${server.name} failed to start — ${errMsg}`);
       await dispatchNotification({
@@ -701,19 +733,30 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
     }
   };
 
+  // Default entry point for the manual "Start" button — hands off to the
+  // staggered startup queue instead of launching directly, matching the
+  // dashboard card's Start button, so starting from this tab can't pile a
+  // second simultaneous boot on top of whatever's currently starting.
+  const handleQueueStart = async () => {
+    setActionPending(true);
+    clearNoRetryServer(server.id);
+    try {
+      await updateServerStatus(server.id, "startup_queued", null);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      enqueueStartup([server.id]);
+    } catch (err) {
+      toast.error(`Failed to queue ${server.name} to start`, { description: String(err) });
+    } finally {
+      setActionPending(false);
+    }
+  };
+
   const handleStop = async () => {
     setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      await tauriCmd.gracefulStopServer(
-        server.id,
-        server.rcon_port,
-        server.rcon_password,
-        server.shutdown_warn_players !== 0,
-        server.shutdown_warn_minutes ?? 5,
-        server.shutdown_message || "Server will shut down in {time}.",
-      );
+      await stopServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to stop ${server.name}`, { description: String(err) });
       await updateServerStatus(server.id, "error", null);
@@ -736,33 +779,18 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   };
 
   const handleRestart = async () => {
-    if (server.restart_warn_players) {
-      const startParams = await buildStartParams();
-      tauriCmd.startGracefulRestart({
-        serverId:      server.id,
-        warnSeconds:   (server.restart_warn_minutes ?? 5) * 60,
-        rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
-        message:       server.restart_message || "Server restarting in {time}.",
-        cancelMessage: server.restart_cancel_message || "Restart has been canceled.",
-        startParams,
-      }).catch((err) => toast.error(`Restart failed: ${err}`));
-      return;
-    }
-
-    setActionPending(true);
+    // Only the plain (non-warn) path is a quick stop+handoff worth a pending
+    // spinner — the warn path runs a countdown that can last minutes.
+    const isWarnRestart = !!server.restart_warn_players;
+    if (!isWarnRestart) setActionPending(true);
     try {
-      await updateServerStatus(server.id, "stopping", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      const params = await buildStartParams();
-      const pid = await tauriCmd.restartServer(params, true);
-      await updateServerStatus(server.id, "running", pid);
+      await restartServerGracefully(server, {
+        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      });
     } catch (err) {
       toast.error(`Failed to restart ${server.name}`, { description: String(err) });
-      await updateServerStatus(server.id, "error", null);
     } finally {
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      setActionPending(false);
+      if (!isWarnRestart) setActionPending(false);
     }
   };
 
@@ -777,14 +805,20 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
       if (!baseDir || !steamcmdPath) return;
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const startParams = restartAfterUpdate ? await buildStartParams() : null;
+      const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
+
+      // Show a visible transition immediately — otherwise the card sits on
+      // "running" with no feedback until the warning countdown finishes.
+      // Rust reverts this back to "running" if the countdown gets cancelled.
+      await updateServerStatus(server.id, "stopping", server.pid);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
 
       tauriCmd.startGracefulUpdate({
         serverId:      server.id,
         serverName:    server.name,
         warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
         rconPort:      server.rcon_port,
-        rconPassword:  server.rcon_password,
+        rconPassword:  server.admin_password,
         message:       server.update_message || "Server going down for update in {time}.",
         cancelMessage: server.update_cancel_message || "Update has been canceled.",
         installPath:   server.install_path,
@@ -806,9 +840,17 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           server.install_path,
           wasRunning,
           restartAfterUpdate,
-          (msg) => toast.info(msg),
           server.rcon_port,
-          server.rcon_password,
+          server.admin_password,
+          {
+            // This branch only runs when the warn-players countdown path above
+            // wasn't taken (warn disabled, or server wasn't running) — still
+            // always saves the world and shuts down cleanly via RCON either way.
+            warnPlayers: false,
+            warnMinutes: server.update_warn_minutes ?? 5,
+            warnMessage: server.update_message || "Server going down for update in {time}.",
+          },
+          (msg) => toast.info(msg),
         );
       } catch (err) {
         if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -828,36 +870,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   };
 
   const handleReinstall = async () => {
+    queryClient.invalidateQueries({ queryKey: ["servers"] });
+    router.push("/");
     try {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      await updateServerStatus(server.id, "installing", null);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      router.push("/");
-      tauriCmd.updateServer(server.id, server.install_path, cacheDir, steamcmdPath)
-        .then(() => updateServerStatus(server.id, "stopped", null))
-        .catch(() => updateServerStatus(server.id, "install_failed", null))
-        .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }));
+      await reinstallServer(server);
     } catch (err) {
-      toast.error(`Failed to start reinstall for ${server.name}`, { description: String(err) });
-    }
-  };
-
-  const handleWipe = async (tier: "map" | "players" | "full") => {
-    setWiping(true);
-    try {
-      await tauriCmd.wipeServerSaves(server.install_path, server.save_folder_name ?? "", tier);
-      setWipeConfirm(null);
-      toast.success(`Save wipe complete (${tier})`);
-    } catch (e) {
-      toast.error(`Save wipe failed: ${e}`);
+      toast.error(`Reinstall failed for ${server.name}`, { description: String(err) });
     } finally {
-      setWiping(false);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
@@ -875,10 +895,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
   }, [server.id]);
 
   // Fetch player list on mount/server-change if running.
-  useEffect(() => {
+  const syncPlayersIfRunning = useCallback(() => {
     if (server.status === "running") refreshPlayers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id]);
+  }, [server.status, refreshPlayers]);
+  useOnMount(syncPlayersIfRunning);
 
   // The per-server event emits the players array directly as payload.
   useTauriEvent<ArkPlayer[]>(
@@ -935,14 +955,60 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               Detecting...
             </Button>
-          ) : isStartFailed ? (
+          ) : isUpdateQueued ? (
             <>
+              <span className="text-xs flex items-center gap-1.5" style={{ color: "#ffa500" }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Update queued
+              </span>
               <Button
-                size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+                size="sm" variant="outline"
+                onClick={async () => {
+                  await updateServerStatus(server.id, "stopped", null);
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }}
+                className="gap-1.5"
+                style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
+              >
+                <Ban className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isStartupQueued ? (
+            <>
+              <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-cyan)" }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Startup queued
+              </span>
+              <Button
+                size="sm" disabled={actionPending}
+                onClick={() => { removeFromStartupQueue(server.id); handleStart(); }}
+                className="gap-1.5"
+                title="Start immediately, skipping the wait for its turn"
                 style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
               >
-                <Play className="w-3.5 h-3.5" /> Retry Start
+                <Play className="w-3.5 h-3.5" /> Skip Queue
               </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={async () => {
+                  removeFromStartupQueue(server.id);
+                  await updateServerStatus(server.id, "stopped", null);
+                  queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }}
+                className="gap-1.5"
+                style={{ color: "var(--text-muted)", borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}
+              >
+                <Ban className="w-3.5 h-3.5" /> Cancel
+              </Button>
+            </>
+          ) : isStartFailed ? (
+            <>
+              {!noRetry && (
+                <Button
+                  size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                >
+                  <Play className="w-3.5 h-3.5" /> Retry Start
+                </Button>
+              )}
               <Button
                 size="sm" variant="outline" onClick={handleReinstall} className="gap-1.5"
                 style={{ color: "var(--neon-purple)", borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}
@@ -952,14 +1018,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             </>
           ) : server.status === "stopping" ? (
             <Button
-              size="sm" onClick={handleForceStop} className="gap-1.5"
+              size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
             </Button>
           ) : server.status === "starting" ? (
             <Button
-              size="sm" onClick={handleForceStop} className="gap-1.5"
+              size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
             >
               <X className="w-3.5 h-3.5" /> Cancel Startup
@@ -973,7 +1039,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             </Button>
           ) : (
             <Button
-              size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
+              size="sm" onClick={handleQueueStart} disabled={actionPending} className="gap-1.5"
               style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
             >
               <Play className="w-3.5 h-3.5" /> Start
@@ -1010,10 +1076,13 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           <Button
             size="sm" variant="outline" disabled={isTransitioning}
             onClick={async () => {
-              const backupDir = await getAppSetting("backup_dir");
+              const [backupDir, baseDir] = await Promise.all([getAppSetting("backup_dir"), getAppSetting("base_dir")]);
               if (!backupDir) return;
-              const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
-              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual")
+              await ensureMapsCacheLoaded().catch(() => {});
+              const mapDef = findMapById(server.map_id);
+              const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
+              const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
+              tauriCmd.createServerBackup(server.id, server.name, server.install_path, mapPath, saveFolder, server.map_id, backupDir, "manual", "", baseDir ?? "")
                 .then(async (record: BackupRecord) => {
                   await insertBackup({
                     id: record.id, server_id: record.serverId, file_path: record.filePath,
@@ -1023,6 +1092,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
                   });
                   const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
                   await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
+                  setLastBackup(record.createdAt);
                 })
                 .catch(() => null);
             }}
@@ -1099,20 +1169,44 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
 
       </div>
 
+      {/* ── Active Event (read-only — edit in Settings) ── */}
+      <div
+        className="glass-card rounded-xl p-4"
+        style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+      >
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <Sparkles className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                {activeEventId
+                  ? (ARK_EVENTS.find((e) => e.id === activeEventId)?.displayName ?? activeEventId)
+                  : "No event active"}
+              </p>
+            </div>
+          </div>
+          <button onClick={() => navigateToConfig("settings-active-event")} className="text-xs px-3 py-1 rounded-md shrink-0"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.08)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            {activeEventId ? "Change →" : "Configure →"}
+          </button>
+        </div>
+        {activeEventId && (() => {
+          const evt = ARK_EVENTS.find((e) => e.id === activeEventId);
+          return evt ? (
+            <p className="text-xs mt-2 pl-6" style={{ color: "var(--text-muted)" }}>
+              {evt.description} <span className="font-mono ml-1" style={{ color: "var(--text-subtle)" }}>Mod: {evt.modId}</span>
+            </p>
+          ) : null;
+        })()}
+      </div>
+
       {/* ── Active Configuration panel ── */}
       <ActiveConfigPanel
         config={activeConfig}
         modCount={modCount}
         launchCommand={launchCommand}
-        onNavigateToConfig={() => {
-          if (onNavigateToConfig) {
-            onNavigateToConfig();
-          } else {
-            const url = new URL(window.location.href);
-            url.searchParams.set("tab", "config");
-            router.push(url.pathname + url.search);
-          }
-        }}
+        onNavigateToConfig={() => navigateToConfig()}
       />
 
       {/* ── Network / install info ── */}
@@ -1141,31 +1235,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
           >
             <FolderOpen className="w-3.5 h-3.5 shrink-0" />
             Open Install Folder
-          </button>
-          <button
-            className="flex items-center gap-1.5 shrink-0 text-xs rounded-lg px-3 py-1.5 transition-all"
-            disabled={validating || isRunning}
-            title={isRunning ? "Stop the server before validating" : "Verify game files via SteamCMD"}
-            style={{ background: "rgba(0,255,255,0.06)", border: "1px solid rgba(0,255,255,0.2)", color: validating ? "var(--text-muted)" : "var(--neon-cyan)", opacity: isRunning ? 0.5 : 1 }}
-            onClick={async () => {
-              setValidating(true);
-              try {
-                const [steamcmdPath, baseDir] = await Promise.all([
-                  getAppSetting("steamcmd_path"),
-                  getAppSetting("base_dir"),
-                ]);
-                if (!steamcmdPath) { toast.error("SteamCMD path not configured"); return; }
-                if (!baseDir) { toast.error("Base directory not configured"); return; }
-                const sep = isLinux ? "/" : "\\";
-                const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-                await tauriCmd.validateServerFiles(server.id, server.install_path, cacheDir, steamcmdPath);
-                toast.success("Game files verified");
-              } catch (e) { toast.error(`Validation failed: ${e}`); }
-              finally { setValidating(false); }
-            }}
-          >
-            {validating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5 shrink-0" />}
-            Verify Files
           </button>
         </div>
       </div>
@@ -1228,67 +1297,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props & { onNavigate
             {wipingDinos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Skull className="w-3.5 h-3.5" />}
             Wipe Wild Dinos
           </button>
-        </div>
-      )}
-
-      {/* ── Wipe Saves card ── */}
-      {!isRunning && (
-        <div
-          className="glass-card rounded-xl p-4 space-y-3"
-          style={{ border: "1px solid rgba(255,0,85,0.2)" }}
-        >
-          <div className="flex items-center gap-2">
-            <X className="w-4 h-4" style={{ color: "var(--neon-red)" }} />
-            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Wipe Save Data</h3>
-          </div>
-          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Permanently delete save files. This cannot be undone. Take a backup first.
-          </p>
-
-          {wipeConfirm ? (
-            <div className="space-y-3 rounded-lg p-3" style={{ background: "rgba(255,0,85,0.06)", border: "1px solid rgba(255,0,85,0.3)" }}>
-              <p className="text-sm font-medium" style={{ color: "var(--neon-red)" }}>
-                {wipeConfirm === "map" && "Wipe Map Data — this will delete all world state (*.ark). Character and tribe data will be preserved."}
-                {wipeConfirm === "players" && "Wipe Player & Tribe Data — this will delete all character profiles and tribe records. World state will be preserved."}
-                {wipeConfirm === "full" && "Full Wipe — this will delete ALL save data including world, characters, tribes, and mod data. This is irreversible."}
-              </p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => setWipeConfirm(null)} disabled={wiping}
-                  style={{ color: "var(--text-muted)" }}>
-                  Cancel
-                </Button>
-                <Button size="sm" onClick={() => handleWipe(wipeConfirm)} disabled={wiping}
-                  style={{ background: "rgba(255,0,85,0.15)", borderColor: "rgba(255,0,85,0.5)", color: "var(--neon-red)" }}>
-                  {wiping ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <X className="w-3.5 h-3.5 mr-1.5" />}
-                  Confirm Wipe
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => setWipeConfirm("map")}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
-              >
-                Map Wipe
-              </button>
-              <button
-                onClick={() => setWipeConfirm("players")}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
-              >
-                Player & Tribe Reset
-              </button>
-              <button
-                onClick={() => setWipeConfirm("full")}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ background: "rgba(255,0,85,0.12)", color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.4)" }}
-              >
-                Full Wipe
-              </button>
-            </div>
-          )}
         </div>
       )}
 

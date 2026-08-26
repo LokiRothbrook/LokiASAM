@@ -13,6 +13,7 @@ import type {
   ArchivedLogInfo, CrashInfo, CrashReport, ChatLogInfo, OtherLogInfo, RconLogLine,
 } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useOnMount } from "@/hooks/useOnMount";
 import {
   getKnownPlayers, getPlayerKnownIps, getPlayerConnectionHistory, getPossibleAlts,
   type PlayerConnectionRow,
@@ -166,17 +167,26 @@ function LivePanel({ server }: { server: ServerRow }) {
     }
   }, [server.id]);
 
+  // Reset display state the moment we transition to active — compared during
+  // render rather than inside the effect below, since it's a synchronous
+  // reset with no async work of its own.
+  const [wasActive, setWasActive] = useState(isActive);
+  if (isActive !== wasActive) {
+    setWasActive(isActive);
+    if (isActive) {
+      setLastSessionFilename(null);
+      setLines([]);
+      setReady(false);
+    }
+  }
+
   // Single effect that registers both event listeners BEFORE starting the watcher.
   // This eliminates a race where the Rust watcher emits the backfill event before
   // the frontend listeners are ready (the Tauri listen() IPC is async/microtask,
   // so a synchronous watchServerLog call would arrive at Rust first, causing the
   // backfill to be emitted with no registered listeners and silently dropped).
-  useEffect(() => {
+  const syncWatcher = useCallback(() => {
     if (isActive) {
-      setLastSessionFilename(null);
-      setLines([]);
-      setReady(false);
-
       let cancelled = false;
       let unlistenBackfill: (() => void) | undefined;
       let unlistenLine: (() => void) | undefined;
@@ -219,13 +229,18 @@ function LivePanel({ server }: { server: ServerRow }) {
         cancelled = true;
         unlistenBackfill?.();
         unlistenLine?.();
+        // Stop the Rust-side file watcher too — without this, switching away
+        // from the Live tab (or navigating off the page) while the server is
+        // still running leaves it tailing the log file indefinitely, and
+        // reopening Live starts a second watcher on top of it.
+        tauriCmd.stopLogWatch(server.id).catch(() => null);
       };
     } else {
       tauriCmd.stopLogWatch(server.id).catch(() => null);
       loadLastSession();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id, isActive]);
+  }, [server.id, server.install_path, isActive, loadLastSession]);
+  useOnMount(syncWatcher);
 
   // Auto-scroll on new live lines and when last-session content is first loaded.
   useEffect(() => {
@@ -392,7 +407,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
     finally { setLoading(false); }
   }, [server.id]);
 
-  useEffect(() => { load(); }, [load]);
+  useOnMount(load);
 
   const openFile = useCallback(async (filename: string, type: "shootergame" | "other") => {
     setSelected({ filename, type });
@@ -580,7 +595,7 @@ function CrashesPanel({ server }: { server: ServerRow }) {
     finally { setLoading(false); }
   }, [server.id]);
 
-  useEffect(() => { load(); }, [load]);
+  useOnMount(load);
 
   const openCrash = useCallback(async (crash: CrashInfo) => {
     setSelected(crash);
@@ -717,7 +732,7 @@ function ChatPanel({ server }: { server: ServerRow }) {
     finally { setLoading(false); }
   }, [server.id]);
 
-  useEffect(() => { load(); }, [load]);
+  useOnMount(load);
 
   const openFile = useCallback(async (info: ChatLogInfo) => {
     setSelected(info);
@@ -730,10 +745,10 @@ function ChatPanel({ server }: { server: ServerRow }) {
     finally { setLoadingFile(false); }
   }, [server.id]);
 
-  useEffect(() => {
+  const autoSelectFirst = useCallback(() => {
     if (chatLogs.length > 0 && !selected) openFile(chatLogs[0]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatLogs]);
+  }, [chatLogs, selected, openFile]);
+  useOnMount(autoSelectFirst);
 
   // Live-append incoming chat lines so the panel updates without manual refresh.
   const todayFilename = `chat_${new Date().toISOString().slice(0, 10)}.log`;
@@ -829,24 +844,47 @@ function PlayersPanel({ server }: { server: ServerRow }) {
   const [knownIps,    setKnownIps]    = useState<{ ip: string; lastSeen: string }[]>([]);
   const [history,     setHistory]     = useState<PlayerConnectionRow[]>([]);
   const [alts,        setAlts]        = useState<{ eosId: string; sharedIps: string[] }[]>([]);
-  const [loading,     setLoading]     = useState(false);
+  // Derived by comparing the requested player against the last completed
+  // fetch, rather than an explicit setLoading(true) at the top of the effect.
+  const [loadedEosId, setLoadedEosId] = useState("");
+  const loading = !!selectedEosId && selectedEosId !== loadedEosId;
 
   useEffect(() => {
     getKnownPlayers(server.id).then(setKnownPlayers).catch(() => {});
   }, [server.id]);
 
+  // Clear the previous player's data the moment the selection changes —
+  // compared during render rather than inside the effect below.
+  const [prevSelectedEosId, setPrevSelectedEosId] = useState(selectedEosId);
+  if (selectedEosId !== prevSelectedEosId) {
+    setPrevSelectedEosId(selectedEosId);
+    if (!selectedEosId) {
+      setKnownIps([]); setHistory([]); setAlts([]);
+    }
+  }
+
+  // Guards against an older, slower-resolving fetch (e.g. from rapidly
+  // switching the selected player) overwriting a newer one's result if
+  // responses arrive out of order.
+  const playerReqIdRef = useRef(0);
   useEffect(() => {
-    if (!selectedEosId) { setKnownIps([]); setHistory([]); setAlts([]); return; }
-    setLoading(true);
+    if (!selectedEosId) return;
+    const eosId = selectedEosId;
+    const reqId = ++playerReqIdRef.current;
     Promise.all([
-      getPlayerKnownIps(server.id, selectedEosId),
-      getPlayerConnectionHistory(server.id, selectedEosId, 200),
-      getPossibleAlts(server.id, selectedEosId),
+      getPlayerKnownIps(server.id, eosId),
+      getPlayerConnectionHistory(server.id, eosId, 200),
+      getPossibleAlts(server.id, eosId),
     ]).then(([ips, hist, altList]) => {
+      if (reqId !== playerReqIdRef.current) return;
       setKnownIps(ips);
       setHistory(hist);
       setAlts(altList);
-    }).catch(() => {}).finally(() => setLoading(false));
+      setLoadedEosId(eosId);
+    }).catch(() => {
+      if (reqId !== playerReqIdRef.current) return;
+      setLoadedEosId(eosId);
+    });
   }, [server.id, selectedEosId]);
 
   const nameFor = (eosId: string) =>

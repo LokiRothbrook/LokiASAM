@@ -70,35 +70,22 @@ jobs:
 
             ### What's new in ${{ github.ref_name }}
 
-            **Wild dino wipe scheduling**
-            A new `wipe_dinos` schedule type fires `destroywilddinos` via RCON at a configured interval. A pre-wipe chat warning is automatically sent to players before the wipe executes.
+            This is a bug-fix release focused on custom/mod map handling and a couple of server-lifecycle edge cases.
 
-            **Pre-backup RCON broadcast**
-            A configurable message can be sent to players in-game before any scheduled backup runs, so they know a backup (and brief lag spike) is coming.
+            **Fix: Custom mod maps not working**
+            A server created (or switched) to a custom mod map now actually launches on that map. Previously the launch arguments silently fell back to The Island, the server details page showed a garbled internal ID instead of the map's name, and custom maps didn't appear in the Settings map dropdown at all — all four were symptoms of the same missing wiring between the custom maps table and the rest of the app, which is now fixed everywhere it was needed (launch args, backups, the scheduler, display labels, and the dropdown).
 
-            **Memory limit restart**
-            Each server can be given a RAM ceiling (in GB). When the stats poller detects the process exceeding that limit, LokiASAM performs a graceful restart — `saveworld`, `doexit`, then relaunch — with a cooldown to prevent restart loops.
+            **Fix: Map's required mod not enforced on an existing server**
+            Changing a server's map in Settings now properly adds and locks the new map's required mod (so it can't be disabled or removed while that map is selected) and removes the previous map's mod — matching what already happened correctly during server creation.
 
-            **Start All / Stop All / Restart All**
-            Global action buttons in the server list header let you start every stopped server, stop every running server, or restart all running servers with a single click.
+            **Fix: Copying mods from another server could drop the current map's required mod**
+            The server creation wizard's "copy from server" step now merges the copied mod list instead of replacing it outright, so a mod map's required mod picked earlier in the wizard survives the copy.
 
-            **Backup path reconciliation**
-            Scheduled and manual backups now use the server's `save_folder_name` as the effective save directory when configured, falling back to the map default. Fixes cases where saves were backed up from the wrong path.
+            **Fix: Map mod display name and ordering**
+            A map's required mod now shows the map's own name in the Mods tab instead of "Unknown Mod", and always sorts to the top of the installed mods list.
 
-            **Setup wizard — automation step rewrite**
-            The automation step now matches the full TimeShift tier system from the server overview: hourly / daily / weekly / monthly tiers for server saves, player data, full backups, and login backups — instead of the old single cron picker.
-
-            **Crossplay toggle fix**
-            The Network step in the setup wizard was writing the old `AllPlatforms` flag (ASE). It now correctly writes the `crossplay` flag to stay in sync with the CLI args step.
-
-            **Launch at login**
-            A new OS-level autostart option (via `tauri-plugin-autostart`) lets LokiASAM start with your system. The toggle is available in the setup wizard tray step and in Settings → System Tray. Pairs well with the existing minimize-to-tray option.
-
-            **Additional launch parameters**
-            New performance tuning, anti-cheat, and gameplay flags added. Save folder override (`-SaveDirectoryOverride`) and active in-game event flags are now applied when starting servers.
-
-            **Fix: Club ARK map path**
-            Corrected the save path for Club ARK (`BobsMissions`) in both the backup manager and game data definitions.
+            **Fix: Servers stuck on "Updating…" after a stopped server's auto-update**
+            A scheduled or startup-triggered auto-update on a stopped server would apply successfully but leave the server's status stuck showing the update-in-progress spinner, requiring a manual Cancel + Reinstall to clear. The status now correctly resets once the update finishes.
 
             ### Installation
 

@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useAppStore } from "@/store/useAppStore";
 
 interface CountdownPayload {
@@ -14,20 +13,13 @@ interface CountdownPayload {
 export default function CountdownManager() {
   const setCountdown = useAppStore((s) => s.setCountdown);
 
-  useEffect(() => {
-    const unlisten = listen<CountdownPayload>("server://countdown", (ev) => {
-      const { serverId, action, remainingSecs, totalSecs } = ev.payload;
-      if (!action) {
-        setCountdown(serverId, null);
-      } else {
-        setCountdown(serverId, { action, remainingSecs, totalSecs });
-      }
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [setCountdown]);
+  useTauriEvent<CountdownPayload>("server://countdown", ({ serverId, action, remainingSecs, totalSecs }) => {
+    if (!action) {
+      setCountdown(serverId, null);
+    } else {
+      setCountdown(serverId, { action, remainingSecs, totalSecs });
+    }
+  });
 
   return null;
 }

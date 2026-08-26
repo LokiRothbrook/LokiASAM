@@ -16,6 +16,11 @@ pub const LOG_BACKFILL: &str = "log://backfill";
 pub const BACKUP_PROGRESS: &str = "backup://progress";
 /// ASA update check result (or update-applied notification).
 pub const ASA_UPDATE_CHECK: &str = "asa://update-check";
+/// Fired when the scheduled background ASA cache check starts/stops, carrying
+/// `{ running: bool }`. The manual "Check for Updates" flow sets the same
+/// TopBar spinner state directly from the frontend, so this only needs to
+/// cover the path the frontend can't otherwise observe.
+pub const ASA_UPDATE_CHECK_RUNNING: &str = "asa://update-check/running";
 /// Player login detected from ShooterGame.log — carries { eosId, ip }.
 /// Emitted on the per-server channel `player://login/{server_id}`.
 pub const PLAYER_LOGIN: &str = "player://login";

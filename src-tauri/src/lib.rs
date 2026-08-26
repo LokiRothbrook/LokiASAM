@@ -208,9 +208,8 @@ pub fn run() {
             // close button and hide to tray instead of exiting.
             // During setup or when close_to_tray=false, the X button exits normally.
             let handle_for_close = app.handle().clone();
-            app.get_webview_window("main")
-                .unwrap()
-                .on_window_event(move |event| {
+            if let Some(main_window) = app.get_webview_window("main") {
+                main_window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         let app_state = handle_for_close.state::<state::AppState>();
                         let setup_done = app_state
@@ -225,6 +224,9 @@ pub fn run() {
                         }
                     }
                 });
+            } else {
+                eprintln!("Warning: main window not found at setup — close-to-tray handler not attached.");
+            }
 
             // ── Scheduler background task ──────────────────────────────────
             let scheduler_handle = app.handle().clone();
@@ -287,6 +289,12 @@ pub fn run() {
                 let mem_restarting: std::sync::Arc<std::sync::Mutex<HashSet<String>>> =
                     std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
 
+                // Shared sysinfo System + per-server PID discovery cache, both
+                // persisted across ticks (not rebuilt per server, not rebuilt per
+                // tick) — see collect_all_server_stats' doc comment for why.
+                let mut sys = sysinfo::System::new();
+                let mut discovery: HashMap<String, commands::system::PidDiscoveryCache> = HashMap::new();
+
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(5));
                 interval.set_missed_tick_behavior(
@@ -346,42 +354,34 @@ pub fn run() {
                             recorder.close_uptime_session(&sid, now_ms);
                         }
                         poll_counters.remove(id);
+                        discovery.remove(id);
                     }
                     prev_active = active_now;
 
-                    // Sample all active servers concurrently so the 200 ms
-                    // CPU-delta sleeps inside get_process_stats overlap.
+                    // One shared refresh + one blocking pass covers every running
+                    // server, instead of each server independently refreshing the
+                    // whole system and re-scanning /proc on its own worker thread.
+                    let servers_for_blocking = servers.clone();
+                    let (sys_back, discovery_back, stats_map) = tokio::task::spawn_blocking(move || {
+                        let stats_map = commands::system::collect_all_server_stats(&mut sys, &mut discovery, &servers_for_blocking);
+                        (sys, discovery, stats_map)
+                    }).await.unwrap_or_else(|_| (sysinfo::System::new(), HashMap::new(), HashMap::new()));
+                    sys = sys_back;
+                    discovery = discovery_back;
+
                     let rcon_pool =
                         stats_handle.state::<state::rcon_pool::RconPool>();
-                    let mut tasks = tokio::task::JoinSet::new();
 
-                    for (server_id, pid, install_path) in &servers {
+                    for (server_id, _pid, _install_path) in &servers {
                         let server_id = server_id.clone();
-                        let pid = *pid;
-                        let install_path = install_path.clone();
-                        // Snapshot player count without holding the lock inside the task.
-                        let player_count: Option<i32> = rcon_pool
+                        let ps = stats_map.get(&server_id).cloned();
+                        let players: Option<i32> = rcon_pool
                             .player_cache
                             .lock()
                             .await
                             .get(&server_id)
                             .map(|v| v.len() as i32);
 
-                        tasks.spawn(async move {
-                            let ps =
-                                commands::system::get_process_stats(
-                                    pid,
-                                    Some(install_path),
-                                )
-                                .await
-                                .ok();
-                            (server_id, ps, player_count)
-                        });
-                    }
-
-                    while let Some(Ok((server_id, ps, players))) =
-                        tasks.join_next().await
-                    {
                         let cpu = ps.as_ref().map(|s| s.cpu_percent);
                         let mem = ps.as_ref().map(|s| s.memory_mb);
 
@@ -488,6 +488,8 @@ pub fn run() {
             commands::server::scan_running_servers,
             commands::server::clone_server,
             commands::server::delete_server,
+            commands::server::get_server_disk_usage,
+            commands::server::get_dir_size,
             commands::server::force_server_start_failed,
             // Certificates
             commands::certs::download_amazon_root_ca,
@@ -547,7 +549,9 @@ pub fn run() {
             commands::backup::backup_all_players,
             commands::backup::create_ini_backup,
             commands::backup::create_save_link,
+            commands::backup::create_mods_saves_link,
             commands::backup::wipe_server_saves,
+            commands::backup::import_server_saves,
             commands::backup::create_full_backup,
             commands::backup::list_ini_backups,
             commands::backup::restore_server_backup,
@@ -573,13 +577,13 @@ pub fn run() {
             commands::system::install_appimage_integration,
             commands::system::uninstall_appimage_integration,
             commands::system::get_install_method,
+            commands::system::get_running_ops,
             commands::system::check_dir,
             commands::system::check_file_exists,
             commands::system::wipe_lokiasam_dir,
             commands::system::delete_directory,
             commands::system::move_base_dir,
             commands::system::abort_operation,
-            commands::system::get_process_stats,
             commands::system::get_platform,
             commands::system::set_setup_complete,
             commands::system::set_close_to_tray,
@@ -589,6 +593,7 @@ pub fn run() {
             commands::system::read_bootstrap,
             commands::system::write_bootstrap,
             commands::system::open_folder,
+            commands::system::remap_import_paths,
             // Proton-GE (Linux)
             commands::proton::scan_for_proton,
             commands::proton::validate_proton_path,

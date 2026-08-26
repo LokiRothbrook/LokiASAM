@@ -11,6 +11,18 @@ pub struct PortDef {
     pub protocol: String, // "tcp" | "udp"
 }
 
+/// Drop any entry whose `protocol` isn't exactly "tcp"/"udp". `protocol` is
+/// only constrained to those two values at the TypeScript type level, which
+/// isn't enforced across the IPC boundary — on Linux, `add_iptables` and
+/// `add_firewalld` interpolate `protocol` directly into a shell command
+/// string run via `pkexec`, so an unvalidated value here would be arbitrary
+/// root command injection. Filtering (rather than erroring) fails closed:
+/// a malformed entry is silently excluded from the firewall-open set instead
+/// of blocking every other legitimate port in the batch.
+fn sanitize_ports(ports: Vec<PortDef>) -> Vec<PortDef> {
+    ports.into_iter().filter(|p| p.protocol == "tcp" || p.protocol == "udp").collect()
+}
+
 #[derive(Debug, Serialize)]
 pub struct PortStatus {
     pub port: u16,
@@ -72,22 +84,31 @@ mod windows_impl {
                 continue;
             }
 
-            let status = runas::Command::new("netsh")
-                .args(&[
-                    "advfirewall", "firewall", "add", "rule",
-                    &format!("name={name}"),
-                    "dir=in", "action=allow",
-                    &format!("protocol={proto}"),
-                    &format!("localport={port_str}"),
-                ])
-                .status()
-                .map_err(|e| format!("Failed to run elevated netsh for port {}: {e}", p.port))?;
+            let port = p.port;
+            // runas::Command::status() blocks the calling thread until the
+            // (possibly UAC-elevated) process exits — a user who leaves the
+            // UAC prompt unanswered would otherwise stall this tokio worker
+            // thread indefinitely, starving unrelated async work (RCON
+            // polling, log tailing) on the same small pool.
+            let status = tokio::task::spawn_blocking(move || {
+                runas::Command::new("netsh")
+                    .args(&[
+                        "advfirewall", "firewall", "add", "rule",
+                        &format!("name={name}"),
+                        "dir=in", "action=allow",
+                        &format!("protocol={proto}"),
+                        &format!("localport={port_str}"),
+                    ])
+                    .status()
+            })
+            .await
+            .map_err(|e| format!("spawn_blocking panicked for port {port}: {e}"))?
+            .map_err(|e| format!("Failed to run elevated netsh for port {port}: {e}"))?;
 
             if !status.success() {
                 return Err(format!(
-                    "netsh exited with code {} for port {}",
+                    "netsh exited with code {} for port {port}",
                     status.code().unwrap_or(-1),
-                    p.port
                 ));
             }
         }
@@ -97,17 +118,22 @@ mod windows_impl {
     pub async fn remove_rules(ports: &[PortDef]) -> Result<(), String> {
         for p in ports {
             let name = rule_name(p.port, &p.protocol);
-            let status = runas::Command::new("netsh")
-                .args(&[
-                    "advfirewall", "firewall", "delete", "rule",
-                    &format!("name={name}"),
-                ])
-                .status()
-                .map_err(|e| format!("Failed to run elevated netsh delete for port {}: {e}", p.port))?;
+            let port = p.port;
+            let status = tokio::task::spawn_blocking(move || {
+                runas::Command::new("netsh")
+                    .args(&[
+                        "advfirewall", "firewall", "delete", "rule",
+                        &format!("name={name}"),
+                    ])
+                    .status()
+            })
+            .await
+            .map_err(|e| format!("spawn_blocking panicked for port {port}: {e}"))?
+            .map_err(|e| format!("Failed to run elevated netsh delete for port {port}: {e}"))?;
 
             if !status.success() {
                 // Non-fatal: rule may already be gone
-                log::warn!("netsh delete exited {} for port {}", status.code().unwrap_or(-1), p.port);
+                log::warn!("netsh delete exited {} for port {port}", status.code().unwrap_or(-1));
             }
         }
         Ok(())
@@ -179,7 +205,7 @@ mod linux_impl {
     // ── UFW ─────────────────────────────────────────────────────────────────
 
     const UFW_PROFILE_PATH: &str = "/etc/ufw/applications.d/lokiasam";
-    const UFW_APP_NAME: &str = "LokiASAM";
+    const UFW_APP_NAME: &str = "lokiasam";
 
     /// Parse the ports line from the lokiasam ufw profile.
     /// Returns a set of "port/proto" strings like {"7777/udp", "27020/tcp"}.
@@ -211,8 +237,11 @@ mod linux_impl {
     }
 
     /// Build the ports= line for the ufw profile from a list of PortDef.
+    /// Each port is its own `|`-separated segment (e.g. `27020/tcp|7777/udp|27015/udp`).
+    /// Comma-grouping (`7777,27015/udp`) is avoided because some UFW versions silently
+    /// drop segments that follow a comma-grouped entry when mixed protocols are present.
+    /// TCP entries come first to match the convention used by other application profiles.
     fn build_ufw_ports_line(ports: &[PortDef]) -> String {
-        // Group by protocol
         let mut udp: Vec<u16> = ports.iter().filter(|p| p.protocol == "udp").map(|p| p.port).collect();
         let mut tcp: Vec<u16> = ports.iter().filter(|p| p.protocol == "tcp").map(|p| p.port).collect();
         udp.sort_unstable();
@@ -220,15 +249,9 @@ mod linux_impl {
         tcp.sort_unstable();
         tcp.dedup();
 
-        let mut segments = Vec::new();
-        if !udp.is_empty() {
-            let ports_str = udp.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
-            segments.push(format!("{ports_str}/udp"));
-        }
-        if !tcp.is_empty() {
-            let ports_str = tcp.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
-            segments.push(format!("{ports_str}/tcp"));
-        }
+        let mut segments: Vec<String> = Vec::new();
+        for p in &udp { segments.push(format!("{p}/udp")); }
+        for p in &tcp { segments.push(format!("{p}/tcp")); }
         segments.join("|")
     }
 
@@ -256,120 +279,51 @@ mod linux_impl {
         FirewallStatus { firewall_type: "ufw".into(), active: true, ports: statuses }
     }
 
-    pub async fn add_ufw(new_ports: &[PortDef], existing_covered: &std::collections::HashSet<String>) -> Result<(), String> {
-        // Read current profile ports, merge with new ones
-        let current = parse_ufw_profile();
-        let mut all_ports: Vec<PortDef> = Vec::new();
-
-        // Keep existing covered ports that are already in the profile
-        for entry in &current {
-            if let Some(slash) = entry.rfind('/') {
-                if let Ok(p) = entry[..slash].parse::<u16>() {
-                    let proto = entry[slash + 1..].to_string();
-                    all_ports.push(PortDef { port: p, protocol: proto });
-                }
+    /// Set the UFW application profile to exactly `desired_ports` and apply it.
+    /// Writes a fresh profile (TCP entries first, one port per `|` segment) then does
+    /// delete → re-allow so UFW picks up the new profile cleanly.
+    /// If `desired_ports` is empty, deletes the rule and the profile file entirely.
+    pub async fn apply_ufw_state(desired_ports: &[PortDef]) -> Result<(), String> {
+        if desired_ports.is_empty() {
+            let cmd = format!("ufw delete allow '{UFW_APP_NAME}' ; rm -f '{UFW_PROFILE_PATH}'");
+            let status = Command::new("pkexec")
+                .args(["sh", "-c", &cmd])
+                .status()
+                .await
+                .map_err(|e| format!("pkexec ufw delete failed: {e}"))?;
+            if !status.success() {
+                return Err(format!("pkexec ufw delete exited {}", status.code().unwrap_or(-1)));
             }
-        }
-        // Add new ports (dedup handled by build)
-        for p in new_ports {
-            let key = format!("{}/{}", p.port, p.protocol);
-            if !existing_covered.contains(&key) {
-                all_ports.push(p.clone());
-            }
-        }
-        // Also include uncovered ones from the original new_ports list
-        for p in new_ports {
-            if !all_ports.iter().any(|e| e.port == p.port && e.protocol == p.protocol) {
-                all_ports.push(p.clone());
-            }
+            return Ok(());
         }
 
-        let profile_content = build_ufw_profile(&all_ports);
+        let tmp_path = std::env::temp_dir().join("lokiasam_ufw_profile");
+        std::fs::write(&tmp_path, build_ufw_profile(desired_ports))
+            .map_err(|e| format!("Failed to write UFW temp profile: {e}"))?;
 
-        // Write profile with pkexec tee
-        let mut child = Command::new("pkexec")
-            .args(["tee", UFW_PROFILE_PATH])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn pkexec tee: {e}"))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(profile_content.as_bytes()).await
-                .map_err(|e| format!("Failed to write profile: {e}"))?;
-        }
-
-        let output = child.wait_with_output().await
-            .map_err(|e| format!("pkexec tee failed: {e}"))?;
-
-        if !output.status.success() {
-            return Err(format!("pkexec tee exited {}", output.status.code().unwrap_or(-1)));
-        }
-
-        // Activate the rule
-        let allow_status = Command::new("pkexec")
-            .args(["ufw", "allow", UFW_APP_NAME])
+        let tmp_str = tmp_path.to_string_lossy();
+        // Copy profile first, then delete the old rule and re-allow from the
+        // updated profile. The delete+allow pair is grouped in `(...)` so `&&`
+        // gates the *whole group* on `cp` succeeding — without the group,
+        // `;` has lower precedence than `&&` and `ufw allow` would run
+        // unconditionally even when `cp` failed, applying rules from a stale
+        // or missing profile. Inside the group, `;` (not `&&`) separates
+        // delete from allow so allow still runs even if no prior rule existed
+        // to delete.
+        let cmd = format!(
+            "cp '{tmp_str}' '{UFW_PROFILE_PATH}' && ( ufw delete allow '{UFW_APP_NAME}' ; ufw allow '{UFW_APP_NAME}' )"
+        );
+        let status = Command::new("pkexec")
+            .args(["sh", "-c", &cmd])
             .status()
             .await
-            .map_err(|e| format!("Failed to run pkexec ufw allow: {e}"))?;
+            .map_err(|e| format!("pkexec ufw apply failed: {e}"))?;
 
-        if !allow_status.success() {
-            return Err(format!("pkexec ufw allow exited {}", allow_status.code().unwrap_or(-1)));
+        let _ = std::fs::remove_file(&tmp_path);
+
+        if !status.success() {
+            return Err(format!("pkexec ufw apply exited {}", status.code().unwrap_or(-1)));
         }
-        Ok(())
-    }
-
-    pub async fn remove_ufw(ports_to_remove: &[PortDef]) -> Result<(), String> {
-        let current = parse_ufw_profile();
-        let remove_set: std::collections::HashSet<String> = ports_to_remove
-            .iter().map(|p| format!("{}/{}", p.port, p.protocol)).collect();
-
-        let remaining: Vec<PortDef> = current.iter()
-            .filter(|k| !remove_set.contains(*k))
-            .filter_map(|entry| {
-                let slash = entry.rfind('/')?;
-                let p = entry[..slash].parse::<u16>().ok()?;
-                Some(PortDef { port: p, protocol: entry[slash + 1..].to_string() })
-            })
-            .collect();
-
-        let profile_content = if remaining.is_empty() {
-            // Delete the profile and the rule
-            let _ = Command::new("pkexec")
-                .args(["ufw", "delete", "allow", UFW_APP_NAME])
-                .status().await;
-            let _ = Command::new("pkexec")
-                .args(["rm", "-f", UFW_PROFILE_PATH])
-                .status().await;
-            return Ok(());
-        } else {
-            build_ufw_profile(&remaining)
-        };
-
-        // Rewrite profile
-        let mut child = Command::new("pkexec")
-            .args(["tee", UFW_PROFILE_PATH])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn pkexec tee: {e}"))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(profile_content.as_bytes()).await
-                .map_err(|e| format!("Failed to write profile: {e}"))?;
-        }
-        let out = child.wait_with_output().await
-            .map_err(|e| format!("pkexec tee failed: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("pkexec tee exited {}", out.status.code().unwrap_or(-1)));
-        }
-
-        // Re-apply
-        let _ = Command::new("pkexec")
-            .args(["ufw", "allow", UFW_APP_NAME])
-            .status().await;
         Ok(())
     }
 
@@ -391,66 +345,119 @@ mod linux_impl {
     }
 
     pub async fn add_firewalld(ports: &[PortDef]) -> Result<(), String> {
+        // Check which ports aren't already open (no elevation needed for --query-port)
+        let mut to_add = Vec::new();
         for p in ports {
             let arg = format!("{}/{}", p.port, p.protocol);
             let already = Command::new("firewall-cmd")
                 .args(["--query-port", &arg])
                 .status().await
                 .map(|s| s.success()).unwrap_or(false);
-            if already { continue; }
-
-            let s = Command::new("pkexec")
-                .args(["firewall-cmd", "--permanent", &format!("--add-port={arg}")])
-                .status().await
-                .map_err(|e| format!("pkexec firewall-cmd failed: {e}"))?;
-            if !s.success() {
-                return Err(format!("firewall-cmd --add-port exited {}", s.code().unwrap_or(-1)));
-            }
+            if !already { to_add.push(arg); }
         }
-        // Reload once after all ports added
-        let _ = Command::new("pkexec")
-            .args(["firewall-cmd", "--reload"])
-            .status().await;
+        if to_add.is_empty() { return Ok(()); }
+
+        // Batch all --add-port flags + --reload into a single pkexec sh call
+        let add_flags = to_add.iter().map(|a| format!("--add-port={a}")).collect::<Vec<_>>().join(" ");
+        let cmd = format!("firewall-cmd --permanent {add_flags} && firewall-cmd --reload");
+        let s = Command::new("pkexec")
+            .args(["sh", "-c", &cmd])
+            .status().await
+            .map_err(|e| format!("pkexec firewall-cmd failed: {e}"))?;
+        if !s.success() {
+            return Err(format!("firewall-cmd add/reload exited {}", s.code().unwrap_or(-1)));
+        }
         Ok(())
     }
 
-    pub async fn remove_firewalld(ports: &[PortDef]) -> Result<(), String> {
-        for p in ports {
-            let arg = format!("{}/{}", p.port, p.protocol);
-            let _ = Command::new("pkexec")
-                .args(["firewall-cmd", "--permanent", &format!("--remove-port={arg}")])
-                .status().await;
+    /// Remove firewall rules for ports NOT in `remaining_ports`.
+    /// Queries `firewall-cmd --list-ports` (no elevation) to find what is currently
+    /// open, then removes only the excess — never touches ports still in use.
+    pub async fn remove_firewalld(remaining_ports: &[PortDef]) -> Result<(), String> {
+        let remaining_set: std::collections::HashSet<String> = remaining_ports
+            .iter().map(|p| format!("{}/{}", p.port, p.protocol)).collect();
+
+        // Query current open ports without elevation
+        let text = match Command::new("firewall-cmd").args(["--list-ports"]).output().await {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
+            Err(_) => return Ok(()), // can't query current state — skip rather than error
+        };
+
+        let to_remove: Vec<String> = text
+            .split_whitespace()
+            .filter(|s| !remaining_set.contains(*s))
+            .map(|s| s.to_string())
+            .collect();
+
+        if to_remove.is_empty() { return Ok(()); }
+
+        let remove_flags = to_remove.iter()
+            .map(|s| format!("--remove-port={s}"))
+            .collect::<Vec<_>>().join(" ");
+        let cmd = format!("firewall-cmd --permanent {remove_flags} && firewall-cmd --reload");
+        let status = Command::new("pkexec")
+            .args(["sh", "-c", &cmd])
+            .status()
+            .await
+            .map_err(|e| format!("pkexec firewall-cmd remove failed: {e}"))?;
+        if !status.success() {
+            return Err(format!("firewall-cmd remove/reload exited {}", status.code().unwrap_or(-1)));
         }
-        let _ = Command::new("pkexec")
-            .args(["firewall-cmd", "--reload"])
-            .status().await;
         Ok(())
     }
 
     // ── iptables (DB-backed fallback) ────────────────────────────────────────
 
     pub async fn add_iptables(ports: &[PortDef]) -> Result<(), String> {
-        for p in ports {
-            let proto = &p.protocol;
-            let port_str = p.port.to_string();
-            let s = Command::new("pkexec")
-                .args(["iptables", "-A", "INPUT", "-p", proto, "--dport", &port_str, "-j", "ACCEPT"])
-                .status().await
-                .map_err(|e| format!("pkexec iptables failed: {e}"))?;
-            if !s.success() {
-                return Err(format!("iptables -A exited {} for port {}", s.code().unwrap_or(-1), p.port));
-            }
+        if ports.is_empty() { return Ok(()); }
+        let cmds = ports.iter()
+            .map(|p| format!("iptables -A INPUT -p {} --dport {} -j ACCEPT", p.protocol, p.port))
+            .collect::<Vec<_>>().join(" && ");
+        let s = Command::new("pkexec")
+            .args(["sh", "-c", &cmds])
+            .status().await
+            .map_err(|e| format!("pkexec iptables failed: {e}"))?;
+        if !s.success() {
+            return Err(format!("iptables add exited {}", s.code().unwrap_or(-1)));
         }
         Ok(())
     }
 
-    pub async fn remove_iptables(ports: &[PortDef]) -> Result<(), String> {
-        for p in ports {
-            let proto = &p.protocol;
-            let port_str = p.port.to_string();
-            let _ = Command::new("pkexec")
-                .args(["iptables", "-D", "INPUT", "-p", proto, "--dport", &port_str, "-j", "ACCEPT"])
-                .status().await;
+    /// Remove iptables rules for ports NOT in `remaining_ports`.
+    /// Parses `iptables -S INPUT` (no elevation) to find current ACCEPT rules,
+    /// then removes only the ones that are no longer needed.
+    pub async fn remove_iptables(remaining_ports: &[PortDef]) -> Result<(), String> {
+        let remaining_set: std::collections::HashSet<String> = remaining_ports
+            .iter().map(|p| format!("{}/{}", p.protocol, p.port)).collect();
+
+        let text = match Command::new("iptables").args(["-S", "INPUT"]).output().await {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
+            Err(_) => return Ok(()), // can't query current state — skip rather than error
+        };
+
+        // Match lines like: -A INPUT -p udp --dport 7777 -j ACCEPT
+        let mut to_remove: Vec<String> = Vec::new();
+        for line in text.lines() {
+            if !line.contains("-j ACCEPT") { continue; }
+            let proto = ["udp", "tcp"].iter().find(|&&pr| line.contains(&format!("-p {pr} ")));
+            let dport = line.split("--dport ").nth(1).and_then(|s| s.split_whitespace().next());
+            if let (Some(proto), Some(port)) = (proto, dport) {
+                if !remaining_set.contains(&format!("{proto}/{port}")) {
+                    to_remove.push(format!("iptables -D INPUT -p {proto} --dport {port} -j ACCEPT"));
+                }
+            }
+        }
+
+        if to_remove.is_empty() { return Ok(()); }
+        // Use ; so a missing rule doesn't abort removal of the remaining ones
+        let cmds = to_remove.join(" ; ");
+        let status = Command::new("pkexec")
+            .args(["sh", "-c", &cmds])
+            .status()
+            .await
+            .map_err(|e| format!("pkexec iptables remove failed: {e}"))?;
+        if !status.success() {
+            return Err(format!("iptables remove exited {}", status.code().unwrap_or(-1)));
         }
         Ok(())
     }
@@ -474,14 +481,14 @@ pub async fn check_firewall_ports(ports: Vec<PortDef>) -> Result<FirewallStatus,
         match detect().await {
             FirewallKind::Ufw      => Ok(check_ufw(&ports).await),
             FirewallKind::Firewalld => Ok(check_firewalld(&ports).await),
-            FirewallKind::Iptables | FirewallKind::None => {
+            kind @ (FirewallKind::Iptables | FirewallKind::None) => {
                 // For iptables we rely on DB state (checked by the frontend).
                 // Return active:false so the frontend falls back to DB.
                 let statuses = ports.iter().map(|p| PortStatus {
                     port: p.port, protocol: p.protocol.clone(), covered: false,
                 }).collect();
                 Ok(FirewallStatus {
-                    firewall_type: if matches!(detect().await, FirewallKind::Iptables) {
+                    firewall_type: if matches!(kind, FirewallKind::Iptables) {
                         "iptables".into()
                     } else {
                         "none".into()
@@ -502,9 +509,13 @@ pub async fn check_firewall_ports(ports: Vec<PortDef>) -> Result<FirewallStatus,
     }
 }
 
-/// Add firewall rules for the given ports. Triggers elevation (UAC / pkexec).
+/// Add (or sync) firewall rules.
+/// `ports` must be the COMPLETE desired set — every port that should be open
+/// across ALL servers, not just the new one being added. The backend writes this
+/// list as the authoritative state so stale entries from deleted servers are removed.
 #[tauri::command]
 pub async fn add_firewall_rules(ports: Vec<PortDef>, _proton_path: Option<String>) -> Result<(), String> {
+    let ports = sanitize_ports(ports);
     #[cfg(target_os = "windows")]
     {
         windows_impl::add_rules(&ports).await
@@ -514,13 +525,10 @@ pub async fn add_firewall_rules(ports: Vec<PortDef>, _proton_path: Option<String
     {
         use linux_impl::*;
         match detect().await {
-            FirewallKind::Ufw => {
-                let current = parse_ufw_profile();
-                add_ufw(&ports, &current).await
-            }
+            FirewallKind::Ufw       => apply_ufw_state(&ports).await,
             FirewallKind::Firewalld => add_firewalld(&ports).await,
             FirewallKind::Iptables  => add_iptables(&ports).await,
-            FirewallKind::None => Ok(()), // nothing to do
+            FirewallKind::None      => Ok(()),
         }
     }
 
@@ -530,11 +538,17 @@ pub async fn add_firewall_rules(ports: Vec<PortDef>, _proton_path: Option<String
     }
 }
 
-/// Remove firewall rules. Called only when the user opts in during server deletion.
+/// Remove firewall rules for ports no longer needed.
+/// `ports` must be the COMPLETE set of ports that should stay open —
+/// every port across ALL remaining servers after the deletion. Ports not in this
+/// list are removed; ports that are still needed are left untouched.
 #[tauri::command]
 pub async fn remove_firewall_rules(ports: Vec<PortDef>) -> Result<(), String> {
+    let ports = sanitize_ports(ports);
     #[cfg(target_os = "windows")]
     {
+        // On Windows, remove_rules takes ports-to-remove, so we can't use the
+        // remaining-ports model directly. For now keep existing per-rule deletion.
         windows_impl::remove_rules(&ports).await
     }
 
@@ -542,7 +556,7 @@ pub async fn remove_firewall_rules(ports: Vec<PortDef>) -> Result<(), String> {
     {
         use linux_impl::*;
         match detect().await {
-            FirewallKind::Ufw       => remove_ufw(&ports).await,
+            FirewallKind::Ufw       => apply_ufw_state(&ports).await,
             FirewallKind::Firewalld => remove_firewalld(&ports).await,
             FirewallKind::Iptables  => remove_iptables(&ports).await,
             FirewallKind::None      => Ok(()),

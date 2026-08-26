@@ -287,15 +287,21 @@ async fn run_rcon_manager(
     // killing it and creating the disconnect/reconnect loop.
     {
         let pool = app.state::<RconPool>();
-        let mut guard = pool.cmd_channels.lock().await;
-        let is_superseded = guard
-            .get(&server_id)
-            .map(|(_, id)| *id != conn_id)
-            .unwrap_or(false);
+        let is_superseded = {
+            let guard = pool.cmd_channels.lock().await;
+            guard
+                .get(&server_id)
+                .map(|(_, id)| *id != conn_id)
+                .unwrap_or(false)
+        };
         if is_superseded {
             return;
         }
-        guard.remove(&server_id);
+        // Clears cmd_channels too (a no-op re-remove) plus log_buffer and
+        // player_cache — a connection that dies on its own (TCP error, server
+        // crash) previously only had cmd_channels cleared here, leaking the
+        // other two maps for the server's lifetime.
+        pool.remove_server(&server_id).await;
     }
 
     emit_log(&app, &server_id, RconLogLine {
@@ -522,7 +528,9 @@ pub async fn rcon_disconnect(
     if let Some((tx, _)) = pool.cmd_channels.lock().await.remove(&server_id) {
         let _ = tx.send(RconCmd::Disconnect).await;
     }
-    pool.log_buffer.lock().await.remove(&server_id);
+    // cmd_channels is already gone (removed above); this clears log_buffer
+    // and player_cache too, so no RCON state lingers after a manual disconnect.
+    pool.remove_server(&server_id).await;
     Ok(())
 }
 

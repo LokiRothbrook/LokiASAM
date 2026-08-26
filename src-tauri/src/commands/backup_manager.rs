@@ -14,6 +14,7 @@
 ///   6. Emits `backup://completed/{serverId}` so the UI can refresh.
 
 use std::collections::HashMap;
+use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
@@ -24,22 +25,16 @@ use super::backup::{
     create_server_backup_inner, backup_all_players_inner, create_player_backup_inner,
     rcon_save_world, rcon_broadcast, BackupRecord,
 };
-
-fn fmt_size(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
-    } else if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else {
-        format!("{:.1} KB", bytes as f64 / 1_024.0)
-    }
-}
+use super::utils::{fmt_size, tier_suffix};
 
 // ---------------------------------------------------------------------------
 // Map ID → ASA map path (matches ARK_MAPS in game-data.ts)
 // ---------------------------------------------------------------------------
 
-fn map_id_to_path(map_id: &str) -> &'static str {
+fn map_id_to_path(conn: &Connection, map_id: &str) -> String {
+    if let Some(custom_path) = db::get_custom_map_path(conn, map_id) {
+        return custom_path;
+    }
     match map_id {
         "theisland"   => "TheIsland_WP",
         "thecenter"   => "TheCenter_WP",
@@ -59,6 +54,21 @@ fn map_id_to_path(map_id: &str) -> &'static str {
         "svartalfheim"=> "Svartalfheim_WP",
         "clubark"     => "BobsMissions_WP",
         _             => "TheIsland_WP",
+    }
+    .to_string()
+}
+
+/// Real on-disk `SavedArks/{X}` subfolder name for a map, when it differs from
+/// the launch/CLI map path returned by `map_id_to_path`. Club ARK (Bob's
+/// Missions) is the one known built-in case: it launches as `BobsMissions_WP`
+/// and its save files keep that `_WP` prefix, but ASA creates the folder
+/// itself as just `SavedArks/BobsMissions/` (no `_WP`). User-added custom mod
+/// maps have no such override — they always use `map_path` verbatim. Mirrors
+/// `getSaveFolder`/`saveFolder` on `ArkMap` in game-data.ts — keep both in sync.
+fn map_id_to_save_folder(conn: &Connection, map_id: &str) -> String {
+    match map_id {
+        "clubark" => "BobsMissions".to_string(),
+        _         => map_id_to_path(conn, map_id),
     }
 }
 
@@ -132,20 +142,6 @@ fn tier_config_any_enabled(cfg: &TierConfig) -> bool {
 // ---------------------------------------------------------------------------
 // Path helpers (mirrors computeRenamedPath from SchedulerManager.tsx)
 // ---------------------------------------------------------------------------
-
-/// Build a tier suffix string like "-MWD" from a comma-separated tiers string like "M,W,D".
-fn tier_suffix(tiers: &str) -> String {
-    if tiers.is_empty() {
-        return String::new();
-    }
-    const ORDER: [char; 4] = ['M', 'W', 'D', 'H'];
-    let flags: Vec<char> = tiers
-        .split(',')
-        .filter_map(|t| t.trim().chars().next())
-        .collect();
-    let sorted: String = ORDER.iter().filter(|c| flags.contains(c)).collect();
-    if sorted.is_empty() { String::new() } else { format!("-{sorted}") }
-}
 
 /// Rename a backup file path to embed the new tier suffix.
 /// "server-2024-01-15_10-00-00.7z"        → "server-2024-01-15_10-00-00-DH.7z"
@@ -387,7 +383,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         _ => return,
     };
 
-    let map_path = map_id_to_path(&server.map_id);
+    let save_folder = map_id_to_save_folder(&conn, &server.map_id);
 
     // Create the archive (eos_id used as player_name for the filename).
     let rec = match create_player_backup_inner(
@@ -395,7 +391,7 @@ pub async fn handle_player_login(app: &AppHandle, server_id: &str, eos_id: &str,
         server_id,
         &server.name,
         &server.install_path,
-        map_path,
+        &save_folder,
         &server.map_id,
         &backup_dir,
         eos_id,
@@ -479,6 +475,8 @@ pub async fn execute_tick(app: &AppHandle) {
         }
     };
 
+    let base_dir = db::get_app_setting(&conn, "base_dir").unwrap_or_default();
+
     let servers = db::get_servers(&conn);
     let pool = app.state::<RconPool>();
 
@@ -487,11 +485,19 @@ pub async fn execute_tick(app: &AppHandle) {
             continue;
         }
 
+        // Skip a server currently undergoing a scheduled restart/update —
+        // reading its files while they're mid-overwrite could produce a
+        // silently incomplete archive. Picked up again on the next hourly
+        // tick. Held for the rest of this iteration.
+        let app_state = app.state::<AppState>();
+        let Some(_lock) = app_state.try_lock_server(&server.id) else {
+            eprintln!("[backup_manager] Skipping backup for {} — restart/update in progress", server.id);
+            continue;
+        };
+
         let schedules = db::get_server_schedules(&conn, &server.id);
-        let base_map_path = map_id_to_path(&server.map_id);
-        let map_path = server.save_folder_name.as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(base_map_path);
+        let map_path = map_id_to_path(&conn, &server.map_id);
+        let save_folder = map_id_to_save_folder(&conn, &server.map_id);
 
         // Parse both schedule configs up front so we can decide whether a
         // world save is needed before starting either backup.
@@ -529,13 +535,15 @@ pub async fn execute_tick(app: &AppHandle) {
                     &server.id,
                     &server.name,
                     &server.install_path,
-                    map_path,
+                    &map_path,
+                    &save_folder,
                     &server.map_id,
                     &backup_dir,
                     "schedule",
                     "",      // tier assigned after tier computation
                     &pool,
                     true,    // world save already done above
+                    &base_dir,
                 ).await {
                     Ok(rec) => {
                         handle_backup_record(&conn, &rec, &cfg, "server", None);
@@ -561,7 +569,7 @@ pub async fn execute_tick(app: &AppHandle) {
                     &server.id,
                     &server.name,
                     &server.install_path,
-                    map_path,
+                    &save_folder,
                     &server.map_id,
                     &backup_dir,
                     "schedule",
@@ -590,63 +598,64 @@ pub async fn execute_tick(app: &AppHandle) {
         // One notification per server per tick regardless of how many backup
         // types ran. Titles are specific when only one type ran; generic when
         // both ran so the body can carry the combined detail.
+        let sname = &server.name;
         let notification: Option<(&str, &str, String, &str)> = match (&server_outcome, &player_outcome) {
             // Both ran — both succeeded
             (Some(Ok(size)), Some(Ok(count))) if *count > 0 => Some((
-                "backup_completed", "Backup Complete",
-                format!("Server backup: {size} · {count} players backed up"),
+                "backup_completed", "Server & Player Backup",
+                format!("{sname} — server backup: {size} · {count} players"),
                 "success",
             )),
             // Both ran — server ok, players ran but 0 profiles found
             (Some(Ok(size)), Some(Ok(_))) => Some((
-                "backup_completed", "Server Backup Complete",
-                format!("Scheduled server backup completed ({size})"),
+                "backup_completed", "Server Backup",
+                format!("{sname} — server backup complete ({size})"),
                 "success",
             )),
             // Both ran — server ok, players failed
             (Some(Ok(size)), Some(Err(pe))) => Some((
                 "backup_failed", "Backup Partially Failed",
-                format!("Server backup complete ({size}) · Player backup failed: {pe}"),
+                format!("{sname} — server backup: {size} · player backup failed: {pe}"),
                 "error",
             )),
             // Both ran — server failed, players ok
             (Some(Err(se)), Some(Ok(count))) if *count > 0 => Some((
                 "backup_failed", "Backup Partially Failed",
-                format!("Server backup failed: {se} · {count} player backups complete"),
+                format!("{sname} — server backup failed: {se} · {count} player backups complete"),
                 "error",
             )),
             // Both ran — server failed, 0 players
             (Some(Err(se)), Some(Ok(_))) => Some((
                 "backup_failed", "Server Backup Failed",
-                format!("Scheduled server backup failed: {se}"),
+                format!("{sname} — server backup failed: {se}"),
                 "error",
             )),
             // Both ran — both failed
             (Some(Err(se)), Some(Err(pe))) => Some((
                 "backup_failed", "Backup Failed",
-                format!("Server backup failed: {se} · Player backup failed: {pe}"),
+                format!("{sname} — server backup failed: {se} · player backup failed: {pe}"),
                 "error",
             )),
             // Server only
             (Some(Ok(size)), None) => Some((
-                "backup_completed", "Server Backup Complete",
-                format!("Scheduled server backup completed ({size})"),
+                "backup_completed", "Server Backup",
+                format!("{sname} — server backup complete ({size})"),
                 "success",
             )),
             (Some(Err(se)), None) => Some((
                 "backup_failed", "Server Backup Failed",
-                format!("Scheduled server backup failed: {se}"),
+                format!("{sname} — server backup failed: {se}"),
                 "error",
             )),
             // Player only
             (None, Some(Ok(count))) if *count > 0 => Some((
-                "backup_completed", "Player Backup Complete",
-                format!("Scheduled player backups completed ({count} players)"),
+                "backup_completed", "Player Backup",
+                format!("{sname} — {count} player backups complete"),
                 "success",
             )),
             (None, Some(Err(pe))) => Some((
                 "backup_failed", "Player Backup Failed",
-                format!("Scheduled player backup failed: {pe}"),
+                format!("{sname} — player backup failed: {pe}"),
                 "error",
             )),
             // Player only with 0 profiles, or nothing ran

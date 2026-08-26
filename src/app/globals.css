@@ -40,7 +40,7 @@
   --color-input:              rgba(var(--neon-purple-rgb), 0.2);
   --color-ring:               var(--neon-purple);
   --color-muted:              rgba(20, 20, 52, 0.85);
-  --color-muted-foreground:   #5858a0;
+  --color-muted-foreground:   rgba(var(--neon-purple-rgb), 0.45);
 
   /* Fonts */
   --font-sans: var(--font-geist-sans);
@@ -76,8 +76,8 @@
   --neon-orange:      #ff8800;
 
   /* Text — defaults match storm preset */
-  --foreground:       #e0e0ff;
-  --text-primary:     #e0e0ff;
+  --foreground:       #dfe4f2;
+  --text-primary:     #dfe4f2;
   --text-muted:       #606880;
   --text-subtle:      #464e64;
 
@@ -93,12 +93,12 @@
   --glass-blur:      12px;
 
   /* Popover / dropdown surface */
-  --popover:            #12161e;
-  --popover-foreground: #e0e0ff;
+  --popover:            rgba(18, 20, 32, 0.97);
+  --popover-foreground: #dfe4f2;
 
   /* Accent — subtle highlight for menu item hover/focus */
   --accent:            rgba(64, 128, 255, 0.15);
-  --accent-foreground: #e0e0ff;
+  --accent-foreground: #dfe4f2;
 }
 
 /* ---------------------------------------------------------------------------

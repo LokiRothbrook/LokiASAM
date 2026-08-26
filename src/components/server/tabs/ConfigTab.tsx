@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
-  Settings2, X, AlertCircle, ToggleLeft, ToggleRight, Terminal,
-  HelpCircle, Upload, Search, FileText, Clipboard, Wand2,
+  Settings2, X, ToggleLeft, ToggleRight, Terminal,
+  HelpCircle, Upload, FileText, Clipboard, Wand2, Sparkles, Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,13 +18,28 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
 import {
   INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
   buildPresetConfig, ARK_EVENTS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, type ServerRow } from "@/lib/db";
+import { useAllMaps } from "@/hooks/useAllMaps";
+import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, addServerMod, removeServerMod, setModMapLock, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -31,12 +48,6 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 interface Props {
   server: ServerRow;
 }
-
-// Keys excluded from the "Full INI Editor" — handled on the server overview/setup pages.
-const OVERVIEW_KEYS = new Set([
-  "SessionName", "ServerPassword", "ServerAdminPassword",
-  "Port", "QueryPort", "RCONPort", "RCONEnabled", "MaxPlayers",
-]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -143,7 +154,8 @@ function FieldRow({
   }
 
   if (field.type === "number" && field.min !== undefined && field.max !== undefined) {
-    const numVal = parseFloat(value) || 0;
+    const parsed = parseFloat(value);
+    const numVal = isNaN(parsed) ? (field.defaultValue as number ?? 0) : parsed;
     return (
       <div className="py-2 space-y-1">
         <FieldLabel field={field} />
@@ -153,7 +165,7 @@ function FieldRow({
           min={field.min}
           max={field.max}
           step={field.step}
-          defaultValue={field.defaultValue}
+          defaultValue={typeof field.defaultValue === "number" ? field.defaultValue : undefined}
         />
       </div>
     );
@@ -320,139 +332,6 @@ function SectionGroup({
 }
 
 // ---------------------------------------------------------------------------
-// Full INI Editor Modal
-// ---------------------------------------------------------------------------
-
-function FullIniModal({
-  config,
-  onSave,
-  onClose,
-}: {
-  config: ServerConfigJson;
-  onSave: (updated: ServerConfigJson) => void;
-  onClose: () => void;
-}) {
-  const [local, setLocal] = useState<ServerConfigJson>(config);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
-
-  const q = search.trim().toLowerCase();
-
-  const toggleGroup = (id: string) =>
-    setExpandedGroups((prev) => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-
-  const handleChange = (f: IniFieldDef, val: string) => {
-    setLocal((prev) => setIniValue(prev, f.section, f.iniSection, f.key, val));
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
-    >
-      <div
-        className="w-full max-w-3xl mx-4 flex flex-col rounded-2xl overflow-hidden"
-        style={{
-          background: "rgba(8,8,25,0.98)",
-          border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
-          boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
-          maxHeight: "90vh",
-        }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-          <div className="flex items-center gap-2">
-            <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Full INI Editor</span>
-          </div>
-          <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0" style={{ color: "var(--text-muted)" }}>
-            <X className="w-4 h-4" />
-          </Button>
-        </div>
-
-        <div className="px-3 py-2 shrink-0 space-y-2" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
-          <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-            <AlertCircle className="w-3 h-3" style={{ color: "var(--neon-purple)" }} />
-            Server name, passwords, and ports are managed on the overview page and are excluded here.
-            Changes take effect on the next server restart.
-          </p>
-          {/* Search */}
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-subtle)" }} />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search settings…"
-              className="h-8 pl-8 text-xs"
-              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-            />
-          </div>
-        </div>
-
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-          {INI_FIELD_GROUPS.map((group) => {
-            let visibleFields = group.fields.filter((f) => !OVERVIEW_KEYS.has(f.key));
-            if (q) {
-              visibleFields = visibleFields.filter(
-                (f) =>
-                  f.label.toLowerCase().includes(q) ||
-                  f.key.toLowerCase().includes(q) ||
-                  (f.description?.toLowerCase().includes(q) ?? false),
-              );
-            }
-            if (visibleFields.length === 0) return null;
-            const open = q ? true : expandedGroups.has(group.id);
-            return (
-              <div key={group.id} className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-                <button
-                  onClick={() => { if (!q) toggleGroup(group.id); }}
-                  className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
-                  style={{ background: "rgba(10,10,30,0.7)" }}
-                >
-                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{group.title}</span>
-                  {open
-                    ? <ChevronDown className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-                    : <ChevronRight className="w-4 h-4" style={{ color: "var(--text-muted)" }} />}
-                </button>
-                {open && (
-                  <div className="px-4 pb-3 divide-y" style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(5,5,20,0.5)" }}>
-                    {visibleFields.map((f) => (
-                      <FieldRow
-                        key={`${f.iniSection}.${f.key}`}
-                        field={f}
-                        value={getIniValue(local, f.section, f.iniSection, f.key)}
-                        onChange={(val) => handleChange(f, val)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-          <Button variant="ghost" onClick={onClose} size="sm" style={{ color: "var(--text-muted)" }}>Cancel</Button>
-          <Button
-            onClick={() => { onSave(local); onClose(); }}
-            size="sm"
-            style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
-          >
-            <Save className="w-3.5 h-3.5 mr-1.5" /> Apply Changes
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Paste INI Modal
 // ---------------------------------------------------------------------------
 
@@ -545,28 +424,159 @@ function PasteIniModal({
 // ---------------------------------------------------------------------------
 
 type CustomSection = {
-  sectionName: string;  // The [SectionName] key in Game.ini
+  sectionName: string;
   rows: { key: string; value: string }[];
 };
 
-function CustomModSections({
-  gameIni,
+type SettingType = "string" | "boolean" | "integer" | "float";
+
+function inferType(value: string): SettingType {
+  if (value === "True" || value === "False") return "boolean";
+  if (/^-?\d+$/.test(value)) return "integer";
+  if (/^-?\d*\.\d+$/.test(value)) return "float";
+  return "string";
+}
+
+function defaultForType(t: SettingType): string {
+  if (t === "boolean") return "False";
+  if (t === "integer") return "0";
+  if (t === "float") return "0.0";
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Dialog for adding a new setting to a mod section
+// ---------------------------------------------------------------------------
+
+function AddSettingDialog({
+  open,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onAdd: (key: string, value: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [type, setType] = useState<SettingType>("string");
+
+  const handleAdd = () => {
+    const k = name.trim();
+    if (!k) return;
+    onAdd(k, defaultForType(type));
+    setName("");
+    setType("string");
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-sm" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
+        <DialogHeader>
+          <DialogTitle className="text-sm" style={{ color: "var(--text-primary)" }}>Add Setting</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 py-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: "var(--text-subtle)" }}>Setting name</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+              placeholder="e.g. MaxDinos"
+              autoFocus
+              className="h-8 text-xs font-mono"
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: "var(--text-subtle)" }}>Value type</label>
+            <Select value={type} onValueChange={(v) => setType(v as SettingType)}>
+              <SelectTrigger className="h-8 text-xs" style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="string">String</SelectItem>
+                <SelectItem value="boolean">Boolean (True / False)</SelectItem>
+                <SelectItem value="integer">Integer</SelectItem>
+                <SelectItem value="float">Float</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Initial value: <code className="font-mono">{defaultForType(type) || '""'}</code>
+          </p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button size="sm" variant="ghost" onClick={onClose} style={{ color: "var(--text-muted)" }}>Cancel</Button>
+          <Button size="sm" onClick={handleAdd} disabled={!name.trim()} className="btn-neon-purple">Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Type-aware value editor for a single mod setting row
+// ---------------------------------------------------------------------------
+
+function ModSettingValue({
+  value,
   onChange,
 }: {
-  gameIni: Record<string, Record<string, string>>;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const type = inferType(value);
+
+  if (type === "boolean") {
+    const checked = value === "True";
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(checked ? "False" : "True")}
+        className="shrink-0 flex items-center"
+      >
+        {checked
+          ? <ToggleRight className="w-7 h-7" style={{ color: "var(--neon-purple)" }} />
+          : <ToggleLeft className="w-7 h-7" style={{ color: "var(--text-subtle)" }} />}
+      </button>
+    );
+  }
+
+  return (
+    <Input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Value"
+      className="h-7 text-xs font-mono flex-1"
+      style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Custom mod sections editor
+// ---------------------------------------------------------------------------
+
+// Standard GameUserSettings.ini sections this app already manages elsewhere —
+// never touched by the custom mod-section editor below.
+const GUS_STANDARD_SECTIONS = new Set([
+  "serversettings",
+  "sessionsettings",
+  "messageoftheday",
+  "ragnarok",
+  "/script/engine.gamesession",
+]);
+
+function CustomModSections({
+  gameUserSettings,
+  onChange,
+}: {
+  gameUserSettings: Record<string, Record<string, string>>;
   onChange: (updated: Record<string, Record<string, string>>) => void;
 }) {
-  // Only show sections that are NOT standard ARK sections
-  const STANDARD_SECTIONS = new Set([
-    "/script/shootergame.shootergamemode",
-    "ServerSettings",
-    "SessionSettings",
-    "MessageOfTheDay",
-    "Ragnarok",
-  ]);
-
-  const customSections: CustomSection[] = Object.entries(gameIni)
-    .filter(([name]) => !STANDARD_SECTIONS.has(name.toLowerCase()) && !STANDARD_SECTIONS.has(name))
+  const customSections: CustomSection[] = Object.entries(gameUserSettings)
+    .filter(([name]) => !GUS_STANDARD_SECTIONS.has(name.toLowerCase()))
     .map(([name, kvs]) => ({
       sectionName: name,
       rows: Object.entries(kvs).map(([key, value]) => ({ key, value })),
@@ -574,16 +584,15 @@ function CustomModSections({
 
   const [newSectionName, setNewSectionName] = useState("");
   const [deletingSection, setDeletingSection] = useState<string | null>(null);
+  const [addSettingFor, setAddSettingFor] = useState<number | null>(null);
 
   const commit = (sections: CustomSection[]) => {
-    const updated = { ...gameIni };
-    // Remove all existing custom sections
+    const updated = { ...gameUserSettings };
     for (const key of Object.keys(updated)) {
-      if (!STANDARD_SECTIONS.has(key.toLowerCase()) && !STANDARD_SECTIONS.has(key)) {
+      if (!GUS_STANDARD_SECTIONS.has(key.toLowerCase())) {
         delete updated[key];
       }
     }
-    // Re-add from editor state
     for (const sec of sections) {
       if (!sec.sectionName.trim()) continue;
       updated[sec.sectionName] = Object.fromEntries(
@@ -596,14 +605,20 @@ function CustomModSections({
   const addSection = () => {
     const name = newSectionName.trim();
     if (!name) return;
-    const updated = [...customSections, { sectionName: name, rows: [{ key: "", value: "" }] }];
+    commit([...customSections, { sectionName: name, rows: [] }]);
     setNewSectionName("");
-    commit(updated);
   };
 
   const deleteSection = (idx: number) => {
     commit(customSections.filter((_, i) => i !== idx));
     setDeletingSection(null);
+  };
+
+  const addRowWithValue = (secIdx: number, key: string, value: string) => {
+    const updated = customSections.map((sec, si) =>
+      si !== secIdx ? sec : { ...sec, rows: [...sec.rows, { key, value }] },
+    );
+    commit(updated);
   };
 
   const updateRow = (secIdx: number, rowIdx: number, field: "key" | "value", val: string) => {
@@ -616,13 +631,6 @@ function CustomModSections({
     commit(updated);
   };
 
-  const addRow = (secIdx: number) => {
-    const updated = customSections.map((sec, si) =>
-      si !== secIdx ? sec : { ...sec, rows: [...sec.rows, { key: "", value: "" }] },
-    );
-    commit(updated);
-  };
-
   const removeRow = (secIdx: number, rowIdx: number) => {
     const updated = customSections.map((sec, si) =>
       si !== secIdx ? sec : { ...sec, rows: sec.rows.filter((_, ri) => ri !== rowIdx) },
@@ -631,96 +639,98 @@ function CustomModSections({
   };
 
   return (
-    <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-      <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,10,30,0.7)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-        <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Custom / Mod Settings (Game.ini)</span>
-        <span className="text-xs" style={{ color: "var(--text-subtle)" }}>New [SectionName] blocks for mods</span>
-      </div>
+    <>
+      {addSettingFor !== null && (
+        <AddSettingDialog
+          open
+          onClose={() => setAddSettingFor(null)}
+          onAdd={(key, value) => addRowWithValue(addSettingFor, key, value)}
+        />
+      )}
 
-      <div className="p-4 space-y-4">
-        {customSections.length === 0 && (
-          <p className="text-xs text-center py-2" style={{ color: "var(--text-subtle)" }}>
-            No custom sections yet. Add one below to configure mod-specific INI settings.
-          </p>
-        )}
-
-        {customSections.map((sec, si) => (
-          <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
-            <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.06)" }}>
-              <span className="text-xs font-mono font-semibold" style={{ color: "var(--neon-purple)" }}>[{sec.sectionName}]</span>
-              {deletingSection === sec.sectionName ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: "rgba(255,0,85,0.9)" }}>Delete this section?</span>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(255,0,85,0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "var(--text-muted)" }} onClick={() => setDeletingSection(null)}>No</Button>
-                </div>
-              ) : (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" style={{ color: "var(--text-subtle)" }} onClick={() => setDeletingSection(sec.sectionName)}>
-                  <X className="w-3.5 h-3.5" />
-                </Button>
-              )}
-            </div>
-            <div className="p-3 space-y-1.5">
-              {sec.rows.map((row, ri) => (
-                <div key={ri} className="flex items-center gap-2">
-                  <Input
-                    value={row.key}
-                    onChange={(e) => updateRow(si, ri, "key", e.target.value)}
-                    placeholder="Key"
-                    className="h-7 text-xs font-mono flex-1"
-                    style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
-                  />
-                  <span className="text-xs" style={{ color: "var(--text-subtle)" }}>=</span>
-                  <Input
-                    value={row.value}
-                    onChange={(e) => updateRow(si, ri, "value", e.target.value)}
-                    placeholder="Value"
-                    className="h-7 text-xs font-mono flex-1"
-                    style={{ background: "rgba(0,0,0,0.35)", borderColor: "rgba(var(--neon-purple-rgb),0.18)", color: "var(--text-primary)" }}
-                  />
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" style={{ color: "var(--text-subtle)" }} onClick={() => removeRow(si, ri)}>
-                    <X className="w-3 h-3" />
-                  </Button>
-                </div>
-              ))}
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 text-xs mt-1"
-                style={{ color: "var(--text-subtle)" }}
-                onClick={() => addRow(si)}
-              >
-                + Add row
-              </Button>
-            </div>
+      <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(180,100,255,0.2)" }}>
+        <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,5,25,0.7)", borderBottom: "1px solid rgba(180,100,255,0.15)" }}>
+          <div>
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Mod Settings</span>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>Custom <code>GameUserSettings.ini</code> sections for mods — add a section per mod, then add its settings.</p>
           </div>
-        ))}
-
-        {/* Add new section */}
-        <div className="flex items-center gap-2 pt-1">
-          <Input
-            value={newSectionName}
-            onChange={(e) => setNewSectionName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") addSection(); }}
-            placeholder="New section name (e.g. MyMod)"
-            className="h-7 text-xs font-mono flex-1"
-            style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={addSection}
-            disabled={!newSectionName.trim()}
-            style={{ color: "var(--neon-purple)" }}
-          >
-            Add Section
-          </Button>
         </div>
-        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          Custom sections are written directly to <code>Game.ini</code> alongside standard settings.
-        </p>
+
+        <div className="p-4 space-y-4">
+          {customSections.length === 0 && (
+            <p className="text-xs text-center py-4" style={{ color: "var(--text-subtle)" }}>
+              No mod sections yet. Add one below using the mod&apos;s section name (e.g. <code className="font-mono">MyMod</code>).
+            </p>
+          )}
+
+          {customSections.map((sec, si) => (
+            <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(180,100,255,0.18)" }}>
+              <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(180,100,255,0.07)" }}>
+                <span className="text-xs font-mono font-semibold" style={{ color: "rgba(200,130,255,0.9)" }}>[{sec.sectionName}]</span>
+                {deletingSection === sec.sectionName ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs" style={{ color: "rgba(255,0,85,0.9)" }}>Delete section?</span>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(255,0,85,0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "var(--text-muted)" }} onClick={() => setDeletingSection(null)}>No</Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="ghost" className="h-6 w-6 p-0" style={{ color: "var(--text-subtle)" }} onClick={() => setDeletingSection(sec.sectionName)}>
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+              </div>
+
+              <div className="p-3 space-y-2">
+                {sec.rows.length === 0 && (
+                  <p className="text-xs py-1" style={{ color: "var(--text-subtle)" }}>No settings yet — click &quot;Add Setting&quot; below.</p>
+                )}
+                {sec.rows.map((row, ri) => (
+                  <div key={ri} className="flex items-center gap-2">
+                    <span className="text-xs font-mono shrink-0 min-w-0 flex-1 truncate" style={{ color: "var(--text-primary)" }} title={row.key}>{row.key}</span>
+                    <span className="text-xs shrink-0" style={{ color: "var(--text-subtle)" }}>=</span>
+                    <div className="flex-1 min-w-0">
+                      <ModSettingValue value={row.value} onChange={(v) => updateRow(si, ri, "value", v)} />
+                    </div>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" style={{ color: "var(--text-subtle)" }} onClick={() => removeRow(si, ri)}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs mt-1"
+                  style={{ color: "rgba(200,130,255,0.8)", border: "1px dashed rgba(180,100,255,0.3)" }}
+                  onClick={() => setAddSettingFor(si)}
+                >
+                  + Add Setting
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {/* Add new section */}
+          <div className="flex items-center gap-2 pt-1">
+            <Input
+              value={newSectionName}
+              onChange={(e) => setNewSectionName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addSection(); }}
+              placeholder="New section name (e.g. MyMod)"
+              className="h-8 text-xs font-mono flex-1"
+              style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(180,100,255,0.25)", color: "var(--text-primary)" }}
+            />
+            <Button
+              size="sm"
+              onClick={addSection}
+              disabled={!newSectionName.trim()}
+              style={{ background: "rgba(180,100,255,0.15)", color: "rgba(200,130,255,0.9)", border: "1px solid rgba(180,100,255,0.35)" }}
+            >
+              Add Section
+            </Button>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -907,20 +917,20 @@ function QuickSetupModal({
 // Active Event card
 // ---------------------------------------------------------------------------
 
-function EventCard({ server }: { server: ServerRow }) {
+function ActiveEventCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
   const [activeEventId, setActiveEventId] = useState<string | null>(server.active_event ?? null);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
 
   const currentEvent = ARK_EVENTS.find((e) => e.id === activeEventId) ?? null;
 
-  const handleSelect = async (eventId: string | null) => {
-    setActiveEventId(eventId);
+  const handleSelect = async (val: string) => {
+    const newId = val === "none" ? null : val;
+    setActiveEventId(newId);
     setSaving(true);
     try {
-      await setServerActiveEvent(server.id, eventId);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      await setServerActiveEvent(server.id, newId);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (e) {
       toast.error(`Failed to save event: ${e}`);
     } finally {
@@ -930,77 +940,84 @@ function EventCard({ server }: { server: ServerRow }) {
 
   return (
     <div
+      id="settings-active-event"
       className="glass-card rounded-xl p-4 space-y-3"
       style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-base">🎃</span>
-          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</h3>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <Sparkles className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Loads the event mod and passes <span className="font-mono">-ActiveEvent=</span> on next server start.
+            </p>
+          </div>
         </div>
-        {saved && <span className="text-xs" style={{ color: "var(--neon-green)" }}>Saved</span>}
-        {saving && !saved && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Saving…</span>}
+        <div className="flex items-center gap-2 shrink-0">
+          {saving && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Saving…</span>}
+          <Select value={activeEventId ?? "none"} onValueChange={handleSelect}>
+            <SelectTrigger className="w-52 text-sm" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)" }}>
+              <SelectValue placeholder="No Event" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No Event</SelectItem>
+              {ARK_EVENTS.map((evt) => (
+                <SelectItem key={evt.id} value={evt.id}>{evt.displayName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
-
-      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Activating an event auto-loads its mod on server start and passes <span className="font-mono" style={{ color: "var(--neon-cyan)" }}>-ActiveEvent=</span> to the launcher.
-        The mod will be locked in the mod list while the event is active.
-      </p>
-
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => handleSelect(null)}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-          style={!activeEventId
-            ? { background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)" }
-            : { background: "rgba(10,10,30,0.5)", color: "var(--text-muted)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-        >
-          No Event
-        </button>
-        {ARK_EVENTS.map((evt) => (
-          <button
-            key={evt.id}
-            onClick={() => handleSelect(evt.id)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={activeEventId === evt.id
-              ? { background: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.5)" }
-              : { background: "rgba(10,10,30,0.5)", color: "var(--text-muted)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-          >
-            {evt.displayName}
-          </button>
-        ))}
-      </div>
-
       {currentEvent && (
-        <div
-          className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-          style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}
-        >
-          <span style={{ color: "var(--neon-purple)" }}>{currentEvent.description}</span>
-          <span className="ml-auto shrink-0 font-mono" style={{ color: "var(--text-subtle)" }}>Mod: {currentEvent.modId}</span>
-        </div>
+        <p className="text-xs pl-6" style={{ color: "var(--text-muted)" }}>
+          {currentEvent.description} <span className="font-mono ml-1" style={{ color: "var(--text-subtle)" }}>Mod: {currentEvent.modId}</span>
+        </p>
       )}
     </div>
   );
 }
 
-function ShutdownSettingsCard({ server }: { server: ServerRow }) {
-  const [warnPlayers, setWarnPlayers] = useState(server.shutdown_warn_players !== 0);
-  const [warnMinutes, setWarnMinutes] = useState(server.shutdown_warn_minutes ?? 5);
-  const [message, setMessage]         = useState(
-    server.shutdown_message || "Server will shut down in {time}."
-  );
+/**
+ * Shared shape behind Shutdown/Restart/Update Warning cards — previously
+ * three independent ~90-line copies differing only in which
+ * `updateServer*Settings` DB call they made, their copy, and whether a
+ * Cancel Message field applies (Shutdown has no countdown to cancel).
+ */
+function WarningSettingsCard({
+  sectionId, title, description, warnLabel, messageLabel, messagePlaceholder,
+  cancelMessagePlaceholder, initialWarnPlayers, initialWarnMinutes, initialMessage,
+  initialCancelMessage, errorLabel, onSave,
+}: {
+  sectionId?: string;
+  title: string;
+  description: string;
+  warnLabel: string;
+  messageLabel: string;
+  messagePlaceholder: string;
+  /** Omit to hide the Cancel Message field. */
+  cancelMessagePlaceholder?: string;
+  initialWarnPlayers: boolean;
+  initialWarnMinutes: number;
+  initialMessage: string;
+  initialCancelMessage?: string;
+  errorLabel: string;
+  onSave: (params: { warnPlayers: boolean; warnMinutes: number; message: string; cancelMessage: string }) => Promise<void>;
+}) {
+  const [warnPlayers, setWarnPlayers] = useState(initialWarnPlayers);
+  const [warnMinutes, setWarnMinutes] = useState(initialWarnMinutes);
+  const [message, setMessage]         = useState(initialMessage);
+  const [cancelMessage, setCancelMessage] = useState(initialCancelMessage ?? "");
   const [saving, setSaving]   = useState(false);
-  const [saved, setSaved]     = useState(false);
+  const [saved, triggerSaved] = useSavedFlash();
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateServerShutdownSettings(server.id, warnPlayers, warnMinutes, message);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      await onSave({ warnPlayers, warnMinutes, message, cancelMessage });
+      triggerSaved();
     } catch (e) {
-      toast.error(`Failed to save shutdown settings: ${e}`);
+      toast.error(`Failed to save ${errorLabel}: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -1008,13 +1025,15 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
 
   return (
     <div
+      id={sectionId}
       className="glass-card rounded-xl p-4 space-y-4"
       style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
     >
       <div className="flex items-center gap-2">
         <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Graceful Shutdown</h3>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h3>
       </div>
+      <p className="text-xs -mt-2" style={{ color: "var(--text-subtle)" }}>{description}</p>
 
       <label className="flex items-center gap-2 cursor-pointer select-none">
         <input
@@ -1024,9 +1043,7 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
           className="w-3.5 h-3.5"
           style={{ accentColor: "var(--neon-purple)" }}
         />
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Warn online players before shutdown
-        </span>
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>{warnLabel}</span>
       </label>
 
       <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
@@ -1042,16 +1059,28 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
         </div>
         <div className="space-y-1">
           <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Shutdown message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
+            {messageLabel} <span className="opacity-60">(&#123;time&#125; = countdown)</span>
           </Label>
           <Input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Server will shut down in {time}."
+            placeholder={messagePlaceholder}
             className="h-7 text-xs"
             style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
           />
         </div>
+        {cancelMessagePlaceholder !== undefined && (
+          <div className="space-y-1">
+            <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel message</Label>
+            <Input
+              value={cancelMessage}
+              onChange={(e) => setCancelMessage(e.target.value)}
+              placeholder={cancelMessagePlaceholder}
+              className="h-7 text-xs"
+              style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+            />
+          </div>
+        )}
       </div>
 
       <Button
@@ -1070,201 +1099,72 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Restart Warning Settings Card
-// ---------------------------------------------------------------------------
+function ShutdownSettingsCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
+  return (
+    <WarningSettingsCard
+      title="Shutdown Warning"
+      description="Used by the manual Stop button. There is no scheduled/automated shutdown."
+      warnLabel="Warn online players before shutdown"
+      messageLabel="Shutdown message"
+      messagePlaceholder="Server will shut down in {time}."
+      initialWarnPlayers={server.shutdown_warn_players !== 0}
+      initialWarnMinutes={server.shutdown_warn_minutes ?? 5}
+      initialMessage={server.shutdown_message || "Server will shut down in {time}."}
+      errorLabel="shutdown settings"
+      onSave={async ({ warnPlayers, warnMinutes, message }) => {
+        await updateServerShutdownSettings(server.id, warnPlayers, warnMinutes, message);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }}
+    />
+  );
+}
 
 function RestartSettingsCard({ server }: { server: ServerRow }) {
-  const [warnPlayers, setWarnPlayers]       = useState(server.restart_warn_players !== 0);
-  const [warnMinutes, setWarnMinutes]       = useState(server.restart_warn_minutes ?? 5);
-  const [message, setMessage]               = useState(server.restart_message || "Server restarting in {time}.");
-  const [cancelMessage, setCancelMessage]   = useState(server.restart_cancel_message || "Restart has been canceled.");
-  const [saving, setSaving]                 = useState(false);
-  const [saved, setSaved]                   = useState(false);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await updateServerRestartSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      toast.error(`Failed to save restart settings: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  const queryClient = useQueryClient();
   return (
-    <div
-      className="glass-card rounded-xl p-4 space-y-4"
-      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-    >
-      <div className="flex items-center gap-2">
-        <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Restart Warning</h3>
-      </div>
-
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={warnPlayers}
-          onChange={(e) => setWarnPlayers(e.target.checked)}
-          className="w-3.5 h-3.5"
-          style={{ accentColor: "var(--neon-purple)" }}
-        />
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Warn online players before restart
-        </span>
-      </label>
-
-      <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Warn time (minutes)</Label>
-          <Input
-            type="number" min={1} max={60}
-            value={warnMinutes}
-            onChange={(e) => setWarnMinutes(parseInt(e.target.value, 10) || 5)}
-            className="h-7 w-24 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Restart message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
-          </Label>
-          <Input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Server restarting in {time}."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel message</Label>
-          <Input
-            value={cancelMessage}
-            onChange={(e) => setCancelMessage(e.target.value)}
-            placeholder="Restart has been canceled."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-      </div>
-
-      <Button
-        size="sm"
-        onClick={handleSave}
-        disabled={saving}
-        style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
-          color: saved ? "var(--neon-green)" : "var(--neon-purple)",
-        }}
-      >
-        {saving ? "Saving…" : saved ? "Saved" : "Save"}
-      </Button>
-    </div>
+    <WarningSettingsCard
+      sectionId="restart-warning-section"
+      title="Restart Warning"
+      description="Shared by the manual Restart button and scheduled Auto-Restart (Automation tab) — one warning message either way."
+      warnLabel="Warn online players before restart"
+      messageLabel="Restart message"
+      messagePlaceholder="Server restarting in {time}."
+      cancelMessagePlaceholder="Restart has been canceled."
+      initialWarnPlayers={server.restart_warn_players !== 0}
+      initialWarnMinutes={server.restart_warn_minutes ?? 5}
+      initialMessage={server.restart_message || "Server restarting in {time}."}
+      initialCancelMessage={server.restart_cancel_message || "Restart has been canceled."}
+      errorLabel="restart settings"
+      onSave={async ({ warnPlayers, warnMinutes, message, cancelMessage }) => {
+        await updateServerRestartSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }}
+    />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Update Warning Settings Card
-// ---------------------------------------------------------------------------
-
 function UpdateSettingsCard({ server }: { server: ServerRow }) {
-  const [warnPlayers, setWarnPlayers]       = useState(server.update_warn_players !== 0);
-  const [warnMinutes, setWarnMinutes]       = useState(server.update_warn_minutes ?? 5);
-  const [message, setMessage]               = useState(server.update_message || "Server going down for update in {time}.");
-  const [cancelMessage, setCancelMessage]   = useState(server.update_cancel_message || "Update has been canceled.");
-  const [saving, setSaving]                 = useState(false);
-  const [saved, setSaved]                   = useState(false);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await updateServerUpdateSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      toast.error(`Failed to save update settings: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  const queryClient = useQueryClient();
   return (
-    <div
-      className="glass-card rounded-xl p-4 space-y-4"
-      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
-    >
-      <div className="flex items-center gap-2">
-        <Settings2 className="w-4 h-4" style={{ color: "var(--neon-purple)" }} />
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Update Warning</h3>
-      </div>
-
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={warnPlayers}
-          onChange={(e) => setWarnPlayers(e.target.checked)}
-          className="w-3.5 h-3.5"
-          style={{ accentColor: "var(--neon-purple)" }}
-        />
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Warn online players before update
-        </span>
-      </label>
-
-      <div className={`space-y-3 pl-5 ${!warnPlayers ? "opacity-40 pointer-events-none" : ""}`}>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Warn time (minutes)</Label>
-          <Input
-            type="number" min={1} max={60}
-            value={warnMinutes}
-            onChange={(e) => setWarnMinutes(parseInt(e.target.value, 10) || 5)}
-            className="h-7 w-24 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Update message <span className="opacity-60">(&#123;time&#125; = countdown)</span>
-          </Label>
-          <Input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Server going down for update in {time}."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs" style={{ color: "var(--text-muted)" }}>Cancel message</Label>
-          <Input
-            value={cancelMessage}
-            onChange={(e) => setCancelMessage(e.target.value)}
-            placeholder="Update has been canceled."
-            className="h-7 text-xs"
-            style={{ background: "rgba(0,0,0,0.4)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
-          />
-        </div>
-      </div>
-
-      <Button
-        size="sm"
-        onClick={handleSave}
-        disabled={saving}
-        style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
-          color: saved ? "var(--neon-green)" : "var(--neon-purple)",
-        }}
-      >
-        {saving ? "Saving…" : saved ? "Saved" : "Save"}
-      </Button>
-    </div>
+    <WarningSettingsCard
+      sectionId="update-warning-section"
+      title="Update Warning"
+      description="Shared by the manual Apply Update button and Auto-Update (Automation tab) — one warning message either way."
+      warnLabel="Warn online players before update"
+      messageLabel="Update message"
+      messagePlaceholder="Server going down for update in {time}."
+      cancelMessagePlaceholder="Update has been canceled."
+      initialWarnPlayers={server.update_warn_players !== 0}
+      initialWarnMinutes={server.update_warn_minutes ?? 5}
+      initialMessage={server.update_message || "Server going down for update in {time}."}
+      initialCancelMessage={server.update_cancel_message || "Update has been canceled."}
+      errorLabel="update settings"
+      onSave={async ({ warnPlayers, warnMinutes, message, cancelMessage }) => {
+        await updateServerUpdateSettings(server.id, warnPlayers, warnMinutes, message, cancelMessage);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }}
+    />
   );
 }
 
@@ -1328,7 +1228,7 @@ function AdvancedConfigTab({
           value={currentThread}
           onChange={(e) => handleThreadChange(e.target.value)}
           className="w-full text-xs rounded-lg px-2 py-1.5"
-          style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
         >
           {THREAD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -1365,7 +1265,7 @@ function AdvancedConfigTab({
           onChange={(e) => setArg("_customCli", e.target.value)}
           placeholder="-SomeFlag -AnotherFlag=value"
           className="font-mono text-xs"
-          style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
         />
       </div>
 
@@ -1384,7 +1284,7 @@ function AdvancedConfigTab({
             min={1}
             step={0.5}
             className="w-32 text-xs"
-            style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+            style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
           />
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>GB</span>
           <Button size="sm" variant="outline" onClick={handleSaveMemLimit} disabled={savingMem}
@@ -1412,7 +1312,7 @@ function AdvancedConfigTab({
               onChange={(e) => setArg(key, e.target.value)}
               placeholder={placeholder}
               className="text-xs font-mono"
-              style={{ background: "rgba(10,10,30,0.8)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
             />
           </div>
         ))}
@@ -1422,15 +1322,16 @@ function AdvancedConfigTab({
 }
 
 export function ConfigTab({ server }: Props) {
+  const queryClient = useQueryClient();
+  const allMaps = useAllMaps();
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
   const [rawGame, setRawGame] = useState("");
-  const [rawMode, setRawMode] = useState(false);
-  const [advancedMode, setAdvancedMode] = useState(false);
+  const [activeTab, setActiveTab] = useState<"settings" | "mods" | "advanced" | "raw">("settings");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [readingIni, setReadingIni] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
+  const [savedFlash, triggerSavedFlash] = useSavedFlash();
   const [isDirty, setIsDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPasteModal, setShowPasteModal] = useState(false);
@@ -1527,20 +1428,26 @@ export function ConfigTab({ server }: Props) {
       const text = await readTextFile(selected);
       const sections = rawTextToSections(text);
       if (!config) return;
-      // Determine which file was picked by looking at key section names
-      const isGus = Object.keys(sections).some((s) =>
-        ["ServerSettings", "SessionSettings", "MessageOfTheDay", "Ragnarok"].includes(s),
-      );
-      const isGame = Object.keys(sections).some((s) =>
-        s.toLowerCase().includes("shootergame"),
-      );
+      // Route each section to its file individually — an imported file
+      // containing sections that belong to both files (a combined export,
+      // or a custom mod section whose name happens to mention "shootergame")
+      // must not dump its entire contents into both; only Game.ini actually
+      // uses "/script/shootergame..." sections, everything else is GUS.
+      const gusSections: Record<string, Record<string, string>> = {};
+      const gameSections: Record<string, Record<string, string>> = {};
+      for (const [name, kv] of Object.entries(sections)) {
+        if (name.toLowerCase().startsWith("/script/shootergame")) {
+          gameSections[name] = kv;
+        } else {
+          gusSections[name] = kv;
+        }
+      }
       setConfig((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
-          ...(isGus ? { gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...sections } } : {}),
-          ...(isGame ? { gameIni: { ...(prev.gameIni as Record<string, Record<string, string>>), ...sections } } : {}),
-          ...(!isGus && !isGame ? { gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...sections } } : {}),
+          gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...gusSections },
+          gameIni: { ...(prev.gameIni as Record<string, Record<string, string>>), ...gameSections },
         };
       });
       setIsDirty(true);
@@ -1588,7 +1495,7 @@ export function ConfigTab({ server }: Props) {
     setError(null);
     try {
       let toSave = toWrite;
-      if (rawMode && !cfg) {
+      if (activeTab === "raw" && !cfg) {
         toSave = {
           ...toWrite,
           gameUserSettings: rawTextToSections(rawGus),
@@ -1600,16 +1507,40 @@ export function ConfigTab({ server }: Props) {
       }
       // Write to disk
       await tauriCmd.writeServerConfig(server.install_path, toSave);
-      // Persist to DB so Config tab loads our version next time, not the server's overwrite
-      await saveServerConfig(
-        server.id,
-        JSON.stringify(toSave.gameUserSettings),
-        JSON.stringify(toSave.gameIni),
-        JSON.stringify(toSave.launchArgs ?? {}),
-      );
+      // Persist to DB so Config tab loads our version next time, not the
+      // server's overwrite. This can't be made truly atomic with the disk
+      // write above (different systems), so on failure here we give a
+      // distinct message: the file IS already updated, only the DB record
+      // of it failed — the reload-from-DB path would otherwise silently
+      // revert the file back next time this tab loads.
+      try {
+        await saveServerConfig(
+          server.id,
+          JSON.stringify(toSave.gameUserSettings),
+          JSON.stringify(toSave.gameIni),
+          JSON.stringify(toSave.launchArgs ?? {}),
+        );
+      } catch (dbErr) {
+        throw new Error(
+          `Config was written to disk, but saving it to the app database failed: ${dbErr}. ` +
+          `Click Save again — your disk changes are already applied and will not be lost by retrying.`
+        );
+      }
+
+      // admin_password is the single source of truth for both the INI value and
+      // RCON auth. If this save changed ServerAdminPassword (e.g. via the raw
+      // editor), keep the DB in sync so RCON doesn't silently start failing —
+      // then bounce the live RCON connection so it reconnects with the new
+      // password immediately instead of waiting for the next failed command.
+      const newAdminPassword = (toSave.gameUserSettings as Record<string, Record<string, string>>)
+        ?.ServerSettings?.ServerAdminPassword;
+      if (newAdminPassword && newAdminPassword !== server.admin_password) {
+        await updateServerAdminPassword(server.id, newAdminPassword);
+        tauriCmd.rconDisconnect(server.id).catch(() => {});
+      }
+
       setIsDirty(false);
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 2000);
+      triggerSavedFlash();
 
       // Snapshot INI files into the backup system (best-effort, non-blocking)
       const backupDir = await getAppSetting("backup_dir").catch(() => null);
@@ -1628,15 +1559,60 @@ export function ConfigTab({ server }: Props) {
       setRawGus(configToRawText(config.gameUserSettings as Record<string, Record<string, string>>));
       setRawGame(configToRawText(config.gameIni as Record<string, Record<string, string>>));
     }
-    setRawMode(true);
+    setActiveTab("raw");
   };
 
-  const switchToStructured = () => {
+  const handleMapChange = async (newMapId: string) => {
+    if (server.status !== "stopped") {
+      toast.error("Server must be stopped to change maps");
+      return;
+    }
+    try {
+      const baseDir = await getAppSetting("base_dir");
+      if (!baseDir) {
+        toast.error("Base directory not configured");
+        return;
+      }
+      const newMapData = allMaps.find((m) => m.id === newMapId);
+      if (!newMapData) {
+        toast.error("Map not found");
+        return;
+      }
+      const oldMapData = allMaps.find((m) => m.id === server.map_id);
+      // Update the SaveGames symlink for the new map
+      await tauriCmd.createModsSavesLink(server.install_path, server.id, baseDir, newMapData.mapPath);
+      // Update the database
+      await updateServerMap(server.id, newMapId);
+
+      // Swap the map-required mod: the old map's required mod is dropped
+      // from the list entirely (unless the new map needs the exact same
+      // mod) — mirrors the wizard's handleMapSelect, which drops the
+      // previous map's mod from the list the same way when switching maps
+      // pre-creation. The new map's required mod is added/locked so it
+      // can't be disabled or removed from the Mods tab while selected.
+      if (oldMapData?.isMod && oldMapData.requiredModId && oldMapData.requiredModId !== newMapData.requiredModId) {
+        await removeServerMod(server.id, oldMapData.requiredModId);
+      }
+      if (newMapData.isMod && newMapData.requiredModId) {
+        // The map's required mod never goes through the "paste ID"
+        // CurseForge verification, so it has no real name available — fall
+        // back to the custom/mod map's own display name instead of a bare
+        // "Unknown Mod".
+        await addServerMod(server.id, newMapData.requiredModId, newMapData.displayName);
+        await setModMapLock(server.id, newMapData.requiredModId, true);
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.success(`Map changed to ${newMapData.displayName}`);
+    } catch (e) {
+      toast.error(`Failed to change map: ${e}`);
+    }
+  };
+
+  const switchFromRaw = () => {
     const gus = rawTextToSections(rawGus);
     const game = rawTextToSections(rawGame);
     if (config) setConfig({ ...config, gameUserSettings: gus, gameIni: game });
-    setRawMode(false);
-    setAdvancedMode(false);
   };
 
   if (loading) {
@@ -1660,18 +1636,27 @@ export function ConfigTab({ server }: Props) {
         {/* Tab selectors */}
         <div className="flex items-center gap-1">
           <button
-            onClick={switchToStructured}
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("settings"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={!rawMode && !advancedMode
+            style={activeTab === "settings"
               ? { background: "rgba(var(--neon-purple-rgb),0.15)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
-            <LayoutList className="w-3.5 h-3.5" /> Structured
+            <LayoutList className="w-3.5 h-3.5" /> Settings
           </button>
           <button
-            onClick={() => { setAdvancedMode(true); setRawMode(false); }}
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("mods"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={advancedMode
+            style={activeTab === "mods"
+              ? { background: "rgba(180,100,255,0.12)", color: "rgba(200,130,255,0.9)", border: "1px solid rgba(180,100,255,0.35)" }
+              : { color: "var(--text-muted)", border: "1px solid transparent" }}
+          >
+            <Package className="w-3.5 h-3.5" /> Mod Settings
+          </button>
+          <button
+            onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("advanced"); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+            style={activeTab === "advanced"
               ? { background: "rgba(255,165,0,0.1)", color: "rgba(255,165,0,0.9)", border: "1px solid rgba(255,165,0,0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
@@ -1680,7 +1665,7 @@ export function ConfigTab({ server }: Props) {
           <button
             onClick={switchToRaw}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-            style={rawMode
+            style={activeTab === "raw"
               ? { background: "rgba(0,255,255,0.08)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
@@ -1757,32 +1742,84 @@ export function ConfigTab({ server }: Props) {
         </div>
       )}
 
-      {/* ── Structured view — ALL INI groups ──────────────────────────────── */}
-      {!rawMode && config && (
+      {/* ── Settings view — all INI field groups plus session/warning settings ── */}
+      {activeTab === "settings" && config && (
         <div className="flex flex-col gap-4">
+          {/* Map Selector */}
+          <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-cyan-rgb),0.2)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Server Map</p>
+                <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                  Current map: <strong>{allMaps.find((m) => m.id === server.map_id)?.displayName ?? server.map_id}</strong>
+                </p>
+              </div>
+              {server.status !== "stopped" && (
+                <div className="text-xs px-2 py-1 rounded" style={{ background: "rgba(255,165,0,0.15)", color: "#ffa500" }}>
+                  Stop to change
+                </div>
+              )}
+            </div>
+            <Select value={server.map_id} onValueChange={handleMapChange} disabled={server.status !== "stopped"}>
+              <SelectTrigger style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-cyan-rgb),0.3)" }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {allMaps.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* INI Field Groups — Active Event slots in right after Session, since
+              it's session-scoped state (like the map/name/password above it)
+              even though it isn't an INI field. */}
           {INI_FIELD_GROUPS.map((g, idx) => (
-            <SectionGroup
-              key={g.id}
-              title={g.title}
-              fields={g.fields}
-              config={config}
-              onChange={handleFieldChange}
-              defaultOpen={idx < 3}
-            />
+            <Fragment key={g.id}>
+              <SectionGroup
+                title={g.title}
+                fields={g.fields}
+                config={config}
+                onChange={handleFieldChange}
+                defaultOpen={idx < 3}
+              />
+              {g.id === "session" && <ActiveEventCard server={server} />}
+            </Fragment>
           ))}
           <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />
-          <CustomModSections
-            gameIni={config.gameIni as Record<string, Record<string, string>>}
-            onChange={(updated) => {
-              setConfig({ ...config, gameIni: updated });
-              setIsDirty(true);
-            }}
-          />
+
+          {/* Warnings — governs both the manual action buttons and (for
+              restart/update) their scheduled counterparts in the Automation tab. */}
+          <div className="pt-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Warnings</h3>
+          </div>
+          <ShutdownSettingsCard server={server} />
+          <RestartSettingsCard server={server} />
+          <UpdateSettingsCard server={server} />
         </div>
       )}
 
+      {/* ── Mod Settings tab ─────────────────────────────────────────────── */}
+      {activeTab === "mods" && config && (
+        <CustomModSections
+          gameUserSettings={config.gameUserSettings as Record<string, Record<string, string>>}
+          onChange={(updated) => {
+            setConfig({ ...config, gameUserSettings: updated });
+            setIsDirty(true);
+          }}
+        />
+      )}
+
+      {/* ── Advanced tab ──────────────────────────────────────────────────── */}
+      {activeTab === "advanced" && config && (
+        <AdvancedConfigTab server={server} config={config} onChange={(patch) => { setConfig({ ...config, ...patch }); setIsDirty(true); }} />
+      )}
+
       {/* ── Raw INI editor ────────────────────────────────────────────────── */}
-      {rawMode && (
+      {activeTab === "raw" && (
         <div className="flex flex-col gap-4">
           <div>
             <p className="text-xs font-semibold mb-2" style={{ color: "var(--text-primary)" }}>GameUserSettings.ini</p>
@@ -1808,17 +1845,6 @@ export function ConfigTab({ server }: Props) {
           </div>
         </div>
       )}
-
-      {/* ── Advanced tab ──────────────────────────────────────────────────── */}
-      {advancedMode && config && (
-        <AdvancedConfigTab server={server} config={config} onChange={(patch) => { setConfig({ ...config, ...patch }); setIsDirty(true); }} />
-      )}
-
-      {/* ── Server behaviour cards (always visible) ───────────────────────── */}
-      <EventCard server={server} />
-      <ShutdownSettingsCard server={server} />
-      <RestartSettingsCard server={server} />
-      <UpdateSettingsCard server={server} />
 
       {/* Paste INI modal */}
       {showPasteModal && (
@@ -1846,7 +1872,7 @@ export function ConfigTab({ server }: Props) {
               value={copyFromServerId}
               onChange={(e) => setCopyFromServerId(e.target.value)}
               className="w-full text-xs rounded-lg px-2 py-1.5"
-              style={{ background: "rgba(10,10,30,0.8)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
             >
               <option value="">Select a server…</option>
               {otherServers.map((s) => (

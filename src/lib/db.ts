@@ -58,7 +58,6 @@ async function runMigrations(db: Database): Promise<void> {
     port                   INTEGER NOT NULL DEFAULT 7777,
     query_port             INTEGER NOT NULL DEFAULT 27015,
     rcon_port              INTEGER NOT NULL DEFAULT 27020,
-    rcon_password          TEXT NOT NULL DEFAULT '',
     max_players            INTEGER NOT NULL DEFAULT 70,
     server_password        TEXT,
     admin_password         TEXT NOT NULL DEFAULT '',
@@ -288,29 +287,11 @@ async function runMigrations(db: Database): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_stats_daily_server_day ON server_stats_daily(server_id, day_ts)"
   );
 
-  // Uptime sessions — one row per contiguous server run, for record/history display.
-  await db.execute(`CREATE TABLE IF NOT EXISTS server_uptime_sessions (
-    id         TEXT    PRIMARY KEY,
-    server_id  TEXT    NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-    started_at INTEGER NOT NULL,
-    ended_at   INTEGER
-  )`);
-  await db.execute(
-    "CREATE INDEX IF NOT EXISTS idx_uptime_sessions_server ON server_uptime_sessions(server_id, started_at)"
-  );
-
   // ── Migration 008: backup system v2 ──────────────────────────────────────
   try { await db.execute("ALTER TABLE backups ADD COLUMN backup_type TEXT NOT NULL DEFAULT 'server'"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE backups ADD COLUMN tiers TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE backups ADD COLUMN player_eosid TEXT"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE backups ADD COLUMN player_name TEXT"); } catch { /* exists */ }
-  await db.execute(`CREATE TABLE IF NOT EXISTS player_name_map (
-    server_id   TEXT NOT NULL,
-    eos_id      TEXT NOT NULL,
-    player_name TEXT NOT NULL,
-    last_seen   TEXT NOT NULL,
-    PRIMARY KEY (server_id, eos_id)
-  )`);
   // Rename old generic "backup" schedule rows to the new typed name.
   await db.execute("UPDATE schedules SET schedule_type = 'backup_server' WHERE schedule_type = 'backup'");
   try { await db.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('full_backup_warning_dismissed', 'false')"); } catch { /* exists */ }
@@ -493,6 +474,89 @@ async function runMigrations(db: Database): Promise<void> {
   // ── Migration 018: memory limit restart + backup broadcast message ─────────
   try { await db.execute("ALTER TABLE servers ADD COLUMN memory_limit_gb REAL"); } catch { /* exists */ }
   try { await db.execute("ALTER TABLE servers ADD COLUMN backup_broadcast_message TEXT NOT NULL DEFAULT 'Server backup in progress — lag may occur.'"); } catch { /* exists */ }
+
+  // ── Migration 019: user-defined custom mod maps ──────────────────────────
+  await db.execute(`CREATE TABLE IF NOT EXISTS custom_maps (
+    id          TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    mod_id       TEXT NOT NULL,
+    map_path     TEXT NOT NULL,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // ── Migration 020: drop rcon_password — admin_password is now the single
+  // source of truth for both RCON auth and ServerAdminPassword. The two used
+  // to drift apart (rcon_password was set once at creation/import and never
+  // touched again), which silently broke RCON whenever the admin password
+  // changed. No data needs to be copied first: admin_password already holds
+  // the correct value for every server (set at creation/import from the real
+  // password), while rcon_password could be stale or, for imported servers, a
+  // random placeholder that never matched the real password at all.
+  try {
+    await db.execute("ALTER TABLE servers DROP COLUMN rcon_password");
+  } catch { /* already dropped, or pre-existing DB without the column */ }
+
+  // ── Migration 021: move custom mod sections from Game.ini to GameUserSettings.ini ──
+  // The Mod Settings editor used to write custom [ModName] sections into
+  // Game.ini, which most mods never actually read their config from — ASA mods
+  // read custom sections from GameUserSettings.ini. Move any previously-saved
+  // custom sections over so existing configs aren't silently ignored by mods.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_021_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const GAME_INI_STANDARD_SECTIONS = new Set(["/script/shootergame.shootergamemode"]);
+      type Row = { server_id: string; game_ini_json: string; game_user_settings_json: string };
+      const rows = await db.select<Row[]>(
+        "SELECT server_id, game_ini_json, game_user_settings_json FROM server_config"
+      );
+      for (const row of rows) {
+        try {
+          const gameIni = JSON.parse(row.game_ini_json ?? "{}") as Record<string, Record<string, string>>;
+          const gus = JSON.parse(row.game_user_settings_json ?? "{}") as Record<string, Record<string, string>>;
+          const customKeys = Object.keys(gameIni).filter(
+            (k) => !GAME_INI_STANDARD_SECTIONS.has(k.toLowerCase())
+          );
+          if (customKeys.length === 0) continue;
+
+          for (const key of customKeys) {
+            gus[key] = { ...(gus[key] ?? {}), ...gameIni[key] };
+            delete gameIni[key];
+          }
+          await db.execute(
+            "UPDATE server_config SET game_ini_json = ?, game_user_settings_json = ? WHERE server_id = ?",
+            [JSON.stringify(gameIni), JSON.stringify(gus), row.server_id]
+          );
+        } catch { /* skip malformed */ }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_021_done', 'true')"
+      );
+    }
+  }
+
+  // ── Migration 022: drop server_uptime_sessions — dead feature, never wired
+  // up to any UI (no reader or writer anywhere in the app). DROP is
+  // naturally idempotent, no done-flag needed.
+  await db.execute("DROP TABLE IF EXISTS server_uptime_sessions");
+
+  // ── Migration 023: normalize in_app_notifications.created_at format ────────
+  // Rust's log_notification used to rely on SQLite's CURRENT_TIMESTAMP
+  // default ("YYYY-MM-DD HH:MM:SS"), while this file's own logNotification
+  // always wrote new Date().toISOString() ("YYYY-MM-DDTHH:MM:SS.sssZ"). The
+  // notifications list sorts by plain text ORDER BY created_at DESC, and
+  // those two formats interleave out of true chronological order — a space
+  // sorts before "T", so every JS-inserted row for a given day sorted above
+  // every Rust-inserted row from that same day regardless of actual time.
+  // Rust now writes the same ISO shape going forward; this backfills rows
+  // already in the DB from before that fix. WHERE excludes rows that already
+  // contain "T" so it's a no-op on repeat runs.
+  await db.execute(
+    `UPDATE in_app_notifications
+     SET created_at = REPLACE(created_at, ' ', 'T') || 'Z'
+     WHERE created_at NOT LIKE '%T%'`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -507,9 +571,9 @@ export interface ServerRow {
   port: number;
   query_port: number;
   rcon_port: number;
-  rcon_password: string;
   max_players: number;
   server_password: string | null;
+  /** ServerAdminPassword — single source of truth for both the INI value and RCON auth. */
   admin_password: string;
   cluster_id: string | null;
   preset_id: string | null;
@@ -530,7 +594,7 @@ export interface ServerRow {
   update_cancel_message: string;
   auto_start: number;                // 0 | 1 — always start on app launch
   installed_build_id: string | null; // populated by Rust on install/update
-  save_folder_name: string;          // subfolder name for -SaveDirectoryOverride; empty = no override
+  save_folder_name: string;          // legacy column — no longer used; kept for schema compatibility
   active_event: string | null;       // ARK event id (e.g. "FearEvolved"); null = no active event
   memory_limit_gb: number | null;    // restart server if RAM exceeds this; null = disabled
   backup_broadcast_message: string;  // RCON broadcast sent before each scheduled backup
@@ -631,7 +695,6 @@ export interface CreateServerInput {
   port: number;
   queryPort: number;
   rconPort: number;
-  rconPassword: string;
   maxPlayers: number;
   saveFolderName?: string;
   serverPassword?: string;
@@ -645,9 +708,9 @@ export async function createServer(input: CreateServerInput): Promise<string> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO servers
-       (id, name, map_id, install_path, port, query_port, rcon_port, rcon_password,
+       (id, name, map_id, install_path, port, query_port, rcon_port,
         max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
     [
       input.id,
       input.name,
@@ -656,7 +719,6 @@ export async function createServer(input: CreateServerInput): Promise<string> {
       input.port,
       input.queryPort,
       input.rconPort,
-      input.rconPassword,
       input.maxPlayers,
       input.serverPassword ?? null,
       input.adminPassword,
@@ -666,6 +728,19 @@ export async function createServer(input: CreateServerInput): Promise<string> {
     ]
   );
   return input.id;
+}
+
+/**
+ * Update the stored ServerAdminPassword (used for both the INI value and RCON
+ * auth). Called whenever ConfigTab saves a config that changed
+ * ServerSettings.ServerAdminPassword, so the RCON connection never goes stale.
+ */
+export async function updateServerAdminPassword(id: string, adminPassword: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET admin_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [adminPassword, id]
+  );
 }
 
 /** Delete a server record and all its related config/mods/schedules (CASCADE). */
@@ -884,6 +959,14 @@ export async function updateBackupBroadcastMessage(id: string, message: string):
   );
 }
 
+export async function updateServerMap(id: string, mapId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [mapId, id]
+  );
+}
+
 /** Set the update_available flag for a single server. */
 export async function setServerUpdateAvailable(
   id: string,
@@ -966,28 +1049,6 @@ export async function setServerAutoStart(id: string, autoStart: boolean): Promis
   );
 }
 
-/** Fetch all servers that have a given status value. */
-export async function getServersWithStatus(status: string): Promise<ServerRow[]> {
-  const db = await getDb();
-  return db.select<ServerRow[]>(
-    "SELECT * FROM servers WHERE status = ? ORDER BY name ASC",
-    [status]
-  );
-}
-
-/** Bulk-reset servers matching a given status to a new status. */
-export async function resetServersFromStatus(
-  fromStatus: string,
-  toStatus: string,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE servers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE status = ?",
-    [toStatus, fromStatus]
-  );
-}
-
-
 // ---------------------------------------------------------------------------
 // Aggregate helpers used by ServerCard
 // ---------------------------------------------------------------------------
@@ -1010,15 +1071,22 @@ export interface ModRow {
 }
 
 /** Return all mods for a server ordered by install_order ascending. */
+/** The map's required mod (locked_by_map) always sorts first, then the rest by install_order. */
 export async function getServerMods(serverId: string): Promise<ModRow[]> {
   const db = await getDb();
   return db.select<ModRow[]>(
-    "SELECT * FROM server_mods WHERE server_id = ? ORDER BY install_order ASC",
+    "SELECT * FROM server_mods WHERE server_id = ? ORDER BY locked_by_map DESC, install_order ASC",
     [serverId]
   );
 }
 
-/** Add a mod to the server_mods table if it doesn't already exist. */
+/**
+ * Add a mod to the server_mods table, or (if it's already there) upgrade its
+ * stored name/thumbnail if this call has a real one. A manually pasted mod
+ * ID that CurseForge verification couldn't resolve is recorded as
+ * "Unknown Mod" (see `ModBrowserEventHandler.tsx`) — this never lets a later
+ * call downgrade an already-real name back to that placeholder.
+ */
 export async function addServerMod(
   serverId: string,
   modId: string,
@@ -1034,9 +1102,12 @@ export async function addServerMod(
   const nextOrder = (rows[0]?.max_order ?? -1) + 1;
   const id = crypto.randomUUID();
   await db.execute(
-    `INSERT OR IGNORE INTO server_mods
+    `INSERT INTO server_mods
        (id, server_id, mod_id, mod_name, mod_thumbnail_url, install_order, enabled, locked_by_map)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(server_id, mod_id) DO UPDATE SET
+       mod_name = CASE WHEN excluded.mod_name = 'Unknown Mod' THEN mod_name ELSE excluded.mod_name END,
+       mod_thumbnail_url = COALESCE(excluded.mod_thumbnail_url, mod_thumbnail_url)`,
     [id, serverId, modId, modName, thumbnailUrl ?? null, nextOrder, lockedByMap ? 1 : 0]
   );
 }
@@ -1076,7 +1147,6 @@ export async function copyServerMods(sourceServerId: string, targetServerId: str
 
 /** Copy the server config (INI + launch args) from sourceServerId to targetServerId. */
 export async function copyServerConfig(sourceServerId: string, targetServerId: string): Promise<void> {
-  const db = await getDb();
   const src = await getServerConfig(sourceServerId);
   if (!src) return;
   await saveServerConfig(
@@ -1251,10 +1321,16 @@ export async function pruneManualBackups(
     [serverId, backupType],
   );
   const toDelete = rows.slice(keep);
+  const { tauriCmd } = await import("@/lib/tauri-commands");
   for (const row of toDelete) {
-    await import("@/lib/tauri-commands").then(({ tauriCmd }) =>
-      tauriCmd.deleteBackup(row.file_path).catch(() => {})
-    );
+    try {
+      await tauriCmd.deleteBackup(row.file_path);
+    } catch {
+      // File delete failed (locked, permissions, unreachable share) — leave
+      // the DB row in place so a future prune retries, rather than losing
+      // track of a backup file that's still sitting on disk.
+      continue;
+    }
     await db.execute("DELETE FROM backups WHERE id = ?", [row.id]);
   }
 }
@@ -1262,21 +1338,6 @@ export async function pruneManualBackups(
 // ---------------------------------------------------------------------------
 // Player name map
 // ---------------------------------------------------------------------------
-
-/** Insert or update an EOS ID → player name mapping. */
-export async function upsertPlayerName(
-  serverId: string,
-  eosId: string,
-  playerName: string
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO player_name_map (server_id, eos_id, player_name, last_seen)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(server_id, eos_id) DO UPDATE SET player_name = excluded.player_name, last_seen = excluded.last_seen`,
-    [serverId, eosId, playerName, new Date().toISOString()]
-  );
-}
 
 /** Bulk upsert multiple players from a listplayers result. */
 export async function upsertPlayerNames(
@@ -1498,32 +1559,6 @@ export async function getPossibleAlts(
   return [...map.entries()].map(([id, ips]) => ({ eosId: id, sharedIps: [...new Set(ips)] }));
 }
 
-/** Count of login backups for a specific player (used for prune logic). */
-export async function getLoginBackupCount(
-  serverId: string,
-  eosId: string
-): Promise<number> {
-  const db = await getDb();
-  const rows = await db.select<{ n: number }[]>(
-    "SELECT COUNT(*) AS n FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login'",
-    [serverId, eosId]
-  );
-  return rows[0]?.n ?? 0;
-}
-
-/** Oldest login backup for a player — used to prune when over the keep limit. */
-export async function getOldestLoginBackup(
-  serverId: string,
-  eosId: string
-): Promise<import("./db").BackupRow | null> {
-  const db = await getDb();
-  const rows = await db.select<BackupRow[]>(
-    "SELECT * FROM backups WHERE server_id = ? AND player_eosid = ? AND triggered_by = 'login' ORDER BY created_at ASC LIMIT 1",
-    [serverId, eosId]
-  );
-  return rows[0] ?? null;
-}
-
 /** Update the file_path for a backup record (used after tier-rename on disk). */
 export async function updateBackupFilePath(
   backupId: string,
@@ -1605,9 +1640,14 @@ export async function getNotifications(
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
 
+  // created_at only has millisecond resolution, so a burst of notifications
+  // logged in the same millisecond (common during bulk operations like
+  // "Update All") tie on the primary sort key — rowid (insertion order) as a
+  // tiebreaker keeps the list deterministically newest-first instead of
+  // falling back to whatever order SQLite happens to return ties in.
   return db.select<InAppNotificationRow[]>(
     `SELECT * FROM in_app_notifications ${where}
-     ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+     ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
 }
@@ -1637,16 +1677,6 @@ export async function markAllNotificationsRead(): Promise<void> {
 export async function deleteNotification(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM in_app_notifications WHERE id = ?", [id]);
-}
-
-/** Delete notifications older than `days` days. */
-export async function pruneOldNotifications(days: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `DELETE FROM in_app_notifications
-     WHERE created_at < datetime('now', '-' || ? || ' days')`,
-    [days]
-  );
 }
 
 export interface PruneNotificationsFilter {
@@ -1785,13 +1815,6 @@ export interface ChartPoint {
   memMax: number | null;
   players: number | null;
   playersMax: number | null;
-}
-
-export interface UptimeSessionRow {
-  id: string;
-  server_id: string;
-  started_at: number;
-  ended_at: number | null;
 }
 
 /** Insert a single raw stat sample for a server. */
@@ -1936,54 +1959,6 @@ export async function rollupOldStats(): Promise<void> {
   await db.execute("DELETE FROM server_stats_daily WHERE day_ts < ?", [cutoff1y]);
 }
 
-// ---------------------------------------------------------------------------
-// Uptime Sessions
-// ---------------------------------------------------------------------------
-
-/**
- * Open a new uptime session for a server. Closes any orphaned open sessions
- * (e.g. from a previous app crash) before inserting the new row.
- */
-export async function openUptimeSession(
-  serverId: string,
-  sessionId: string,
-  startedAt: number,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE server_uptime_sessions SET ended_at = ? WHERE server_id = ? AND ended_at IS NULL",
-    [startedAt, serverId],
-  );
-  await db.execute(
-    "INSERT INTO server_uptime_sessions (id, server_id, started_at) VALUES (?, ?, ?)",
-    [sessionId, serverId, startedAt],
-  );
-}
-
-/** Close the open uptime session by ID. */
-export async function closeUptimeSession(
-  sessionId: string,
-  endedAt: number,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    "UPDATE server_uptime_sessions SET ended_at = ? WHERE id = ?",
-    [endedAt, sessionId],
-  );
-}
-
-/** Return uptime sessions for a server, newest first. */
-export async function getUptimeSessions(
-  serverId: string,
-  limit = 20,
-): Promise<UptimeSessionRow[]> {
-  const db = await getDb();
-  return db.select<UptimeSessionRow[]>(
-    "SELECT * FROM server_uptime_sessions WHERE server_id = ? ORDER BY started_at DESC LIMIT ?",
-    [serverId, limit],
-  );
-}
-
 /** Get a single global (server_id IS NULL) notification config by channel. */
 export async function getGlobalChannelConfig(
   channel: string
@@ -2054,15 +2029,6 @@ export async function getBuildVersionCache(): Promise<Map<string, BuildVersionRo
   return new Map(rows.map((r) => [r.build_id, r]));
 }
 
-export async function getBuildVersion(buildId: string): Promise<BuildVersionRow | null> {
-  const db = await getDb();
-  const rows = await db.select<BuildVersionRow[]>(
-    "SELECT build_id, game_version, source FROM build_version_cache WHERE build_id = ?",
-    [buildId]
-  );
-  return rows[0] ?? null;
-}
-
 /** Format a build ID + optional version into a display string.
  *  Known version:  "V49.23 (23691984)"
  *  Unknown:        "Build 23691984"
@@ -2076,4 +2042,51 @@ export function formatServerVersion(
   const entry = versionCache.get(installedBuildId);
   if (entry?.game_version) return `V${entry.game_version} (${installedBuildId})`;
   return `Build ${installedBuildId}`;
+}
+
+// ---------------------------------------------------------------------------
+// custom_maps
+// ---------------------------------------------------------------------------
+
+export interface CustomMapRow {
+  id: string;
+  display_name: string;
+  mod_id: string;
+  map_path: string;
+  created_at: string;
+}
+
+export async function getCustomMaps(): Promise<CustomMapRow[]> {
+  const db = await getDb();
+  return db.select<CustomMapRow[]>(
+    "SELECT id, display_name, mod_id, map_path, created_at FROM custom_maps ORDER BY created_at ASC"
+  );
+}
+
+export async function insertCustomMap(
+  id: string,
+  displayName: string,
+  modId: string,
+  mapPath: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO custom_maps (id, display_name, mod_id, map_path) VALUES (?, ?, ?, ?)",
+    [id, displayName, modId, mapPath],
+  );
+}
+
+export async function updateCustomMap(
+  id: string, displayName: string, modId: string, mapPath: string
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE custom_maps SET display_name = ?, mod_id = ?, map_path = ? WHERE id = ?",
+    [displayName, modId, mapPath, id]
+  );
+}
+
+export async function deleteCustomMap(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM custom_maps WHERE id = ?", [id]);
 }

@@ -2,9 +2,7 @@ use crate::state::{scheduler::SchedulerState, AppState};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::time::{sleep, Duration};
-
-use super::server::{inner_start_server, inner_stop_server, StartServerParams};
+use tokio::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,8 +19,6 @@ pub struct SchedulerFiredPayload {
     pub schedule_type: String,
     pub success: bool,
     pub error: Option<String>,
-    /// All backup records created by this firing (player backups produce one per player).
-    pub backup_records: Vec<crate::commands::backup::BackupRecord>,
 }
 
 // ---------------------------------------------------------------------------
@@ -35,21 +31,28 @@ pub struct SchedulerFiredPayload {
 /// and once on startup after the DB is ready. Rust fires entries purely based on
 /// `next_run_ms` — cron parsing lives entirely in the frontend (cron-parser).
 ///
-/// Preserves `u64::MAX` for any entry that is currently in-flight (still running a
-/// backup). The frontend may push a stale `next_run_ms` for such entries before it
-/// has had a chance to update the DB; overwriting `u64::MAX` would cause an immediate
-/// re-fire on the next tick.
+/// Preserves `u64::MAX` for any entry that is currently in-flight. The frontend
+/// may push a stale (already-past) `next_run_ms` for such entries before it has
+/// had a chance to update the DB with the fire's real result — overwriting
+/// `u64::MAX` with that stale value would cause an immediate re-fire on the
+/// next tick. Only guard against *stale* incoming values though: the resync
+/// that runs right after the fire actually completes carries a genuinely
+/// future `next_run_ms`, and must be allowed through — otherwise the entry
+/// would stay locked at `u64::MAX` forever (every later resync would see the
+/// still-MAX stored value and re-lock its own fresh value too), so a schedule
+/// would only ever fire once per app session.
 #[tauri::command]
 pub async fn sync_schedules(
     entries: Vec<crate::state::scheduler::ScheduleEntry>,
     state: tauri::State<'_, SchedulerState>,
 ) -> Result<(), String> {
+    let now = now_ms();
     let mut store = state.entries.lock().unwrap();
     let mut updated = entries;
     for entry in updated.iter_mut() {
         if let Some(existing) = store.iter().find(|e| e.schedule_id == entry.schedule_id) {
-            if existing.next_run_ms == u64::MAX {
-                // Entry is currently in-flight — don't overwrite the guard.
+            if existing.next_run_ms == u64::MAX && entry.next_run_ms <= now {
+                // Entry is in-flight and this push still looks stale — keep the guard.
                 entry.next_run_ms = u64::MAX;
             }
         }
@@ -124,59 +127,107 @@ async fn fire_wipe_dinos(app: &AppHandle, entry: &crate::state::scheduler::Sched
 }
 
 async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    if !is_server_running(app, &entry.server_id) {
+    if !super::server::is_server_running(app, &entry.server_id) {
         return Ok(());
     }
-
-    let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
-    let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
-    let message       = cfg["message"].as_str().unwrap_or("Server restarting in {time}.").to_string();
-    let cancel_msg    = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
-    {
+    // Mid-boot (spawned but not yet RCON-confirmed) — see fire_update for why
+    // this skips the countdown/graceful handshake entirely.
+    let is_confirmed_running = {
         let state = app.state::<AppState>();
-        state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
+        let registry = state.running_servers.lock().unwrap();
+        registry.get(&entry.server_id).map(|rs| rs.confirmed_running).unwrap_or(false)
+    };
+
+    // Refuse to restart a server whose hourly backup is currently in
+    // progress — killing the process mid-backup can produce a silently
+    // incomplete archive. The restart will fire again at its next scheduled
+    // occurrence.
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&entry.server_id)
+        .ok_or_else(|| format!("A backup is currently in progress for {} — restart will retry next time", entry.server_id))?;
+
+    if is_confirmed_running {
+        let cfg: serde_json::Value = serde_json::from_str(&entry.config_json).unwrap_or_default();
+        let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
+        let message       = cfg["message"].as_str().unwrap_or("Server restarting in {time}.").to_string();
+        let cancel_msg    = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
+        {
+            let state = app.state::<AppState>();
+            let mut cd = state.countdowns.lock().unwrap();
+            // Refuse to start a second countdown for this server — otherwise a
+            // restart and an update schedule (or two restarts) becoming due in
+            // the same tick would silently overwrite each other's countdown
+            // handle and both run their own stop/start sequence concurrently.
+            if cd.contains_key(&entry.server_id) {
+                return Err(format!("A countdown is already in progress for {}", entry.server_id));
+            }
+            cd.insert(entry.server_id.clone(), tx);
+        }
+
+        let result = super::countdown::run_countdown(
+            app,
+            &entry.server_id,
+            warn_minutes * 60,
+            entry.rcon_port,
+            &entry.rcon_password,
+            &message,
+            &cancel_msg,
+            "restart",
+            &mut rx,
+        ).await;
+
+        {
+            let state = app.state::<AppState>();
+            state.countdowns.lock().unwrap().remove(&entry.server_id);
+        }
+
+        if matches!(result, super::countdown::CountdownResult::Cancel) {
+            return Ok(());
+        }
+
+        // Registered immediately before the kill (not earlier — cancelling
+        // above never touches the process, so registering any sooner would
+        // leak a handoff entry nothing will ever wait on or clear).
+        let notify = state.register_stop_handoff(&entry.server_id);
+        super::server::graceful_shutdown_via_rcon(app, &entry.server_id, entry.rcon_port, &entry.rcon_password).await;
+        // Wait for the watcher's own cleanup to finish before we emit our
+        // next status below, so its delayed "stopped" can't race in after.
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
+    } else {
+        // Nothing loaded to save, no players connected yet — go straight to a
+        // synchronous hard kill rather than waiting out an RCON handshake
+        // that isn't up yet.
+        let notify = state.register_stop_handoff(&entry.server_id);
+        let _ = super::server::inner_stop_server(app, &entry.server_id, false);
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
     }
 
-    let result = super::countdown::run_countdown(
-        app,
-        &entry.server_id,
-        warn_minutes * 60,
-        entry.rcon_port,
-        &entry.rcon_password,
-        &message,
-        &cancel_msg,
-        "restart",
-        &mut rx,
-    ).await;
-
-    {
-        let state = app.state::<AppState>();
-        state.countdowns.lock().unwrap().remove(&entry.server_id);
-    }
-
-    if matches!(result, super::countdown::CountdownResult::Cancel) {
-        return Ok(());
-    }
-
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-    sleep(Duration::from_secs(3)).await;
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
-
-    for _ in 0..60 {
-        sleep(Duration::from_millis(500)).await;
-        if !is_server_running(app, &entry.server_id) { break; }
-    }
-    let _ = inner_stop_server(app, &entry.server_id, false);
-
-    let params = entry_to_start_params(entry);
-    inner_start_server(app.clone(), params).await.map(|_| ())
+    // Hand off to the frontend's staggered startup queue instead of starting
+    // directly, so a batch of same-time restart schedules doesn't cold-boot
+    // several servers at once — the "server://any-change" listener re-enqueues
+    // on this status.
+    use crate::commands::server::{emit_status, ServerStatus};
+    emit_status(app, &ServerStatus {
+        server_id: entry.server_id.clone(),
+        status: "startup_queued".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
+    Ok(())
 }
 
 /// Run a global cache update check: update the shared SteamCMD cache, compare
 /// old vs new build IDs, and emit `asa://update-check` so the frontend can
 /// mark outdated servers and prompt the user.
+///
+/// Shares `update_cache_inner`'s mutual-exclusion guard with the manual
+/// "Check for Updates" flow (both key on `ASA_CACHE_CHECK_KEY`) so a
+/// background tick can never run a second concurrent SteamCMD process
+/// against the same cache dir if the user triggers a manual check at the
+/// same moment — it just skips this tick silently and retries next time.
 async fn fire_global_update_check(
     app: &AppHandle,
     entry: &crate::state::scheduler::ScheduleEntry,
@@ -187,27 +238,27 @@ async fn fire_global_update_check(
     let old_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
         .unwrap_or_else(|| "0".to_string());
 
-    tokio::fs::create_dir_all(&cache_dir)
-        .await
-        .map_err(|e| format!("Failed to create cache dir: {e}"))?;
-
-    crate::commands::steamcmd::steamcmd_app_update(
-        app,
-        &entry.steamcmd_path,
+    let state = app.state::<AppState>();
+    let _ = app.emit(crate::events::ASA_UPDATE_CHECK_RUNNING, serde_json::json!({ "running": true }));
+    let result = crate::commands::steamcmd::update_cache_inner(
+        crate::commands::steamcmd::ASA_CACHE_CHECK_KEY,
         &cache_dir,
-        false,
-        "steamcmd://output/global-update-check",
-        None,
+        &entry.steamcmd_path,
+        &state,
+        app,
     )
-    .await?;
+    .await;
+    let _ = app.emit(crate::events::ASA_UPDATE_CHECK_RUNNING, serde_json::json!({ "running": false }));
 
-    let new_build = crate::commands::steamcmd::get_cache_build_id(&cache_dir)
-        .unwrap_or_else(|| old_build.clone());
-
-    // Trigger internet version fetch for a newly-downloaded build
-    if new_build != "0" {
-        crate::commands::build_version::maybe_fetch_internet(app, &new_build);
-    }
+    let new_build = match result {
+        Ok(b) => b,
+        Err(e) if e.contains("already in progress") => {
+            // A manual check is running right now — skip this tick silently,
+            // the next scheduled tick will retry.
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
 
     let _ = app.emit(
         crate::events::ASA_UPDATE_CHECK,
@@ -227,10 +278,34 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
     let sep = if entry.base_dir.contains('\\') { '\\' } else { '/' };
     let cache_dir = format!("{}{sep}lokiasam{sep}cache{sep}asa-server", entry.base_dir);
 
-    let is_running    = is_server_running(app, &entry.server_id);
+    let is_running    = super::server::is_server_running(app, &entry.server_id);
+    // Distinguish "fully up and joinable" from "spawned but still mid-boot" —
+    // the confirmed_running flag on the running_servers entry tells them apart.
+    let is_confirmed_running = {
+        let state = app.state::<AppState>();
+        let registry = state.running_servers.lock().unwrap();
+        registry.get(&entry.server_id).map(|rs| rs.confirmed_running).unwrap_or(false)
+    };
+    // A server that hadn't even been spawned yet, but was sitting in the
+    // startup queue, isn't caught by is_running at all — read the live DB
+    // status directly to catch that case too.
+    let was_queued_for_startup = app.state::<AppState>().get_db_path()
+        .and_then(|p| crate::db::open(&p).ok())
+        .and_then(|conn| crate::db::get_server_status(&conn, &entry.server_id))
+        .as_deref() == Some("startup_queued");
+    // Either of these means the server was on its way up (mid-boot or merely
+    // queued for its turn) when this update interrupted it — see the restart
+    // branch below for why that always finishes the launch regardless of
+    // only_if_running, and does so via the startup queue rather than directly.
+    let interrupted_startup = (is_running && !is_confirmed_running) || was_queued_for_startup;
     let warn_minutes  = if cfg["broadcastWarning"].as_bool().unwrap_or(false) { cfg["warningMinutes"].as_u64().unwrap_or(0) } else { 0 };
     let skip_if_players = cfg["skipIfPlayersOnline"].as_bool().unwrap_or(false);
     let restart_after   = cfg["restartAfterUpdate"].as_bool().unwrap_or(true);
+    // When false, restart_after applies even if the server was stopped before
+    // the update (used by per-server Auto-Update automation's "Only restart if
+    // server was already running" toggle — unchecked means "always end up
+    // running after an update").
+    let only_if_running = cfg["onlyIfRunning"].as_bool().unwrap_or(true);
     let message         = cfg["message"].as_str().unwrap_or("Server going down for update in {time}.").to_string();
     let cancel_msg      = cfg["cancelMessage"].as_str().unwrap_or("").to_string();
 
@@ -245,11 +320,42 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         }
     }
 
-    if is_running {
+    // Refuse to update a server whose hourly backup is currently reading its
+    // files — overwriting them mid-backup can produce a silently incomplete
+    // archive. The per-server auto-update entry is regenerated on the next
+    // schedule sync as long as update_available stays set, so this retries
+    // shortly rather than being lost.
+    let state = app.state::<AppState>();
+    let _lock = state.try_lock_server(&entry.server_id)
+        .ok_or_else(|| format!("A backup is currently in progress for {} — update will retry shortly", entry.server_id))?;
+
+    if is_running && !is_confirmed_running {
+        // Mid-boot: the process is spawned but RCON isn't up yet, so there's no
+        // world state to save and no players to warn — the countdown and the
+        // RCON SaveWorld/doexit handshake would just run out the clock (up to
+        // the full warn duration, then up to 30s of polling in
+        // graceful_shutdown_via_rcon) before falling back to a hard kill
+        // anyway. Skip straight to it. SIGKILL (not SIGTERM) specifically,
+        // since it's synchronous — sync_cache_to_server below must never race
+        // a process that might still be exiting.
+        let notify = state.register_stop_handoff(&entry.server_id);
+        let _ = super::server::inner_stop_server(app, &entry.server_id, false);
+        // Wait for the watcher's own cleanup to finish before proceeding —
+        // otherwise its delayed "stopped" can race in after our own status
+        // emissions below and silently overwrite them.
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
+    } else if is_confirmed_running {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::state::CountdownSignal>(1);
         {
             let state = app.state::<AppState>();
-            state.countdowns.lock().unwrap().insert(entry.server_id.clone(), tx);
+            let mut cd = state.countdowns.lock().unwrap();
+            // See fire_restart — refuse to clobber a countdown already in
+            // progress for this server (e.g. a restart schedule racing this
+            // update schedule in the same tick).
+            if cd.contains_key(&entry.server_id) {
+                return Err(format!("A countdown is already in progress for {}", entry.server_id));
+            }
+            cd.insert(entry.server_id.clone(), tx);
         }
 
         let result = super::countdown::run_countdown(
@@ -273,15 +379,12 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
             return Ok(());
         }
 
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "saveworld").await;
-        sleep(Duration::from_secs(3)).await;
-        transient_rcon_send(entry.rcon_port, &entry.rcon_password, "doexit").await;
-
-        for _ in 0..60 {
-            sleep(Duration::from_millis(500)).await;
-            if !is_server_running(app, &entry.server_id) { break; }
-        }
-        let _ = inner_stop_server(app, &entry.server_id, false);
+        // Registered immediately before the kill (not earlier — cancelling
+        // above never touches the process, so registering any sooner would
+        // leak a handoff entry nothing will ever wait on or clear).
+        let notify = state.register_stop_handoff(&entry.server_id);
+        super::server::graceful_shutdown_via_rcon(app, &entry.server_id, entry.rcon_port, &entry.rcon_password).await;
+        state.wait_for_stop_handoff(&entry.server_id, notify).await;
     }
 
     // Emit "updating" so the server card shows the spinner.
@@ -294,21 +397,31 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         error: None,
     });
 
-    // Update shared cache via SteamCMD.
+    // Sync the shared cache to the server directory (preserving Saved/). The
+    // cache itself is NOT re-validated/re-downloaded here — it was already
+    // brought current by the global check that flagged this server as
+    // outdated in the first place (same as the manual/bulk apply path, which
+    // only ever calls apply_cache_to_server, never steamcmd_app_update).
+    // Re-running a full SteamCMD app_update per server was not just redundant
+    // but actively unsafe: when several servers' "When Found" automation
+    // fires in the same tick, each spawned its own SteamCMD process against
+    // this same shared cache directory concurrently, which SteamCMD does not
+    // handle safely (lock contention/hangs between instances) — this was the
+    // actual cause of updates appearing to stall the startup queue.
     let channel = format!("steamcmd://output/{}", entry.server_id);
     tokio::fs::create_dir_all(&cache_dir)
         .await
         .map_err(|e| format!("Failed to create cache dir: {e}"))?;
 
-    crate::commands::steamcmd::steamcmd_app_update(
-        app, &entry.steamcmd_path, &cache_dir, false, &channel, None,
-    ).await?;
-
     // Sync updated files to the server directory (preserving Saved/).
     let cache_path  = std::path::PathBuf::from(&cache_dir);
     let server_path = std::path::PathBuf::from(&entry.install_path);
+    let app_clone = app.clone();
+    let channel_clone = channel.clone();
     tokio::task::spawn_blocking(move || {
-        crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path)
+        // Scheduled updates aren't individually cancellable — a never-set flag is correct here.
+        let no_abort = std::sync::atomic::AtomicBool::new(false);
+        crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &no_abort)
     })
     .await
     .map_err(|e| format!("Sync task panicked: {e}"))?
@@ -326,39 +439,53 @@ async fn fire_update(app: &AppHandle, entry: &crate::state::scheduler::ScheduleE
         "serverId": entry.server_id,
     }));
 
-    // Restart if requested and server was running.
-    if restart_after && is_running {
-        let params = entry_to_start_params(entry);
-        inner_start_server(app.clone(), params).await.map(|_| ())?;
+    // Clear the per-server update flag — otherwise the UI keeps showing
+    // "Update Available" and, for "immediately" mode, the next scheduler
+    // sync would generate this same auto-update entry all over again.
+    if let Some(db_path) = app.state::<AppState>().get_db_path() {
+        if let Ok(conn) = crate::db::open(&db_path) {
+            crate::db::clear_update_available(&conn, &entry.server_id);
+        }
+    }
+
+    // Restart if requested — either the server was already fully running, the
+    // schedule says to bring it up regardless (only_if_running = false), or it
+    // was on its way up (mid-boot or queued) when this update interrupted it.
+    // The last case always finishes the launch regardless of only_if_running —
+    // that toggle is about whether a server that was merely *stopped* should
+    // come back up, not about abandoning a launch already in motion.
+    //
+    // Always hands off to the frontend's staggered startup queue rather than
+    // starting directly — several servers restarting after the same update
+    // check shouldn't all cold-boot at once. The "server://any-change"
+    // listener re-enqueues on this status.
+    if restart_after && (is_confirmed_running || !only_if_running || interrupted_startup) {
+        use crate::commands::server::{emit_status, ServerStatus};
+        emit_status(app, &ServerStatus {
+            server_id: entry.server_id.clone(),
+            status: "startup_queued".into(),
+            pid: None,
+            uptime_seconds: None,
+            error: None,
+        });
+    } else {
+        // No restart is coming — the server was already stopped and the
+        // automation config says to leave it that way (or restart_after is
+        // off). Nothing else ever clears the "updating" status set above for
+        // this case, so without this the server sits stuck showing the
+        // in-progress spinner (Overview/dashboard) until the user manually
+        // Cancels and Reinstalls, even though the update itself succeeded.
+        use crate::commands::server::{emit_status, ServerStatus};
+        emit_status(app, &ServerStatus {
+            server_id: entry.server_id.clone(),
+            status: "stopped".into(),
+            pid: None,
+            uptime_seconds: None,
+            error: None,
+        });
     }
 
     Ok(())
-}
-
-fn entry_to_start_params(entry: &crate::state::scheduler::ScheduleEntry) -> StartServerParams {
-    StartServerParams {
-        server_id: entry.server_id.clone(),
-        server_name: entry.server_name.clone(),
-        install_path: entry.install_path.clone(),
-        map_path: entry.map_path.clone(),
-        port: entry.port,
-        query_port: entry.query_port,
-        rcon_port: entry.rcon_port,
-        rcon_password: entry.rcon_password.clone(),
-        extra_args: entry.extra_args.clone(),
-        mod_ids: entry.mod_ids.clone(),
-        proton_path: entry.proton_path.clone(),
-        prefix_path: entry.prefix_path.clone(),
-    }
-}
-
-/// Returns true if a server is currently running (checked via AppState).
-fn is_server_running(app: &AppHandle, server_id: &str) -> bool {
-    app.state::<AppState>()
-        .running_servers
-        .lock()
-        .unwrap()
-        .contains_key(server_id)
 }
 
 /// Called by the background scheduler loop in lib.rs.
@@ -388,28 +515,28 @@ pub fn tick_scheduler(app: &AppHandle) {
             let server_id = entry.server_id.clone();
             let server_name = entry.server_name.clone();
 
-            let (success, error, backup_records) = match schedule_type.as_str() {
+            let (success, error) = match schedule_type.as_str() {
                 "broadcast" => match fire_broadcast(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "restart" => match fire_restart(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "update" => match fire_update(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "global_update_check" => match fire_global_update_check(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
                 "wipe_dinos" => match fire_wipe_dinos(&app, &entry).await {
-                    Ok(_) => (true, None, vec![]),
-                    Err(e) => (false, Some(e), vec![]),
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e)),
                 },
-                _ => (false, Some(format!("Unknown schedule type: {schedule_type}")), vec![]),
+                _ => (false, Some(format!("Unknown schedule type: {schedule_type}"))),
             };
 
             let _ = app.emit(
@@ -421,7 +548,6 @@ pub fn tick_scheduler(app: &AppHandle) {
                     schedule_type,
                     success,
                     error,
-                    backup_records,
                 },
             );
         });

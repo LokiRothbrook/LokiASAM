@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { tauriCmd, type RconLogLine, type ArkPlayer, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useOnMount } from "@/hooks/useOnMount";
 import type { ServerRow } from "@/lib/db";
 
 interface Props {
@@ -65,7 +66,17 @@ export function RconConsole({ server }: Props) {
   const [connected, setConnected]     = useState(false);
   const [connecting, setConnecting]   = useState(false);
   const [error, setError]             = useState<string | null>(null);
-  const [lines, setLines]             = useState<RconLogLine[]>([]);
+  // Seeded with a "not running" placeholder when applicable — server.status is
+  // already known synchronously on first render, no effect needed to set it.
+  const [lines, setLines] = useState<RconLogLine[]>(() =>
+    server.status !== "running"
+      ? [{
+          timestampMs: Date.now(),
+          text: "Server is not running — start the server to use RCON.",
+          kind: "system",
+        }]
+      : []
+  );
   const [cmdInput, setCmdInput]       = useState("");
   const [msgInput, setMsgInput]       = useState("");
   const [sending, setSending]         = useState(false);
@@ -158,45 +169,56 @@ export function RconConsole({ server }: Props) {
     } catch { /* ignore */ }
   }, [server.install_path]);
 
+  // Ban/whitelist/unban/unwhitelist all schedule a delayed refreshLists() so
+  // the RCON server has time to apply the change first. Tracked here so they
+  // can be cleared on unmount instead of firing (and doing wasted IPC work)
+  // after the user has already navigated away.
+  const refreshTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const scheduleRefreshLists = useCallback(() => {
+    const id = setTimeout(() => {
+      refreshTimeoutsRef.current.delete(id);
+      refreshLists();
+    }, 500);
+    refreshTimeoutsRef.current.add(id);
+  }, [refreshLists]);
+  useEffect(() => () => {
+    refreshTimeoutsRef.current.forEach(clearTimeout);
+    refreshTimeoutsRef.current.clear();
+  }, []);
+
   // ── Manual reconnect (user presses "Reconnect" button) ───────────────────
   // RconManager handles auto-connect; this is only needed for the manual button.
   const connect = useCallback(async () => {
     setConnecting(true);
     setError(null);
     try {
-      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.rcon_password);
+      await tauriCmd.rconConnect(server.id, "127.0.0.1", server.rcon_port, server.admin_password);
       // State update comes via rcon://status/{id} event — no need to set here.
     } catch (e) {
       setError(String(e));
       setConnecting(false);
     }
-  }, [server.id, server.rcon_port, server.rcon_password]);
+  }, [server.id, server.rcon_port, server.admin_password]);
 
   // Sync initial connected state from Rust on mount (covers the case where
   // RconManager already connected before this tab was opened).
-  useEffect(() => {
-    if (server.status !== "running") {
-      setLines([{
-        timestampMs: Date.now(),
-        text: "Server is not running — start the server to use RCON.",
-        kind: "system",
-      }]);
-      return;
-    }
+  const syncConnectedState = useCallback(() => {
+    if (server.status !== "running") return;
     tauriCmd.rconIsConnected(server.id).then((live) => {
       setConnected(live);
       if (!live) setError(null);
     }).catch(() => null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [server.status, server.id]);
+  useOnMount(syncConnectedState);
 
   // Seed player list from cache (no RCON command) and load file-based lists once connected.
   // Subsequent updates come from rcon://players/{id} events via RconManager's 30 s tick.
-  useEffect(() => {
+  const syncOnConnect = useCallback(() => {
     if (!connected) return;
     tauriCmd.rconGetCachedPlayers(server.id).then((p) => { if (p !== null) setPlayers(p); }).catch(() => null);
     refreshLists();
-  }, [connected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connected, server.id, refreshLists]);
+  useOnMount(syncOnConnect);
 
   // ── Send a raw RCON command ───────────────────────────────────────────────
   const sendCommand = useCallback(async (cmd: string) => {
@@ -252,7 +274,7 @@ export function RconConsole({ server }: Props) {
     setSelectedPlayer(null);
     await sendCommand(cmd);
     if (action.label === "Ban" || action.label === "Whitelist") {
-      setTimeout(refreshLists, 500);
+      scheduleRefreshLists();
     }
   };
 
@@ -281,12 +303,12 @@ export function RconConsole({ server }: Props) {
 
   const unban = async (id: string) => {
     await sendCommand(`unbanplayer ${id}`);
-    setTimeout(refreshLists, 500);
+    scheduleRefreshLists();
   };
 
   const unwhitelist = async (id: string) => {
     await sendCommand(`disallowplayertojoinnocheck ${id}`);
-    setTimeout(refreshLists, 500);
+    scheduleRefreshLists();
   };
 
   // ── Layout ────────────────────────────────────────────────────────────────

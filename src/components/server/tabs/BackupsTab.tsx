@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useOnMount } from "@/hooks/useOnMount";
 import {
   Archive, Plus, Trash2, RotateCcw, HardDrive, User, FileText,
   AlertCircle, Loader2, RefreshCw, CalendarClock,
@@ -13,8 +15,10 @@ import {
   type BackupRow,
 } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
+import { stopServerGracefully } from "@/lib/server-utils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import { ARK_MAPS } from "@/data/game-data";
+import { getSaveFolder } from "@/data/game-data";
+import { useAllMaps } from "@/hooks/useAllMaps";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 
@@ -39,12 +43,6 @@ function formatHumanDate(iso: string): string {
     hour: "numeric", minute: "2-digit", second: "2-digit",
   });
   return `${datePart} ${timePart}`;
-}
-
-function platform(): string {
-  return typeof navigator !== "undefined" && !navigator.userAgent.includes("Windows")
-    ? "LinuxServer"
-    : "WindowsServer";
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +219,6 @@ function BackupRowCard({
 }) {
   const isLogin = backup.triggered_by === "login";
   const tiers = !isLogin && backup.tiers ? backup.tiers.split(",").filter(Boolean) : [];
-  const fname = backup.file_path.split(/[\\/]/).pop() ?? backup.file_path;
   const displayName = backup.backup_type === "player" && backup.player_name
     ? backup.player_name
     : null;
@@ -543,6 +540,7 @@ function IniBackupSection({
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!backupDir) return;
     setLoading(true);
     try {
       setSnapshots(await tauriCmd.listIniBackups(serverId, backupDir));
@@ -551,12 +549,12 @@ function IniBackupSection({
     }
   }, [serverId, backupDir]);
 
-  useEffect(() => { if (backupDir) load(); }, [load, backupDir]);
+  useOnMount(load);
 
   async function handleRestore(timestamp: string) {
     onBusyChange(true);
     try {
-      await tauriCmd.restoreIniBackup(`${backupDir}/${serverId}/ini/${timestamp}`, installPath, platform());
+      await tauriCmd.restoreIniBackup(serverId, `${backupDir}/${serverId}/ini/${timestamp}`, installPath);
       toast.success(`Config restored from ${timestamp}.`);
     } catch (e) {
       toast.error(`INI restore failed: ${e}`);
@@ -648,9 +646,10 @@ function IniBackupSection({
 // ---------------------------------------------------------------------------
 
 function SyncConfirmDialog({
-  importCount, onConfirm, onCancel,
+  importCount, deleteCount, onConfirm, onCancel,
 }: {
   importCount: number;
+  deleteCount: number;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -671,20 +670,33 @@ function SyncConfirmDialog({
             Sync from Disk
           </h3>
         </div>
-        <p className="text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
-          Found{" "}
-          <span style={{ color: "var(--text-primary)" }}>
-            {importCount} file{importCount !== 1 ? "s" : ""}
-          </span>{" "}
-          to import.
-        </p>
+        <div className="text-sm leading-relaxed space-y-1.5" style={{ color: "var(--text-muted)" }}>
+          {importCount > 0 && (
+            <p>
+              Found{" "}
+              <span style={{ color: "var(--text-primary)" }}>
+                {importCount} file{importCount !== 1 ? "s" : ""}
+              </span>{" "}
+              to import.
+            </p>
+          )}
+          {deleteCount > 0 && (
+            <p>
+              <span style={{ color: "var(--neon-red)" }}>
+                {deleteCount} record{deleteCount !== 1 ? "s" : ""}
+              </span>{" "}
+              will be removed from history — their files were not found in the backup directory.
+              If the directory is temporarily unreachable, cancel and check it before continuing.
+            </p>
+          )}
+        </div>
         <div className="flex gap-3 pt-1">
           <Button variant="outline" className="flex-1 cursor-pointer"
             style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
             onClick={onCancel}>Cancel</Button>
           <Button className="flex-1 cursor-pointer"
             style={{ background: "rgba(var(--neon-purple-rgb),0.15)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}
-            onClick={onConfirm}>Import</Button>
+            onClick={onConfirm}>{importCount > 0 ? "Import" : "Continue"}</Button>
         </div>
       </div>
     </div>
@@ -701,7 +713,11 @@ interface Props {
 }
 
 export function BackupsTab({ server, onNavigateToAutomation }: Props) {
-  const mapPath = ARK_MAPS.find((m) => m.id === server.map_id)?.mapPath ?? "TheIsland_WP";
+  const queryClient = useQueryClient();
+  const allMaps = useAllMaps();
+  const mapDef = allMaps.find((m) => m.id === server.map_id);
+  const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
+  const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
 
   const [serverBackups, setServerBackups] = useState<BackupRow[]>([]);
   const [playerBackups, setPlayerBackups] = useState<BackupRow[]>([]);
@@ -715,22 +731,25 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const [showFullWarning, setShowFullWarning] = useState(false);
   const [fullEstimate,    setFullEstimate]    = useState(0);
   const [backupDir,       setBackupDir]       = useState("");
-  const [syncPending,     setSyncPending]     = useState<{ toImport: BackupRecord[] } | null>(null);
+  const [baseDir,         setBaseDir]         = useState("");
+  const [syncPending,     setSyncPending]     = useState<{ toImport: BackupRecord[]; toDelete: string[] } | null>(null);
   const [syncing,         setSyncing]         = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [srv, plr, ful, bdir] = await Promise.all([
+      const [srv, plr, ful, bdir, bsdir] = await Promise.all([
         getServerBackupsByType(server.id, "server"),
         getServerBackupsByType(server.id, "player"),
         getServerBackupsByType(server.id, "full"),
         getAppSetting("backup_dir"),
+        getAppSetting("base_dir"),
       ]);
       setServerBackups(srv);
       setPlayerBackups(plr);
       setFullBackups(ful);
       setBackupDir(bdir ?? "");
+      setBaseDir(bsdir ?? "");
     } catch (e) {
       toast.error(`Failed to load backups: ${e}`);
     } finally {
@@ -738,7 +757,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     }
   }, [server.id]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useOnMount(loadAll);
 
   useTauriEvent<{ percent: number; currentFile: string; label: string }>(
     `backup://progress/${server.id}`,
@@ -764,7 +783,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting server backup…" });
     try {
       const rec: BackupRecord = await tauriCmd.createServerBackup(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
+        server.id, server.name, server.install_path, mapPath, saveFolder, server.map_id, backupDir, "manual",
+        "", baseDir
       );
       await insertBackup({
         id: rec.id, server_id: rec.serverId, file_path: rec.filePath,
@@ -788,7 +808,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting player backups…" });
     try {
       const records = await tauriCmd.backupAllPlayers(
-        server.id, server.name, server.install_path, mapPath, server.map_id, backupDir, "manual"
+        server.id, server.name, server.install_path, saveFolder, server.map_id, backupDir, "manual"
       );
       if (records.length === 0) {
         toast.info("No player profiles found to back up.");
@@ -864,13 +884,18 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
     try {
       if (server.status === "running") {
         setProgress((p) => ({ ...p, label: "Stopping server…" }));
-        await tauriCmd.stopServer(server.id, true);
-        await new Promise((r) => setTimeout(r, 2000));
+        // Graceful (RCON SaveWorld + doexit, same as the Stop button) rather
+        // than a raw kill signal, and this only resolves once the process is
+        // actually confirmed dead — no arbitrary fixed sleep needed, and no
+        // risk of restoring over files a still-exiting process is writing.
+        await stopServerGracefully(server, {
+          onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+        });
       }
       if (target.backup_type === "server") {
-        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path);
+        await tauriCmd.restoreServerBackup(server.id, target.file_path, server.install_path, baseDir, mapPath, saveFolder);
       } else if (target.backup_type === "player") {
-        await tauriCmd.restorePlayerBackup(server.id, target.file_path, server.install_path, mapPath);
+        await tauriCmd.restorePlayerBackup(server.id, target.file_path, server.install_path, saveFolder);
       } else if (target.backup_type === "full") {
         await tauriCmd.restoreFullBackup(server.id, target.file_path, server.install_path);
       }
@@ -912,23 +937,22 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       const diskPaths = new Set(diskRecords.map((r) => r.filePath));
       const dbPaths   = new Set(allDb.map((r) => r.file_path));
 
-      // Silently remove stale DB records (files no longer on disk).
-      for (const dbRec of allDb) {
-        if (!diskPaths.has(dbRec.file_path)) {
-          await deleteBackupRecord(dbRec.id).catch(() => {});
-        }
-      }
+      // DB records whose file wasn't found on disk — held for confirmation
+      // rather than deleted immediately. If the backup directory is briefly
+      // unreachable, a scan returning few/no files must not silently wipe
+      // history for files that are actually still there.
+      const toDelete = allDb.filter((r) => !diskPaths.has(r.file_path)).map((r) => r.id);
 
       // Find disk files not yet in DB.
       const toImport = diskRecords.filter((r) => !dbPaths.has(r.filePath));
 
-      if (toImport.length === 0) {
+      if (toImport.length === 0 && toDelete.length === 0) {
         toast.info("Backups are up to date.");
         await loadAll();
         return;
       }
 
-      setSyncPending({ toImport });
+      setSyncPending({ toImport, toDelete });
     } catch (e) {
       toast.error(`Scan failed: ${e}`);
     } finally {
@@ -938,10 +962,18 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
 
   async function handleSyncConfirmed() {
     if (!syncPending) return;
-    const { toImport } = syncPending;
+    const { toImport, toDelete } = syncPending;
     setSyncPending(null);
     setSyncing(true);
     try {
+      for (const id of toDelete) {
+        await deleteBackupRecord(id).catch(() => {});
+      }
+      if (toImport.length === 0) {
+        toast.success(`Removed ${toDelete.length} record${toDelete.length !== 1 ? "s" : ""} not found on disk.`);
+        await loadAll();
+        return;
+      }
       // Load existing records so we know which higher tiers are already covered.
       const [dbSrv, dbPlr, dbFul] = await Promise.all([
         getServerBackupsByType(server.id, "server"),
@@ -995,7 +1027,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         seenByType[rec.backupType] = seen;
       }
 
-      toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}.`);
+      const deletedNote = toDelete.length > 0 ? `, removed ${toDelete.length} not found on disk` : "";
+      toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}${deletedNote}.`);
       await loadAll();
     } catch (e) {
       toast.error(`Import failed: ${e}`);
@@ -1148,6 +1181,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       {syncPending && (
         <SyncConfirmDialog
           importCount={syncPending.toImport.length}
+          deleteCount={syncPending.toDelete.length}
           onConfirm={handleSyncConfirmed}
           onCancel={() => setSyncPending(null)}
         />

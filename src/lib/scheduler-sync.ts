@@ -11,10 +11,10 @@
 import { tauriCmd, type ScheduleEntry } from "@/lib/tauri-commands";
 import {
   getServers, getServerSchedules, getServerMods, getServerConfig, getAppSetting,
-  setAppSetting,
 } from "@/lib/db";
-import { ARK_MAPS, LAUNCH_PARAMETERS } from "@/data/game-data";
+import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
+import { launchArgsToExtraArgs } from "@/lib/server-utils";
 
 function isTauriEnv(): boolean {
   return (
@@ -32,6 +32,7 @@ export async function syncSchedulesToRust(): Promise<void> {
       getAppSetting("steamcmd_path"),
       getAppSetting("base_dir"),
       getAppSetting("backup_dir"),
+      ensureMapsCacheLoaded(),
     ]);
 
     const isLinux =
@@ -59,17 +60,11 @@ export async function syncSchedulesToRust(): Promise<void> {
       const launchArgs: Record<string, string> = config
         ? JSON.parse(config.launch_args_json)
         : {};
-      const extraArgs = Object.entries(launchArgs).flatMap(([k, v]) => {
-        if (!v || v === "false" || v === "0") return [];
-        const param = LAUNCH_PARAMETERS.find((p) => p.key === k);
-        if (param?.type === "boolean") return v === "true" ? [param.flag] : [];
-        if (param) return v ? [`${param.flag}${v}`] : [];
-        return v === "true" ? [`-${k}`] : [`-${k}=${v}`];
-      });
+      const extraArgs = launchArgsToExtraArgs(launchArgs);
 
       const modIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
 
-      const map = ARK_MAPS.find((m) => m.id === server.map_id);
+      const map = findMapById(server.map_id);
       const mapPath = map?.mapPath ?? "TheIsland_WP";
 
       // Backup schedules are handled by the hourly backup://tick task in Rust,
@@ -103,7 +98,7 @@ export async function syncSchedulesToRust(): Promise<void> {
           port: server.port,
           queryPort: server.query_port,
           rconPort: server.rcon_port,
-          rconPassword: server.rcon_password,
+          rconPassword: server.admin_password,
           extraArgs,
           modIds,
           protonPath: protonPath ?? undefined,
@@ -113,7 +108,18 @@ export async function syncSchedulesToRust(): Promise<void> {
           backupDir: backupDir ?? "",
           scheduleType: schedule.schedule_type,
           enabled: true,
-          configJson: schedule.config_json ?? "{}",
+          // Restart schedules no longer carry their own warning config — they
+          // share the server's restart_warn_* fields with the manual Restart
+          // button (same pattern the per-server Auto-Update entry below already
+          // uses), so there's one warning message regardless of trigger.
+          configJson: schedule.schedule_type === "restart"
+            ? JSON.stringify({
+                broadcastWarning: server.restart_warn_players === 1,
+                warningMinutes:   server.restart_warn_minutes ?? 5,
+                message:          server.restart_message || "Server restarting in {time}.",
+                cancelMessage:    server.restart_cancel_message || "Restart has been canceled.",
+              })
+            : schedule.config_json ?? "{}",
           nextRunMs,
         });
       }
@@ -138,7 +144,10 @@ export async function syncSchedulesToRust(): Promise<void> {
 
     if ((isStartup || isLegacy) && steamcmdPath && baseDir && servers.length > 0) {
       const intervalMs = isStartupHourly || isLegacy ? 3_600_000 : 0;
-      let nextRunMs: number;
+      // null means "don't schedule a global check this sync" — this must
+      // never short-circuit the rest of the function (per-server auto-update
+      // entries below still need to be built and sent regardless).
+      let nextRunMs: number | null = null;
       if (!lastChecked) {
         // Never checked — fire 30 s after startup.
         nextRunMs = Date.now() + 30_000;
@@ -147,18 +156,15 @@ export async function syncSchedulesToRust(): Promise<void> {
         // If overdue, give a 30-second startup buffer before firing.
         nextRunMs = scheduled < Date.now() ? Date.now() + 30_000 : scheduled;
       } else {
-        // "startup" mode — only fire if we've never checked (handled above).
-        // If already checked today, skip.
+        // "startup" mode — only fire if we've never checked (handled above),
+        // or if it's been at least 24h since the last check.
         const sinceLastCheck = Date.now() - new Date(lastChecked).getTime();
-        if (sinceLastCheck < 24 * 3_600_000) {
-          // Checked within the last 24 h; don't fire again on this session.
-          await tauriCmd.syncSchedules(entries);
-          return;
+        if (sinceLastCheck >= 24 * 3_600_000) {
+          nextRunMs = Date.now() + 30_000;
         }
-        nextRunMs = Date.now() + 30_000;
       }
 
-      entries.push({
+      if (nextRunMs !== null) entries.push({
         scheduleId:   "global-update-check",
         serverId:     "global",
         serverName:   "ASA Cache",
@@ -181,6 +187,75 @@ export async function syncSchedulesToRust(): Promise<void> {
         configJson:   JSON.stringify({ intervalMs }),
         nextRunMs,
       });
+    }
+
+    // ── Per-server Auto-Update entries ──────────────────────────────────────
+    // Synthesized (not stored as `schedules` rows) from each server's
+    // update_automation_json, same pattern as the global-update-check entry
+    // above. Reuses the existing fully-graceful `fire_update` handler in
+    // scheduler.rs — countdown warning, SaveWorld+doexit, SteamCMD update,
+    // sync, conditional restart — the same safe-shutdown path manual updates
+    // already use. Only generated when there's actually an update available,
+    // so this never restarts a server just to find nothing changed.
+    if (steamcmdPath && baseDir) {
+      for (const server of servers) {
+        if (server.update_available !== 1) continue;
+        if (server.status === "updating" || server.status === "installing") continue;
+
+        let automation: { mode: "off" | "immediately" | "at_time"; update_time: string; restart_after_update: boolean; only_if_running: boolean };
+        try {
+          automation = { mode: "off", update_time: "03:00", restart_after_update: true, only_if_running: true, ...JSON.parse(server.update_automation_json || "{}") };
+        } catch {
+          continue;
+        }
+        if (automation.mode === "off") continue;
+
+        let nextRunMs: number | null = null;
+        if (automation.mode === "immediately") {
+          nextRunMs = Date.now() + 15_000;
+        } else if (automation.mode === "at_time") {
+          const [h, m] = automation.update_time.split(":").map(Number);
+          const cron = `${isNaN(m) ? 0 : m} ${isNaN(h) ? 3 : h} * * *`;
+          const next = getNextCronDate(cron);
+          nextRunMs = next ? next.getTime() : null;
+        }
+        if (nextRunMs === null) continue;
+
+        const map = findMapById(server.map_id);
+        const mapPath = map?.mapPath ?? "TheIsland_WP";
+
+        entries.push({
+          scheduleId:    `update-auto-${server.id}`,
+          serverId:      server.id,
+          serverName:    server.name,
+          installPath:   server.install_path,
+          mapPath,
+          mapId:         server.map_id,
+          port:          server.port,
+          queryPort:     server.query_port,
+          rconPort:      server.rcon_port,
+          rconPassword:  server.admin_password,
+          extraArgs:     [],
+          modIds:        [],
+          protonPath:    protonPath ?? undefined,
+          prefixPath:    prefixPath ?? undefined,
+          steamcmdPath:  steamcmdPath ?? "",
+          baseDir:       baseDir ?? "",
+          backupDir:     backupDir ?? "",
+          scheduleType:  "update",
+          enabled:       true,
+          configJson: JSON.stringify({
+            broadcastWarning:    server.update_warn_players === 1,
+            warningMinutes:      server.update_warn_minutes ?? 5,
+            skipIfPlayersOnline: false,
+            restartAfterUpdate:  automation.restart_after_update,
+            onlyIfRunning:       automation.only_if_running,
+            message:             server.update_message || "Server going down for update in {time}.",
+            cancelMessage:       server.update_cancel_message || "Update has been canceled.",
+          }),
+          nextRunMs,
+        });
+      }
     }
 
     await tauriCmd.syncSchedules(entries);

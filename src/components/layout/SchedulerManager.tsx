@@ -12,30 +12,104 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
-  updateScheduleRun, getScheduleById, setAppSetting,
+  updateScheduleRun, getScheduleById, setAppSetting, rollupOldStats,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
-import type { SchedulerFiredPayload } from "@/lib/tauri-commands";
+import { runPerServerUpdateCheck } from "@/lib/update-utils";
+import { useAppStore } from "@/store/useAppStore";
+import type { SchedulerFiredPayload, UpdateCheckResult } from "@/lib/tauri-commands";
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export function SchedulerManager() {
+  const queryClient = useQueryClient();
+  const setAsaCacheOpLabel = useAppStore((s) => s.setAsaCacheOpLabel);
+
+  // Scheduled background cache check start/stop — the manual "Check for
+  // Updates" flow sets this same TopBar spinner state directly from JS
+  // (runAsaCacheUpdate), but the background tick lives entirely in Rust, so
+  // it needs this event to make the spinner (and any disabled buttons keyed
+  // off it) reflect a check that's running in the background.
+  useTauriEvent<{ running: boolean }>("asa://update-check/running", (payload) => {
+    setAsaCacheOpLabel(payload.running ? "Checking ASA updates (background)…" : null);
+  });
+
+  // SteamCMD only actually pulls bytes for part of a "check" run — most of it
+  // is just validating manifests against Steam. Flip the TopBar label to make
+  // that visible instead of leaving "Checking…" up for however long a real
+  // download takes. Fires for every cache-check op regardless of who started
+  // it (manual dashboard/Settings check or the background scheduled tick) —
+  // they all stream through the shared "steamcmd://output/check" channel and
+  // all funnel through this one global asaCacheOpLabel.
+  useTauriEvent<{ line: string; stream: string }>("steamcmd://output/check", (payload) => {
+    if (!/downloading/i.test(payload.line)) return;
+    const current = useAppStore.getState().asaCacheOpLabel;
+    if (!current?.startsWith("Checking ASA updates")) return;
+    setAsaCacheOpLabel(
+      current.includes("background") ? "Downloading ASA update (background)…" : "Downloading ASA update…"
+    );
+  });
+
   useEffect(() => {
     syncSchedulesToRust();
+    // Roll up + prune server_stats_history on startup — this was previously
+    // dead code (never called anywhere), so raw stats samples accumulated
+    // unbounded for the life of the install. Cheap/idempotent to run once
+    // per app start; only does real work once ~daily since it only touches
+    // rows older than 30 days.
+    rollupOldStats().catch(() => {});
   }, []);
+
+  // Background ASA cache/update results — fired for (1) the scheduled global
+  // cache check and (2) per-server auto-update completion. Handled globally
+  // (not page-scoped) so servers get flagged/cleared regardless of which page
+  // is open when a background check or scheduled auto-update fires.
+  useTauriEvent<UpdateCheckResult | { updateApplied?: boolean; serverId?: string }>(
+    "asa://update-check",
+    async (payload) => {
+      if ("updateApplied" in payload && payload.updateApplied) {
+        // Rust already cleared update_available in the DB — refresh the UI and
+        // drop any stale per-server auto-update entry left in the scheduler
+        // (e.g. a "Daily at Time" fire still queued for tonight), same reason
+        // applyUpdateToServer() resyncs after a manual apply.
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+        syncSchedulesToRust();
+        return;
+      }
+      if ("updateAvailable" in payload) {
+        const r = payload as UpdateCheckResult;
+        // latestBuildId is the cache's actual post-check content (cachedBuildId
+        // is the pre-check value, kept only to report whether it changed).
+        await Promise.all([
+          setAppSetting("asa_cached_build_id", r.latestBuildId),
+          setAppSetting("asa_latest_build_id", r.latestBuildId),
+          setAppSetting("asa_last_checked", new Date().toISOString()),
+        ]);
+        await runPerServerUpdateCheck(false);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+      }
+    },
+  );
 
   // Non-backup scheduler events: restart, broadcast, update, global_update_check.
   useTauriEvent<SchedulerFiredPayload>("scheduler://fired", async (payload) => {
-    const { scheduleId, serverId, serverName, scheduleType, success, error } = payload;
+    const { scheduleId, serverName, scheduleType, success, error } = payload;
 
     if (scheduleType === "global_update_check") {
-      await setAppSetting("asa_last_checked", new Date().toISOString());
-      if (!success) toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
+      // On success this is already written by the asa://update-check handler
+      // above (which also carries the actual build-id result) — only write
+      // it here on failure, since fire_global_update_check returns before
+      // ever emitting that event if the check itself errors out.
+      if (!success) {
+        await setAppSetting("asa_last_checked", new Date().toISOString());
+        toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
+      }
       syncSchedulesToRust();
       return;
     }

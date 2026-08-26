@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 use crate::state::CountdownSignal;
-use super::server::{inner_stop_server, inner_start_server, StartServerParams};
+use super::server::{emit_status, ServerStatus, StartServerParams};
 
 // ---------------------------------------------------------------------------
 // Tauri event payload
@@ -108,10 +108,16 @@ pub async fn run_countdown(
                 total_secs,
             });
             emit_clear(app, server_id);
+            // With no countdown badge ever shown (nothing to warn anyone
+            // about), the card would otherwise sit on "running" right up
+            // until the final post-restart status — emit an explicit
+            // "stopping" so there's a visible transition in the meantime.
+            emit_stopping(app, server_id);
             return CountdownResult::Proceed;
         }
     } else {
         emit_clear(app, server_id);
+        emit_stopping(app, server_id);
         return CountdownResult::Proceed;
     }
 
@@ -167,6 +173,25 @@ pub async fn run_countdown(
                             rcon_send(rcon_port, rcon_password, &format!("ServerChat {cancel_message}")).await;
                         }
                         emit_clear(app, server_id);
+                        // Callers that write "stopping" up front (Restart
+                        // All, the manual Restart/Update-now buttons) need
+                        // this reverted — the server was never actually
+                        // touched. Every run_countdown caller only starts a
+                        // countdown for an already-running server, so
+                        // reverting to "running" is always correct here.
+                        // Keep the real pid — it's still the same live
+                        // process, nulling it out would break anything keyed
+                        // off server.pid (RCON, stats polling, Stop button).
+                        let pid = app.state::<AppState>()
+                            .running_servers.lock().unwrap()
+                            .get(server_id).map(|rs| rs.pid);
+                        emit_status(app, &ServerStatus {
+                            server_id: server_id.to_string(),
+                            status: "running".into(),
+                            pid,
+                            uptime_seconds: None,
+                            error: None,
+                        });
                         return CountdownResult::Cancel;
                     }
                 }
@@ -187,14 +212,38 @@ fn emit_clear(app: &AppHandle, server_id: &str) {
     });
 }
 
+/// Emit a "stopping" status update. Used when a countdown is skipped
+/// entirely (no players online, or a zero-length warning) so the UI still
+/// shows a visible transition instead of sitting on the prior status right
+/// up until the restart/update's final result arrives.
+fn emit_stopping(app: &AppHandle, server_id: &str) {
+    emit_status(app, &ServerStatus {
+        server_id: server_id.to_string(),
+        status: "stopping".into(),
+        pid: None,
+        uptime_seconds: None,
+        error: None,
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Register / deregister countdown channels in AppState
 // ---------------------------------------------------------------------------
 
-fn register_countdown(state: &AppState, server_id: &str) -> mpsc::Receiver<CountdownSignal> {
+/// Atomically checks for and registers a countdown in one lock acquisition —
+/// checking `contains_key` and inserting under two separate locks (as this
+/// used to do) leaves a window where two near-simultaneous callers for the
+/// same server_id can both pass the check before either inserts, silently
+/// overwriting one Sender with the other and leaving the first countdown
+/// un-cancellable and running unsupervised.
+fn try_register_countdown(state: &AppState, server_id: &str) -> Result<mpsc::Receiver<CountdownSignal>, String> {
     let (tx, rx) = mpsc::channel::<CountdownSignal>(1);
-    state.countdowns.lock().unwrap().insert(server_id.to_string(), tx);
-    rx
+    let mut cd = state.countdowns.lock().unwrap();
+    if cd.contains_key(server_id) {
+        return Err(format!("A countdown is already in progress for {server_id}"));
+    }
+    cd.insert(server_id.to_string(), tx);
+    Ok(rx)
 }
 
 fn deregister_countdown(state: &AppState, server_id: &str) {
@@ -231,15 +280,21 @@ pub async fn start_graceful_restart(
         }
     }
 
-    // Guard: no concurrent countdown.
-    {
-        let cd = state.countdowns.lock().unwrap();
-        if cd.contains_key(&params.server_id) {
-            return Err("A countdown is already in progress for this server".into());
-        }
+    // Guard: no concurrent countdown (checked and registered atomically).
+    let mut rx = try_register_countdown(&state, &params.server_id)?;
+
+    // Fail fast if a backup/update is already in progress for this server —
+    // held for the whole operation, including the countdown, since a backup
+    // that started mid-countdown and was still running when doexit fires
+    // would hit the same race this guards against. Not a `ServerLockGuard`
+    // (RAII) since that can't cross into the spawned 'static task below —
+    // released manually on every exit path instead, the same way
+    // `stopping_servers`/`countdowns` already span this spawn boundary.
+    if !state.busy_servers.lock().unwrap().insert(params.server_id.clone()) {
+        deregister_countdown(&state, &params.server_id);
+        return Err(format!("An operation is already in progress for {} — try again in a moment", params.server_id));
     }
 
-    let mut rx = register_countdown(&state, &params.server_id);
     let app2 = app.clone();
 
     // Spawn so the command returns immediately.
@@ -260,26 +315,27 @@ pub async fn start_graceful_restart(
         deregister_countdown(&state2, &params.server_id);
 
         if matches!(result, CountdownResult::Proceed) {
-            // saveworld → doexit → wait → restart
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "saveworld"
+            let notify = state2.register_stop_handoff(&params.server_id);
+            super::server::graceful_shutdown_via_rcon(
+                &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
-            sleep(Duration::from_secs(3)).await;
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "doexit"
-            ).await;
-
-            // Wait up to 30s for graceful exit.
-            for _ in 0..60 {
-                sleep(Duration::from_millis(500)).await;
-                let still_running = state2.running_servers.lock().unwrap().contains_key(&params.server_id);
-                if !still_running { break; }
-            }
-            // Force-kill if still alive.
-            let _ = inner_stop_server(&app2, &params.server_id, false);
-
-            let _ = inner_start_server(app2, params.start_params).await;
+            // Wait for the watcher's own cleanup to finish before emitting
+            // our next status — otherwise its delayed "stopped" can race in
+            // afterward and silently overwrite it.
+            state2.wait_for_stop_handoff(&params.server_id, notify).await;
+            // Hand off to the staggered startup queue instead of restarting
+            // directly — same reason fire_restart/inner_restart_server do,
+            // so several servers warn-restarting together (e.g. Restart All)
+            // don't all cold-boot at once.
+            emit_status(&app2, &ServerStatus {
+                server_id: params.server_id.clone(),
+                status: "startup_queued".into(),
+                pid: None,
+                uptime_seconds: None,
+                error: None,
+            });
         }
+        state2.busy_servers.lock().unwrap().remove(&params.server_id);
     });
 
     Ok(())
@@ -312,20 +368,30 @@ pub async fn start_graceful_update(
     state: State<'_, AppState>,
     params: GracefulUpdateParams,
 ) -> Result<(), String> {
-    // Guard: no concurrent countdown.
-    {
-        let cd = state.countdowns.lock().unwrap();
-        if cd.contains_key(&params.server_id) {
-            return Err("A countdown is already in progress for this server".into());
-        }
+    let was_running = state.running_servers.lock().unwrap().contains_key(&params.server_id);
+    // Guard: no concurrent countdown (checked and registered atomically).
+    let mut rx = try_register_countdown(&state, &params.server_id)?;
+
+    // Fail fast if a backup/restart is already in progress for this server —
+    // see start_graceful_restart's comment for why this can't be a
+    // `ServerLockGuard` (RAII) across the spawn boundary below. Released by
+    // `ReleaseBusyOnDrop` inside the spawned task instead, since that task
+    // has several early-return exit points this needs to cover uniformly.
+    if !state.busy_servers.lock().unwrap().insert(params.server_id.clone()) {
+        deregister_countdown(&state, &params.server_id);
+        return Err(format!("An operation is already in progress for {} — try again in a moment", params.server_id));
     }
 
-    let was_running = state.running_servers.lock().unwrap().contains_key(&params.server_id);
-    let mut rx = register_countdown(&state, &params.server_id);
     let app2 = app.clone();
 
     tauri::async_runtime::spawn(async move {
         let state2 = app2.state::<AppState>();
+        struct ReleaseBusyOnDrop<'a> { state: &'a AppState, server_id: &'a str }
+        impl Drop for ReleaseBusyOnDrop<'_> {
+            fn drop(&mut self) { self.state.busy_servers.lock().unwrap().remove(self.server_id); }
+        }
+        let _release_busy = ReleaseBusyOnDrop { state: &state2, server_id: &params.server_id };
+
         // Only run countdown if server is actually running.
         let proceed = if was_running {
             let r = run_countdown(
@@ -348,27 +414,19 @@ pub async fn start_graceful_update(
 
         if !proceed { return; }
 
-        // Stop the server gracefully if it was running.
+        // Stop the server gracefully if it was running, and wait for the
+        // watcher's own cleanup to finish before proceeding — otherwise its
+        // delayed "stopped" can race in after our own status emissions below
+        // (updating / startup_queued / stopped) and silently overwrite them.
         if was_running {
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "saveworld"
+            let notify = state2.register_stop_handoff(&params.server_id);
+            super::server::graceful_shutdown_via_rcon(
+                &app2, &params.server_id, params.rcon_port, &params.rcon_password,
             ).await;
-            sleep(Duration::from_secs(3)).await;
-            let _ = super::rcon::transient_rcon_command(
-                params.rcon_port, &params.rcon_password, "doexit"
-            ).await;
-
-            for _ in 0..60 {
-                sleep(Duration::from_millis(500)).await;
-                let still = state2.running_servers.lock().unwrap().contains_key(&params.server_id);
-                if !still { break; }
-            }
-            let _ = inner_stop_server(&app2, &params.server_id, false);
+            state2.wait_for_stop_handoff(&params.server_id, notify).await;
         }
 
         // Emit "updating" status so server card shows spinner.
-        use crate::commands::server::emit_status;
-        use crate::commands::server::ServerStatus;
         emit_status(&app2, &ServerStatus {
             server_id: params.server_id.clone(),
             status: "updating".into(),
@@ -407,8 +465,12 @@ pub async fn start_graceful_update(
         // Sync updated cache to server directory.
         let cache_path  = std::path::PathBuf::from(&params.cache_dir);
         let server_path = std::path::PathBuf::from(&params.install_path);
+        let app_clone = app2.clone();
+        let channel_clone = channel.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path)
+            // Not individually cancellable from this countdown-triggered path — a never-set flag is correct here.
+            let no_abort = std::sync::atomic::AtomicBool::new(false);
+            crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &no_abort)
         }).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
             eprintln!("Cache sync failed: {e}");
         }
@@ -418,13 +480,24 @@ pub async fn start_graceful_update(
             "updateApplied": true,
             "serverId": params.server_id,
         }));
-
-        // Restart if requested and we have start params.
-        if params.restart_after {
-            if let Some(sp) = params.start_params {
-                let _ = inner_start_server(app2, sp).await;
-                return;
+        if let Some(db_path) = state2.get_db_path() {
+            if let Ok(conn) = crate::db::open(&db_path) {
+                crate::db::clear_update_available(&conn, &params.server_id);
             }
+        }
+
+        // Restart if requested — hand off to the staggered startup queue
+        // rather than starting directly, same as the scheduler's post-update
+        // restart and the plain graceful-restart command above.
+        if params.restart_after && params.start_params.is_some() {
+            emit_status(&app2, &ServerStatus {
+                server_id: params.server_id.clone(),
+                status: "startup_queued".into(),
+                pid: None,
+                uptime_seconds: None,
+                error: None,
+            });
+            return;
         }
 
         emit_status(&app2, &ServerStatus {
