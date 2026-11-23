@@ -1410,9 +1410,10 @@ pub async fn graceful_stop_server(
 
     // Held for the whole operation (including the player-warning countdown,
     // which can run for several minutes) so a scheduled backup can't start
-    // mid-shutdown and produce a truncated archive.
-    let _lock = state.try_lock_server(&server_id)
-        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+    // mid-shutdown and produce a truncated archive. Queues behind a backup
+    // that's already running rather than failing — the stop simply happens
+    // once the backup has finished reading the server's files.
+    let _lock = state.lock_server(&server_id).await;
 
     let (pid, install_path, server_name) = {
         let registry = state.running_servers.lock().unwrap();

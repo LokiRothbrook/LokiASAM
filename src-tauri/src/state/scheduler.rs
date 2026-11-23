@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 /// One schedule entry with all data needed to fire the action — no DB access required.
@@ -45,12 +46,20 @@ pub struct ScheduleEntry {
 /// Atomically replaced by `sync_schedules` whenever the frontend saves changes.
 pub struct SchedulerState {
     pub entries: Mutex<Vec<ScheduleEntry>>,
+    /// Schedule IDs whose fire task is still running. `sync_schedules` keeps
+    /// these parked at `u64::MAX` no matter what `next_run_ms` the frontend
+    /// pushes, so a resync mid-fire (e.g. one triggered by an unrelated
+    /// schedule finishing) can never re-arm an entry that's still executing —
+    /// a per-server auto-update in a 15-minute warning countdown used to get
+    /// re-fired every ~15 s this way.
+    pub in_flight: Mutex<HashSet<String>>,
 }
 
 impl SchedulerState {
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(HashSet::new()),
         }
     }
 }

@@ -60,12 +60,21 @@ pub struct AppState {
     /// Used by Rust-side business logic (backup manager, notification dispatch) to open
     /// their own rusqlite connections without blocking the Tauri plugin-sql connection.
     pub db_path: Mutex<Option<String>>,
-    /// Server IDs currently undergoing a backup, restart, or update — held for
-    /// the whole operation so the hourly backup tick and a scheduled
-    /// restart/update can never run concurrently against the same server
-    /// (a restart/update killing or overwriting files mid-backup can produce
-    /// a silently-incomplete archive). Acquire via `try_lock_server`.
-    pub busy_servers: Mutex<HashSet<String>>,
+    /// Per-server operation locks (backup, restart, update, stop, delete…).
+    /// Each server gets its own FIFO-fair async mutex, so automated work
+    /// (hourly backups, scheduled restarts/updates, auto-update) *queues*
+    /// behind whatever is already running on that server instead of failing
+    /// outright — e.g. a restart that comes due mid-backup now runs as soon
+    /// as the backup finishes rather than being dropped until its next
+    /// occurrence. Interactive callers that would rather fail fast use
+    /// `try_lock_server`; queued callers use `lock_server`.
+    pub server_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Guards the shared ASA server cache directory. SteamCMD writing to the
+    /// cache (update check, reinstall, verify) takes the write half; copying
+    /// the cache into a server install (apply/auto-update) takes the read
+    /// half — so several servers can sync at once, but never while SteamCMD
+    /// is mid-way through rewriting the files they're copying.
+    pub asa_cache_lock: Arc<tokio::sync::RwLock<()>>,
     /// Server IDs whose current stop is being orchestrated by a restart/update
     /// flow rather than a plain Stop. The process-exit watcher spawned back
     /// when the server was originally started predates that flow and
@@ -81,20 +90,10 @@ pub struct AppState {
     pub restart_handoff: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 }
 
-/// RAII guard returned by `AppState::try_lock_server` — releases the lock
-/// when dropped, on every exit path (return, `?`, panic unwind) of whichever
-/// scope holds it.
-pub struct ServerLockGuard<'a> {
-    state: &'a AppState,
-    server_id: String,
-}
-
-impl Drop for ServerLockGuard<'_> {
-    fn drop(&mut self) {
-        self.state.busy_servers.lock().unwrap().remove(&self.server_id);
-    }
-}
-
+/// Guard returned by `AppState::try_lock_server` / `lock_server` — releases
+/// the server's lock when dropped, on every exit path. Owned (`'static`), so
+/// it can be moved into a spawned task that outlives the command call.
+pub type ServerLockGuard = tokio::sync::OwnedMutexGuard<()>;
 
 impl AppState {
     pub fn new() -> Self {
@@ -111,21 +110,30 @@ impl AppState {
             abort_flags: Mutex::new(HashMap::new()),
             countdowns: Mutex::new(HashMap::new()),
             db_path: Mutex::new(None),
-            busy_servers: Mutex::new(HashSet::new()),
+            server_locks: Mutex::new(HashMap::new()),
+            asa_cache_lock: Arc::new(tokio::sync::RwLock::new(())),
             restart_handoff: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Attempt to mark a server as busy (backup/restart/update in progress).
-    /// Returns `None` if another operation already holds the lock; otherwise
-    /// a guard that releases it when dropped.
-    pub fn try_lock_server(&self, server_id: &str) -> Option<ServerLockGuard<'_>> {
-        let inserted = self.busy_servers.lock().unwrap().insert(server_id.to_string());
-        if inserted {
-            Some(ServerLockGuard { state: self, server_id: server_id.to_string() })
-        } else {
-            None
-        }
+    fn server_mutex(&self, server_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            self.server_locks.lock().unwrap()
+                .entry(server_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    }
+
+    /// Attempt to take a server's operation lock without waiting. Returns
+    /// `None` if another operation already holds it.
+    pub fn try_lock_server(&self, server_id: &str) -> Option<ServerLockGuard> {
+        self.server_mutex(server_id).try_lock_owned().ok()
+    }
+
+    /// Take a server's operation lock, waiting in FIFO order behind any
+    /// operation that already holds it (or is already queued for it).
+    pub async fn lock_server(&self, server_id: &str) -> ServerLockGuard {
+        self.server_mutex(server_id).lock_owned().await
     }
 
     /// Store the database file path (called from init_stats_recorder).

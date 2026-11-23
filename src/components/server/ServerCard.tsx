@@ -385,7 +385,13 @@ export function ServerCard({ server }: Props) {
         steamcmdPath,
         restartAfter:  restartAfterUpdate,
         startParams,
-      }).catch((err) => toast.error(`Update failed: ${err}`));
+      }).catch(async (err) => {
+        // Refused before anything happened (e.g. a backup is running) —
+        // undo the optimistic "stopping" so the server doesn't look stuck.
+        await updateServerStatus(server.id, server.status, server.pid);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+        toast.error(`Update failed: ${err}`);
+      });
       return;
     }
 

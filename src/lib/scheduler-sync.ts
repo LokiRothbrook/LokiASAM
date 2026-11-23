@@ -16,6 +16,24 @@ import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { launchArgsToExtraArgs } from "@/lib/server-utils";
 
+/** When this app session started — the "on startup" update check is due
+ *  whenever the last check predates it (i.e. hasn't happened this session). */
+const SESSION_STARTED_MS = Date.now();
+/** Fixed fire time for this session's startup check, computed once — every
+ *  resync used to push it another 30 s into the future, and any resync while
+ *  it was running re-armed it to fire a second time. */
+let startupCheckAtMs: number | null = null;
+
+/** serverId → earliest time a failed "When Found" auto-update may retry.
+ *  Without this, a persistent failure (disk full, permissions…) re-fired
+ *  every 15 s forever, each time with its own error notification. */
+const autoUpdateRetryAfter = new Map<string, number>();
+const AUTO_UPDATE_RETRY_BACKOFF_MS = 10 * 60_000;
+
+export function noteAutoUpdateFailure(serverId: string): void {
+  autoUpdateRetryAfter.set(serverId, Date.now() + AUTO_UPDATE_RETRY_BACKOFF_MS);
+}
+
 function isTauriEnv(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -128,40 +146,35 @@ export async function syncSchedulesToRust(): Promise<void> {
     // ── Global auto-update-check entry ─────────────────────────────────────
     // Fires the shared cache update on startup and/or hourly, depending on
     // the asa_auto_check_hours setting:
-    //   "startup"        — fire once ~30 s after launch
-    //   "startup_hourly" — fire ~30 s after launch, then repeat every hour
+    //   "startup"        — once per app launch, ~30 s after startup
+    //   "startup_hourly" — once ~30 s after launch, then every hour
     //   "disabled" / "0" — no scheduled check
     const [autoCheckMode, lastChecked] = await Promise.all([
       getAppSetting("asa_auto_check_hours"),
       getAppSetting("asa_last_checked"),
     ]);
     const mode = autoCheckMode ?? "disabled";
-    const isStartupHourly = mode === "startup_hourly";
-    const isStartup       = mode === "startup" || isStartupHourly;
     // Legacy numeric values ("1","6","12","24") treated as startup_hourly.
     const legacyHours     = parseInt(mode);
     const isLegacy        = !isNaN(legacyHours) && legacyHours > 0;
+    const isHourly        = mode === "startup_hourly" || isLegacy;
+    const isStartup       = mode === "startup" || isHourly;
 
-    if ((isStartup || isLegacy) && steamcmdPath && baseDir && servers.length > 0) {
-      const intervalMs = isStartupHourly || isLegacy ? 3_600_000 : 0;
+    if (isStartup && steamcmdPath && baseDir && servers.length > 0) {
+      const intervalMs = isHourly ? 3_600_000 : 0;
+      const lastCheckedMs = lastChecked ? new Date(lastChecked).getTime() : NaN;
+      const checkedThisSession = !isNaN(lastCheckedMs) && lastCheckedMs >= SESSION_STARTED_MS;
       // null means "don't schedule a global check this sync" — this must
       // never short-circuit the rest of the function (per-server auto-update
       // entries below still need to be built and sent regardless).
       let nextRunMs: number | null = null;
-      if (!lastChecked) {
-        // Never checked — fire 30 s after startup.
-        nextRunMs = Date.now() + 30_000;
-      } else if (isStartupHourly || isLegacy) {
-        const scheduled = new Date(lastChecked).getTime() + intervalMs;
-        // If overdue, give a 30-second startup buffer before firing.
-        nextRunMs = scheduled < Date.now() ? Date.now() + 30_000 : scheduled;
-      } else {
-        // "startup" mode — only fire if we've never checked (handled above),
-        // or if it's been at least 24h since the last check.
-        const sinceLastCheck = Date.now() - new Date(lastChecked).getTime();
-        if (sinceLastCheck >= 24 * 3_600_000) {
-          nextRunMs = Date.now() + 30_000;
-        }
+      if (!checkedThisSession) {
+        // Every launch checks once (a manual check this session counts).
+        startupCheckAtMs ??= Date.now() + 30_000;
+        nextRunMs = startupCheckAtMs;
+      } else if (isHourly) {
+        // May be in the past if overdue — Rust fires it on the next tick.
+        nextRunMs = lastCheckedMs + intervalMs;
       }
 
       if (nextRunMs !== null) entries.push({
@@ -193,7 +206,7 @@ export async function syncSchedulesToRust(): Promise<void> {
     // Synthesized (not stored as `schedules` rows) from each server's
     // update_automation_json, same pattern as the global-update-check entry
     // above. Reuses the existing fully-graceful `fire_update` handler in
-    // scheduler.rs — countdown warning, SaveWorld+doexit, SteamCMD update,
+    // scheduler.rs — countdown warning, SaveWorld+doexit, cache→server
     // sync, conditional restart — the same safe-shutdown path manual updates
     // already use. Only generated when there's actually an update available,
     // so this never restarts a server just to find nothing changed.
@@ -212,7 +225,7 @@ export async function syncSchedulesToRust(): Promise<void> {
 
         let nextRunMs: number | null = null;
         if (automation.mode === "immediately") {
-          nextRunMs = Date.now() + 15_000;
+          nextRunMs = Math.max(Date.now() + 15_000, autoUpdateRetryAfter.get(server.id) ?? 0);
         } else if (automation.mode === "at_time") {
           const [h, m] = automation.update_time.split(":").map(Number);
           const cron = `${isNaN(m) ? 0 : m} ${isNaN(h) ? 3 : h} * * *`;

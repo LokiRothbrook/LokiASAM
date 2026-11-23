@@ -480,19 +480,42 @@ pub async fn execute_tick(app: &AppHandle) {
     let servers = db::get_servers(&conn);
     let pool = app.state::<RconPool>();
 
-    for server in &servers {
-        if !running_ids.contains(&server.id) {
-            continue;
-        }
+    // (server, deferred) — a server busy with a restart/update/stop when its
+    // turn comes is pushed to the back of the queue instead of being skipped
+    // until next hour, so every other server's backup goes ahead first and
+    // the busy one is backed up as soon as that operation finishes.
+    let mut queue: std::collections::VecDeque<(&db::ServerRow, bool)> = servers.iter()
+        .filter(|s| running_ids.contains(&s.id))
+        .map(|s| (s, false))
+        .collect();
 
-        // Skip a server currently undergoing a scheduled restart/update —
-        // reading its files while they're mid-overwrite could produce a
-        // silently incomplete archive. Picked up again on the next hourly
-        // tick. Held for the rest of this iteration.
+    while let Some((server, deferred)) = queue.pop_front() {
+        // Reading a server's files while a restart/update is overwriting them
+        // could produce a silently incomplete archive, so the lock is held
+        // for the rest of this iteration.
         let app_state = app.state::<AppState>();
-        let Some(_lock) = app_state.try_lock_server(&server.id) else {
-            eprintln!("[backup_manager] Skipping backup for {} — restart/update in progress", server.id);
-            continue;
+        let _lock = if deferred {
+            let guard = app_state.lock_server(&server.id).await;
+            // Whatever we waited on may have stopped or restarted the server —
+            // only back up one that's still fully up (a fresh boot after an
+            // update gets its backup on the next hourly tick).
+            let still_up = app_state.running_servers.lock().unwrap()
+                .get(&server.id)
+                .is_some_and(|rs| rs.confirmed_running);
+            if !still_up {
+                eprintln!("[backup_manager] Skipping backup for {} — no longer running after waiting", server.id);
+                continue;
+            }
+            guard
+        } else {
+            match app_state.try_lock_server(&server.id) {
+                Some(guard) => guard,
+                None => {
+                    eprintln!("[backup_manager] Deferring backup for {} — another operation is in progress", server.id);
+                    queue.push_back((server, true));
+                    continue;
+                }
+            }
         };
 
         let schedules = db::get_server_schedules(&conn, &server.id);

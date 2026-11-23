@@ -20,7 +20,7 @@ import { ImportServerWizard } from "@/components/server/ImportServerWizard";
 import { useServers } from "@/hooks/useServers";
 import { getAppSetting, updateServerStatus } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
-import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate, type ServerUpdateInfo } from "@/lib/update-utils";
+import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate, getAutoUpdatePlan, type ServerUpdateInfo } from "@/lib/update-utils";
 import { restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -438,6 +438,7 @@ export default function DashboardPage() {
       installedBuild:      "—",
       cachedBuild:         "—",
       autoUpdateImmediate: false,
+      autoUpdatePlan:      getAutoUpdatePlan(s),
     }));
 
   const anyUpdatesStarting = serversWithUpdates.some((s) => s.status === "starting");

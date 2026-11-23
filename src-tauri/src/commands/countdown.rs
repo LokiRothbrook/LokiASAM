@@ -286,19 +286,18 @@ pub async fn start_graceful_restart(
     // Fail fast if a backup/update is already in progress for this server —
     // held for the whole operation, including the countdown, since a backup
     // that started mid-countdown and was still running when doexit fires
-    // would hit the same race this guards against. Not a `ServerLockGuard`
-    // (RAII) since that can't cross into the spawned 'static task below —
-    // released manually on every exit path instead, the same way
-    // `stopping_servers`/`countdowns` already span this spawn boundary.
-    if !state.busy_servers.lock().unwrap().insert(params.server_id.clone()) {
+    // would hit the same race this guards against. The guard is owned, so it
+    // moves into the spawned task below and is released when that finishes.
+    let Some(server_lock) = state.try_lock_server(&params.server_id) else {
         deregister_countdown(&state, &params.server_id);
         return Err(format!("An operation is already in progress for {} — try again in a moment", params.server_id));
-    }
+    };
 
     let app2 = app.clone();
 
     // Spawn so the command returns immediately.
     tauri::async_runtime::spawn(async move {
+        let _server_lock = server_lock;
         let state2 = app2.state::<AppState>();
         let result = run_countdown(
             &app2,
@@ -335,7 +334,6 @@ pub async fn start_graceful_restart(
                 error: None,
             });
         }
-        state2.busy_servers.lock().unwrap().remove(&params.server_id);
     });
 
     Ok(())
@@ -373,24 +371,18 @@ pub async fn start_graceful_update(
     let mut rx = try_register_countdown(&state, &params.server_id)?;
 
     // Fail fast if a backup/restart is already in progress for this server —
-    // see start_graceful_restart's comment for why this can't be a
-    // `ServerLockGuard` (RAII) across the spawn boundary below. Released by
-    // `ReleaseBusyOnDrop` inside the spawned task instead, since that task
-    // has several early-return exit points this needs to cover uniformly.
-    if !state.busy_servers.lock().unwrap().insert(params.server_id.clone()) {
+    // see start_graceful_restart. Moved into the spawned task below, which
+    // releases it on whichever of its exit paths it takes.
+    let Some(server_lock) = state.try_lock_server(&params.server_id) else {
         deregister_countdown(&state, &params.server_id);
         return Err(format!("An operation is already in progress for {} — try again in a moment", params.server_id));
-    }
+    };
 
     let app2 = app.clone();
 
     tauri::async_runtime::spawn(async move {
+        let _server_lock = server_lock;
         let state2 = app2.state::<AppState>();
-        struct ReleaseBusyOnDrop<'a> { state: &'a AppState, server_id: &'a str }
-        impl Drop for ReleaseBusyOnDrop<'_> {
-            fn drop(&mut self) { self.state.busy_servers.lock().unwrap().remove(self.server_id); }
-        }
-        let _release_busy = ReleaseBusyOnDrop { state: &state2, server_id: &params.server_id };
 
         // Only run countdown if server is actually running.
         let proceed = if was_running {
@@ -435,23 +427,38 @@ pub async fn start_graceful_update(
             error: None,
         });
 
-        // Run SteamCMD update.
+        // Sync the shared cache into the server directory. The cache was
+        // already brought current by the update check that flagged this
+        // server — running SteamCMD again here (as this used to) meant one
+        // SteamCMD process per server against the same shared cache dir,
+        // which isn't safe when several updates overlap.
         let channel = format!("steamcmd://output/{}", params.server_id);
-        if let Err(e) = tokio::fs::create_dir_all(&params.cache_dir).await {
-            eprintln!("Failed to create cache dir: {e}");
-        }
+        let sync_result: Result<(), String> = async {
+            tokio::fs::create_dir_all(&params.cache_dir).await
+                .map_err(|e| format!("Failed to create cache dir: {e}"))?;
+            let _cache_guard = state2.asa_cache_lock.clone().read_owned().await;
+            let cache_path  = std::path::PathBuf::from(&params.cache_dir);
+            let server_path = std::path::PathBuf::from(&params.install_path);
+            let app_clone = app2.clone();
+            let channel_clone = channel.clone();
+            tokio::task::spawn_blocking(move || {
+                // Not individually cancellable from this countdown-triggered path — a never-set flag is correct here.
+                let no_abort = std::sync::atomic::AtomicBool::new(false);
+                crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &no_abort)
+            })
+            .await
+            .map_err(|e| format!("Sync task panicked: {e}"))?
+            .map_err(|e| format!("Failed to sync server files: {e}"))
+        }.await;
 
-        let update_result = crate::commands::steamcmd::steamcmd_app_update(
-            &app2,
-            &params.steamcmd_path,
-            &params.cache_dir,
-            false,
-            &channel,
-            None,
-        ).await;
-
-        if let Err(e) = update_result {
-            eprintln!("Scheduled update SteamCMD failed: {e}");
+        if let Err(e) = sync_result {
+            // Leave update_available set — the update did NOT happen.
+            crate::commands::notifications::dispatch_notification(
+                &app2, "update_failed", Some(&params.server_id), &params.server_name,
+                "Server Update Failed",
+                &format!("Failed to update {}: {e}", params.server_name),
+                "error",
+            ).await;
             emit_status(&app2, &ServerStatus {
                 server_id: params.server_id.clone(),
                 status: "stopped".into(),
@@ -462,29 +469,28 @@ pub async fn start_graceful_update(
             return;
         }
 
-        // Sync updated cache to server directory.
-        let cache_path  = std::path::PathBuf::from(&params.cache_dir);
-        let server_path = std::path::PathBuf::from(&params.install_path);
-        let app_clone = app2.clone();
-        let channel_clone = channel.clone();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            // Not individually cancellable from this countdown-triggered path — a never-set flag is correct here.
-            let no_abort = std::sync::atomic::AtomicBool::new(false);
-            crate::commands::steamcmd::sync_cache_to_server(&cache_path, &server_path, &app_clone, &channel_clone, &no_abort)
-        }).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
-            eprintln!("Cache sync failed: {e}");
+        let acf = std::path::Path::new(&params.install_path).join(crate::commands::steamcmd::ACF_REL_PATH);
+        if let Some(build_id) = crate::commands::steamcmd::read_acf_build_id(&acf) {
+            crate::commands::build_version::record_install(&app2, &params.server_id, &build_id);
         }
 
-        // Emit update-available cleared.
-        let _ = app2.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
-            "updateApplied": true,
-            "serverId": params.server_id,
-        }));
+        // Clear the flag before announcing it, so the frontend's refresh on
+        // this event reads the cleared value.
         if let Some(db_path) = state2.get_db_path() {
             if let Ok(conn) = crate::db::open(&db_path) {
                 crate::db::clear_update_available(&conn, &params.server_id);
             }
         }
+        let _ = app2.emit(crate::events::ASA_UPDATE_CHECK, serde_json::json!({
+            "updateApplied": true,
+            "serverId": params.server_id,
+        }));
+        crate::commands::notifications::dispatch_notification(
+            &app2, "server_updated", Some(&params.server_id), &params.server_name,
+            "Server Updated",
+            &format!("{} has been updated successfully.", params.server_name),
+            "success",
+        ).await;
 
         // Restart if requested — hand off to the staggered startup queue
         // rather than starting directly, same as the scheduler's post-update

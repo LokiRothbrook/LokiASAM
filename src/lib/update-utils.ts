@@ -29,6 +29,43 @@ export interface ServerUpdateInfo {
    *  will apply automatically within seconds, so manual-update UI should not
    *  offer to double it up. */
   autoUpdateImmediate: boolean;
+  /** What the server's Auto-Update automation will do about it. */
+  autoUpdatePlan: AutoUpdatePlan;
+}
+
+export type AutoUpdatePlan =
+  | { kind: "now" }
+  | { kind: "at_time"; time: string }
+  | { kind: "manual" };
+
+/** How (and whether) `server`'s Auto-Update automation will apply a pending update. */
+export function getAutoUpdatePlan(server: Pick<ServerRow, "update_automation_json">): AutoUpdatePlan {
+  try {
+    const cfg = JSON.parse(server.update_automation_json || "{}");
+    if (cfg.mode === "immediately") return { kind: "now" };
+    if (cfg.mode === "at_time") return { kind: "at_time", time: cfg.update_time || "03:00" };
+  } catch { /* malformed — treat as off */ }
+  return { kind: "manual" };
+}
+
+/** Multi-line summary of what will happen to each outdated server, e.g. for
+ *  the background check's notification — so it's clear whether anything is
+ *  actually going to apply the update or it's waiting on the user. */
+export function describeUpdatePlans(updates: ServerUpdateInfo[]): string {
+  const now    = updates.filter((u) => u.autoUpdatePlan.kind === "now").map((u) => u.name);
+  const manual = updates.filter((u) => u.autoUpdatePlan.kind === "manual").map((u) => u.name);
+  const timed  = new Map<string, string[]>();
+  for (const u of updates) {
+    if (u.autoUpdatePlan.kind !== "at_time") continue;
+    timed.set(u.autoUpdatePlan.time, [...(timed.get(u.autoUpdatePlan.time) ?? []), u.name]);
+  }
+  const lines: string[] = [];
+  if (now.length > 0) lines.push(`Auto-updating now: ${now.join(", ")}.`);
+  for (const [time, names] of timed) lines.push(`Auto-update scheduled for ${time}: ${names.join(", ")}.`);
+  if (manual.length > 0) {
+    lines.push(`Auto-Update is off for ${manual.join(", ")} — use Update All on the dashboard to apply.`);
+  }
+  return lines.join("\n");
 }
 
 export interface UpdateCheckSummary {
@@ -129,6 +166,7 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
             installedBuild:      installed,
             cachedBuild:         cachedBuildId,
             autoUpdateImmediate: isAutoUpdateImmediate(server),
+            autoUpdatePlan:      getAutoUpdatePlan(server),
           });
           if (!wasAlreadyFlagged) {
             newlyAvailable.push(server.id);
@@ -145,6 +183,7 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
             installedBuild:      "unknown",
             cachedBuild:         cachedBuildId,
             autoUpdateImmediate: isAutoUpdateImmediate(server),
+            autoUpdatePlan:      getAutoUpdatePlan(server),
           });
         }
       }
@@ -162,9 +201,10 @@ export async function runPerServerUpdateCheck(silent = false): Promise<UpdateChe
       ? "Server Update Available"
       : `${names.length} Servers Need Updates`;
 
-    const body = names.length === 1
+    const intro = names.length === 1
       ? `An update is available for ${names[0]}.`
       : `Updates available for: ${names.join(", ")}.`;
+    const body = `${intro}\n${describeUpdatePlans(allWithUpdates.filter((s) => newlyAvailable.includes(s.id)))}`;
 
     await dispatchNotification({
       eventType:  NOTIFICATION_EVENTS.UPDATE_AVAILABLE,
@@ -244,7 +284,12 @@ export async function applyUpdateToServer(
       await tauriCmd.gracefulStopServer(
         serverId, rconPort, rconPassword,
         shutdownWarn.warnPlayers, shutdownWarn.warnMinutes, shutdownWarn.warnMessage,
-      );
+      ).catch((e) => {
+        // The stop queues behind any backup/restart already running on this
+        // server — if that operation stopped it in the meantime, there's
+        // simply nothing left to stop.
+        if (!String(e).includes("is not running")) throw e;
+      });
     }
 
     onStatusChange?.("Applying update…");

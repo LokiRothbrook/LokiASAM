@@ -504,6 +504,7 @@ pub async fn install_server(
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
 
     let result = async {
+        let _cache_guard = state.asa_cache_lock.clone().write_owned().await;
         emit_line(&app_handle, &channel, "stdout",
             &format!("Ensuring server cache at: {cache_dir}"))?;
         tokio::fs::create_dir_all(&cache_dir).await
@@ -565,6 +566,7 @@ pub async fn update_server(
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
 
     let result = async {
+        let _cache_guard = state.asa_cache_lock.clone().write_owned().await;
         emit_line(&app_handle, &channel, "stdout", "Checking for updates (cache)…")?;
         tokio::fs::create_dir_all(&cache_dir).await
             .map_err(|e| format!("Failed to ensure cache directory: {e}"))?;
@@ -613,8 +615,12 @@ pub async fn validate_server_files(
     cache_dir: String,
     steamcmd_path: String,
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<(), String> {
     let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
+    // Overwrites this server's files — queue behind any backup reading them.
+    let _lock = state.lock_server(&server_id).await;
+    let _cache_guard = state.asa_cache_lock.clone().write_owned().await;
     emit_line(&app_handle, &channel, "stdout", "Validating server files in cache…")?;
 
     tokio::fs::create_dir_all(&cache_dir).await
@@ -742,6 +748,10 @@ pub async fn update_cache_inner(
     let abort = state.register_abort(server_id);
 
     let result: Result<String, String> = async {
+        // Exclusive access to the cache while SteamCMD rewrites it — waits for
+        // any in-progress cache→server syncs (auto-update/apply) to finish
+        // first, and holds off new ones until the check is done.
+        let _cache_guard = state.asa_cache_lock.clone().write_owned().await;
         emit_line(app_handle, &channel, "stdout", "Updating server cache from Steam…")?;
         tokio::fs::create_dir_all(&cache_dir)
             .await
@@ -792,14 +802,26 @@ pub async fn apply_cache_to_server(
     // Auto-Update landing on the same server around the same moment — both
     // used to sync the cache into the same install directory concurrently
     // with no coordination at all.
-    let _lock = state.try_lock_server(&server_id)
-        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+    //
+    // Queues (rather than failing) behind a backup or other operation that's
+    // already running on this server, so "Update All" doesn't fail a server
+    // just because its hourly backup happened to be mid-way through.
+    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
+    let _lock = match state.try_lock_server(&server_id) {
+        Some(guard) => guard,
+        None => {
+            let _ = emit_line(&app_handle, &channel, "stdout",
+                "Waiting for another operation on this server (e.g. a backup) to finish…");
+            state.lock_server(&server_id).await
+        }
+    };
 
     let op_key = format!("server_{server_id}");
     let abort = state.register_abort(&op_key);
-    let channel = format!("{}/{}", events::STEAMCMD_OUTPUT, server_id);
 
     let result = async {
+        // Never copy from the cache while an update check is rewriting it.
+        let _cache_guard = state.asa_cache_lock.clone().read_owned().await;
         emit_line(&app_handle, &channel, "stdout",
             "Syncing updated files to server (preserving Saved/ data)…")?;
 

@@ -32,6 +32,7 @@ import {
 } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { useAutostart } from "@/hooks/useAutostart";
+import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
@@ -994,6 +995,9 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
   const handleAutoCheckChange = async (value: string) => {
     setAutoCheck(value);
     await setAppSetting("asa_auto_check_hours", value);
+    // Apply immediately — otherwise the new mode only took effect after the
+    // next unrelated resync (or an app restart).
+    await syncSchedulesToRust();
   };
 
   return (
