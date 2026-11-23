@@ -37,7 +37,7 @@ import { LokiIcon } from "@/components/shared/LokiIcon";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import {
   GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS, buildPresetConfig,
-  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS, ARK_EVENTS,
+  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS, ARK_EVENTS, ARK_EVENT_MOD_IDS,
   type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter, type ArkEvent,
 } from "@/data/game-data";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -788,28 +788,23 @@ function BasicInfoStep({
                     <TooltipTrigger asChild>
                       <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
                     </TooltipTrigger>
-                    <TooltipContent>Shown to players in a pop-up when they join. Leave blank to disable. Use \n for line breaks.</TooltipContent>
+                    <TooltipContent>Shown to players in a pop-up when they join. Leave blank to disable. Single line only — ASA does not support line breaks.</TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
               </div>
-              <textarea
-                value={data.motdMessage}
-                onChange={(e) => onChange({ motdMessage: e.target.value })}
-                placeholder={"Welcome to the server!\nUse \\n for line breaks."}
-                rows={3}
-                className="w-full text-sm rounded px-3 py-2 resize-none"
-                style={{
-                  background: "var(--surface)",
-                  border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
-                  color: "var(--text-primary)",
-                  outline: "none",
-                  fontFamily: "inherit",
-                }}
-              />
-              {data.motdMessage.trim() && (
-                <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <Input
+                  type="text"
+                  value={data.motdMessage}
+                  // INI values can't span lines — strip any newlines from pasted text.
+                  onChange={(e) => onChange({ motdMessage: e.target.value.replace(/[\r\n]+/g, " ") })}
+                  placeholder="Welcome to the server!"
+                  className="flex-1 min-w-48"
+                  style={fieldStyle(true, false)}
+                />
+                <div className={cn("flex items-center gap-2 shrink-0", !data.motdMessage.trim() && "opacity-50 pointer-events-none")}>
                   <Label className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>Display for</Label>
-                  <div className="flex-1">
+                  <div className="w-28">
                     <NumberField
                       value={data.motdDuration}
                       onChange={(v) => onChange({ motdDuration: v })}
@@ -821,7 +816,7 @@ function BasicInfoStep({
                   </div>
                   <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>seconds</span>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         );
@@ -2670,6 +2665,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const allMaps = useAllMaps();
   const [input, setInput] = useState("");
+  const [addError, setAddError] = useState("");
   // Shared ["servers"] cache — see GameModeStep for why this isn't its own effect.
   const { data: existingServers = [] } = useQuery({ queryKey: ["servers"], queryFn: getServers });
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
@@ -2690,6 +2686,18 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
   const setModBrowserParams = useAppStore((s) => s.setModBrowserParams);
   const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
   const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
+  const verifying        = useAppStore((s) => s.verifying);
+  const verifyTotal      = useAppStore((s) => s.verifyTotal);
+  const verifyProgress   = useAppStore((s) => s.verifyProgress);
+  const startVerifying   = useAppStore((s) => s.startVerifying);
+  const stopVerifying    = useAppStore((s) => s.stopVerifying);
+
+  // Clear the add input when verification finishes
+  const prevVerifyingRef = useRef(false);
+  useEffect(() => {
+    if (prevVerifyingRef.current && !verifying) setInput("");
+    prevVerifyingRef.current = verifying;
+  }, [verifying]);
 
   // Listen for mod browser "add" events. ModBrowserEventHandler skips DB writes
   // for serverId="wizard-temp", so we handle wizard state directly here.
@@ -2734,11 +2742,43 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
     }
   };
 
-  const addMod = () => {
-    const id = input.trim();
-    if (!id || data.modIds.includes(id)) { setInput(""); return; }
-    onChange({ modIds: [...data.modIds, id] });
-    setInput("");
+  // Add mods by ID (comma-separated). Same flow as the server Mods tab: each ID
+  // is verified against CurseForge in the hidden window, which resolves its
+  // name and reports back via mod://add-to-server (handled above).
+  const addMod = async () => {
+    const raw = input.trim();
+    if (!raw) { setAddError("Enter at least one mod ID."); return; }
+
+    const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+    const invalid = ids.filter((id) => !/^\d+$/.test(id));
+    if (invalid.length > 0) {
+      setAddError(`Invalid ID${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")} — IDs must be numbers.`);
+      return;
+    }
+
+    // Event mods are handled by the Active Event selector on Basic Info.
+    const eventBlocked = ids.filter((id) => ARK_EVENT_MOD_IDS.has(id));
+    if (eventBlocked.length > 0) {
+      const names = eventBlocked.map((id) => ARK_EVENTS.find((e) => e.modId === id)?.displayName ?? id);
+      setAddError(`Event mods are managed by the Active Event setting on Basic Info: ${names.join(", ")}`);
+      return;
+    }
+
+    const toVerify = ids.filter((id) => !data.modIds.includes(id));
+    if (toVerify.length === 0) {
+      setAddError("All entered IDs are already in the mod list.");
+      return;
+    }
+
+    setAddError("");
+    startVerifying(toVerify.length);
+    try {
+      await tauriCmd.startModVerification(toVerify, "wizard-temp", data.modIds);
+    } catch (e) {
+      stopVerifying();
+      setAddError(String(e));
+    }
   };
 
   const removeMod = (id: string) => {
@@ -2823,22 +2863,35 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
       <div className="flex gap-2">
         <Input
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => { setInput(e.target.value); setAddError(""); }}
           onKeyDown={(e) => e.key === "Enter" && addMod()}
-          placeholder="CurseForge mod ID (e.g. 928793)"
+          placeholder="CurseForge mod IDs (e.g. 928793, 123456)"
           className="font-mono text-sm"
           style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          disabled={verifying}
         />
         <Button
           onClick={addMod}
+          disabled={verifying || !input.trim()}
           variant="outline"
           size="sm"
           className="gap-1 shrink-0"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
         >
-          <Plus className="w-4 h-4" /> Add
+          {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+          {verifying
+            ? verifyTotal > 0
+              ? `Verifying ${verifyProgress} / ${verifyTotal}…`
+              : "Verifying…"
+            : "Add"}
         </Button>
       </div>
+      {addError && (
+        <p className="text-xs flex items-center gap-1 -mt-3" style={{ color: "var(--neon-red)" }}>
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          {addError}
+        </p>
+      )}
 
       {data.modIds.length === 0 ? (
         <div className="rounded-lg p-4 text-center" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
@@ -2849,6 +2902,9 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
         <div className="space-y-1.5">
           {data.modIds.map((id, i) => {
             const locked = data.lockedModIds.includes(id);
+            // Same fallback the install step uses when writing the mod to the DB.
+            const name = data.modNames[id]
+              || (selectedMap?.requiredModId === id ? selectedMap.displayName : "Unknown Mod");
             return (
               <div
                 key={id}
@@ -2858,11 +2914,16 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
                   border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 }}
               >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: "var(--text-subtle)" }}>#{i + 1}</span>
-                  {locked && <Lock className="w-3 h-3" style={{ color: "var(--neon-cyan)" }} />}
-                  <span className="text-sm font-mono" style={{ color: locked ? "var(--neon-cyan)" : "var(--text-primary)" }}>{id}</span>
-                  {locked && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>Map Mod</span>}
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-mono w-5 text-center shrink-0" style={{ color: "var(--text-subtle)" }}>{i + 1}</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {locked && <Lock className="w-3 h-3 shrink-0" style={{ color: "var(--neon-cyan)" }} />}
+                      <span className="text-sm font-medium truncate" style={{ color: locked ? "var(--neon-cyan)" : "var(--text-primary)" }}>{name}</span>
+                      {locked && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>Map Mod</span>}
+                    </div>
+                    <span className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>{id}</span>
+                  </div>
                 </div>
                 {!locked && (
                   <Button

@@ -6,7 +6,7 @@ import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
   Settings2, X, ToggleLeft, ToggleRight, Terminal,
-  HelpCircle, Upload, FileText, Clipboard, Wand2, Sparkles, Package,
+  HelpCircle, Upload, FileText, Clipboard, Wand2, Sparkles, Package, MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -978,6 +978,81 @@ function ActiveEventCard({ server }: { server: ServerRow }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Message of the Day card
+// ---------------------------------------------------------------------------
+
+const MOTD_SECTION = "MessageOfTheDay";
+const MOTD_DEFAULT_DURATION = 20;
+
+function MotdCard({
+  config,
+  onChange,
+}: {
+  config: ServerConfigJson;
+  onChange: (updated: ServerConfigJson) => void;
+}) {
+  const gus = config.gameUserSettings as Record<string, Record<string, string>>;
+  const message = gus?.[MOTD_SECTION]?.Message ?? "";
+  const parsedDuration = parseInt(gus?.[MOTD_SECTION]?.Duration ?? "", 10);
+  const duration = isNaN(parsedDuration) ? MOTD_DEFAULT_DURATION : parsedDuration;
+
+  const commit = (nextMessage: string, nextDuration: number) => {
+    const updated = { ...gus };
+    // An empty message disables the MOTD — drop the section entirely,
+    // matching what the creation wizard writes.
+    if (nextMessage.trim()) {
+      updated[MOTD_SECTION] = { ...(gus?.[MOTD_SECTION] ?? {}), Message: nextMessage, Duration: String(nextDuration) };
+    } else {
+      delete updated[MOTD_SECTION];
+    }
+    onChange({ ...config, gameUserSettings: updated });
+  };
+
+  return (
+    <div
+      id="settings-motd"
+      className="glass-card rounded-xl p-4 space-y-3"
+      style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <MessageSquare className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Message of the Day</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Shown to players in a pop-up when they join. Single line only — leave blank to disable.
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 flex-wrap pl-6">
+        <Input
+          type="text"
+          value={message}
+          // INI values can't span lines — strip any newlines from pasted text.
+          onChange={(e) => commit(e.target.value.replace(/[\r\n]+/g, " "), duration)}
+          placeholder="Welcome to the server!"
+          className="h-8 text-sm flex-1 min-w-48"
+          style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}
+        />
+        <div className={`flex items-center gap-2 shrink-0 ${message.trim() ? "" : "opacity-50 pointer-events-none"}`}>
+          <Label className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>Display for</Label>
+          <div className="w-28">
+            <NumberField
+              value={duration}
+              onChange={(v) => commit(message, v)}
+              min={1}
+              max={120}
+              step={1}
+              defaultValue={MOTD_DEFAULT_DURATION}
+            />
+          </div>
+          <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>seconds</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Shared shape behind Shutdown/Restart/Update Warning cards — previously
  * three independent ~90-line copies differing only in which
@@ -1774,9 +1849,11 @@ export function ConfigTab({ server }: Props) {
             </Select>
           </div>
 
-          {/* INI Field Groups — Active Event slots in right after Session, since
-              it's session-scoped state (like the map/name/password above it)
-              even though it isn't an INI field. */}
+          {/* INI Field Groups — Active Event and MOTD slot in right after Session, since
+              they're session-scoped state (like the map/name/password above it).
+              Active Event isn't an INI field; MOTD gets its own card because it
+              lives in a separate [MessageOfTheDay] section and needs a paired
+              message + duration control. */}
           {INI_FIELD_GROUPS.map((g, idx) => (
             <Fragment key={g.id}>
               <SectionGroup
@@ -1786,7 +1863,12 @@ export function ConfigTab({ server }: Props) {
                 onChange={handleFieldChange}
                 defaultOpen={idx < 3}
               />
-              {g.id === "session" && <ActiveEventCard server={server} />}
+              {g.id === "session" && (
+                <>
+                  <ActiveEventCard server={server} />
+                  <MotdCard config={config} onChange={(updated) => { setConfig(updated); setIsDirty(true); }} />
+                </>
+              )}
             </Fragment>
           ))}
           <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />

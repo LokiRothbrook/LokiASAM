@@ -46,6 +46,7 @@ export function ModBrowserEventHandler() {
       // The wizard's ModsStep listens for this event directly and updates its own state.
       if (data.serverId === "wizard-temp") {
         incrementModAddedCount();
+        if (data.source === "verify") incrementVerifyProgress();
         return;
       }
 
