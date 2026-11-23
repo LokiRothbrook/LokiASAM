@@ -174,7 +174,7 @@ export function StartupRecoveryManager() {
           <Button
             size="sm"
             onClick={handleRestartNow}
-            style={{ background: "rgba(0,255,136,0.15)", border: "1px solid rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+            style={{ background: "rgba(var(--neon-green-rgb),0.15)", border: "1px solid rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
           >
             Restart Now
           </Button>

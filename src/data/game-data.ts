@@ -298,7 +298,7 @@ export function getMapById(id: string): ArkMap | undefined {
  * of GameUserSettings.ini. Keys match the exact INI key names used by ASA.
  */
 export interface GameUserSettingsConfig {
-  // [SessionSettings]
+  // [SessionSettings] / [ServerSettings] identity
   SessionName: string;
   ServerPassword: string;
   ServerAdminPassword: string;
@@ -334,7 +334,7 @@ export interface GameUserSettingsConfig {
   DinoCharacterHealthRecoveryMultiplier: number;
 
   // [ServerSettings] — PvP / PvE
-  AllowPvP: boolean;
+  ServerPVE: boolean;
   AllowCaveBuildingPvE: boolean;
   AllowCaveBuildingPvP: boolean;
   AllowFlyerCarryPvE: boolean;
@@ -444,7 +444,7 @@ export const DEFAULT_GAME_USER_SETTINGS: GameUserSettingsConfig = {
   DinoCharacterStaminaDrainMultiplier: 1.0,
   DinoCharacterHealthRecoveryMultiplier: 1.0,
 
-  AllowPvP: false,
+  ServerPVE: false,
   AllowCaveBuildingPvE: false,
   AllowCaveBuildingPvP: true,
   AllowFlyerCarryPvE: false,
@@ -519,7 +519,7 @@ export const GAME_MODES: GameModeConfig[] = [
     description:
       "Player vs Environment. Cooperative gameplay — no player-vs-player combat. Ideal for friends building together or solo players. Friendly fire and cryo sickness are disabled.",
     gameUserSettings: {
-      AllowPvP: false,
+      ServerPVE: true,
       AllowCaveBuildingPvE: true,
       AllowFlyerCarryPvE: true,
       EnablePvPGamma: false,
@@ -534,7 +534,7 @@ export const GAME_MODES: GameModeConfig[] = [
     description:
       "Player vs Player. Competitive combat enabled. Players and tribes can raid each other's bases and tames.",
     gameUserSettings: {
-      AllowPvP: true,
+      ServerPVE: false,
       EnablePvPGamma: true,
       PreventOfflinePvP: true,
       PreventOfflinePvPInterval: 900,
@@ -842,7 +842,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
       { section: "gus", iniSection: "SessionSettings", key: "SessionName", label: "Server Name", type: "string", placeholder: "My ASA Server", description: "The name shown in the server browser." },
       // MaxPlayers lives in [/Script/Engine.GameSession] in ASA's GameUserSettings.ini
       { section: "gus", iniSection: "/Script/Engine.GameSession", key: "MaxPlayers", label: "Max Players", type: "number", min: 1, max: 200, defaultValue: 70, description: "Maximum concurrent players allowed." },
-      { section: "gus", iniSection: "SessionSettings", key: "ServerPassword", label: "Join Password", type: "string", placeholder: "(no password)", description: "Players must enter this to join. Leave empty for public." },
+      { section: "gus", iniSection: "ServerSettings", key: "ServerPassword", label: "Join Password", type: "string", placeholder: "(no password)", description: "Players must enter this to join. Leave empty for public." },
     ],
   },
   {
@@ -871,12 +871,12 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     id: "breeding",
     title: "Taming & Breeding",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "MatingIntervalMultiplier", label: "Mating Interval", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = dinos can mate more often." },
-      { section: "gus", iniSection: "ServerSettings", key: "EggHatchSpeedMultiplier", label: "Egg Hatch Speed", type: "number", min: 0, max: 100, step: 0.5, defaultValue: 1.0, description: "Higher = eggs hatch faster." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyMatureSpeedMultiplier", label: "Baby Mature Speed", type: "number", min: 0, max: 100, step: 0.5, defaultValue: 1.0, description: "Higher = babies grow up faster." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyCuddleIntervalMultiplier", label: "Imprint Interval", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = imprinting cuddles required less often." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyImprintingStatScaleMultiplier", label: "Imprint Stat Scale", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Multiplier on imprinting stat bonuses." },
-      { section: "gus", iniSection: "ServerSettings", key: "BabyImprintAmountMultiplier", label: "Imprint Amount", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = each cuddle gives more imprint %." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "MatingIntervalMultiplier", label: "Mating Interval", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = dinos can mate more often." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "EggHatchSpeedMultiplier", label: "Egg Hatch Speed", type: "number", min: 0, max: 100, step: 0.5, defaultValue: 1.0, description: "Higher = eggs hatch faster." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "BabyMatureSpeedMultiplier", label: "Baby Mature Speed", type: "number", min: 0, max: 100, step: 0.5, defaultValue: 1.0, description: "Higher = babies grow up faster." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "BabyCuddleIntervalMultiplier", label: "Imprint Interval", type: "number", min: 0.01, max: 10, step: 0.05, defaultValue: 1.0, description: "Lower = imprinting cuddles required less often." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "BabyImprintingStatScaleMultiplier", label: "Imprint Stat Scale", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Multiplier on imprinting stat bonuses." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "BabyImprintAmountMultiplier", label: "Imprint Amount", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = each cuddle gives more imprint %." },
       { section: "gus", iniSection: "ServerSettings", key: "AllowAnyoneBabyImprintCuddle", label: "Anyone Can Imprint", type: "boolean", defaultValue: false, description: "Allow any player (not just the imprinter) to cuddle babies." },
     ],
   },
@@ -901,7 +901,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     id: "pvp_pve",
     title: "PvP / PvE Settings",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "AllowPvP", label: "Allow PvP", type: "boolean", defaultValue: false, description: "Enable player-vs-player combat." },
+      { section: "gus", iniSection: "ServerSettings", key: "ServerPVE", label: "PvE Mode", type: "boolean", defaultValue: false, description: "On = PvE (no player-vs-player damage). Off = PvP." },
       { section: "gus", iniSection: "ServerSettings", key: "EnablePvPGamma", label: "PvP Gamma", type: "boolean", defaultValue: false, description: "Allow gamma adjustment in PvP (gives night vision advantage)." },
       { section: "gus", iniSection: "ServerSettings", key: "PreventOfflinePvP", label: "Offline Raid Protection", type: "boolean", defaultValue: false, description: "Protect structures/tames when the owner tribe is offline." },
       { section: "gus", iniSection: "ServerSettings", key: "PreventOfflinePvPInterval", label: "ORP Grace Period (s)", type: "number", min: 0, max: 86400, step: 60, defaultValue: 900, description: "Seconds after last tribe member logs off before protection kicks in." },
@@ -916,7 +916,6 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
     id: "tribe",
     title: "Tribes & Structures",
     fields: [
-      { section: "gus", iniSection: "ServerSettings", key: "MaxNumberOfPlayersInTribe", label: "Max Tribe Size", type: "number", min: 0, max: 200, defaultValue: 0, description: "0 = unlimited." },
       { section: "gus", iniSection: "ServerSettings", key: "TribeNameChangeCooldown", label: "Tribe Rename Cooldown (min)", type: "number", min: 0, max: 1440, defaultValue: 15, description: "Minutes before a tribe can rename itself again. 0 = no cooldown." },
       { section: "gus", iniSection: "ServerSettings", key: "StructureDamageMultiplier", label: "Structure Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Scales all damage dealt to player-built structures." },
       { section: "gus", iniSection: "ServerSettings", key: "StructureResistanceMultiplier", label: "Structure Resistance", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Lower = structures take more damage." },
@@ -932,9 +931,8 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
       { section: "gus", iniSection: "ServerSettings", key: "DayCycleSpeedScale", label: "Day Cycle Speed", type: "number", min: 0.1, max: 10, step: 0.1, defaultValue: 1.0, description: "Overall day/night cycle speed." },
       { section: "gus", iniSection: "ServerSettings", key: "DayTimeSpeedScale", label: "Daytime Speed", type: "number", min: 0.1, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = daytime passes faster. Independent of the night speed scale." },
       { section: "gus", iniSection: "ServerSettings", key: "NightTimeSpeedScale", label: "Nighttime Speed", type: "number", min: 0.1, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = nights pass faster." },
-      { section: "gus", iniSection: "ServerSettings", key: "GlobalSpoilingTimeMultiplier", label: "Spoiling Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = food/items spoil slower." },
-      { section: "gus", iniSection: "ServerSettings", key: "GlobalItemDecompositionTimeMultiplier", label: "Item Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "How long dropped items persist on the ground before disappearing. Higher = longer." },
-      { section: "gus", iniSection: "ServerSettings", key: "GlobalCorpseDecompositionTimeMultiplier", label: "Corpse Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "How long player and wild dino corpses persist before disappearing. Higher = longer." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "GlobalSpoilingTimeMultiplier", label: "Spoiling Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = food/items spoil slower." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "GlobalItemDecompositionTimeMultiplier", label: "Item Decay Time", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "How long dropped items persist on the ground before disappearing. Higher = longer." },
       { section: "gus", iniSection: "ServerSettings", key: "AutoSavePeriodMinutes", label: "Auto-Save Interval (min)", type: "number", min: 0, max: 120, defaultValue: 15, description: "How often the server saves to disk. Set to 0 to disable ARK's auto-save and manage saves manually via RCON." },
     ],
   },
@@ -982,10 +980,10 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
       { section: "gus", iniSection: "ServerSettings", key: "TamedDinoDamageMultiplier", label: "Tamed Dino Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Scales damage output of tamed dinos. Stacks with the general Dino Damage multiplier." },
       { section: "gus", iniSection: "ServerSettings", key: "TamedDinoResistanceMultiplier", label: "Tamed Dino Resistance", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Lower = tamed dinos take more damage." },
       { section: "gus", iniSection: "ServerSettings", key: "HarvestHealthMultiplier", label: "Resource Health", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = resources take more hits to deplete. Combine with Harvest Amount for best feel." },
-      { section: "gus", iniSection: "ServerSettings", key: "FuelConsumptionIntervalMultiplier", label: "Fuel Consumption Interval", type: "number", min: 0.01, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = generators and campfires consume fuel less frequently." },
-      { section: "gus", iniSection: "ServerSettings", key: "FishingLootQualityMultiplier", label: "Fishing Loot Quality", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Scales the quality (e.g. Journeyman, Mastercraft) of items caught via fishing." },
-      { section: "gus", iniSection: "ServerSettings", key: "SupplyCrateLootQualityMultiplier", label: "Supply Crate Loot Quality", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Scales the quality of items inside supply drops and orbital supply crates." },
-      { section: "gus", iniSection: "ServerSettings", key: "UseCorpseLifeSpanMultiplier", label: "Corpse Lifespan", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = death bags and wild corpses persist longer." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "FuelConsumptionIntervalMultiplier", label: "Fuel Consumption Interval", type: "number", min: 0.01, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = generators and campfires consume fuel less frequently." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "FishingLootQualityMultiplier", label: "Fishing Loot Quality", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Scales the quality (e.g. Journeyman, Mastercraft) of items caught via fishing." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "SupplyCrateLootQualityMultiplier", label: "Supply Crate Loot Quality", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Scales the quality of items inside supply drops and orbital supply crates." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "UseCorpseLifeSpanMultiplier", label: "Corpse Lifespan", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Higher = death bags and wild corpses persist longer." },
       { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "DinoHarvestingDamageMultiplier", label: "Dino Harvesting Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 3.2, description: "Damage dinos deal to harvestable resources." },
       { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "PlayerHarvestingDamageMultiplier", label: "Player Harvesting Damage", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "Damage players deal to harvestable resources." },
       { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "TamedDinoCharacterFoodDrainMultiplier", label: "Tamed Dino Food Drain", type: "number", min: 0, max: 10, step: 0.1, defaultValue: 1.0, description: "How quickly tamed dinos deplete their food stat. Higher = need feeding more often." },
@@ -1158,7 +1156,7 @@ export const INI_FIELD_GROUPS: IniFieldGroup[] = [
       { section: "gus", iniSection: "ServerSettings", key: "AlwaysAllowStructurePickup", label: "Always Allow Structure Pickup", type: "boolean", defaultValue: false, description: "Remove the 30-second pickup timer. Structures can be picked up at any time." },
       { section: "gus", iniSection: "ServerSettings", key: "PvEAllowStructuresAtSupplyDrops", label: "Build Near Supply Drops (PvE)", type: "boolean", defaultValue: false, description: "Allow structures to be placed near orbital supply drops in PvE." },
       { section: "gus", iniSection: "ServerSettings", key: "AllowCrateSpawnsOnTopOfStructures", label: "Supply Drops Land on Structures", type: "boolean", defaultValue: false, description: "Supply drops will land on top of structures instead of being blocked by them." },
-      { section: "gus", iniSection: "ServerSettings", key: "bDisableStructurePlacementCollision", label: "Disable Structure Placement Collision", type: "boolean", defaultValue: false, description: "Allows structures to be placed overlapping other structures or terrain (creative-mode building)." },
+      { section: "game", iniSection: "/script/shootergame.shootergamemode", key: "bDisableStructurePlacementCollision", label: "Disable Structure Placement Collision", type: "boolean", defaultValue: false, description: "Allows structures to be placed overlapping other structures or terrain (creative-mode building)." },
     ],
   },
   // ── Download / Upload / Cluster Transfer ─────────────────────────────────
@@ -1249,6 +1247,8 @@ export interface LaunchParameter {
   key: string;
   flag: string;
   type: LaunchParamType;
+  /** When set, the param is edited as a dropdown of these values ("" = omit the flag). */
+  options?: { value: string; label: string }[];
   defaultValue: boolean | number | string;
   description: string;
   category: LaunchParamCategory;
@@ -1363,6 +1363,19 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
     flag: "-culture=",
     type: "string",
     defaultValue: "",
+    options: [
+      { value: "",   label: "None (server default)" },
+      { value: "en", label: "English (en)" },
+      { value: "de", label: "German (de)" },
+      { value: "fr", label: "French (fr)" },
+      { value: "es", label: "Spanish (es)" },
+      { value: "it", label: "Italian (it)" },
+      { value: "ja", label: "Japanese (ja)" },
+      { value: "ko", label: "Korean (ko)" },
+      { value: "pt", label: "Portuguese (pt)" },
+      { value: "ru", label: "Russian (ru)" },
+      { value: "zh", label: "Chinese Simplified (zh)" },
+    ],
     description: "Server locale / language code (e.g. en, de, fr). Leave blank for default.",
     category: "performance",
   },
@@ -1556,11 +1569,20 @@ export const LAUNCH_PARAMETERS: LaunchParameter[] = [
   },
   // ── Access control ────────────────────────────────────────────────────────
   {
-    key: "crossplay",
-    flag: "-crossplay",
-    type: "boolean",
-    defaultValue: false,
-    description: "Enable crossplay — allows Xbox, PlayStation, and PC players to join the same server.",
+    // Replaces the old "crossplay"/"AllPlatforms" toggles, neither of which
+    // is an ASA flag (see db.ts migration 024).
+    key: "ServerPlatform",
+    flag: "-ServerPlatform=",
+    type: "string",
+    defaultValue: "",
+    options: [
+      { value: "",              label: "Game default" },
+      { value: "ALL",           label: "All platforms (crossplay)" },
+      { value: "PC",            label: "PC only" },
+      { value: "PC+XSX+WINGDK", label: "PC + Xbox" },
+      { value: "PC+PS5",        label: "PC + PlayStation" },
+    ],
+    description: "Which platforms can join. All platforms enables crossplay between PC, Xbox and PlayStation.",
     category: "access",
   },
   {

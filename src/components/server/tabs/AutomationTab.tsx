@@ -18,13 +18,13 @@ import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
   setServerUpdateAutomation, updateBackupBroadcastMessage,
-  updateServerRestartSettings, updateServerUpdateSettings,
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
 import { getAppSetting, setAppSetting } from "@/lib/db";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import type { ServerRow } from "@/lib/db";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -122,19 +122,16 @@ function AddScheduleRow({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <select
+        <OptionSelect
           value={mode}
-          onChange={(e) => setMode(e.target.value as AddMode)}
-          className="h-8 text-xs px-2 rounded shrink-0"
-          style={{
-            background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
-            color: "var(--text-primary)", outline: "none",
-          }}
-        >
-          <option value="minutes">Every X minutes</option>
-          <option value="hours">Every X hours</option>
-          <option value="daily">Daily at time</option>
-        </select>
+          options={[
+            { value: "minutes", label: "Every X minutes" },
+            { value: "hours",   label: "Every X hours" },
+            { value: "daily",   label: "Daily at time" },
+          ]}
+          onChange={(v) => setMode(v as AddMode)}
+          className="w-auto shrink-0"
+        />
 
         {(mode === "minutes" || mode === "hours") && (
           <Input
@@ -295,11 +292,33 @@ interface CardProps {
   onNavigateToConfig?: (anchor?: string) => void;
 }
 
-function ScheduleCard({ server, serverId, type, icon: Icon, title, description, existing, onRefresh, onNavigateToConfig }: CardProps) {
-  const queryClient = useQueryClient();
-  const [restartWarnPlayers, setRestartWarnPlayers] = useState(server.restart_warn_players !== 0);
-  const [savingRestartWarn, setSavingRestartWarn] = useState(false);
+/**
+ * Read-only summary of a server's restart/update warning. The warning itself
+ * is edited in one place (Settings → Warnings) since the manual buttons and
+ * the automation share it.
+ */
+function WarningSummary({ action, warn, minutes, onEdit }: {
+  action: "restart" | "update";
+  warn: boolean;
+  minutes: number;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="rounded-lg px-3 py-2 flex items-center justify-between gap-2"
+      style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+        {warn
+          ? <>Players are warned <strong style={{ color: "var(--text-primary)" }}>{minutes} min</strong> before {action === "restart" ? "a restart" : "an update"} (same as the manual button).</>
+          : <>Players are <strong style={{ color: "var(--text-primary)" }}>not warned</strong> before {action === "restart" ? "a restart" : "an update"}.</>}
+      </span>
+      <button type="button" onClick={onEdit} className="text-xs shrink-0" style={{ color: "var(--neon-cyan)" }}>
+        Edit warning →
+      </button>
+    </div>
+  );
+}
 
+function ScheduleCard({ server, serverId, type, icon: Icon, title, description, existing, onRefresh, onNavigateToConfig }: CardProps) {
   const [addMode, setAddMode] = useState<AddMode>("daily");
   const [addNum,  setAddNum]  = useState(6);
   const [addTime, setAddTime] = useState("06:00");
@@ -307,26 +326,6 @@ function ScheduleCard({ server, serverId, type, icon: Icon, title, description, 
   const [adding,  setAdding]  = useState(false);
 
   const hasSchedules = existing.length > 0;
-
-  async function handleToggleRestartWarn(checked: boolean) {
-    setRestartWarnPlayers(checked);
-    setSavingRestartWarn(true);
-    try {
-      await updateServerRestartSettings(
-        server.id, checked,
-        server.restart_warn_minutes ?? 5,
-        server.restart_message || "Server restarting in {time}.",
-        server.restart_cancel_message || "Restart has been canceled.",
-      );
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      syncSchedulesToRust();
-    } catch (e) {
-      setRestartWarnPlayers(!checked);
-      toast.error(`Failed to save: ${e}`);
-    } finally {
-      setSavingRestartWarn(false);
-    }
-  }
 
   async function handleAdd() {
     setAdding(true);
@@ -396,7 +395,7 @@ function ScheduleCard({ server, serverId, type, icon: Icon, title, description, 
             <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h3>
             {hasSchedules && (
               <span className="px-1.5 py-0.5 rounded text-xs"
-                style={{ background: "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>
+                style={{ background: "rgba(var(--neon-green-rgb),0.08)", color: "var(--neon-green)", border: "1px solid rgba(var(--neon-green-rgb),0.2)" }}>
                 {existing.length} schedule{existing.length !== 1 ? "s" : ""}
               </span>
             )}
@@ -405,36 +404,14 @@ function ScheduleCard({ server, serverId, type, icon: Icon, title, description, 
         </div>
       </div>
 
-      {/* Restart warning — shared with the manual Restart button; edited in Settings */}
+      {/* Restart warning — shared with the manual Restart button; edited in Settings → Warnings */}
       {type === "restart" && (
-        <div className="rounded-lg p-3 space-y-2"
-          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={restartWarnPlayers}
-                disabled={savingRestartWarn}
-                onChange={(e) => handleToggleRestartWarn(e.target.checked)}
-                className="w-3.5 h-3.5"
-                style={{ accentColor: "var(--neon-purple)" }} />
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                Warn players before restart
-              </span>
-            </label>
-            {restartWarnPlayers && (
-              <button
-                type="button"
-                onClick={() => onNavigateToConfig?.("restart-warning-section")}
-                className="text-xs shrink-0"
-                style={{ color: "var(--neon-cyan)" }}
-              >
-                Edit message →
-              </button>
-            )}
-          </div>
-          <p className="text-xs pl-5" style={{ color: "var(--text-subtle)" }}>
-            Same warning message and timing as the manual Restart button — edit it in Settings.
-          </p>
-        </div>
+        <WarningSummary
+          action="restart"
+          warn={server.restart_warn_players !== 0}
+          minutes={server.restart_warn_minutes ?? 5}
+          onEdit={() => onNavigateToConfig?.("restart-warning-section")}
+        />
       )}
 
       {/* Existing schedule list */}
@@ -648,8 +625,8 @@ function BackupTypeSection({
       <Button size="sm" onClick={handleSave} disabled={saving}
         className="gap-1.5 cursor-pointer"
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          background: saved ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(var(--neon-green-rgb),0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}>
         {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -741,8 +718,8 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
       <Button size="sm" onClick={handleSave} disabled={saving}
         className="gap-1.5 cursor-pointer"
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          background: saved ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(var(--neon-green-rgb),0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}>
         {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -799,7 +776,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
           className="w-16 h-8 text-sm text-center shrink-0"
           style={{
             background: "rgba(0,0,0,0.4)",
-            border: `1px solid ${enabled ? "rgba(0,255,255,0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+            border: `1px solid ${enabled ? "rgba(var(--neon-cyan-rgb),0.35)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
             color: "var(--text-primary)",
           }}
         />
@@ -819,8 +796,8 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
       <Button size="sm" onClick={handleSave} disabled={saving}
         className="gap-1.5 cursor-pointer"
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          background: saved ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(var(--neon-green-rgb),0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}>
         {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -889,8 +866,8 @@ function ManualBackupRow({ serverId }: { serverId: string }) {
       <Button size="sm" onClick={handleSave} disabled={saving}
         className="gap-1.5 cursor-pointer"
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border:     saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          background: saved ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border:     saved ? "1px solid rgba(var(--neon-green-rgb),0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color:      saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}>
         {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
@@ -957,28 +934,6 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, triggerSaved] = useSavedFlash();
-  const [updateWarnPlayers, setUpdateWarnPlayers] = useState(server.update_warn_players !== 0);
-  const [savingUpdateWarn, setSavingUpdateWarn] = useState(false);
-
-  const handleToggleUpdateWarn = async (checked: boolean) => {
-    setUpdateWarnPlayers(checked);
-    setSavingUpdateWarn(true);
-    try {
-      await updateServerUpdateSettings(
-        server.id, checked,
-        server.update_warn_minutes ?? 5,
-        server.update_message || "Server going down for update in {time}.",
-        server.update_cancel_message || "Update has been canceled.",
-      );
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      syncSchedulesToRust();
-    } catch (e) {
-      setUpdateWarnPlayers(!checked);
-      toast.error(`Failed to save: ${e}`);
-    } finally {
-      setSavingUpdateWarn(false);
-    }
-  };
 
   useEffect(() => {
     (async () => {
@@ -1034,7 +989,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
             <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Update</h3>
             {isActive && (
               <span className="px-1.5 py-0.5 rounded text-xs"
-                style={{ background: "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>
+                style={{ background: "rgba(var(--neon-green-rgb),0.08)", color: "var(--neon-green)", border: "1px solid rgba(var(--neon-green-rgb),0.2)" }}>
                 Active
               </span>
             )}
@@ -1049,7 +1004,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
 
       {!autoCheckEnabled && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-          style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "rgba(255,165,0,0.8)" }}>
+          style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)", color: "rgba(var(--neon-orange-rgb),0.8)" }}>
           <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>Auto update checks are disabled in Settings. Enable a check interval there for automation to work.</span>
         </div>
@@ -1102,29 +1057,12 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
 
       {automation.mode !== "off" && (
         <div className="space-y-2 border-t pt-3" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.1)" }}>
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={updateWarnPlayers}
-                disabled={savingUpdateWarn}
-                onChange={(e) => handleToggleUpdateWarn(e.target.checked)}
-                className="w-3.5 h-3.5"
-                style={{ accentColor: "var(--neon-purple)" }} />
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warn players before update</span>
-            </label>
-            {updateWarnPlayers && (
-              <button
-                type="button"
-                onClick={() => onNavigateToConfig?.("update-warning-section")}
-                className="text-xs shrink-0"
-                style={{ color: "var(--neon-cyan)" }}
-              >
-                Edit message →
-              </button>
-            )}
-          </div>
-          <p className="text-xs pl-5" style={{ color: "var(--text-subtle)" }}>
-            Same warning message and timing as the manual Apply Update button — edit it in Settings.
-          </p>
+          <WarningSummary
+            action="update"
+            warn={server.update_warn_players !== 0}
+            minutes={server.update_warn_minutes ?? 5}
+            onEdit={() => onNavigateToConfig?.("update-warning-section")}
+          />
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" checked={automation.restart_after_update}
               onChange={(e) => handleSave({ restart_after_update: e.target.checked })}

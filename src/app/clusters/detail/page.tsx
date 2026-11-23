@@ -24,12 +24,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { joinCluster, leaveCluster } from "@/lib/cluster-utils";
 import { tauriCmd } from "@/lib/tauri-commands";
 import {
   getCluster,
   getServersInCluster,
   getServers,
-  setServerCluster,
   getAppSetting,
   formatServerVersion,
   type ClusterRow,
@@ -68,8 +68,7 @@ function AddServerDialog({ cluster, open, onClose, onAdded }: AddServerDialogPro
     if (!selectedId) return;
     setBusy(true);
     try {
-      await tauriCmd.addServerToCluster(selectedId, cluster.id);
-      await setServerCluster(selectedId, cluster.id);
+      await joinCluster(selectedId, cluster.id);
       const server = allServers.find((s) => s.id === selectedId);
       toast.success(`${server?.name ?? selectedId} added to ${cluster.name}.`);
       setSelectedId("");
@@ -251,8 +250,7 @@ function ClusterDetailContent() {
   async function handleRemove(server: ServerRow) {
     setRemoving(true);
     try {
-      await tauriCmd.removeServerFromCluster(server.id);
-      await setServerCluster(server.id, null);
+      await leaveCluster(server.id);
       toast.success(`${server.name} removed from cluster.`);
       refresh();
     } catch (e) {
@@ -507,8 +505,8 @@ function ClusterDetailContent() {
               variant="outline"
               onClick={() => removeTarget && handleRemove(removeTarget)}
               disabled={removing}
-              className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+              className="gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+              style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
             >
               {removing ? "Removing…" : "Remove"}
             </Button>

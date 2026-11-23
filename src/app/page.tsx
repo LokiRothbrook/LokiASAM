@@ -115,9 +115,9 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
           title={anyStarting ? "A server with a pending update is currently starting" : undefined}
           className="h-7 gap-1.5 text-xs"
           style={{
-            background:  "rgba(255,165,0,0.12)",
-            border:      "1px solid rgba(255,165,0,0.4)",
-            color:       "#ffa500",
+            background:  "rgba(var(--neon-orange-rgb),0.12)",
+            border:      "1px solid rgba(var(--neon-orange-rgb),0.4)",
+            color:       "var(--neon-orange)",
           }}
         >
           <ArrowUp className="w-3 h-3" />
@@ -170,7 +170,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ArrowUp className="w-4 h-4" style={{ color: "#ffa500" }} />
+            <ArrowUp className="w-4 h-4" style={{ color: "var(--neon-orange)" }} />
             {updates.length === 1 ? "Update Available" : `${updates.length} Updates Available`}
           </DialogTitle>
           <DialogDescription>
@@ -185,8 +185,8 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
               key={s.id}
               className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
               style={{
-                background: "rgba(255,165,0,0.05)",
-                border: "1px solid rgba(255,165,0,0.15)",
+                background: "rgba(var(--neon-orange-rgb),0.05)",
+                border: "1px solid rgba(var(--neon-orange-rgb),0.15)",
                 opacity: s.autoUpdateImmediate ? 0.6 : 1,
               }}
             >
@@ -212,8 +212,8 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
                     color: s.status === "running" ? "var(--neon-green)"
                          : s.status === "starting" ? "var(--neon-cyan)"
                          : "var(--text-muted)",
-                    background: s.status === "running" ? "rgba(0,255,136,0.08)"
-                              : s.status === "starting" ? "rgba(0,255,255,0.08)"
+                    background: s.status === "running" ? "rgba(var(--neon-green-rgb),0.08)"
+                              : s.status === "starting" ? "rgba(var(--neon-cyan-rgb),0.08)"
                               : "rgba(255,255,255,0.04)",
                   }}
                 >
@@ -235,7 +235,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
         {anyRunning && (
           <div
             className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "#ffa500" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)", color: "var(--neon-orange)" }}
           >
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             Running servers will be stopped to apply the update.
@@ -244,7 +244,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
         {anyStarting && (
           <div
             className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(255,200,0,0.06)", border: "1px solid rgba(255,200,0,0.2)", color: "#ffc800" }}
+            style={{ background: "rgba(var(--neon-yellow-rgb),0.06)", border: "1px solid rgba(var(--neon-yellow-rgb),0.2)", color: "var(--neon-yellow)" }}
           >
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             One or more servers are currently starting. Their startup will be cancelled to apply the update.
@@ -255,7 +255,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
         {(anyRunning || anyStarting) && (
           <div
             className="flex items-center gap-3 px-1 py-2 rounded-lg"
-            style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.15)" }}
           >
             <Switch
               id="ua-restart-toggle"
@@ -276,7 +276,7 @@ function UpdatesFoundDialog({ open, onOpenChange, updates, onUpdateAll }: Update
           <Button
             disabled={manualUpdates.length === 0}
             onClick={() => { onOpenChange(false); onUpdateAll(restartAfterUpdate); }}
-            style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.15)", borderColor: "rgba(var(--neon-orange-rgb),0.5)", color: "var(--neon-orange)" }}
           >
             <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
             {manualUpdates.length === updates.length
@@ -311,7 +311,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ArrowUp className="w-4 h-4" style={{ color: "#ffa500" }} />
+            <ArrowUp className="w-4 h-4" style={{ color: "var(--neon-orange)" }} />
             Update All Servers
           </DialogTitle>
           <DialogDescription>
@@ -324,7 +324,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
             <div
               key={s.id}
               className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
-              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+              style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.15)" }}
             >
               <div>
                 <span className="font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</span>
@@ -340,8 +340,8 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
                   color: s.status === "running" ? "var(--neon-green)"
                        : s.status === "starting" ? "var(--neon-cyan)"
                        : "var(--text-muted)",
-                  background: s.status === "running" ? "rgba(0,255,136,0.08)"
-                            : s.status === "starting" ? "rgba(0,255,255,0.08)"
+                  background: s.status === "running" ? "rgba(var(--neon-green-rgb),0.08)"
+                            : s.status === "starting" ? "rgba(var(--neon-cyan-rgb),0.08)"
                             : "rgba(255,255,255,0.04)",
                 }}
               >
@@ -354,7 +354,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
         {anyRunning && (
           <div
             className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "#ffa500" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)", color: "var(--neon-orange)" }}
           >
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             Running servers will be stopped to apply the update.
@@ -363,7 +363,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
         {anyStarting && (
           <div
             className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
-            style={{ background: "rgba(255,200,0,0.06)", border: "1px solid rgba(255,200,0,0.2)", color: "#ffc800" }}
+            style={{ background: "rgba(var(--neon-yellow-rgb),0.06)", border: "1px solid rgba(var(--neon-yellow-rgb),0.2)", color: "var(--neon-yellow)" }}
           >
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             One or more servers are currently starting. Their startup will be cancelled to apply the update.
@@ -373,7 +373,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
         {(anyRunning || anyStarting) && (
           <div
             className="flex items-center gap-3 px-1 py-2 rounded-lg"
-            style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.15)" }}
           >
             <Switch
               id="ua-conf-restart-toggle"
@@ -393,7 +393,7 @@ function UpdateAllDialog({ open, onOpenChange, updates, anyStarting, onConfirm }
           </Button>
           <Button
             onClick={() => { onOpenChange(false); onConfirm(restartAfterUpdate); }}
-            style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.15)", borderColor: "rgba(var(--neon-orange-rgb),0.5)", color: "var(--neon-orange)" }}
           >
             <ArrowUp className="w-3.5 h-3.5 mr-1.5" />
             Update All
@@ -584,7 +584,7 @@ export default function DashboardPage() {
                 onClick={handleStartAll}
                 title="Start all stopped servers"
                 className="gap-1.5"
-                style={{ borderColor: "rgba(0,255,136,0.3)", color: "var(--neon-green)", background: "rgba(0,255,136,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-green-rgb),0.3)", color: "var(--neon-green)", background: "rgba(var(--neon-green-rgb),0.05)" }}
               >
                 <Play className="w-3.5 h-3.5" /> Start All
               </Button>
@@ -594,7 +594,7 @@ export default function DashboardPage() {
                   ? "Force-kill all servers still stopping (no world save)"
                   : "Stop all running servers"}
                 className="gap-1.5"
-                style={{ borderColor: "rgba(255,0,85,0.3)", color: "rgba(255,0,85,0.85)", background: "rgba(255,0,85,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "rgba(var(--neon-red-rgb),0.85)", background: "rgba(var(--neon-red-rgb),0.05)" }}
               >
                 <Square className="w-3.5 h-3.5" /> {stoppingServers.length > 0 ? "Force Stop All" : "Stop All"}
               </Button>
@@ -604,7 +604,7 @@ export default function DashboardPage() {
                   ? "Skip the remaining warning wait and restart now"
                   : "Restart all running servers"}
                 className="gap-1.5"
-                style={{ borderColor: "rgba(0,255,255,0.3)", color: "var(--neon-cyan)", background: "rgba(0,255,255,0.05)" }}
+                style={{ borderColor: "rgba(var(--neon-cyan-rgb),0.3)", color: "var(--neon-cyan)", background: "rgba(var(--neon-cyan-rgb),0.05)" }}
               >
                 <RotateCcw className="w-3.5 h-3.5" /> {restartCountdownServers.length > 0 ? "Restart All Now" : "Restart All"}
               </Button>

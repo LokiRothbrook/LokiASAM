@@ -56,7 +56,7 @@ function VerifyFilesCard({ server }: Props) {
   };
 
   return (
-    <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(0,255,255,0.15)" }}>
+    <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-cyan-rgb),0.15)" }}>
       <div className="flex items-center gap-2">
         <ShieldCheck className="w-4 h-4" style={{ color: "var(--neon-cyan)" }} />
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Verify Files</h3>
@@ -73,7 +73,7 @@ function VerifyFilesCard({ server }: Props) {
           disabled={validating || isRunning}
           title={isRunning ? "Stop the server before validating" : "Verify game files via SteamCMD"}
           className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
-          style={{ background: "rgba(0,255,255,0.08)", border: "1px solid rgba(0,255,255,0.3)", color: validating ? "var(--text-muted)" : "var(--neon-cyan)", opacity: isRunning ? 0.5 : 1 }}
+          style={{ background: "rgba(var(--neon-cyan-rgb),0.08)", border: "1px solid rgba(var(--neon-cyan-rgb),0.3)", color: validating ? "var(--text-muted)" : "var(--neon-cyan)", opacity: isRunning ? 0.5 : 1 }}
         >
           {validating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
           {validating ? "Verifying…" : "Verify Files"}
@@ -183,7 +183,7 @@ function WipeSaveDataCard({ server }: Props) {
   };
 
   return (
-    <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,0,85,0.2)" }}>
+    <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-red-rgb),0.2)" }}>
       <div className="flex items-center gap-2">
         <X className="w-4 h-4" style={{ color: "var(--neon-red)" }} />
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Wipe Save Data</h3>
@@ -195,7 +195,7 @@ function WipeSaveDataCard({ server }: Props) {
       {isRunning ? (
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>Stop the server before wiping save data.</p>
       ) : wipeConfirm ? (
-        <div className="space-y-3 rounded-lg p-3" style={{ background: "rgba(255,0,85,0.06)", border: "1px solid rgba(255,0,85,0.3)" }}>
+        <div className="space-y-3 rounded-lg p-3" style={{ background: "rgba(var(--neon-red-rgb),0.06)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
           <p className="text-sm font-medium" style={{ color: "var(--neon-red)" }}>
             {wipeConfirm === "map" && "Wipe Map Data — this will delete all world state (*.ark). Character and tribe data will be preserved."}
             {wipeConfirm === "players" && "Wipe Player & Tribe Data — this will delete all character profiles and tribe records. World state will be preserved."}
@@ -207,7 +207,7 @@ function WipeSaveDataCard({ server }: Props) {
               Cancel
             </Button>
             <Button size="sm" onClick={() => handleWipe(wipeConfirm)} disabled={wiping}
-              style={{ background: "rgba(255,0,85,0.15)", borderColor: "rgba(255,0,85,0.5)", color: "var(--neon-red)" }}>
+              style={{ background: "rgba(var(--neon-red-rgb),0.15)", borderColor: "rgba(var(--neon-red-rgb),0.5)", color: "var(--neon-red)" }}>
               {wiping ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <X className="w-3.5 h-3.5 mr-1.5" />}
               Confirm Wipe
             </Button>
@@ -218,21 +218,21 @@ function WipeSaveDataCard({ server }: Props) {
           <button
             onClick={() => setWipeConfirm("map")}
             className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
+            style={{ background: "rgba(var(--neon-red-rgb),0.06)", color: "rgba(var(--neon-red-rgb),0.8)", border: "1px solid rgba(var(--neon-red-rgb),0.25)" }}
           >
             Map Wipe
           </button>
           <button
             onClick={() => setWipeConfirm("players")}
             className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={{ background: "rgba(255,0,85,0.06)", color: "rgba(255,0,85,0.8)", border: "1px solid rgba(255,0,85,0.25)" }}
+            style={{ background: "rgba(var(--neon-red-rgb),0.06)", color: "rgba(var(--neon-red-rgb),0.8)", border: "1px solid rgba(var(--neon-red-rgb),0.25)" }}
           >
             Player & Tribe Reset
           </button>
           <button
             onClick={() => setWipeConfirm("full")}
             className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={{ background: "rgba(255,0,85,0.12)", color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.4)" }}
+            style={{ background: "rgba(var(--neon-red-rgb),0.12)", color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.4)" }}
           >
             Full Wipe
           </button>

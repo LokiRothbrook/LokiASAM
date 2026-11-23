@@ -18,10 +18,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { createCluster } from "@/lib/cluster-utils";
 import { tauriCmd } from "@/lib/tauri-commands";
 import {
   getClustersWithServerCount,
-  createClusterRecord,
   deleteClusterRecord,
   getServersInCluster,
   setServerCluster,
@@ -48,13 +48,7 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
     if (!name.trim()) return;
     setBusy(true);
     try {
-      const baseDir = (await getAppSetting("base_dir")) ?? "";
-      const id = await tauriCmd.createCluster(
-        name.trim(),
-        baseDir,
-        customDir.trim() || undefined
-      );
-      await createClusterRecord(id, name.trim(), customDir.trim() || null);
+      await createCluster(name.trim(), customDir);
       toast.success(`Cluster "${name.trim()}" created.`);
       setName("");
       setCustomDir("");
@@ -223,7 +217,7 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
 
         <div
           className="flex items-center justify-between px-1 py-2 rounded-lg"
-          style={{ background: "rgba(255,0,85,0.05)", border: "1px solid rgba(255,0,85,0.15)" }}
+          style={{ background: "rgba(var(--neon-red-rgb),0.05)", border: "1px solid rgba(var(--neon-red-rgb),0.15)" }}
         >
           <div className="min-w-0 pr-3">
             <p className="text-sm" style={{ color: "var(--text-primary)" }}>
@@ -256,8 +250,8 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
             variant="outline"
             onClick={handleDelete}
             disabled={busy}
-            className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+            className="gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+            style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
           >
             {busy ? "Deleting…" : "Delete Cluster"}
           </Button>

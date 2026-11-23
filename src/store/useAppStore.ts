@@ -21,6 +21,8 @@ interface AppState {
   notificationBellOpen: boolean;
   /** Whether the New Server creation wizard overlay is visible. */
   showNewServerWizard: boolean;
+  /** Set when the creation wizard was opened via Clone Server — the source server ID. */
+  cloneFromServerId: string | null;
   /** Whether the CurseForge mod browser overlay is currently open. */
   modBrowserOpen: boolean;
   /** Params passed to the mod-browser page so it knows which server to open for. */
@@ -89,6 +91,8 @@ interface AppState {
   setSetupComplete: (complete: boolean) => void;
   setNotificationBellOpen: (open: boolean) => void;
   setShowNewServerWizard: (show: boolean) => void;
+  /** Open the creation wizard pre-filled as a clone of `serverId`. */
+  openCloneWizard: (serverId: string) => void;
   setModBrowserOpen: (open: boolean) => void;
   setModBrowserParams: (p: { serverId: string; serverName: string; addedModIds: string[] } | null) => void;
   setModBrowserJustClosed: (v: boolean) => void;
@@ -138,6 +142,7 @@ export const useAppStore = create<AppState>((set) => ({
   setupComplete: false,
   notificationBellOpen: false,
   showNewServerWizard: false,
+  cloneFromServerId: null,
   modBrowserOpen: false,
   modBrowserParams: null,
   modBrowserJustClosed: false,
@@ -188,7 +193,8 @@ export const useAppStore = create<AppState>((set) => ({
   setSetupChecked: (checked) => set({ setupChecked: checked }),
   setSetupComplete: (complete) => set({ setupComplete: complete }),
   setNotificationBellOpen: (open) => set({ notificationBellOpen: open }),
-  setShowNewServerWizard: (show) => set({ showNewServerWizard: show }),
+  setShowNewServerWizard: (show) => set({ showNewServerWizard: show, cloneFromServerId: null }),
+  openCloneWizard: (serverId) => set({ showNewServerWizard: true, cloneFromServerId: serverId }),
   setModBrowserOpen: (open) => set({ modBrowserOpen: open }),
   setModBrowserParams: (p) => set({ modBrowserParams: p }),
   setModBrowserJustClosed: (v) => set({ modBrowserJustClosed: v }),

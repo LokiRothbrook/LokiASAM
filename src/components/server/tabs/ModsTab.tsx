@@ -22,6 +22,7 @@ import { tauriCmd } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import type { ServerRow } from "@/lib/db";
 import { ARK_EVENT_MOD_IDS, ARK_EVENTS } from "@/data/game-data";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 
 interface Props {
   server: ServerRow;
@@ -59,17 +60,12 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
   return (
     <div className="glass-card flex flex-col gap-3 p-4 rounded-xl" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}>
       <p className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>Copy Mods from Server</p>
-      <select
+      <OptionSelect
         value={selectedId}
-        onChange={(e) => setSelectedId(e.target.value)}
-        className="w-full text-xs rounded-lg px-2 py-1.5"
-        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
-      >
-        <option value="">Select a server…</option>
-        {servers.map((s) => (
-          <option key={s.id} value={s.id}>{s.name}</option>
-        ))}
-      </select>
+        options={servers.map((s) => ({ value: s.id, label: s.name }))}
+        onChange={setSelectedId}
+        placeholder="Select a server…"
+      />
       <Button size="sm" disabled={!selectedId || copying} onClick={handleCopy} className="btn-neon-purple w-full">
         {copying ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
         Copy Mods
@@ -538,7 +534,7 @@ function ModRowItem({
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg group transition-all"
       style={{
-        background: locked ? "rgba(var(--neon-purple-rgb),0.04)" : "rgba(10,10,30,0.4)",
+        background: locked ? "rgba(var(--neon-purple-rgb),0.04)" : "var(--surface)",
         border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.18)" : "rgba(var(--neon-purple-rgb),0.08)"}`,
         opacity: enabled ? 1 : 0.55,
       }}
@@ -575,7 +571,7 @@ function ModRowItem({
             </span>
           )}
           {isEventMod && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,140,0,0.08)", color: "rgba(255,140,0,0.9)", border: "1px solid rgba(255,140,0,0.25)" }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-orange-rgb),0.08)", color: "rgba(var(--neon-orange-rgb),0.9)", border: "1px solid rgba(var(--neon-orange-rgb),0.25)" }}>
               Event — Manage in Config
             </span>
           )}

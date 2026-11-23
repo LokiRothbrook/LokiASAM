@@ -23,15 +23,17 @@ import {
 } from "recharts";
 import { useServerStats } from "@/hooks/useServerStats";
 import { useServerStatsHistory, type Timeframe } from "@/hooks/useServerStatsHistory";
+import { getIni, isIniTrue, GAME_MODE_SECTION } from "@/lib/ini-utils";
+import { loadEffectiveConfig } from "@/lib/server-config";
 import { tauriCmd, type ArkPlayer } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import {
-  updateServerStatus, getServerConfig, getServerModCount,
+  updateServerStatus, getServerModCount,
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
   pruneManualBackups, setServerAutoStart,
 } from "@/lib/db";
 import { buildLaunchCommandPreview, buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
-import { applyUpdateToServer } from "@/lib/update-utils";
+import { runServerUpdateAction } from "@/lib/update-utils";
 import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
@@ -476,11 +478,11 @@ type ActiveConfig = {
 };
 
 function gusVal(cfg: ActiveConfig, key: string): string {
-  return cfg.gameUserSettings?.["ServerSettings"]?.[key] ?? "";
+  return getIni(cfg.gameUserSettings, "ServerSettings", key) ?? "";
 }
 
 function gameVal(cfg: ActiveConfig, key: string): string {
-  return cfg.gameIni?.["/script/shootergame.shootergamemode"]?.[key] ?? "";
+  return getIni(cfg.gameIni, GAME_MODE_SECTION, key) ?? "";
 }
 
 function fmtMult(raw: string, def = "1.0"): string {
@@ -502,8 +504,8 @@ function ActiveConfigPanel({
   const [cliExpanded, setCliExpanded] = useState(false);
   if (!config) return null;
 
-  const pvp = gusVal(config, "ServerPVE") !== "True";
-  const orp = gusVal(config, "PreventOfflinePvP") === "True";
+  const pvp = !isIniTrue(gusVal(config, "ServerPVE"));
+  const orp = isIniTrue(gusVal(config, "PreventOfflinePvP"));
   const orpGrace = gusVal(config, "PreventOfflinePvPInterval");
   const battleEye = config.launchArgs?.["NoBattlEye"] !== "true";
   const harvest   = fmtMult(gusVal(config, "HarvestAmountMultiplier"));
@@ -647,19 +649,15 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
         getNextScheduledRestart(server.id),
         getHasBackupEnabled(server.id),
         getAppSetting("asa_auto_check_hours"),
-        getServerConfig(server.id),
+        loadEffectiveConfig({ id: server.id, install_path: server.install_path }).catch(() => null),
       ]);
       if (!cancelled) {
         setModCount(mc);
         if (cfgRow) {
-          const launchArgs = JSON.parse(cfgRow.launch_args_json || "{}");
-          setActiveConfig({
-            gameUserSettings: JSON.parse(cfgRow.game_user_settings_json || "{}"),
-            gameIni: JSON.parse(cfgRow.game_ini_json || "{}"),
-            launchArgs,
-          });
+          const { config } = cfgRow;
+          setActiveConfig(config);
           // Build launch command preview (async, non-blocking)
-          buildLaunchCommandPreview(serverRef.current, launchArgs).then(setLaunchCommand).catch(() => {});
+          buildLaunchCommandPreview(serverRef.current, config.launchArgs).then(setLaunchCommand).catch(() => {});
         }
         setLastBackup(lb);
         setNextRestart(nr);
@@ -796,84 +794,15 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
 
   const handleApplyUpdate = async () => {
     setShowUpdateConfirm(false);
-
-    if (server.update_warn_players && isRunning) {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
-
-      // Show a visible transition immediately — otherwise the card sits on
-      // "running" with no feedback until the warning countdown finishes.
-      // Rust reverts this back to "running" if the countdown gets cancelled.
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-
-      tauriCmd.startGracefulUpdate({
-        serverId:      server.id,
-        serverName:    server.name,
-        warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
-        rconPort:      server.rcon_port,
-        rconPassword:  server.admin_password,
-        message:       server.update_message || "Server going down for update in {time}.",
-        cancelMessage: server.update_cancel_message || "Update has been canceled.",
-        installPath:   server.install_path,
-        cacheDir,
-        steamcmdPath,
-        restartAfter:  restartAfterUpdate,
-        startParams,
-      }).catch(async (err) => {
-        // Refused before anything happened (e.g. a backup is running) —
-        // undo the optimistic "stopping" so the server doesn't look stuck.
-        await updateServerStatus(server.id, server.status, server.pid);
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-        toast.error(`Update failed: ${err}`);
-      });
-      return;
-    }
-
-    setApplyingUpdate(true);
-    try {
-      const wasRunning = isRunning;
-      try {
-        await applyUpdateToServer(
-          server.id,
-          server.name,
-          server.install_path,
-          wasRunning,
-          restartAfterUpdate,
-          server.rcon_port,
-          server.admin_password,
-          {
-            // This branch only runs when the warn-players countdown path above
-            // wasn't taken (warn disabled, or server wasn't running) — still
-            // always saves the world and shuts down cleanly via RCON either way.
-            warnPlayers: false,
-            warnMinutes: server.update_warn_minutes ?? 5,
-            warnMessage: server.update_message || "Server going down for update in {time}.",
-          },
-          (msg) => toast.info(msg),
-        );
-      } catch (err) {
-        if (err && typeof err === "object" && "restartNeeded" in err) {
-          await handleStart();
-          return;
-        }
-        throw err;
-      }
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.success(`${server.name} updated successfully.`);
-    } catch (e) {
-      toast.error(`Update failed: ${e}`);
-    } finally {
-      setApplyingUpdate(false);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-    }
+    await runServerUpdateAction(server, {
+      isRunning,
+      restartAfter: restartAfterUpdate,
+      onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      onPendingChange: setApplyingUpdate,
+      onRestartNeeded: handleStart,
+    });
   };
+
 
   const handleReinstall = async () => {
     queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -932,7 +861,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {countdown ? (
             <>
-              <span className="text-xs font-medium" style={{ color: "#ff8c00" }}>
+              <span className="text-xs font-medium" style={{ color: "var(--neon-orange)" }}>
                 {countdown.action === "restart"
                   ? `Restarting in ${formatCountdown(countdown.remainingSecs)}`
                   : `Updating in ${formatCountdown(countdown.remainingSecs)}`}
@@ -941,7 +870,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
                 size="sm"
                 onClick={() => tauriCmd.proceedNow(server.id).catch(() => {})}
                 className="gap-1.5"
-                style={{ background: "rgba(255,140,0,0.12)", borderColor: "rgba(255,140,0,0.4)", color: "#ff8c00" }}
+                style={{ background: "rgba(var(--neon-orange-rgb),0.12)", borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
               >
                 {countdown.action === "restart"
                   ? <><RotateCcw className="w-3.5 h-3.5" /> Restart Now</>
@@ -951,7 +880,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
                 size="sm" variant="outline"
                 onClick={() => tauriCmd.cancelCountdown(server.id).catch(() => {})}
                 className="gap-1.5"
-                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+                style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}
               >
                 <X className="w-3.5 h-3.5" /> Cancel
               </Button>
@@ -963,7 +892,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             </Button>
           ) : isUpdateQueued ? (
             <>
-              <span className="text-xs flex items-center gap-1.5" style={{ color: "#ffa500" }}>
+              <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-orange)" }}>
                 <Loader2 className="w-3 h-3 animate-spin" /> Update queued
               </span>
               <Button
@@ -988,7 +917,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
                 onClick={() => { removeFromStartupQueue(server.id); handleStart(); }}
                 className="gap-1.5"
                 title="Start immediately, skipping the wait for its turn"
-                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                style={{ background: "rgba(var(--neon-green-rgb),0.12)", borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
               >
                 <Play className="w-3.5 h-3.5" /> Skip Queue
               </Button>
@@ -1010,7 +939,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
               {!noRetry && (
                 <Button
                   size="sm" onClick={handleStart} disabled={actionPending} className="gap-1.5"
-                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                  style={{ background: "rgba(var(--neon-green-rgb),0.12)", borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
                 >
                   <Play className="w-3.5 h-3.5" /> Retry Start
                 </Button>
@@ -1025,28 +954,28 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
           ) : server.status === "stopping" ? (
             <Button
               size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
-              style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
+              style={{ background: "rgba(var(--neon-orange-rgb),0.12)", borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
             </Button>
           ) : server.status === "starting" ? (
             <Button
               size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
-              style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
+              style={{ background: "rgba(var(--neon-yellow-rgb),0.12)", borderColor: "rgba(var(--neon-yellow-rgb),0.4)", color: "var(--neon-yellow)" }}
             >
               <X className="w-3.5 h-3.5" /> Cancel Startup
             </Button>
           ) : isRunning ? (
             <Button
               size="sm" onClick={handleStop} disabled={actionPending} className="gap-1.5"
-              style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+              style={{ background: "rgba(var(--neon-red-rgb),0.12)", borderColor: "rgba(var(--neon-red-rgb),0.4)", color: "var(--neon-red)" }}
             >
               <Square className="w-3.5 h-3.5" /> Stop
             </Button>
           ) : (
             <Button
               size="sm" onClick={handleQueueStart} disabled={actionPending} className="gap-1.5"
-              style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+              style={{ background: "rgba(var(--neon-green-rgb),0.12)", borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
             >
               <Play className="w-3.5 h-3.5" /> Start
             </Button>
@@ -1069,9 +998,9 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
               title={!autoCheckEnabled ? "Enable auto update checks in Settings to use this feature" : undefined}
               className="gap-1.5"
               style={{
-                background: autoCheckEnabled ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
-                border: `1px solid ${autoCheckEnabled ? "rgba(255,165,0,0.4)" : "rgba(255,165,0,0.15)"}`,
-                color: autoCheckEnabled ? "#ffa500" : "rgba(255,165,0,0.4)",
+                background: autoCheckEnabled ? "rgba(var(--neon-orange-rgb),0.12)" : "rgba(var(--neon-orange-rgb),0.04)",
+                border: `1px solid ${autoCheckEnabled ? "rgba(var(--neon-orange-rgb),0.4)" : "rgba(var(--neon-orange-rgb),0.15)"}`,
+                color: autoCheckEnabled ? "var(--neon-orange)" : "rgba(var(--neon-orange-rgb),0.4)",
               }}
             >
               {applyingUpdate ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
@@ -1217,7 +1146,13 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
 
       {/* ── Network / install info ── */}
       <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
-        <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Network</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Network</h3>
+          <button onClick={() => navigateToConfig("settings-identity")} className="text-xs px-3 py-1 rounded-md shrink-0"
+            style={{ background: "rgba(var(--neon-purple-rgb),0.08)", color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            Edit →
+          </button>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           {[
             { label: "Game Port",   value: server.port },
@@ -1298,7 +1233,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             }}
             disabled={wipingDinos}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
-            style={{ background: "rgba(0,255,255,0.08)", border: "1px solid rgba(0,255,255,0.3)", color: "var(--neon-cyan)" }}
+            style={{ background: "rgba(var(--neon-cyan-rgb),0.08)", border: "1px solid rgba(var(--neon-cyan-rgb),0.3)", color: "var(--neon-cyan)" }}
           >
             {wipingDinos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Skull className="w-3.5 h-3.5" />}
             Wipe Wild Dinos
@@ -1321,7 +1256,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
           {isRunning && (
             <div
               className="flex items-center gap-3 px-1 py-2 rounded-lg"
-              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+              style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.15)" }}
             >
               <Switch
                 id="ov-restart-toggle"
@@ -1340,7 +1275,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
               Cancel
             </Button>
             <Button onClick={handleApplyUpdate} disabled={applyingUpdate}
-              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              style={{ background: "rgba(var(--neon-orange-rgb),0.15)", borderColor: "rgba(var(--neon-orange-rgb),0.5)", color: "var(--neon-orange)" }}>
               <ArrowUp className="w-3.5 h-3.5 mr-1.5" /> Update
             </Button>
           </DialogFooter>

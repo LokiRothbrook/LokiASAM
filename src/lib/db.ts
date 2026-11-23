@@ -557,6 +557,49 @@ async function runMigrations(db: Database): Promise<void> {
      SET created_at = REPLACE(created_at, ' ', 'T') || 'Z'
      WHERE created_at NOT LIKE '%T%'`
   );
+
+  // ── Migration 024: move INI keys older versions wrote to the wrong place ──
+  // ServerPassword → [ServerSettings], AllowPvP → ServerPVE, Game.ini-only
+  // settings out of GameUserSettings.ini, crossplay/AllPlatforms launch args
+  // → ServerPlatform, and the per-server NoTransferFromFiltering toggle (now
+  // automatic for cluster members). Applied to the DB copy, and to the INI
+  // files on disk with in-place patches so nothing else in them changes.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_024_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const { migrateIniKeys, migrateLaunchArgs } = await import("@/lib/config-migrations");
+      const { tauriCmd } = await import("@/lib/tauri-commands");
+      type Row = { server_id: string; game_user_settings_json: string; game_ini_json: string; launch_args_json: string; install_path: string };
+      const rows = await db.select<Row[]>(
+        `SELECT c.server_id, c.game_user_settings_json, c.game_ini_json, c.launch_args_json, s.install_path
+         FROM server_config c JOIN servers s ON s.id = c.server_id`
+      );
+      for (const row of rows) {
+        try {
+          const ini = migrateIniKeys(JSON.parse(row.game_user_settings_json || "{}"), JSON.parse(row.game_ini_json || "{}"));
+          const launch = migrateLaunchArgs(JSON.parse(row.launch_args_json || "{}"));
+          if (ini.ops.length > 0 || launch.changed) {
+            await db.execute(
+              "UPDATE server_config SET game_user_settings_json = ?, game_ini_json = ?, launch_args_json = ? WHERE server_id = ?",
+              [JSON.stringify(ini.gus), JSON.stringify(ini.game), JSON.stringify(launch.args), row.server_id]
+            );
+          }
+          // Disk: compute the ops from the files themselves (they may differ
+          // from the DB copy) and patch only those keys.
+          const disk = await tauriCmd.readServerConfig(row.install_path).catch(() => null);
+          if (disk) {
+            const { ops } = migrateIniKeys(disk.gameUserSettings, disk.gameIni);
+            if (ops.length > 0) await tauriCmd.patchServerIni(row.install_path, ops).catch(() => {});
+          }
+        } catch { /* skip malformed */ }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_024_done', 'true')"
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,10 +750,13 @@ export interface CreateServerInput {
 export async function createServer(input: CreateServerInput): Promise<string> {
   const db = await getDb();
   await db.execute(
+    // restart/update warnings default ON for new servers, matching shutdown
+    // (the column defaults are 0 only for rows that predate those columns).
     `INSERT INTO servers
        (id, name, map_id, install_path, port, query_port, rcon_port,
-        max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
+        max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name,
+        restart_warn_players, update_warn_players)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, 1, 1)`,
     [
       input.id,
       input.name,
@@ -740,6 +786,33 @@ export async function updateServerAdminPassword(id: string, adminPassword: strin
   await db.execute(
     "UPDATE servers SET admin_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [adminPassword, id]
+  );
+}
+
+export interface ServerIdentity {
+  name: string;
+  port: number;
+  queryPort: number;
+  rconPort: number;
+  maxPlayers: number;
+  serverPassword: string | null;
+  adminPassword: string;
+}
+
+/**
+ * Update the identity columns of a server row. These mirror INI keys
+ * (SessionName, ServerPassword, …) and are kept in sync by
+ * `saveServerConfigFull` / the Server Identity card.
+ */
+export async function updateServerIdentity(id: string, identity: ServerIdentity): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE servers SET name = ?, port = ?, query_port = ?, rcon_port = ?, max_players = ?,
+       server_password = ?, admin_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [
+      identity.name, identity.port, identity.queryPort, identity.rconPort, identity.maxPlayers,
+      identity.serverPassword || null, identity.adminPassword, id,
+    ]
   );
 }
 

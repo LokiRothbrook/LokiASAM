@@ -318,7 +318,7 @@ export function RconConsole({ server }: Props) {
       {/* ── Status bar ── */}
       <div
         className="glass-card rounded-xl px-3 py-2 flex items-center gap-3 flex-wrap shrink-0"
-        style={{ borderColor: connected ? "rgba(0,255,136,0.3)" : error ? "rgba(255,50,50,0.25)" : "rgba(var(--neon-purple-rgb),0.15)" }}
+        style={{ borderColor: connected ? "rgba(var(--neon-green-rgb),0.3)" : error ? "rgba(var(--neon-red-rgb),0.25)" : "rgba(var(--neon-purple-rgb),0.15)" }}
       >
         <div className="flex items-center gap-2">
           <div
@@ -346,7 +346,7 @@ export function RconConsole({ server }: Props) {
       {/* ── Error banner ── */}
       {error && !connected && (
         <div className="rounded-lg px-3 py-2 flex items-center gap-2 text-xs shrink-0"
-          style={{ background: "rgba(255,50,50,0.08)", border: "1px solid rgba(255,50,50,0.2)" }}>
+          style={{ background: "rgba(var(--neon-red-rgb),0.08)", border: "1px solid rgba(var(--neon-red-rgb),0.2)" }}>
           <AlertCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-red)" }} />
           <span style={{ color: "var(--neon-red)" }}>{error}</span>
         </div>
@@ -390,7 +390,7 @@ export function RconConsole({ server }: Props) {
           </div>
 
           {/* Banned Players accordion */}
-          <div className="glass-card rounded-xl shrink-0" style={{ border: "1px solid rgba(255,50,50,0.15)" }}>
+          <div className="glass-card rounded-xl shrink-0" style={{ border: "1px solid rgba(var(--neon-red-rgb),0.15)" }}>
             <button
               type="button"
               className="w-full flex items-center gap-1.5 px-3 py-2"
@@ -405,7 +405,7 @@ export function RconConsole({ server }: Props) {
                 : <ChevronDown className="w-3 h-3" style={{ color: "var(--text-muted)" }} />}
             </button>
             {banOpen && (
-              <div className="border-t px-2 pb-2 max-h-32 overflow-y-auto" style={{ borderColor: "rgba(255,50,50,0.1)" }}>
+              <div className="border-t px-2 pb-2 max-h-32 overflow-y-auto" style={{ borderColor: "rgba(var(--neon-red-rgb),0.1)" }}>
                 {banList.length === 0 ? (
                   <p className="text-xs py-1.5 text-center" style={{ color: "var(--text-muted)" }}>No banned players</p>
                 ) : banList.map((id) => (
@@ -427,7 +427,7 @@ export function RconConsole({ server }: Props) {
           </div>
 
           {/* Whitelist accordion */}
-          <div className="glass-card rounded-xl shrink-0" style={{ border: "1px solid rgba(0,255,136,0.15)" }}>
+          <div className="glass-card rounded-xl shrink-0" style={{ border: "1px solid rgba(var(--neon-green-rgb),0.15)" }}>
             <button
               type="button"
               className="w-full flex items-center gap-1.5 px-3 py-2"
@@ -442,7 +442,7 @@ export function RconConsole({ server }: Props) {
                 : <ChevronDown className="w-3 h-3" style={{ color: "var(--text-muted)" }} />}
             </button>
             {wlOpen && (
-              <div className="border-t px-2 pb-2 max-h-32 overflow-y-auto" style={{ borderColor: "rgba(0,255,136,0.1)" }}>
+              <div className="border-t px-2 pb-2 max-h-32 overflow-y-auto" style={{ borderColor: "rgba(var(--neon-green-rgb),0.1)" }}>
                 {whitelist.length === 0 ? (
                   <p className="text-xs py-1.5 text-center" style={{ color: "var(--text-muted)" }}>Whitelist is empty</p>
                 ) : whitelist.map((id) => (
@@ -471,7 +471,7 @@ export function RconConsole({ server }: Props) {
           <div
             ref={logRef}
             className="rounded-xl p-3 overflow-y-auto font-mono text-xs leading-relaxed"
-            style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.1)", flex: "1 1 0", minHeight: 0 }}
+            style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)", flex: "1 1 0", minHeight: 0 }}
           >
             {lines.map((l, i) => (
               <div key={i} className="flex gap-2 items-start mb-0.5">
@@ -560,7 +560,7 @@ export function RconConsole({ server }: Props) {
               onChange={(e) => { setCmdInput(e.target.value); setHistoryIdx(-1); }}
               onKeyDown={handleCmdKeyDown}
               disabled={!connected || sending}
-              style={{ background: "#000010", borderColor: connected ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.1)", color: "var(--text-primary)" }}
+              style={{ background: "var(--terminal-bg)", borderColor: connected ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(255,255,255,0.1)", color: "var(--text-primary)" }}
             />
             <Button size="sm" className="btn-neon-cyan h-9 shrink-0"
               onClick={() => sendCommand(cmdInput)}

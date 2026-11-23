@@ -223,8 +223,8 @@ export function TourModal({ onClose }: { onClose: () => void }) {
             ) : (
               <Button size="sm" onClick={onClose} className="gap-1.5"
                 style={{
-                  background: "rgba(0,255,136,0.12)",
-                  border: "1px solid rgba(0,255,136,0.4)",
+                  background: "rgba(var(--neon-green-rgb),0.12)",
+                  border: "1px solid rgba(var(--neon-green-rgb),0.4)",
                   color: "var(--neon-green)",
                 }}>
                 Done <CheckCircle2 className="w-3.5 h-3.5" />

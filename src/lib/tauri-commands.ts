@@ -182,6 +182,16 @@ export interface ServerConfigJson {
   launchArgs: Record<string, string>;
 }
 
+export interface IniPatchOp {
+  file: "gus" | "game";
+  section: string;
+  key: string;
+  /** null removes the key */
+  value: string | null;
+}
+
+export type AccessListId = "admins" | "exclusive_join" | "join_no_check";
+
 export interface BackupRecord {
   id: string;
   serverId: string;
@@ -520,6 +530,21 @@ export const tauriCmd = {
   /** Parse the user's existing INI files and return structured JSON. */
   importIniFiles: (gusPath: string, gameIniPath: string) =>
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
+  /** Parse the GameUserSettings.ini / Game.ini pair inside a folder (INI snapshot preview). */
+  readIniFolder: (folderPath: string) =>
+    invoke<ServerConfigJson>("read_ini_folder", { folderPath }),
+  /**
+   * Set (`value` string) or remove (`value: null`) individual keys in the
+   * server's INI files in place — comments, ordering and repeated keys are kept.
+   */
+  patchServerIni: (installPath: string, ops: IniPatchOp[]) =>
+    invoke<void>("patch_server_ini", { installPath, ops }),
+  /** Read a player access-list file (admins / exclusive join / join no-check). */
+  readAccessList: (installPath: string, list: AccessListId) =>
+    invoke<string>("read_server_text_file", { installPath, list }),
+  /** Overwrite a player access-list file. */
+  writeAccessList: (installPath: string, list: AccessListId, content: string) =>
+    invoke<void>("write_server_text_file", { installPath, list, content }),
 
   // Backups
   //

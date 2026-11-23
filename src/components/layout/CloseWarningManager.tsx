@@ -161,7 +161,7 @@ export function CloseWarningManager() {
       <DialogContent
         showCloseButton={false}
         className="max-w-md"
-        style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}
+        style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-orange-rgb),0.35)" }}
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
@@ -202,8 +202,8 @@ export function CloseWarningManager() {
             variant="outline"
             onClick={handleAbortAndClose}
             disabled={aborting}
-            className="w-full gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-            style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+            className="w-full gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+            style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
           >
             <TriangleAlert className="w-4 h-4" />
             {aborting ? "Aborting…" : "Abort & Close"}

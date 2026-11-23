@@ -39,7 +39,7 @@ import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { useSetupStore } from "@/store/useSetupStore";
 import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry, type FirewallStatus, type PortDef } from "@/lib/tauri-commands";
-import { applyTheme, ACCENT_OPTIONS, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
+import { applyTheme, ACCENT_OPTIONS, ACCENT_HEX, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
@@ -110,7 +110,7 @@ function DirValidationRow({ result }: { result: DirCheckResult }) {
   const GB_25 = 26843545600;
   const GB_50 = 53687091200;
   const spaceColor =
-    result.freeBytes < GB_25 ? "#ff3c3c" : result.freeBytes < GB_50 ? "#ffaa00" : "var(--neon-green)";
+    result.freeBytes < GB_25 ? "var(--neon-red)" : result.freeBytes < GB_50 ? "var(--neon-orange)" : "var(--neon-green)";
   return (
     <div className="space-y-1">
       {result.writable ? (
@@ -118,7 +118,7 @@ function DirValidationRow({ result }: { result: DirCheckResult }) {
           <CheckCircle2 className="w-3 h-3" /> Location is writable
         </p>
       ) : (
-        <p className="text-xs flex items-center gap-1.5" style={{ color: "#ff3c3c" }}>
+        <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}>
           <AlertCircle className="w-3 h-3" /> {result.error ?? "Not writable"}
         </p>
       )}
@@ -189,9 +189,9 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
     <>
       {/* Main delete dialog */}
       <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-        <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "var(--popover)", border: "1px solid rgba(255,60,60,0.3)" }}>
+        <DialogContent showCloseButton={false} className="max-w-md" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-red)" }}>
               <Trash2 className="w-4 h-4" /> Delete LokiASAM Data
             </DialogTitle>
           </DialogHeader>
@@ -202,8 +202,8 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
             </p>
 
             {/* Base case — always deleted */}
-            <div className="rounded-lg p-3 space-y-1" style={{ background: "rgba(255,60,60,0.08)", border: "1px solid rgba(255,60,60,0.2)" }}>
-              <p className="font-semibold text-xs uppercase tracking-wide" style={{ color: "#ff3c3c" }}>Will be deleted</p>
+            <div className="rounded-lg p-3 space-y-1" style={{ background: "rgba(var(--neon-red-rgb),0.08)", border: "1px solid rgba(var(--neon-red-rgb),0.2)" }}>
+              <p className="font-semibold text-xs uppercase tracking-wide" style={{ color: "var(--neon-red)" }}>Will be deleted</p>
               <p className="text-xs">The <span className="font-mono">lokiasam/</span> subfolder — database, config, and logs. Server game files are kept.</p>
             </div>
 
@@ -211,8 +211,8 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
             <label
               className="flex items-start gap-3 rounded-lg p-3 cursor-pointer transition-colors"
               style={{
-                background: fullWipe ? "rgba(255,60,60,0.12)" : "rgba(255,255,255,0.03)",
-                border: `1px solid ${fullWipe ? "rgba(255,60,60,0.4)" : "rgba(255,255,255,0.08)"}`,
+                background: fullWipe ? "rgba(var(--neon-red-rgb),0.12)" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${fullWipe ? "rgba(var(--neon-red-rgb),0.4)" : "rgba(255,255,255,0.08)"}`,
               }}
             >
               <input
@@ -222,7 +222,7 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
                 className="mt-0.5 shrink-0 accent-red-500"
               />
               <div className="space-y-0.5">
-                <p className="font-semibold text-xs" style={{ color: fullWipe ? "#ff3c3c" : "var(--text-primary)" }}>
+                <p className="font-semibold text-xs" style={{ color: fullWipe ? "var(--neon-red)" : "var(--text-primary)" }}>
                   Also delete server files, backups, and all other content
                 </p>
                 <p className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -238,7 +238,7 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
               Cancel
             </Button>
             <Button onClick={handleWipe} disabled={wiping}
-              style={{ background: "rgba(255,60,60,0.15)", borderColor: "rgba(255,60,60,0.5)", color: "#ff3c3c" }}>
+              style={{ background: "rgba(var(--neon-red-rgb),0.15)", borderColor: "rgba(var(--neon-red-rgb),0.5)", color: "var(--neon-red)" }}>
               {wiping
                 ? <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Deleting…</>
                 : fullWipe ? <><Trash2 className="w-3 h-3 mr-1.5" /> Delete Everything</> : <><Trash2 className="w-3 h-3 mr-1.5" /> Delete LokiASAM Data</>
@@ -250,9 +250,9 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
 
       {/* Nested confirmation for full wipe */}
       <Dialog open={confirmOpen} onOpenChange={(v) => { if (!v) setConfirmOpen(false); }}>
-        <DialogContent showCloseButton={false} className="max-w-sm" style={{ background: "var(--popover)", border: "1px solid rgba(255,60,60,0.5)" }}>
+        <DialogContent showCloseButton={false} className="max-w-sm" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-red-rgb),0.5)" }}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2" style={{ color: "#ff3c3c" }}>
+            <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-red)" }}>
               <TriangleAlert className="w-4 h-4" /> Complete Data Loss Warning
             </DialogTitle>
           </DialogHeader>
@@ -261,7 +261,7 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
             <p style={{ color: "var(--text-muted)" }}>
               This will permanently delete <strong style={{ color: "var(--text-primary)" }}>everything</strong> inside:
             </p>
-            <p className="font-mono text-xs break-all rounded px-2 py-1.5" style={{ background: "rgba(255,60,60,0.1)", color: "#ff3c3c" }}>
+            <p className="font-mono text-xs break-all rounded px-2 py-1.5" style={{ background: "rgba(var(--neon-red-rgb),0.1)", color: "var(--neon-red)" }}>
               {path}
             </p>
             <p style={{ color: "var(--text-muted)" }}>
@@ -275,7 +275,7 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
               Cancel
             </Button>
             <Button onClick={handleConfirmFullWipe}
-              style={{ background: "rgba(255,60,60,0.2)", borderColor: "rgba(255,60,60,0.6)", color: "#ff3c3c" }}>
+              style={{ background: "rgba(var(--neon-red-rgb),0.2)", borderColor: "rgba(var(--neon-red-rgb),0.6)", color: "var(--neon-red)" }}>
               <TriangleAlert className="w-3 h-3 mr-1.5" /> Yes, Delete Everything
             </Button>
           </DialogFooter>
@@ -426,11 +426,7 @@ function ThemeStep() {
         <div className="flex flex-wrap gap-2 px-1.5 py-1">
           {ACCENT_OPTIONS.map(({ value, label }) => {
             const selected = themeAccent === value;
-            const hexMap: Record<ThemeAccent, string> = {
-              purple: "#bf00ff", cyan: "#00ffff", green: "#00ff88", pink: "#ff0080",
-              orange: "#ff8800", red: "#ff0055", blue: "#4080ff", teal: "#00ffc8", yellow: "#ffdc00",
-            };
-            const hex = hexMap[value as ThemeAccent] ?? "#bf00ff";
+            const hex = ACCENT_HEX[value as ThemeAccent] ?? ACCENT_HEX.purple;
             return (
               <button
                 key={value}
@@ -440,7 +436,7 @@ function ThemeStep() {
                 style={{
                   background: hex,
                   boxShadow: selected
-                    ? `0 0 0 2px #050510, 0 0 0 4px ${hex}, 0 0 10px ${hex}`
+                    ? `0 0 0 2px var(--background), 0 0 0 4px ${hex}, 0 0 10px ${hex}`
                     : "none",
                 }}
               />
@@ -702,7 +698,7 @@ function ImportVerifyPanel({
 
   return (
     <div className="rounded-lg p-4 space-y-3"
-      style={{ background: "rgba(0,255,136,0.05)", border: `1px solid ${allGood && protonAllGood ? "rgba(0,255,136,0.2)" : "rgba(255,136,0,0.3)"}` }}>
+      style={{ background: "rgba(var(--neon-green-rgb),0.05)", border: `1px solid ${allGood && protonAllGood ? "rgba(var(--neon-green-rgb),0.2)" : "rgba(var(--neon-orange-rgb),0.3)"}` }}>
       <p className="text-xs font-semibold" style={{ color: "var(--neon-green)" }}>Found in database:</p>
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
         <span style={{ color: "var(--text-primary)" }}>{info.servers}</span> server{info.servers !== 1 ? "s" : ""} registered
@@ -710,7 +706,7 @@ function ImportVerifyPanel({
 
       {/* SteamCMD row */}
       {info.steamcmdMissing && !steamcmdDone ? (
-        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
+        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(var(--neon-orange-rgb),0.08)", border: "1px solid rgba(var(--neon-orange-rgb),0.25)" }}>
           <p className="text-xs font-medium" style={{ color: "var(--neon-orange)" }}>
             SteamCMD not found at previous path
           </p>
@@ -722,8 +718,8 @@ function ImportVerifyPanel({
               Install Now
             </Button>
             {installingSteamcmd && (
-              <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="outline" className="gap-1 h-7 text-xs bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}>
+              <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="outline" className="gap-1 h-7 text-xs bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+                style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}>
                 <StopCircle className="w-3 h-3" /> Cancel Install
               </Button>
             )}
@@ -746,7 +742,7 @@ function ImportVerifyPanel({
 
       {/* Proton-GE row (Linux only) */}
       {info.protonMissing && !protonDone ? (
-        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.25)" }}>
+        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(var(--neon-orange-rgb),0.08)", border: "1px solid rgba(var(--neon-orange-rgb),0.25)" }}>
           <p className="text-xs font-medium" style={{ color: "var(--neon-orange)" }}>
             Proton-GE not found at previous path
           </p>
@@ -759,7 +755,7 @@ function ImportVerifyPanel({
             </Button>
             {installingProton && (
               <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
-                style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+                style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
                 <StopCircle className="w-3 h-3" /> Cancel Install
               </Button>
             )}
@@ -895,8 +891,8 @@ function ImportVerifyPanel({
                   size="sm"
                   className="gap-1.5 h-7 text-xs"
                   style={{
-                    background: "rgba(0,255,136,0.08)",
-                    border: "1px solid rgba(0,255,136,0.4)",
+                    background: "rgba(var(--neon-green-rgb),0.08)",
+                    border: "1px solid rgba(var(--neon-green-rgb),0.4)",
                     color: "var(--neon-green)",
                   }}
                 >
@@ -1268,7 +1264,7 @@ function BaseDirStep() {
   };
 
   const borderColor = dirResult
-    ? dirResult.writable ? "rgba(0,255,136,0.5)" : "rgba(255,60,60,0.5)"
+    ? dirResult.writable ? "rgba(var(--neon-green-rgb),0.5)" : "rgba(var(--neon-red-rgb),0.5)"
     : baseDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
@@ -1352,11 +1348,11 @@ function BaseDirStep() {
 
           {/* ── LokiASAM already installed here ── */}
           {dirResult?.hasLokiasam && (
-            <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(255,136,0,0.08)", border: "1px solid rgba(255,136,0,0.35)" }}>
+            <div className="rounded-lg p-4 space-y-3" style={{ background: "rgba(var(--neon-orange-rgb),0.08)", border: "1px solid rgba(var(--neon-orange-rgb),0.35)" }}>
               <div className="flex items-start gap-2">
-                <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffaa00" }} />
+                <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-orange)" }} />
                 <div className="space-y-1">
-                  <p className="text-sm font-semibold" style={{ color: "#ffaa00" }}>LokiASAM is already installed here</p>
+                  <p className="text-sm font-semibold" style={{ color: "var(--neon-orange)" }}>LokiASAM is already installed here</p>
                   <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                     Continuing will overwrite your database — all server configurations, schedules, and settings will be permanently lost.
                   </p>
@@ -1376,7 +1372,7 @@ function BaseDirStep() {
                   variant="ghost"
                   onClick={() => setWipeOpen(true)}
                   className="gap-1.5 h-7 text-xs"
-                  style={{ color: "#ff3c3c", border: "1px solid rgba(255,60,60,0.3)" }}
+                  style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}
                 >
                   <Trash2 className="w-3 h-3" /> Delete LokiASAM Data
                 </Button>
@@ -1386,8 +1382,8 @@ function BaseDirStep() {
 
           {/* ── Directory has other content (not LokiASAM) ── */}
           {dirResult?.writable && !dirResult.hasLokiasam && !dirResult.isNew && !dirResult.isEmpty && (
-            <div className="rounded-lg p-3 flex items-start gap-2" style={{ background: "rgba(255,136,0,0.06)", border: "1px solid rgba(255,136,0,0.25)" }}>
-              <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "#ffaa00" }} />
+            <div className="rounded-lg p-3 flex items-start gap-2" style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.25)" }}>
+              <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-orange)" }} />
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                 This directory is not empty. Server files will be installed alongside existing content.
               </p>
@@ -1427,7 +1423,7 @@ function BaseDirStep() {
                 className="flex-1 font-mono text-sm"
                 style={{
                   background: "var(--surface)",
-                  borderColor: importValid ? "rgba(0,255,136,0.5)" : importDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
+                  borderColor: importValid ? "rgba(var(--neon-green-rgb),0.5)" : importDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                   color: "var(--text-primary)",
                 }}
               />
@@ -1448,8 +1444,8 @@ function BaseDirStep() {
               size="sm"
               className="gap-2"
               style={{
-                background: importValid ? "rgba(0,255,136,0.08)" : "rgba(var(--neon-purple-rgb),0.08)",
-                border: `1px solid ${importValid ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+                background: importValid ? "rgba(var(--neon-green-rgb),0.08)" : "rgba(var(--neon-purple-rgb),0.08)",
+                border: `1px solid ${importValid ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
                 color: importValid ? "var(--neon-green)" : "var(--neon-purple)",
               }}
             >
@@ -1463,7 +1459,7 @@ function BaseDirStep() {
             </Button>
 
             {importError && (
-              <p className="text-xs flex items-center gap-1.5" style={{ color: "#ff3c3c" }}>
+              <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--neon-red)" }}>
                 <AlertCircle className="w-3 h-3 shrink-0" /> {importError}
               </p>
             )}
@@ -1503,7 +1499,7 @@ function BackupDirStep() {
   };
 
   const borderColor = dirResult
-    ? dirResult.writable ? "rgba(0,255,136,0.5)" : "rgba(255,60,60,0.5)"
+    ? dirResult.writable ? "rgba(var(--neon-green-rgb),0.5)" : "rgba(var(--neon-red-rgb),0.5)"
     : backupDir ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
@@ -1553,7 +1549,7 @@ function BackupDirStep() {
 
       <div
         className="rounded-lg p-4"
-        style={{ background: "rgba(0,255,136,0.05)", border: "1px solid rgba(0,255,136,0.15)" }}
+        style={{ background: "rgba(var(--neon-green-rgb),0.05)", border: "1px solid rgba(var(--neon-green-rgb),0.15)" }}
       >
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           <span className="font-semibold" style={{ color: "var(--neon-green)" }}>Tip: </span>
@@ -1728,8 +1724,8 @@ function SteamCmdStep() {
             disabled={isLoading || !baseDir || steamcmdValidated}
             className="w-full gap-2"
             style={{
-              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
+              background: steamcmdValidated ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -1744,8 +1740,8 @@ function SteamCmdStep() {
           {isLoading && outputChannel !== null && (
             <Button
               onClick={async () => { await tauriCmd.abortOperation("steamcmd_install"); }}
-              size="sm" variant="outline" className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}>
+              size="sm" variant="outline" className="w-full gap-1.5 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+              style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}>
               <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           )}
@@ -1770,7 +1766,7 @@ function SteamCmdStep() {
               className="flex-1 font-mono text-sm"
               style={{
                 background: "var(--surface)",
-                borderColor: steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
+                borderColor: steamcmdValidated ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.2)",
                 color: "var(--text-primary)",
               }}
             />
@@ -1788,8 +1784,8 @@ function SteamCmdStep() {
             disabled={isLoading || !steamcmdPath || steamcmdValidated}
             className="w-full gap-2"
             style={{
-              background: steamcmdValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border: `1px solid ${steamcmdValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
+              background: steamcmdValidated ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${steamcmdValidated ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: steamcmdValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -2039,8 +2035,8 @@ function ProtonGEStep() {
             disabled={isLoading || !baseDir || protonValidated}
             className="w-full gap-2"
             style={{
-              background: protonValidated ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border: `1px solid ${protonValidated ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
+              background: protonValidated ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${protonValidated ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: protonValidated ? "var(--neon-green)" : "var(--neon-purple)",
             }}
           >
@@ -2057,8 +2053,8 @@ function ProtonGEStep() {
           {isLoading && showDownload && (
             <Button
               onClick={async () => { await tauriCmd.abortOperation("proton_download"); }}
-              size="sm" variant="outline" className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}>
+              size="sm" variant="outline" className="w-full gap-1.5 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+              style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}>
               <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           )}
@@ -2120,8 +2116,8 @@ function ProtonGEStep() {
                       disabled={!!validating}
                       className="w-full text-left rounded-lg px-3 py-2 text-xs transition-all disabled:opacity-60"
                       style={{
-                        background: isSelected ? "rgba(0,255,136,0.07)" : isValidating ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
-                        border: `1px solid ${isSelected ? "rgba(0,255,136,0.4)" : isValidating ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                        background: isSelected ? "rgba(var(--neon-green-rgb),0.07)" : isValidating ? "rgba(var(--neon-purple-rgb),0.1)" : "var(--surface)",
+                        border: `1px solid ${isSelected ? "rgba(var(--neon-green-rgb),0.4)" : isValidating ? "rgba(var(--neon-purple-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                       }}
                     >
                       <span className="flex items-center gap-2">
@@ -2191,7 +2187,7 @@ function ProtonGEStep() {
       {/* Managed-mode risk confirmation */}
       <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
         <DialogContent showCloseButton={false} className="max-w-md"
-          style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+          style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-orange-rgb),0.35)" }}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
               <AlertCircle className="w-5 h-5" /> Switch to Managed Mode?
@@ -2215,8 +2211,8 @@ function ProtonGEStep() {
               Keep Unmanaged
             </Button>
             <Button variant="outline"
-              className="gap-2 bg-[rgba(255,136,0,0.12)]! hover:bg-[rgba(255,136,0,0.25)]!"
-              style={{ borderColor: "rgba(255,136,0,0.4)", color: "var(--neon-orange)" }}
+              className="gap-2 bg-[rgba(var(--neon-orange-rgb),0.12)]! hover:bg-[rgba(var(--neon-orange-rgb),0.25)]!"
+              style={{ borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
               onClick={() => {
                 setShowManagedConfirm(false);
                 setProtonMode("managed");
@@ -2764,10 +2760,10 @@ function TrayStep() {
         </div>
         <div
           className="rounded-lg p-3"
-          style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.2)" }}
+          style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}
         >
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            <span className="font-semibold" style={{ color: "#ffa500" }}>Desktop notifications: </span>
+            <span className="font-semibold" style={{ color: "var(--neon-orange)" }}>Desktop notifications: </span>
             OS desktop notifications (the pop-up alerts from your system) may only appear when LokiASAM is minimized to the system tray. This is dependent on your desktop environment and its notification settings, not LokiASAM itself.
           </p>
         </div>
@@ -2910,7 +2906,7 @@ function AutoUpdateStep() {
           {protonMode === "existing" ? (
             <div className="space-y-3">
               <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
-                style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
+                style={{ background: "rgba(var(--neon-orange-rgb),0.07)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
                 <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
                 <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
                   Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
@@ -2919,8 +2915,8 @@ function AutoUpdateStep() {
               <Button
                 variant="outline"
                 onClick={() => setShowManagedConfirm(true)}
-                className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-                style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+                className="gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+                style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
               >
                 <TriangleAlert className="w-4 h-4" />
                 Allow LokiASAM to Manage This Proton Install
@@ -2928,7 +2924,7 @@ function AutoUpdateStep() {
 
               <Dialog open={showManagedConfirm} onOpenChange={(v) => { if (!v) setShowManagedConfirm(false); }}>
                 <DialogContent showCloseButton={false} className="max-w-lg"
-                  style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+                  style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-orange-rgb),0.35)" }}>
                   <DialogHeader>
                     <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
                       <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
@@ -2953,8 +2949,8 @@ function AutoUpdateStep() {
                       Go Back to Proton-GE Setup
                     </Button>
                     <Button variant="outline"
-                      className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-                      style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+                      className="w-full gap-1.5 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+                      style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
                       onClick={() => { setProtonMode("managed"); setShowManagedConfirm(false); }}>
                       Allow Management
                     </Button>
@@ -3065,7 +3061,7 @@ function AppImageIntegrationPanel() {
             onClick={handleUninstall}
             disabled={working}
             className="text-xs h-7"
-            style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+            style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}
           >
             {working ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
             Remove
@@ -3105,9 +3101,9 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
       <div
         className="w-20 h-20 rounded-full flex items-center justify-center"
         style={{
-          background: "rgba(0,255,136,0.1)",
-          border: "1px solid rgba(0,255,136,0.4)",
-          boxShadow: "0 0 30px rgba(0,255,136,0.2)",
+          background: "rgba(var(--neon-green-rgb),0.1)",
+          border: "1px solid rgba(var(--neon-green-rgb),0.4)",
+          boxShadow: "0 0 30px rgba(var(--neon-green-rgb),0.2)",
         }}
       >
         <CheckCircle2 className="w-10 h-10" style={{ color: "var(--neon-green)" }} />
@@ -3591,8 +3587,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     variant="outline"
                     onClick={handleNext}
                     disabled={saving}
-                    className="gap-2 bg-[rgba(0,255,136,0.12)]! hover:bg-[rgba(0,255,136,0.22)]!"
-                    style={{ borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                    className="gap-2 bg-[rgba(var(--neon-green-rgb),0.12)]! hover:bg-[rgba(var(--neon-green-rgb),0.22)]!"
+                    style={{ borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
                   >
                     {saving ? (
                       <><Loader2 className="w-4 h-4 animate-spin" /> Importing…</>

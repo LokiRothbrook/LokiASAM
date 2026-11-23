@@ -35,7 +35,7 @@ const isTauri =
   !!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 
 export function SetupGuard({ children }: SetupGuardProps) {
-  const { setupChecked, setupComplete, setSetupChecked, setSetupComplete, showNewServerWizard, setShowNewServerWizard } = useAppStore();
+  const { setupChecked, setupComplete, setSetupChecked, setSetupComplete, showNewServerWizard, setShowNewServerWizard, cloneFromServerId } = useAppStore();
 
   useEffect(() => {
     if (!isTauri) {
@@ -142,7 +142,12 @@ export function SetupGuard({ children }: SetupGuardProps) {
       )}
       {/* New server creation wizard overlay */}
       {showNewServerWizard && (
-        <ServerCreationWizard onClose={() => setShowNewServerWizard(false)} />
+        <ServerCreationWizard
+          // Remount when switching between New and Clone so state resets.
+          key={cloneFromServerId ?? "new"}
+          cloneFromServerId={cloneFromServerId}
+          onClose={() => setShowNewServerWizard(false)}
+        />
       )}
     </>
   );

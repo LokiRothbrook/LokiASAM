@@ -18,8 +18,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { reinstallServer } from "@/lib/server-actions";
@@ -27,16 +25,7 @@ import { getSaveFolder } from "@/data/game-data";
 import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import {
   deleteServerRecord,
-  createServer,
-  updateServerStatus,
-  getServerConfig,
-  saveServerConfig,
-  getServerMods,
-  addServerMod,
-  getServerSchedules,
-  createSchedule,
   getAppSetting,
-  isServerNameTaken,
   insertBackup,
   pruneManualBackups,
   getServers,
@@ -47,7 +36,6 @@ import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import { getExclusivePorts as computeExclusivePorts, getServerFirewallPorts } from "@/lib/firewall-utils";
 import type { PortDef } from "@/lib/tauri-commands";
-const uuidv4 = () => crypto.randomUUID();
 
 interface Props {
   server: ServerRow;
@@ -256,7 +244,7 @@ function DeleteDialog({
               sublabel="Only ports not shared with any other server will be removed"
               enabled={removeRules}
               onToggle={() => setRemoveRules((v) => !v)}
-              color="rgba(255,165,0,1)"
+              color="rgba(var(--neon-orange-rgb),1)"
             />
           )}
         </div>
@@ -266,7 +254,7 @@ function DeleteDialog({
           <Button
             disabled={deleting}
             onClick={handleDelete}
-            style={{ background: "rgba(255,0,85,0.15)", borderColor: "var(--neon-red)", color: "var(--neon-red)" }}
+            style={{ background: "rgba(var(--neon-red-rgb),0.15)", borderColor: "var(--neon-red)", color: "var(--neon-red)" }}
           >
             {deleting ? <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Deleting…</> : "Delete"}
           </Button>
@@ -280,194 +268,6 @@ function DeleteDialog({
 // Clone dialog
 // ---------------------------------------------------------------------------
 
-function CloneDialog({
-  server,
-  open,
-  onClose,
-}: {
-  server: ServerRow;
-  open: boolean;
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const [name, setName] = useState(`Copy of ${server.name}`);
-  const [port, setPort] = useState(server.port + 10);
-  const [queryPort, setQueryPort] = useState(server.query_port + 10);
-  const [rconPort, setRconPort] = useState(server.rcon_port + 10);
-  const [cloning, setCloning] = useState(false);
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
-
-  const handleClone = async () => {
-    const trimmedName = name.trim();
-    if (!trimmedName) { setError("Name is required."); return; }
-    setError("");
-    setCloning(true);
-
-    let newId = "";
-    let newInstallPath = "";
-
-    try {
-      // Validate name uniqueness
-      const taken = await isServerNameTaken(trimmedName);
-      if (taken) { setError("A server with this name already exists."); return; }
-
-      const baseDir = await getAppSetting("base_dir");
-      if (!baseDir) { setError("Base directory not configured."); return; }
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      newInstallPath = `${baseDir.replace(/[/\\]$/, "")}${sep}servers${sep}${trimmedName}`;
-      newId = uuidv4();
-
-      // 1. Create DB record
-      setStatus("Creating server record…");
-      await createServer({
-        id: newId,
-        name: trimmedName,
-        mapId: server.map_id,
-        installPath: newInstallPath,
-        port,
-        queryPort,
-        rconPort,
-        maxPlayers: server.max_players,
-        serverPassword: server.server_password ?? undefined,
-        adminPassword: server.admin_password,
-        clusterId: server.cluster_id ?? undefined,
-        presetId: server.preset_id ?? undefined,
-      });
-
-      // 2. Clone config (from DB)
-      setStatus("Copying configuration…");
-      const cfg = await getServerConfig(server.id);
-      if (cfg) {
-        await saveServerConfig(
-          newId,
-          cfg.game_user_settings_json,
-          cfg.game_ini_json,
-          cfg.launch_args_json
-        );
-      }
-
-      // 3. Clone mods
-      setStatus("Copying mods list…");
-      const mods = await getServerMods(server.id);
-      for (const mod of mods) {
-        await addServerMod(newId, mod.mod_id, mod.mod_name, mod.mod_thumbnail_url ?? null);
-      }
-
-      // 4. Clone schedules
-      setStatus("Copying schedules…");
-      const schedules = await getServerSchedules(server.id);
-      for (const s of schedules) {
-        await createSchedule({
-          id: uuidv4(),
-          serverId: newId,
-          scheduleType: s.schedule_type,
-          cronExpression: s.cron_expression,
-          enabled: s.enabled === 1,
-          configJson: s.config_json,
-        });
-      }
-
-      // 5. Copy game files
-      setStatus("Copying server files — this may take several minutes…");
-      try {
-        await tauriCmd.cloneServer(server.install_path, newInstallPath);
-      } catch (fileErr) {
-        const msg = String(fileErr);
-        if (msg.includes("Source path does not exist") || msg.includes("does not exist")) {
-          // Source server has no files — mark the clone as needing install.
-          // This is not an error; the user can reinstall from the server card.
-          await updateServerStatus(newId, "install_failed", null).catch(() => {});
-          queryClient.invalidateQueries({ queryKey: ["servers"] });
-          toast.success(`Server "${trimmedName}" cloned. Server files were not found — use Reinstall on the new server card.`);
-          onClose();
-          return;
-        }
-        throw fileErr;
-      }
-
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.success(`Server "${trimmedName}" cloned successfully.`);
-      onClose();
-    } catch (err) {
-      setError(`Clone failed: ${err}`);
-    } finally {
-      setCloning(false);
-      setStatus("");
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && !cloning && onClose()}>
-      <DialogContent className="max-w-md" onClick={(e) => e.stopPropagation()}>
-        <DialogHeader>
-          <DialogTitle style={{ color: "var(--neon-purple)" }}>
-            Clone &ldquo;{server.name}&rdquo;
-          </DialogTitle>
-          <DialogDescription>
-            Creates a copy with the same config, mods, and schedules. Port numbers must be unique.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 mt-1">
-          <div className="space-y-1.5">
-            <Label style={{ color: "var(--text-primary)" }}>New Server Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={cloning}
-              style={{ background: "var(--surface)", borderColor: "var(--border)" }}
-            />
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: "Game Port", value: port, set: setPort },
-              { label: "Query Port", value: queryPort, set: setQueryPort },
-              { label: "RCON Port", value: rconPort, set: setRconPort },
-            ].map(({ label, value: v, set }) => (
-              <div key={label} className="space-y-1.5">
-                <Label className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</Label>
-                <Input
-                  type="number"
-                  value={v}
-                  onChange={(e) => set(Number(e.target.value))}
-                  disabled={cloning}
-                  className="text-sm"
-                  style={{ background: "var(--surface)", borderColor: "var(--border)" }}
-                />
-              </div>
-            ))}
-          </div>
-
-          {cloning && status && (
-            <p className="text-xs flex items-center gap-2" style={{ color: "var(--neon-purple)" }}>
-              <Loader2 className="w-3 h-3 animate-spin shrink-0" /> {status}
-            </p>
-          )}
-          {error && (
-            <p className="text-xs" style={{ color: "var(--neon-red)" }}>{error}</p>
-          )}
-        </div>
-
-        <DialogFooter className="gap-2 mt-2">
-          <Button variant="outline" onClick={onClose} disabled={cloning}>Cancel</Button>
-          <Button
-            onClick={handleClone}
-            disabled={cloning || !name.trim()}
-            style={{
-              background: "rgba(var(--neon-purple-rgb),0.15)",
-              borderColor: "var(--neon-purple)",
-              color: "var(--neon-purple)",
-            }}
-          >
-            {cloning ? <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Cloning…</> : "Clone Server"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // ServerActionMenu
@@ -476,7 +276,7 @@ function CloneDialog({
 export function ServerActionMenu({ server, onBackupComplete }: Props) {
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen]   = useState(false);
-  const [cloneOpen,  setCloneOpen]    = useState(false);
+  const openCloneWizard = useAppStore((s) => s.openCloneWizard);
   const [backingUp,  setBackingUp]    = useState(false);
   const [verifying,  setVerifying]    = useState(false);
   const [reinstallOpen, setReinstallOpen] = useState(false);
@@ -596,10 +396,10 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
         <DropdownMenuContent align="end" className="w-48">
           <DropdownMenuItem
             className="gap-2"
-            onClick={() => setCloneOpen(true)}
+            onClick={() => openCloneWizard(server.id)}
           >
             <Copy className="w-4 h-4" />
-            Clone Server
+            Clone Server…
           </DropdownMenuItem>
           <DropdownMenuItem
             className="gap-2"
@@ -657,7 +457,6 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
       </DropdownMenu>
 
       <DeleteDialog server={server} open={deleteOpen} onClose={() => setDeleteOpen(false)} />
-      <CloneDialog  server={server} open={cloneOpen}  onClose={() => setCloneOpen(false)} />
 
       <Dialog open={reinstallOpen} onOpenChange={(v) => !v && setReinstallOpen(false)}>
         <DialogContent onClick={(e) => e.stopPropagation()}>

@@ -49,7 +49,7 @@ import {
   getHasBackupEnabled,
   getAppSetting,
 } from "@/lib/db";
-import { applyUpdateToServer, isAutoUpdateImmediate } from "@/lib/update-utils";
+import { runServerUpdateAction, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
@@ -355,84 +355,15 @@ export function ServerCard({ server }: Props) {
 
   const handleApplyUpdate = async () => {
     setShowUpdateConfirm(false);
-
-    if (server.update_warn_players && isRunning) {
-      const [baseDir, steamcmdPath] = await Promise.all([
-        getAppSetting("base_dir"),
-        getAppSetting("steamcmd_path"),
-      ]);
-      if (!baseDir || !steamcmdPath) return;
-      const sep = baseDir.includes("\\") ? "\\" : "/";
-      const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
-      const startParams = restartAfterUpdate ? await buildStartParams(server) : null;
-
-      // Show a visible transition immediately — otherwise the card sits on
-      // "running" with no feedback until the warning countdown finishes.
-      // Rust reverts this back to "running" if the countdown gets cancelled.
-      await updateServerStatus(server.id, "stopping", server.pid);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-
-      tauriCmd.startGracefulUpdate({
-        serverId:      server.id,
-        serverName:    server.name,
-        warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
-        rconPort:      server.rcon_port,
-        rconPassword:  server.admin_password,
-        message:       server.update_message || "Server going down for update in {time}.",
-        cancelMessage: server.update_cancel_message || "Update has been canceled.",
-        installPath:   server.install_path,
-        cacheDir,
-        steamcmdPath,
-        restartAfter:  restartAfterUpdate,
-        startParams,
-      }).catch(async (err) => {
-        // Refused before anything happened (e.g. a backup is running) —
-        // undo the optimistic "stopping" so the server doesn't look stuck.
-        await updateServerStatus(server.id, server.status, server.pid);
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
-        toast.error(`Update failed: ${err}`);
-      });
-      return;
-    }
-
-    setActionPending(true);
-    try {
-      const wasRunning = isRunning;
-      try {
-        await applyUpdateToServer(
-          server.id,
-          server.name,
-          server.install_path,
-          wasRunning,
-          restartAfterUpdate,
-          server.rcon_port,
-          server.admin_password,
-          {
-            // This branch only runs when the warn-players countdown path above
-            // wasn't taken (warn disabled, or server wasn't running) — still
-            // always saves the world and shuts down cleanly via RCON either way.
-            warnPlayers: false,
-            warnMinutes: server.update_warn_minutes ?? 5,
-            warnMessage: server.update_message || "Server going down for update in {time}.",
-          },
-          (msg) => toast.info(msg),
-        );
-      } catch (err) {
-        if (err && typeof err === "object" && "restartNeeded" in err) {
-          await handleStart();
-          return;
-        }
-        throw err;
-      }
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.success(`${server.name} updated successfully.`);
-    } catch (e) {
-      toast.error(`Update failed: ${e}`);
-    } finally {
-      setActionPending(false);
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-    }
+    await runServerUpdateAction(server, {
+      isRunning,
+      restartAfter: restartAfterUpdate,
+      onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+      onPendingChange: setActionPending,
+      onRestartNeeded: handleStart,
+    });
   };
+
 
   const handleReinstall = async () => {
     queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -449,9 +380,9 @@ export function ServerCard({ server }: Props) {
   // ── Border glow based on status ───────────────────────────────────────────
 
   const borderColor = isRunning
-    ? "rgba(0,255,136,0.35)"
+    ? "rgba(var(--neon-green-rgb),0.35)"
     : server.status === "error" || server.status === "crashed" || isReinstallable
-    ? "rgba(255,0,85,0.35)"
+    ? "rgba(var(--neon-red-rgb),0.35)"
     : "rgba(var(--neon-purple-rgb),0.2)";
 
   return (
@@ -460,9 +391,9 @@ export function ServerCard({ server }: Props) {
       style={{
         border: `1px solid ${borderColor}`,
         boxShadow: isRunning
-          ? "0 0 20px rgba(0,255,136,0.08)"
+          ? "0 0 20px rgba(var(--neon-green-rgb),0.08)"
           : server.status === "error" || server.status === "crashed"
-          ? "0 0 20px rgba(255,0,85,0.08)"
+          ? "0 0 20px rgba(var(--neon-red-rgb),0.08)"
           : undefined,
       }}
       onClick={(e) => {
@@ -642,7 +573,7 @@ export function ServerCard({ server }: Props) {
                 size="sm"
                 onClick={() => tauriCmd.proceedNow(server.id).catch(() => {})}
                 className="gap-1.5 flex-1"
-                style={{ background: "rgba(255,140,0,0.12)", borderColor: "rgba(255,140,0,0.4)", color: "#ff8c00" }}
+                style={{ background: "rgba(var(--neon-orange-rgb),0.12)", borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
               >
                 {countdown.action === "restart"
                   ? <><RotateCcw className="w-3.5 h-3.5" /> Restart Now</>
@@ -652,7 +583,7 @@ export function ServerCard({ server }: Props) {
                 size="sm" variant="outline"
                 onClick={() => tauriCmd.cancelCountdown(server.id).catch(() => {})}
                 className="gap-1.5"
-                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+                style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}
               >
                 <X className="w-3.5 h-3.5" /> Cancel
               </Button>
@@ -667,7 +598,7 @@ export function ServerCard({ server }: Props) {
                   queryClient.invalidateQueries({ queryKey: ["servers"] });
                 }}
                 className="gap-1.5"
-                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+                style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}
               >
                 <XCircle className="w-3.5 h-3.5" /> Cancel
               </Button>
@@ -681,7 +612,7 @@ export function ServerCard({ server }: Props) {
             </>
           ) : isUpdateQueued ? (
             <>
-              <span className="text-xs flex items-center gap-1" style={{ color: "#ffa500" }}>
+              <span className="text-xs flex items-center gap-1" style={{ color: "var(--neon-orange)" }}>
                 <Loader2 className="w-3 h-3" /> Update queued
               </span>
               <Button
@@ -706,7 +637,7 @@ export function ServerCard({ server }: Props) {
                 onClick={() => { removeFromStartupQueue(server.id); handleStart(); }}
                 className="gap-1.5 ml-auto"
                 title="Start immediately, skipping the wait for its turn"
-                style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                style={{ background: "rgba(var(--neon-green-rgb),0.12)", borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
               >
                 <Play className="w-3.5 h-3.5" /> Skip Queue
               </Button>
@@ -732,7 +663,7 @@ export function ServerCard({ server }: Props) {
               {isStartFailed && !noRetry && (
                 <Button
                   size="sm" disabled={actionPending} onClick={handleStart} className="gap-1.5"
-                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                  style={{ background: "rgba(var(--neon-green-rgb),0.12)", borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
                 >
                   <Play className="w-3.5 h-3.5" /> Retry
                 </Button>
@@ -754,28 +685,28 @@ export function ServerCard({ server }: Props) {
               {server.status === "stopping" ? (
                 <Button
                   size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
-                  style={{ background: "rgba(255,100,0,0.12)", borderColor: "rgba(255,100,0,0.4)", color: "#ff6400" }}
+                  style={{ background: "rgba(var(--neon-orange-rgb),0.12)", borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
                 >
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
                 </Button>
               ) : isStarting ? (
                 <Button
                   size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
-                  style={{ background: "rgba(255,200,0,0.12)", borderColor: "rgba(255,200,0,0.4)", color: "#ffc800" }}
+                  style={{ background: "rgba(var(--neon-yellow-rgb),0.12)", borderColor: "rgba(var(--neon-yellow-rgb),0.4)", color: "var(--neon-yellow)" }}
                 >
                   <X className="w-3.5 h-3.5" /> Cancel Startup
                 </Button>
               ) : isRunning ? (
                 <Button
                   size="sm" disabled={actionPending} onClick={handleStop} className="gap-1.5 flex-1"
-                  style={{ background: "rgba(255,0,85,0.12)", borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+                  style={{ background: "rgba(var(--neon-red-rgb),0.12)", borderColor: "rgba(var(--neon-red-rgb),0.4)", color: "var(--neon-red)" }}
                 >
                   <Square className="w-3.5 h-3.5" /> Stop
                 </Button>
               ) : (
                 <Button
                   size="sm" disabled={actionPending} onClick={handleQueueStart} className="gap-1.5 flex-1"
-                  style={{ background: "rgba(0,255,136,0.12)", borderColor: "rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+                  style={{ background: "rgba(var(--neon-green-rgb),0.12)", borderColor: "rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
                 >
                   <Play className="w-3.5 h-3.5" /> Start
                 </Button>
@@ -802,9 +733,9 @@ export function ServerCard({ server }: Props) {
                   }
                   className="gap-1.5"
                   style={{
-                    background:   autoCheckEnabled && !autoUpdateImmediate ? "rgba(255,165,0,0.12)" : "rgba(255,165,0,0.04)",
-                    borderColor:  autoCheckEnabled && !autoUpdateImmediate ? "rgba(255,165,0,0.5)"  : "rgba(255,165,0,0.2)",
-                    color:        autoCheckEnabled && !autoUpdateImmediate ? "#ffa500"              : "rgba(255,165,0,0.4)",
+                    background:   autoCheckEnabled && !autoUpdateImmediate ? "rgba(var(--neon-orange-rgb),0.12)" : "rgba(var(--neon-orange-rgb),0.04)",
+                    borderColor:  autoCheckEnabled && !autoUpdateImmediate ? "rgba(var(--neon-orange-rgb),0.5)"  : "rgba(var(--neon-orange-rgb),0.2)",
+                    color:        autoCheckEnabled && !autoUpdateImmediate ? "var(--neon-orange)"              : "rgba(var(--neon-orange-rgb),0.4)",
                   }}
                 >
                   <ArrowUp className="w-3.5 h-3.5" /> {autoUpdateImmediate ? "Auto-updating" : "Update"}
@@ -841,7 +772,7 @@ export function ServerCard({ server }: Props) {
           {isRunning && (
             <div
               className="flex items-center justify-between px-1 py-2 rounded-lg"
-              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+              style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.15)" }}
             >
               <p className="text-sm" style={{ color: "var(--text-primary)" }}>
                 Restart server after update
@@ -865,7 +796,7 @@ export function ServerCard({ server }: Props) {
               Cancel
             </Button>
             <Button onClick={handleApplyUpdate}
-              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              style={{ background: "rgba(var(--neon-orange-rgb),0.15)", borderColor: "rgba(var(--neon-orange-rgb),0.5)", color: "var(--neon-orange)" }}>
               <ArrowUp className="w-3.5 h-3.5 mr-1.5" /> Update
             </Button>
           </DialogFooter>
@@ -914,7 +845,7 @@ export function ServerCard({ server }: Props) {
                   queryClient.invalidateQueries({ queryKey: ["servers"] });
                   setShowProgress(false);
                 }}
-                style={{ color: "var(--neon-red)", borderColor: "rgba(255,0,85,0.3)" }}
+                style={{ color: "var(--neon-red)", borderColor: "rgba(var(--neon-red-rgb),0.3)" }}
               >
                 Cancel Install
               </Button>

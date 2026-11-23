@@ -3,10 +3,11 @@
 import { Fragment, useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSavedFlash } from "@/hooks/useSavedFlash";
+import { useOnMount } from "@/hooks/useOnMount";
 import {
   Save, Code, LayoutList, RefreshCw, ChevronDown, ChevronRight,
   Settings2, X, ToggleLeft, ToggleRight, Terminal,
-  HelpCircle, Upload, FileText, Clipboard, Wand2, Sparkles, Package, MessageSquare,
+  HelpCircle, Upload, FileText, Clipboard, Wand2, Sparkles, Package, MessageSquare, AlertTriangle, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,15 +34,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
+import { type IniSections, mergeIniSections, carryOverIdentity, isIdentityKey } from "@/lib/ini-utils";
+import { ServerIdentityCard } from "@/components/server/ServerIdentityCard";
+import { ConfigHistoryDialog } from "@/components/server/ConfigHistoryDialog";
+import { AccessListsCard } from "@/components/server/AccessListsCard";
+import { loadEffectiveConfig, saveServerConfigFull } from "@/lib/server-config";
+import { checkConfigBeforeSave } from "@/lib/config-checks";
+import {
+  type PresetBuildInput, type PresetStyleId,
+  DEFAULT_GAME_MODE_OPTIONS, DEFAULT_GUIDED_RATES, buildPresetGus, buildPresetGameIni,
+} from "@/lib/preset-builder";
 import {
   INI_FIELD_GROUPS, LAUNCH_PARAMETERS, GAME_MODES, PRESET_STYLES,
-  buildPresetConfig, ARK_EVENTS,
+  ARK_EVENTS,
   type IniFieldDef, type LaunchParameter,
 } from "@/data/game-data";
 import { useAllMaps } from "@/hooks/useAllMaps";
-import { getServerConfig, saveServerConfig, updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, copyServerConfig, updateServerMemoryLimit, updateServerMap, updateServerAdminPassword, addServerMod, removeServerMod, setModMapLock, type ServerRow } from "@/lib/db";
+import { updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, updateServerMemoryLimit, updateServerMap, addServerMod, removeServerMod, setModMapLock, type ServerRow } from "@/lib/db";
 import { toast } from "sonner";
 import { NumberField } from "@/components/shared/NumberField";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 
@@ -201,6 +213,18 @@ function LaunchParamRow({
   value: string;
   onChange: (val: string) => void;
 }) {
+  if (param.options) {
+    return (
+      <div className="py-2 space-y-1">
+        <span className="text-xs font-mono font-medium" style={{ color: "var(--text-primary)" }}>{param.flag}</span>
+        {param.description && (
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>{param.description}</p>
+        )}
+        <OptionSelect value={value} options={param.options} onChange={onChange} size="sm" />
+      </div>
+    );
+  }
+
   if (param.type === "boolean") {
     const on = value === "true" || value === "1";
     return (
@@ -243,6 +267,11 @@ function LaunchParamRow({
   );
 }
 
+// Edited on the Advanced tab instead (thread options are mutually exclusive
+// there; platform has its own card) — listing them here too would give the
+// same setting two editors.
+const ADVANCED_TAB_PARAM_KEYS = new Set(["OneThread", "ForceUsePerfThreads", "NoPerfThreads", "ServerPlatform"]);
+
 function LaunchParamGroup({
   config,
   onChange,
@@ -270,7 +299,7 @@ function LaunchParamGroup({
       </button>
       {open && (
         <div className="px-4 pb-3 divide-y" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-          {LAUNCH_PARAMETERS.filter((p) => p.category !== "cluster").map((p) => (
+          {LAUNCH_PARAMETERS.filter((p) => p.category !== "cluster" && !ADVANCED_TAB_PARAM_KEYS.has(p.key)).map((p) => (
             <LaunchParamRow
               key={p.key}
               param={p}
@@ -358,7 +387,7 @@ function PasteIniModal({
       <div
         className="w-full max-w-2xl mx-4 flex flex-col rounded-2xl overflow-hidden"
         style={{
-          background: "rgba(8,8,25,0.98)",
+          background: "var(--popover)",
           border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
           boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
           maxHeight: "90vh",
@@ -379,7 +408,7 @@ function PasteIniModal({
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={10}
-              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--terminal-fg)", outline: "none" }}
               placeholder="Paste GameUserSettings.ini content here…"
               value={gusText}
               onChange={(e) => setGusText(e.target.value)}
@@ -391,7 +420,7 @@ function PasteIniModal({
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={6}
-              style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--terminal-fg)", outline: "none" }}
               placeholder="Paste Game.ini content here… (optional)"
               value={gameText}
               onChange={(e) => setGameText(e.target.value)}
@@ -648,8 +677,8 @@ function CustomModSections({
         />
       )}
 
-      <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(180,100,255,0.2)" }}>
-        <div className="px-4 py-3 flex items-center justify-between" style={{ background: "rgba(10,5,25,0.7)", borderBottom: "1px solid rgba(180,100,255,0.15)" }}>
+      <div className="glass-card rounded-xl overflow-hidden" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.2)" }}>
+        <div className="px-4 py-3 flex items-center justify-between" style={{ background: "var(--surface)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
           <div>
             <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Mod Settings</span>
             <p className="text-xs mt-0.5" style={{ color: "var(--text-subtle)" }}>Custom <code>GameUserSettings.ini</code> sections for mods — add a section per mod, then add its settings.</p>
@@ -664,13 +693,13 @@ function CustomModSections({
           )}
 
           {customSections.map((sec, si) => (
-            <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(180,100,255,0.18)" }}>
-              <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(180,100,255,0.07)" }}>
-                <span className="text-xs font-mono font-semibold" style={{ color: "rgba(200,130,255,0.9)" }}>[{sec.sectionName}]</span>
+            <div key={sec.sectionName} className="rounded-lg overflow-hidden" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.18)" }}>
+              <div className="flex items-center justify-between px-3 py-2" style={{ background: "rgba(var(--neon-purple-rgb),0.07)" }}>
+                <span className="text-xs font-mono font-semibold" style={{ color: "rgba(var(--neon-purple-rgb),0.9)" }}>[{sec.sectionName}]</span>
                 {deletingSection === sec.sectionName ? (
                   <div className="flex items-center gap-2">
-                    <span className="text-xs" style={{ color: "rgba(255,0,85,0.9)" }}>Delete section?</span>
-                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(255,0,85,0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
+                    <span className="text-xs" style={{ color: "rgba(var(--neon-red-rgb),0.9)" }}>Delete section?</span>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "rgba(var(--neon-red-rgb),0.9)" }} onClick={() => deleteSection(si)}>Yes</Button>
                     <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" style={{ color: "var(--text-muted)" }} onClick={() => setDeletingSection(null)}>No</Button>
                   </div>
                 ) : (
@@ -700,7 +729,7 @@ function CustomModSections({
                   size="sm"
                   variant="ghost"
                   className="h-7 text-xs mt-1"
-                  style={{ color: "rgba(200,130,255,0.8)", border: "1px dashed rgba(180,100,255,0.3)" }}
+                  style={{ color: "rgba(var(--neon-purple-rgb),0.8)", border: "1px dashed rgba(var(--neon-purple-rgb),0.3)" }}
                   onClick={() => setAddSettingFor(si)}
                 >
                   + Add Setting
@@ -717,13 +746,13 @@ function CustomModSections({
               onKeyDown={(e) => { if (e.key === "Enter") addSection(); }}
               placeholder="New section name (e.g. MyMod)"
               className="h-8 text-xs font-mono flex-1"
-              style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(180,100,255,0.25)", color: "var(--text-primary)" }}
+              style={{ background: "rgba(0,0,0,0.3)", borderColor: "rgba(var(--neon-purple-rgb),0.25)", color: "var(--text-primary)" }}
             />
             <Button
               size="sm"
               onClick={addSection}
               disabled={!newSectionName.trim()}
-              style={{ background: "rgba(180,100,255,0.15)", color: "rgba(200,130,255,0.9)", border: "1px solid rgba(180,100,255,0.35)" }}
+              style={{ background: "rgba(var(--neon-purple-rgb),0.15)", color: "rgba(var(--neon-purple-rgb),0.9)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)" }}
             >
               Add Section
             </Button>
@@ -754,37 +783,19 @@ function QuickSetupModal({
   const filteredStyles = PRESET_STYLES.filter((s) => !["guided_custom", "full_custom"].includes(s.id));
 
   const handleApply = () => {
-    const presetGus = buildPresetConfig(selectedMode, selectedStyle);
-    // Keys that belong to a separate section or are managed elsewhere — never overwrite from a preset
-    const skipKeys = new Set([
-      "MaxPlayers", "SessionName", "ServerPassword", "ServerAdminPassword",
-      "Port", "QueryPort", "RCONPort", "RCONEnabled",
-    ]);
-    const gusSection: Record<string, string> = {};
-    for (const [k, v] of Object.entries(presetGus)) {
-      if (skipKeys.has(k) || v === undefined || v === null) continue;
-      gusSection[k] = String(v);
-    }
-    const gameSection: Record<string, string> = {};
-    const style = PRESET_STYLES.find((s) => s.id === selectedStyle);
-    if (style?.gameIni) {
-      for (const [k, v] of Object.entries(style.gameIni)) {
-        if (v !== undefined && v !== null) gameSection[k] = String(v);
-      }
-    }
-    // Apply GameMode Game.ini overrides too
-    const mode = GAME_MODES.find((m) => m.id === selectedMode);
-    if ((mode as unknown as { gameIni?: Record<string, unknown> })?.gameIni) {
-      const mi = (mode as unknown as { gameIni: Record<string, unknown> }).gameIni;
-      for (const [k, v] of Object.entries(mi)) {
-        if (v !== undefined && v !== null) gameSection[k] = String(v);
-      }
-    }
-    onApply(
-      { ServerSettings: gusSection },
-      { "/script/shootergame.shootergamemode": gameSection },
-      applyMode,
-    );
+    // Same builder the creation wizard uses, so a preset means the same thing
+    // in both places. Gameplay keys only — identity is never touched.
+    const input: PresetBuildInput = {
+      ...DEFAULT_GAME_MODE_OPTIONS,
+      gameMode: selectedMode,
+      presetStyle: selectedStyle as PresetStyleId,
+      guidedRates: DEFAULT_GUIDED_RATES,
+      fullCustomGus: {},
+      fullCustomGameIni: {},
+      name: "", serverPassword: "", adminPassword: "", rconPort: 0, maxPlayers: 0,
+      motdMessage: "", motdDuration: 20,
+    };
+    onApply(buildPresetGus(input), buildPresetGameIni(input), applyMode);
     onClose();
   };
 
@@ -796,7 +807,7 @@ function QuickSetupModal({
       <div
         className="w-full max-w-xl mx-4 flex flex-col rounded-2xl overflow-hidden"
         style={{
-          background: "rgba(8,8,25,0.98)",
+          background: "var(--popover)",
           border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
           boxShadow: "0 16px 64px rgba(0,0,0,0.8)",
         }}
@@ -1163,8 +1174,8 @@ function WarningSettingsCard({
         onClick={handleSave}
         disabled={saving}
         style={{
-          background: saved ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-          border: saved ? "1px solid rgba(0,255,136,0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
+          background: saved ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+          border: saved ? "1px solid rgba(var(--neon-green-rgb),0.4)" : "1px solid rgba(var(--neon-purple-rgb),0.4)",
           color: saved ? "var(--neon-green)" : "var(--neon-purple)",
         }}
       >
@@ -1247,6 +1258,8 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
 // AdvancedConfigTab
 // ---------------------------------------------------------------------------
 
+const SERVER_PLATFORM_OPTIONS = LAUNCH_PARAMETERS.find((p) => p.key === "ServerPlatform")?.options ?? [];
+
 const THREAD_OPTIONS = [
   { value: "", label: "Default (let ARK decide)" },
   { value: "OneThread", label: "OneThread — single CPU thread" },
@@ -1294,43 +1307,36 @@ function AdvancedConfigTab({
   return (
     <div className="space-y-4">
       {/* Thread options */}
-      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Thread Options</h3>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           Undocumented by Wildcard. Leave at Default unless you have a specific reason to change.
         </p>
-        <select
-          value={currentThread}
-          onChange={(e) => handleThreadChange(e.target.value)}
-          className="w-full text-xs rounded-lg px-2 py-1.5"
-          style={{ background: "var(--surface)", border: "1px solid rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
-        >
-          {THREAD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <OptionSelect value={currentThread} options={THREAD_OPTIONS} onChange={handleThreadChange} />
       </div>
 
       {/* Platform */}
-      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
-        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Platform</h3>
-        <div className="flex items-center justify-between px-1 py-2 rounded-lg" style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.15)" }}>
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>All Platforms (Crossplay)</p>
-            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Pass <code>-AllPlatforms</code> — allow PC, Xbox, PlayStation, and other platforms to join.</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setArg("AllPlatforms", launchArgs["AllPlatforms"] === "true" ? "false" : "true")}
-            className="shrink-0 flex items-center"
-          >
-            {launchArgs["AllPlatforms"] === "true"
-              ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-              : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-          </button>
-        </div>
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Server Platform</h3>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Passes <code>-ServerPlatform=</code>. Choose All platforms for crossplay between PC, Xbox and PlayStation.
+        </p>
+        <OptionSelect
+          value={launchArgs["ServerPlatform"] ?? ""}
+          options={SERVER_PLATFORM_OPTIONS}
+          onChange={(v) => setArg("ServerPlatform", v)}
+        />
       </div>
 
+      {/* Player access lists */}
+      <AccessListsCard
+        server={server}
+        exclusiveJoin={launchArgs["exclusivejoin"] === "true"}
+        onExclusiveJoinChange={(on) => setArg("exclusivejoin", on ? "true" : "false")}
+      />
+
       {/* Custom CLI */}
-      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Custom Launch Arguments</h3>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           Appended verbatim to the launch command. Useful for undocumented or mod-specific flags.
@@ -1340,12 +1346,12 @@ function AdvancedConfigTab({
           onChange={(e) => setArg("_customCli", e.target.value)}
           placeholder="-SomeFlag -AnotherFlag=value"
           className="font-mono text-xs"
-          style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+          style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-orange-rgb),0.3)", color: "var(--text-primary)" }}
         />
       </div>
 
       {/* Memory limit */}
-      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Memory Limit Restart</h3>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           Automatically restart the server if RAM usage exceeds this threshold. Leave blank to disable.
@@ -1359,18 +1365,18 @@ function AdvancedConfigTab({
             min={1}
             step={0.5}
             className="w-32 text-xs"
-            style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+            style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-orange-rgb),0.3)", color: "var(--text-primary)" }}
           />
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>GB</span>
           <Button size="sm" variant="outline" onClick={handleSaveMemLimit} disabled={savingMem}
-            style={{ borderColor: "rgba(255,165,0,0.4)", color: "rgba(255,165,0,0.9)", background: "rgba(255,165,0,0.06)" }}>
+            style={{ borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "rgba(var(--neon-orange-rgb),0.9)", background: "rgba(var(--neon-orange-rgb),0.06)" }}>
             {savingMem ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>
 
       {/* Network settings */}
-      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(255,165,0,0.2)" }}>
+      <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
         <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Advanced Network</h3>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           For multi-NIC setups, VPN-based DDoS protection, or port forwarding edge cases. Leave blank if not needed.
@@ -1387,7 +1393,7 @@ function AdvancedConfigTab({
               onChange={(e) => setArg(key, e.target.value)}
               placeholder={placeholder}
               className="text-xs font-mono"
-              style={{ background: "var(--surface)", borderColor: "rgba(255,165,0,0.3)", color: "var(--text-primary)" }}
+              style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-orange-rgb),0.3)", color: "var(--text-primary)" }}
             />
           </div>
         ))}
@@ -1398,6 +1404,10 @@ function AdvancedConfigTab({
 
 export function ConfigTab({ server }: Props) {
   const queryClient = useQueryClient();
+  // Primitive deps for the loader — the server row object itself is replaced
+  // on every status refresh, which must not reload (and discard) edits.
+  const serverId = server.id;
+  const installPath = server.install_path;
   const allMaps = useAllMaps();
   const [config, setConfig] = useState<ServerConfigJson | null>(null);
   const [rawGus, setRawGus] = useState("");
@@ -1411,6 +1421,7 @@ export function ConfigTab({ server }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [showQuickSetup, setShowQuickSetup] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [showCopyFromServer, setShowCopyFromServer] = useState(false);
   const [copyFromServerId, setCopyFromServerId] = useState("");
   const [otherServers, setOtherServers] = useState<ServerRow[]>([]);
@@ -1419,60 +1430,65 @@ export function ConfigTab({ server }: Props) {
     getServers().then((all) => setOtherServers(all.filter((s) => s.id !== server.id))).catch(() => {});
   }, [server.id]);
 
+  // Bring another server's gameplay config into the editor. Its identity
+  // keys (name, passwords, RCON port, max players, MOTD) are NOT copied — they
+  // describe that other server, and copying them used to point this server's
+  // RCON at the wrong port. Review + Save applies it like any other edit.
   const handleCopyFromServer = async () => {
-    if (!copyFromServerId) return;
+    if (!copyFromServerId || !config) return;
     try {
-      await copyServerConfig(copyFromServerId, server.id);
-      await loadFromDb();
+      const source = otherServers.find((s) => s.id === copyFromServerId);
+      if (!source) return;
+      const { config: src } = await loadEffectiveConfig(source);
+      setConfig({
+        gameUserSettings: carryOverIdentity(config.gameUserSettings, src.gameUserSettings),
+        gameIni: src.gameIni,
+        launchArgs: src.launchArgs,
+      });
+      setIsDirty(true);
       setShowCopyFromServer(false);
       setCopyFromServerId("");
-      toast.success("Config copied");
+      toast.success(`Config copied from ${source.name} — review and save to apply.`);
     } catch (e) {
       toast.error(`Failed to copy config: ${e}`);
     }
   };
 
-  // Load from DB on mount — reflects what we last saved, not what the server may have overwritten
+  // Load the DB copy (what we last saved). Falls back to — and adopts — the
+  // INI files on disk when the DB copy is empty (imported servers), so the
+  // editor never opens blank over a real config.
   const loadFromDb = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const row = await getServerConfig(server.id);
-      if (row) {
-        const gus = JSON.parse(row.game_user_settings_json || "{}");
-        const game = JSON.parse(row.game_ini_json || "{}");
-        const launchArgs = JSON.parse(row.launch_args_json || "{}");
-        const cfg: ServerConfigJson = { gameUserSettings: gus, gameIni: game, launchArgs };
-        setConfig(cfg);
-        setRawGus(configToRawText(gus));
-        setRawGame(configToRawText(game));
-      } else {
-        // No saved config yet — show empty
-        const empty: ServerConfigJson = { gameUserSettings: {}, gameIni: {}, launchArgs: {} };
-        setConfig(empty);
-        setRawGus("");
-        setRawGame("");
-      }
+      const { config: cfg, fromDisk } = await loadEffectiveConfig({ id: serverId, install_path: installPath });
+      setConfig(cfg);
+      setRawGus(configToRawText(cfg.gameUserSettings));
+      setRawGame(configToRawText(cfg.gameIni));
       setIsDirty(false);
+      if (fromDisk) toast.info("Loaded this server's existing INI files from disk.");
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [server.id]);
+  }, [serverId, installPath]);
 
-  useEffect(() => { loadFromDb(); }, [loadFromDb]);
+  useOnMount(loadFromDb);
 
-  // Explicitly read from the INI files on disk — overwrites UI state with what the server has on disk
+  // Explicitly read the INI files on disk into the editor. Launch args aren't
+  // stored in the INI files, so the current ones are kept. Marked dirty so the
+  // user can Save to make the disk version the app's copy too.
   const readFromIni = useCallback(async () => {
     setReadingIni(true);
     setError(null);
     try {
-      const cfg = await tauriCmd.readServerConfig(server.install_path);
-      setConfig(cfg);
-      setRawGus(configToRawText(cfg.gameUserSettings as Record<string, Record<string, string>>));
-      setRawGame(configToRawText(cfg.gameIni as Record<string, Record<string, string>>));
-      setIsDirty(false);
+      const disk = await tauriCmd.readServerConfig(server.install_path);
+      setConfig((prev) => ({ ...disk, launchArgs: prev?.launchArgs ?? {} }));
+      setRawGus(configToRawText(disk.gameUserSettings));
+      setRawGame(configToRawText(disk.gameIni));
+      setIsDirty(true);
+      toast.success("Loaded from disk — Save to keep this version.");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1488,7 +1504,24 @@ export function ConfigTab({ server }: Props) {
 
   const handleLaunchArgChange = (key: string, val: string) => {
     if (!config) return;
-    setConfig({ ...config, launchArgs: { ...(config.launchArgs as Record<string, string> ?? {}), [key]: val } });
+    setConfig({ ...config, launchArgs: { ...(config.launchArgs ?? {}), [key]: val } });
+    setIsDirty(true);
+  };
+
+  /**
+   * Merge imported sections key by key and keep this server's identity keys —
+   * an imported file from another server must not rename it or change its
+   * passwords/RCON port.
+   */
+  const mergeImported = (gus: IniSections, game: IniSections) => {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        gameUserSettings: carryOverIdentity(prev.gameUserSettings, mergeIniSections(prev.gameUserSettings, gus)),
+        gameIni: mergeIniSections(prev.gameIni, game),
+      };
+    });
     setIsDirty(true);
   };
 
@@ -1508,8 +1541,8 @@ export function ConfigTab({ server }: Props) {
       // or a custom mod section whose name happens to mention "shootergame")
       // must not dump its entire contents into both; only Game.ini actually
       // uses "/script/shootergame..." sections, everything else is GUS.
-      const gusSections: Record<string, Record<string, string>> = {};
-      const gameSections: Record<string, Record<string, string>> = {};
+      const gusSections: IniSections = {};
+      const gameSections: IniSections = {};
       for (const [name, kv] of Object.entries(sections)) {
         if (name.toLowerCase().startsWith("/script/shootergame")) {
           gameSections[name] = kv;
@@ -1517,111 +1550,87 @@ export function ConfigTab({ server }: Props) {
           gusSections[name] = kv;
         }
       }
-      setConfig((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          gameUserSettings: { ...(prev.gameUserSettings as Record<string, Record<string, string>>), ...gusSections },
-          gameIni: { ...(prev.gameIni as Record<string, Record<string, string>>), ...gameSections },
-        };
-      });
-      setIsDirty(true);
+      mergeImported(gusSections, gameSections);
       toast.success("INI file imported — review changes and save to apply.");
     } catch (e) {
       toast.error(`Failed to import file: ${e}`);
     }
   };
 
-  const handlePasteApply = (
-    gus: Record<string, Record<string, string>>,
-    game: Record<string, Record<string, string>>,
-  ) => {
+  const handlePasteApply = (gus: IniSections, game: IniSections) => {
     if (!config) return;
-    setConfig({
-      ...config,
-      gameUserSettings: { ...(config.gameUserSettings as Record<string, Record<string, string>>), ...gus },
-      gameIni: { ...(config.gameIni as Record<string, Record<string, string>>), ...game },
-    });
-    setIsDirty(true);
+    mergeImported(gus, game);
     toast.success("INI text applied — review changes and save to apply.");
   };
 
-  const handleQuickSetupApply = (
-    gus: Record<string, Record<string, string>>,
-    game: Record<string, Record<string, string>>,
-    mode: "overlay" | "replace",
-  ) => {
+  const handleQuickSetupApply = (gus: IniSections, game: IniSections, mode: "overlay" | "replace") => {
     if (!config) return;
-    const base = mode === "replace" ? { gameUserSettings: {}, gameIni: config.gameIni, launchArgs: config.launchArgs } : config;
-    setConfig({
-      ...base,
-      gameUserSettings: { ...(base.gameUserSettings as Record<string, Record<string, string>>), ...gus },
-      gameIni: { ...(base.gameIni as Record<string, Record<string, string>>), ...game },
-    });
+    if (mode === "overlay") {
+      // Preset values win key by key; every other setting is kept.
+      setConfig({
+        ...config,
+        gameUserSettings: mergeIniSections(config.gameUserSettings, gus),
+        gameIni: mergeIniSections(config.gameIni, game),
+      });
+    } else {
+      // Replace the gameplay settings with the preset, but keep what isn't
+      // gameplay: identity keys, the MOTD, and custom mod sections.
+      const modSections: IniSections = Object.fromEntries(
+        Object.entries(config.gameUserSettings).filter(([name]) => !GUS_STANDARD_SECTIONS.has(name.toLowerCase())),
+      );
+      setConfig({
+        ...config,
+        gameUserSettings: carryOverIdentity(config.gameUserSettings, mergeIniSections(modSections, gus)),
+        gameIni: game,
+      });
+    }
     setIsDirty(true);
     toast.success(`Preset applied (${mode}). Review changes and save.`);
   };
 
-  // Save to disk AND update DB so our settings survive server restarts
+  // Identity was saved straight to disk + DB by the Identity card; mirror it
+  // into the editor (and raw text) without discarding other unsaved edits.
+  const handleIdentitySaved = (apply: (cfg: ServerConfigJson) => ServerConfigJson) => {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const next = apply(prev);
+      setRawGus(configToRawText(next.gameUserSettings));
+      return next;
+    });
+  };
+
+  // The config the toolbar Save would write (raw tab edits included).
+  const pendingConfig = (): ServerConfigJson | null => {
+    if (!config) return null;
+    if (activeTab !== "raw") return config;
+    return { ...config, gameUserSettings: rawTextToSections(rawGus), gameIni: rawTextToSections(rawGame) };
+  };
+
+  const [saveIssues, setSaveIssues] = useState<{ cfg: ServerConfigJson; issues: string[] } | null>(null);
+
+  // Check for problems first; if any, ask before writing (feature: save-time checks).
   const handleSave = async (cfg?: ServerConfigJson) => {
-    const toWrite = cfg ?? config;
-    if (!toWrite) return;
+    const toSave = cfg ?? pendingConfig();
+    if (!toSave) return;
+    const issues = await checkConfigBeforeSave(server, toSave).catch(() => []);
+    if (issues.length > 0) {
+      setSaveIssues({ cfg: toSave, issues });
+      return;
+    }
+    await doSave(toSave);
+  };
+
+  // Write to disk AND the DB (snapshot first, identity synced) — see server-config.ts.
+  const doSave = async (toSave: ServerConfigJson) => {
     setSaving(true);
     setError(null);
     try {
-      let toSave = toWrite;
-      if (activeTab === "raw" && !cfg) {
-        toSave = {
-          ...toWrite,
-          gameUserSettings: rawTextToSections(rawGus),
-          gameIni: rawTextToSections(rawGame),
-        };
-        setConfig(toSave);
-      } else if (cfg) {
-        setConfig(cfg);
-      }
-      // Write to disk
-      await tauriCmd.writeServerConfig(server.install_path, toSave);
-      // Persist to DB so Config tab loads our version next time, not the
-      // server's overwrite. This can't be made truly atomic with the disk
-      // write above (different systems), so on failure here we give a
-      // distinct message: the file IS already updated, only the DB record
-      // of it failed — the reload-from-DB path would otherwise silently
-      // revert the file back next time this tab loads.
-      try {
-        await saveServerConfig(
-          server.id,
-          JSON.stringify(toSave.gameUserSettings),
-          JSON.stringify(toSave.gameIni),
-          JSON.stringify(toSave.launchArgs ?? {}),
-        );
-      } catch (dbErr) {
-        throw new Error(
-          `Config was written to disk, but saving it to the app database failed: ${dbErr}. ` +
-          `Click Save again — your disk changes are already applied and will not be lost by retrying.`
-        );
-      }
-
-      // admin_password is the single source of truth for both the INI value and
-      // RCON auth. If this save changed ServerAdminPassword (e.g. via the raw
-      // editor), keep the DB in sync so RCON doesn't silently start failing —
-      // then bounce the live RCON connection so it reconnects with the new
-      // password immediately instead of waiting for the next failed command.
-      const newAdminPassword = (toSave.gameUserSettings as Record<string, Record<string, string>>)
-        ?.ServerSettings?.ServerAdminPassword;
-      if (newAdminPassword && newAdminPassword !== server.admin_password) {
-        await updateServerAdminPassword(server.id, newAdminPassword);
-        tauriCmd.rconDisconnect(server.id).catch(() => {});
-      }
-
+      setConfig(toSave);
+      const { warnings } = await saveServerConfigFull(server, toSave);
+      warnings.forEach((w) => toast.warning(w));
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       setIsDirty(false);
       triggerSavedFlash();
-
-      // Snapshot INI files into the backup system (best-effort, non-blocking)
-      const backupDir = await getAppSetting("backup_dir").catch(() => null);
-      if (backupDir) {
-        tauriCmd.createIniBackup(server.id, server.install_path, backupDir).catch(() => {});
-      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1706,7 +1715,7 @@ export function ConfigTab({ server }: Props) {
       {/* ── Sticky toolbar — always visible at top ─────────────────────────── */}
       <div
         className="sticky top-0 z-10 flex items-center justify-between gap-3 flex-wrap py-2 -mx-1 px-1"
-        style={{ background: "var(--bg-base, #05050f)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+        style={{ background: "var(--background)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         {/* Tab selectors */}
         <div className="flex items-center gap-1">
@@ -1723,7 +1732,7 @@ export function ConfigTab({ server }: Props) {
             onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("mods"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
             style={activeTab === "mods"
-              ? { background: "rgba(180,100,255,0.12)", color: "rgba(200,130,255,0.9)", border: "1px solid rgba(180,100,255,0.35)" }
+              ? { background: "rgba(var(--neon-purple-rgb),0.12)", color: "rgba(var(--neon-purple-rgb),0.9)", border: "1px solid rgba(var(--neon-purple-rgb),0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
             <Package className="w-3.5 h-3.5" /> Mod Settings
@@ -1732,7 +1741,7 @@ export function ConfigTab({ server }: Props) {
             onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("advanced"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
             style={activeTab === "advanced"
-              ? { background: "rgba(255,165,0,0.1)", color: "rgba(255,165,0,0.9)", border: "1px solid rgba(255,165,0,0.35)" }
+              ? { background: "rgba(var(--neon-orange-rgb),0.1)", color: "rgba(var(--neon-orange-rgb),0.9)", border: "1px solid rgba(var(--neon-orange-rgb),0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
             <Settings2 className="w-3.5 h-3.5" /> Advanced
@@ -1741,7 +1750,7 @@ export function ConfigTab({ server }: Props) {
             onClick={switchToRaw}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
             style={activeTab === "raw"
-              ? { background: "rgba(0,255,255,0.08)", color: "var(--neon-cyan)", border: "1px solid rgba(0,255,255,0.35)" }
+              ? { background: "rgba(var(--neon-cyan-rgb),0.08)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-cyan-rgb),0.35)" }
               : { color: "var(--text-muted)", border: "1px solid transparent" }}
           >
             <Code className="w-3.5 h-3.5" /> Raw INI
@@ -1759,7 +1768,7 @@ export function ConfigTab({ server }: Props) {
         {/* Right: dirty badge + import + save */}
         <div className="flex items-center gap-2">
           {isDirty && (
-            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(255,140,0,0.12)", color: "rgba(255,140,0,0.9)", border: "1px solid rgba(255,140,0,0.3)" }}>
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(var(--neon-orange-rgb),0.12)", color: "rgba(var(--neon-orange-rgb),0.9)", border: "1px solid rgba(var(--neon-orange-rgb),0.3)" }}>
               Unsaved changes
             </span>
           )}
@@ -1772,6 +1781,10 @@ export function ConfigTab({ server }: Props) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="text-xs">
+              <DropdownMenuItem onClick={() => setShowHistory(true)}>
+                <History className="w-3.5 h-3.5 mr-2" />
+                Config history…
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={readFromIni} disabled={readingIni}>
                 <RefreshCw className={`w-3.5 h-3.5 mr-2 ${readingIni ? "animate-spin" : ""}`} />
                 Reload from disk
@@ -1812,7 +1825,7 @@ export function ConfigTab({ server }: Props) {
       </div>
 
       {error && (
-        <div className="text-sm px-4 py-3 rounded-lg" style={{ background: "rgba(255,0,85,0.08)", border: "1px solid rgba(255,0,85,0.3)", color: "#ff6688" }}>
+        <div className="text-sm px-4 py-3 rounded-lg" style={{ background: "rgba(var(--neon-red-rgb),0.08)", border: "1px solid rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}>
           {error}
         </div>
       )}
@@ -1830,7 +1843,7 @@ export function ConfigTab({ server }: Props) {
                 </p>
               </div>
               {server.status !== "stopped" && (
-                <div className="text-xs px-2 py-1 rounded" style={{ background: "rgba(255,165,0,0.15)", color: "#ffa500" }}>
+                <div className="text-xs px-2 py-1 rounded" style={{ background: "rgba(var(--neon-orange-rgb),0.15)", color: "var(--neon-orange)" }}>
                   Stop to change
                 </div>
               )}
@@ -1849,28 +1862,27 @@ export function ConfigTab({ server }: Props) {
             </Select>
           </div>
 
-          {/* INI Field Groups — Active Event and MOTD slot in right after Session, since
-              they're session-scoped state (like the map/name/password above it).
-              Active Event isn't an INI field; MOTD gets its own card because it
-              lives in a separate [MessageOfTheDay] section and needs a paired
-              message + duration control. */}
-          {INI_FIELD_GROUPS.map((g, idx) => (
-            <Fragment key={g.id}>
+          {/* Identity (name/ports/passwords/max players) has its own card and
+              is filtered out of the generic field groups below, so each
+              setting has exactly one editor. Active Event and MOTD follow it
+              as the other session-scoped settings. */}
+          <ServerIdentityCard server={server} onIdentitySaved={handleIdentitySaved} />
+          <ActiveEventCard server={server} />
+          <MotdCard config={config} onChange={(updated) => { setConfig(updated); setIsDirty(true); }} />
+          {INI_FIELD_GROUPS.map((g, idx) => {
+            const fields = g.fields.filter((f) => !isIdentityKey(f.iniSection, f.key));
+            if (fields.length === 0) return null;
+            return (
               <SectionGroup
+                key={g.id}
                 title={g.title}
-                fields={g.fields}
+                fields={fields}
                 config={config}
                 onChange={handleFieldChange}
                 defaultOpen={idx < 3}
               />
-              {g.id === "session" && (
-                <>
-                  <ActiveEventCard server={server} />
-                  <MotdCard config={config} onChange={(updated) => { setConfig(updated); setIsDirty(true); }} />
-                </>
-              )}
-            </Fragment>
-          ))}
+            );
+          })}
           <LaunchParamGroup config={config} onChange={handleLaunchArgChange} />
 
           {/* Warnings — governs both the manual action buttons and (for
@@ -1908,7 +1920,7 @@ export function ConfigTab({ server }: Props) {
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={20}
-              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-cyan-rgb),0.2)", color: "var(--terminal-fg)", outline: "none" }}
               value={rawGus}
               onChange={(e) => { setRawGus(e.target.value); setIsDirty(true); }}
               spellCheck={false}
@@ -1919,7 +1931,7 @@ export function ConfigTab({ server }: Props) {
             <textarea
               className="w-full font-mono text-xs rounded-lg p-3 resize-y"
               rows={10}
-              style={{ background: "#000008", border: "1px solid rgba(0,255,255,0.2)", color: "#e0e0ff", outline: "none" }}
+              style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-cyan-rgb),0.2)", color: "var(--terminal-fg)", outline: "none" }}
               value={rawGame}
               onChange={(e) => { setRawGame(e.target.value); setIsDirty(true); }}
               spellCheck={false}
@@ -1946,36 +1958,67 @@ export function ConfigTab({ server }: Props) {
 
       {/* Copy from server modal */}
       {showCopyFromServer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }}>
-          <div className="glass-card rounded-xl p-5 space-y-4 w-80" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)" }}>
-            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Copy Config from Server</h3>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>This will overwrite the current INI config with the selected server&apos;s config.</p>
-            <select
-              value={copyFromServerId}
-              onChange={(e) => setCopyFromServerId(e.target.value)}
-              className="w-full text-xs rounded-lg px-2 py-1.5"
-              style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
-            >
-              <option value="">Select a server…</option>
-              {otherServers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
+        <Dialog open onOpenChange={(v) => { if (!v) { setShowCopyFromServer(false); setCopyFromServerId(""); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Copy Config from Server</DialogTitle>
+            </DialogHeader>
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Replaces this server&apos;s gameplay settings and launch parameters with the selected server&apos;s.
+              This server&apos;s name, passwords, ports and MOTD are kept. Review, then Save to apply.
+            </p>
+            <Select value={copyFromServerId} onValueChange={setCopyFromServerId}>
+              <SelectTrigger className="w-full text-xs"><SelectValue placeholder="Select a server…" /></SelectTrigger>
+              <SelectContent>
+                {otherServers.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={() => { setShowCopyFromServer(false); setCopyFromServerId(""); }}>Cancel</Button>
+              <Button size="sm" className="btn-neon-purple" disabled={!copyFromServerId} onClick={handleCopyFromServer}>Copy Config</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {showHistory && config && (
+        <ConfigHistoryDialog
+          server={server}
+          currentConfig={pendingConfig() ?? config}
+          hasUnsavedChanges={isDirty}
+          onClose={() => setShowHistory(false)}
+          onRestored={() => { loadFromDb(); queryClient.invalidateQueries({ queryKey: ["servers"] }); }}
+        />
+      )}
+
+      {/* Save-time checks — shown when the config has problems worth confirming */}
+      {saveIssues && (
+        <Dialog open onOpenChange={(v) => { if (!v) setSaveIssues(null); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" style={{ color: "var(--neon-orange)" }} />
+                Check before saving
+              </DialogTitle>
+            </DialogHeader>
+            <ul className="space-y-2">
+              {saveIssues.issues.map((issue) => (
+                <li key={issue} className="text-xs leading-relaxed rounded-lg px-3 py-2"
+                  style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)", color: "var(--text-primary)" }}>
+                  {issue}
+                </li>
               ))}
-            </select>
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setShowCopyFromServer(false); setCopyFromServerId(""); }}
-                className="flex-1 text-xs px-3 py-1.5 rounded-lg"
-                style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-muted)" }}
-              >Cancel</button>
-              <button
-                onClick={handleCopyFromServer}
-                disabled={!copyFromServerId}
-                className="flex-1 text-xs px-3 py-1.5 rounded-lg"
-                style={{ background: copyFromServerId ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(10,10,30,0.5)", color: copyFromServerId ? "var(--neon-purple)" : "var(--text-subtle)", border: `1px solid ${copyFromServerId ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}` }}
-              >Copy Config</button>
-            </div>
-          </div>
-        </div>
+            </ul>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={() => setSaveIssues(null)}>Go back</Button>
+              <Button size="sm" className="btn-neon-purple" onClick={() => { const c = saveIssues.cfg; setSaveIssues(null); doSave(c); }}>
+                Save anyway
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
     </TooltipProvider>

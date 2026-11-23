@@ -92,7 +92,7 @@ function Step1({ onDetected }: Step1Props) {
       {error && (
         <div
           className="flex items-start gap-2 p-3 rounded-lg text-sm"
-          style={{ background: "rgba(255,0,85,0.06)", border: "1px solid rgba(255,0,85,0.2)", color: "var(--neon-red)" }}
+          style={{ background: "rgba(var(--neon-red-rgb),0.06)", border: "1px solid rgba(var(--neon-red-rgb),0.2)", color: "var(--neon-red)" }}
         >
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
           {error}
@@ -160,8 +160,16 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         adminPassword: adminPass.trim(),
       });
 
-      // Create a blank server_config row so tabs don't break.
-      await saveServerConfig(id, "{}", "{}", "{}");
+      // Store the server's existing INI files as the app's config copy. An
+      // empty copy here used to open the Config tab blank, and saving from it
+      // replaced the real files with almost nothing.
+      const existing = await tauriCmd.readServerConfig(installPath).catch(() => null);
+      await saveServerConfig(
+        id,
+        JSON.stringify(existing?.gameUserSettings ?? {}),
+        JSON.stringify(existing?.gameIni ?? {}),
+        "{}",
+      );
 
       toast.success(`"${name}" imported successfully.`);
       onImported();
@@ -177,7 +185,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
       {/* Detection summary */}
       <div
         className="flex items-start gap-2.5 p-3 rounded-lg text-xs"
-        style={{ background: "rgba(0,255,136,0.04)", border: "1px solid rgba(0,255,136,0.15)" }}
+        style={{ background: "rgba(var(--neon-green-rgb),0.04)", border: "1px solid rgba(var(--neon-green-rgb),0.15)" }}
       >
         <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--neon-green)" }} />
         <div style={{ color: "var(--text-muted)" }}>
@@ -270,7 +278,7 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
           onClick={handleImport}
           disabled={saving || !name.trim()}
           className="gap-2"
-          style={{ background: "rgba(0,255,136,0.15)", border: "1px solid rgba(0,255,136,0.4)", color: "var(--neon-green)" }}
+          style={{ background: "rgba(var(--neon-green-rgb),0.15)", border: "1px solid rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Server className="w-4 h-4" />}
           Import Server

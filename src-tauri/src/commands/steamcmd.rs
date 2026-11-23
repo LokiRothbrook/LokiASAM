@@ -878,8 +878,12 @@ pub async fn detect_server_install(install_path: String) -> Result<DetectedServe
     }
 
     let ini = parse_gus_ini(&gus_path);
+    // Section names are matched case-insensitively — hand-edited files vary.
     let get = |section: &str, key: &str| -> Option<String> {
-        ini.get(section)?.get(key).cloned()
+        ini.iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(section))
+            .and_then(|(_, kv)| kv.get(key).cloned())
+            .filter(|v| !v.is_empty())
     };
 
     Ok(DetectedServerConfig {
@@ -891,8 +895,11 @@ pub async fn detect_server_install(install_path: String) -> Result<DetectedServe
                             .or_else(|| get("ServerSettings", "RCONPort"))
                             .and_then(|v| v.parse().ok()),
         admin_password: get("ServerSettings", "ServerAdminPassword"),
-        server_password:get("ServerSettings", "ServerPassword"),
-        max_players:    get("GameSession", "MaxPlayers")
+        server_password:get("ServerSettings", "ServerPassword")
+                            .or_else(|| get("SessionSettings", "ServerPassword")),
+        // ASA keeps MaxPlayers in the UE GameSession section.
+        max_players:    get("/Script/Engine.GameSession", "MaxPlayers")
+                            .or_else(|| get("GameSession", "MaxPlayers"))
                             .or_else(|| get("ServerSettings", "MaxPlayers"))
                             .and_then(|v| v.parse().ok()),
         build_id,

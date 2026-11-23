@@ -16,6 +16,7 @@ import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { toast } from "sonner";
+import { buildStartParams } from "@/lib/server-utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -435,4 +436,103 @@ export async function applyUpdateToAllServers(
   }
 
   return { succeeded, failed };
+}
+
+/**
+ * The per-server "Apply Update" button action, shared by the dashboard
+ * ServerCard and the server OverviewTab so the two can't drift apart.
+ *
+ * Warn-enabled + running: hands off to Rust's graceful update (in-game
+ * countdown, then SaveWorld/doexit, cache→server sync, optional restart).
+ * Otherwise: applies the update directly (still a clean RCON shutdown).
+ */
+export async function runServerUpdateAction(
+  server: ServerRow,
+  opts: {
+    isRunning: boolean;
+    restartAfter: boolean;
+    onInvalidate: () => void;
+    /** Toggled around the direct (non-countdown) path, which is worth a spinner. */
+    onPendingChange: (pending: boolean) => void;
+    /** Called when the update finished but the server still needs starting. */
+    onRestartNeeded: () => Promise<void>;
+  },
+): Promise<void> {
+  const { isRunning, restartAfter, onInvalidate, onPendingChange, onRestartNeeded } = opts;
+
+  if (server.update_warn_players && isRunning) {
+    const [baseDir, steamcmdPath] = await Promise.all([
+      getAppSetting("base_dir"),
+      getAppSetting("steamcmd_path"),
+    ]);
+    if (!baseDir || !steamcmdPath) return;
+    const sep = baseDir.includes("\\") ? "\\" : "/";
+    const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
+    const startParams = restartAfter ? await buildStartParams(server) : null;
+
+    // Show a visible transition immediately — otherwise the server sits on
+    // "running" with no feedback until the warning countdown finishes.
+    // Rust reverts this back to "running" if the countdown gets cancelled.
+    await updateServerStatus(server.id, "stopping", server.pid);
+    onInvalidate();
+
+    tauriCmd.startGracefulUpdate({
+      serverId:      server.id,
+      serverName:    server.name,
+      warnSeconds:   (server.update_warn_minutes ?? 5) * 60,
+      rconPort:      server.rcon_port,
+      rconPassword:  server.admin_password,
+      message:       server.update_message || "Server going down for update in {time}.",
+      cancelMessage: server.update_cancel_message || "Update has been canceled.",
+      installPath:   server.install_path,
+      cacheDir,
+      steamcmdPath,
+      restartAfter,
+      startParams,
+    }).catch(async (err) => {
+      // Refused before anything happened (e.g. a backup is running) —
+      // undo the optimistic "stopping" so the server doesn't look stuck.
+      await updateServerStatus(server.id, server.status, server.pid);
+      onInvalidate();
+      toast.error(`Update failed: ${err}`);
+    });
+    return;
+  }
+
+  onPendingChange(true);
+  try {
+    try {
+      await applyUpdateToServer(
+        server.id,
+        server.name,
+        server.install_path,
+        isRunning,
+        restartAfter,
+        server.rcon_port,
+        server.admin_password,
+        {
+          // Only reached when the warn countdown path above wasn't taken
+          // (warn disabled, or server not running) — still always saves the
+          // world and shuts down cleanly via RCON either way.
+          warnPlayers: false,
+          warnMinutes: server.update_warn_minutes ?? 5,
+          warnMessage: server.update_message || "Server going down for update in {time}.",
+        },
+        (msg) => toast.info(msg),
+      );
+    } catch (err) {
+      if (err && typeof err === "object" && "restartNeeded" in err) {
+        await onRestartNeeded();
+        return;
+      }
+      throw err;
+    }
+    onInvalidate();
+    toast.success(`${server.name} updated successfully.`);
+  } catch (e) {
+    toast.error(`Update failed: ${e}`);
+  } finally {
+    onPendingChange(false);
+    onInvalidate();
+  }
 }
