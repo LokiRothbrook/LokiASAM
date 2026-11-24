@@ -214,6 +214,13 @@ async fn fire_restart(app: &AppHandle, entry: &crate::state::scheduler::Schedule
         state.wait_for_stop_handoff(&entry.server_id, notify).await;
     }
 
+    crate::commands::notifications::dispatch_notification(
+        app, "scheduled_restart", Some(&entry.server_id), &entry.server_name,
+        &format!("{} restarting", entry.server_name),
+        "Scheduled restart — the server will be back up shortly.",
+        "info",
+    ).await;
+
     // Hand off to the frontend's staggered startup queue instead of starting
     // directly, so a batch of same-time restart schedules doesn't cold-boot
     // several servers at once — the "server://any-change" listener re-enqueues

@@ -961,7 +961,7 @@ function ActiveEventCard({ server }: { server: ServerRow }) {
           <div>
             <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Active Event</p>
             <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-              Loads the event mod and passes <span className="font-mono">-ActiveEvent=</span> on next server start.
+              Adds the event&apos;s mod to <span className="font-mono">-mods=</span> on next server start — that&apos;s what turns the event on in ASA.
             </p>
           </div>
         </div>

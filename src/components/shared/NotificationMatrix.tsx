@@ -3,12 +3,12 @@
 /**
  * NotificationMatrix — per-event × per-channel notification toggle grid.
  *
- * Rows: all active notification event types (12 — player events excluded)
- * Columns: Bell | Desktop | Discord | SMTP
+ * Rows: every event in NOTIFICATION_EVENTS (each one the app actually sends)
+ * Columns: In-App | Bell | Desktop | Discord | SMTP
  *
  * Reads and writes directly to notification_configs (server_id IS NULL).
- * Bell column controls whether the event shows as unread in the bell badge
- * and popup. All events still always fire an in-app toast and get logged.
+ * Each cell is independent: In-App = toast, Bell = unread in the bell badge
+ * and popup. Every event is still archived on the Notifications page.
  * Discord and SMTP columns are disabled if credentials are not yet configured.
  */
 

@@ -558,6 +558,42 @@ async function runMigrations(db: Database): Promise<void> {
      WHERE created_at NOT LIKE '%T%'`
   );
 
+  // ── Migration 025: explicit notification event lists ─────────────────────
+  // events_json "[]" used to mean "all events", so switching every event off
+  // for a channel (which also saves "[]") silently switched them all ON. Rows
+  // now always list their events and "[]" means none: rewrite legacy "[]"
+  // rows to the full list (their current behaviour), re-enable In-App/Bell
+  // rows (no UI can switch those channels off; an old matrix bug created
+  // In-App disabled), and tick the two new restart events for In-App/Bell.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_025_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const { NOTIFICATION_EVENTS } = await import("@/data/game-data");
+      const all = Object.values(NOTIFICATION_EVENTS) as string[];
+      const rows = await db.select<{ id: string; channel: string; events_json: string }[]>(
+        "SELECT id, channel, events_json FROM notification_configs"
+      );
+      for (const row of rows) {
+        let events: string[];
+        try { events = JSON.parse(row.events_json || "[]"); } catch { events = []; }
+        if (events.length === 0) events = [...all];
+        const visible = row.channel === "in_app" || row.channel === "bell";
+        if (visible) {
+          for (const e of ["scheduled_restart", "memory_restart"]) if (!events.includes(e)) events.push(e);
+        }
+        await db.execute(
+          `UPDATE notification_configs SET events_json = ?${visible ? ", enabled = 1" : ""} WHERE id = ?`,
+          [JSON.stringify(events), row.id]
+        );
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_025_done', 'true')"
+      );
+    }
+  }
+
   // ── Migration 024: move INI keys older versions wrote to the wrong place ──
   // ServerPassword → [ServerSettings], AllowPvP → ServerPVE, Game.ini-only
   // settings out of GameUserSettings.ini, crossplay/AllPlatforms launch args
@@ -2054,7 +2090,11 @@ export async function saveGlobalChannelEvents(
   events: string[]
 ): Promise<void> {
   const existing = await getGlobalChannelConfig(channel);
-  const defaultEnabled = channel === "bell" || channel === "desktop";
+  // In-App, Bell and Desktop have no channel-level switch — they're controlled
+  // per event — so a new row for them must be enabled. (In-App used to be
+  // created disabled here, silencing every toast on the first matrix edit.)
+  // Discord/Email stay off until their credentials are tested.
+  const defaultEnabled = channel === "in_app" || channel === "bell" || channel === "desktop";
   await saveNotificationConfig({
     id: existing?.id ?? crypto.randomUUID(),
     serverId: null,

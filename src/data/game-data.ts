@@ -1631,21 +1631,25 @@ export function getLaunchParamsByCategory(
 // Notification Events
 // ---------------------------------------------------------------------------
 
+/**
+ * Every notification the app actually sends — each one gets a row of
+ * per-channel toggles in Settings → Notifications. Add an entry here (and a
+ * label below) whenever a new dispatchNotification / Rust dispatch_notification
+ * event type is introduced, or it can't be switched off.
+ */
 export const NOTIFICATION_EVENTS = {
   SERVER_STARTED: "server_started",
   SERVER_STOPPED: "server_stopped",
   SERVER_CRASHED: "server_crashed",
   SERVER_START_FAILED: "server_start_failed",
+  SCHEDULED_RESTART: "scheduled_restart",
+  MEMORY_RESTART: "memory_restart",
   SERVER_UPDATED: "server_updated",
   UPDATE_AVAILABLE: "update_available",
   UPDATE_STARTED: "update_started",
   UPDATE_FAILED: "update_failed",
   BACKUP_COMPLETED: "backup_completed",
   BACKUP_FAILED: "backup_failed",
-  SCHEDULED_RESTART: "scheduled_restart",
-  RCON_FAILED: "rcon_failed",
-  MOD_INSTALLED: "mod_installed",
-  LOW_DISK_SPACE: "low_disk_space",
   SERVER_INSTALL_COMPLETE: "server_install_complete",
   SERVER_INSTALL_FAILED: "server_install_failed",
 } as const;
@@ -1654,20 +1658,18 @@ export type NotificationEventType =
   (typeof NOTIFICATION_EVENTS)[keyof typeof NOTIFICATION_EVENTS];
 
 export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = {
-  server_started:          "Server Started",
+  server_started:          "Server Online",
   server_stopped:          "Server Stopped",
   server_crashed:          "Server Crashed",
   server_start_failed:     "Server Failed to Start",
+  scheduled_restart:       "Scheduled Restart",
+  memory_restart:          "Memory-Limit Restart",
   server_updated:          "Server Updated",
   update_available:        "Update Available",
   update_started:          "Update Started",
   update_failed:           "Update Failed",
   backup_completed:        "Backup Completed",
   backup_failed:           "Backup Failed",
-  scheduled_restart:       "Scheduled Restart",
-  rcon_failed:             "RCON Connection Failed",
-  mod_installed:           "Mod Installed",
-  low_disk_space:          "Low Disk Space",
   server_install_complete: "Server Install Complete",
   server_install_failed:   "Server Install Failed",
 };

@@ -58,14 +58,14 @@ export function launchArgsToExtraArgs(launchArgs: Record<string, string>): strin
 
 /**
  * Launch args the app derives from server state rather than from the saved
- * launch-arg settings: active event, cluster membership and max players.
+ * launch-arg settings: cluster membership and max players. (The active event
+ * is turned on by its mod in -mods — see launchModIds; ASA has no working
+ * -ActiveEvent flag.)
  * Shared by the real start params and the launch-command preview so the two
  * can't drift apart.
  */
 async function derivedLaunchArgs(server: ServerRow): Promise<string[]> {
   const args: string[] = [];
-
-  if (server.active_event) args.push(`-ActiveEvent=${server.active_event}`);
 
   // Cluster members share a cluster dir/ID and are isolated from servers
   // outside the cluster (NoTransferFromFiltering) — always both together.
@@ -93,7 +93,7 @@ async function derivedLaunchArgs(server: ServerRow): Promise<string[]> {
   return args;
 }
 
-/** Enabled mod IDs plus the active event's mod (events need their mod loaded). */
+/** Enabled mod IDs plus the active event's mod — loading that mod is what enables the event in ASA. */
 function launchModIds(server: ServerRow, mods: { mod_id: string; enabled: number }[]): string[] {
   const ids = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
   if (server.active_event) {

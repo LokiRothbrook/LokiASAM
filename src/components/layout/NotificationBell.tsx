@@ -87,8 +87,8 @@ export function NotificationBell() {
   const resetUnreadBump = useAppStore((s) => s.resetUnreadBump);
 
   const { data: unreadCount = 0 } = useUnreadNotificationCount();
-  // Show only unread notifications in the bell, newest first, capped at 10
-  const { data: unread = [] } = useNotificationList({ unreadOnly: true, limit: 10 });
+  // Every unread notification, newest first (the popup list scrolls).
+  const { data: unread = [] } = useNotificationList({ unreadOnly: true, limit: Math.max(unreadCount, 1) });
 
   async function handleOpenChange(value: boolean) {
     setOpen(value);
@@ -123,14 +123,15 @@ export function NotificationBell() {
           <Bell className="w-5 h-5" />
           {unreadCount > 0 && (
             <span
-              className="absolute top-1 right-1 flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold"
+              // Pill that grows with the digit count — shows the exact number.
+              className="absolute top-0.5 right-0.5 flex items-center justify-center min-w-4 h-4 px-1 rounded-full text-[10px] font-bold leading-none tabular-nums"
               style={{
                 background: "var(--neon-red)",
                 color: "#000",
                 boxShadow: "var(--glow-red)",
               }}
             >
-              {unreadCount > 9 ? "9+" : unreadCount}
+              {unreadCount}
             </span>
           )}
         </Button>
@@ -157,7 +158,7 @@ export function NotificationBell() {
               className="text-xs px-1.5 py-0.5 rounded-full font-bold"
               style={{ background: "var(--neon-red)", color: "#000" }}
             >
-              {unreadCount > 9 ? "9+" : unreadCount}
+              {unreadCount}
             </span>
           )}
         </div>

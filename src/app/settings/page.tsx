@@ -2152,6 +2152,9 @@ const GLOBAL_CHANNEL_DEFS = [
   },
 ];
 
+// A new channel row starts with every event ticked ("[]" means none).
+const ALL_EVENTS_JSON = JSON.stringify(Object.values(NOTIFICATION_EVENTS));
+
 function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?: () => void }) {
   const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
   const [saving, setSaving]   = useState<string | null>(null);
@@ -2168,7 +2171,7 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
     const existing = getConfig(channelId);
     await saveNotificationConfig({
       id: existing?.id ?? crypto.randomUUID(), serverId: null, channel: channelId,
-      enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? "[]",
+      enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? ALL_EVENTS_JSON,
     });
     await loadConfigs();
   }
@@ -2179,7 +2182,7 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
       const existing = getConfig(channelId);
       await saveNotificationConfig({
         id: existing?.id ?? crypto.randomUUID(), serverId: null, channel: channelId,
-        enabled: existing?.enabled === 1, configJson, eventsJson: existing?.events_json ?? "[]",
+        enabled: existing?.enabled === 1, configJson, eventsJson: existing?.events_json ?? ALL_EVENTS_JSON,
       });
       await loadConfigs();
       toast.success("Notification config saved.");

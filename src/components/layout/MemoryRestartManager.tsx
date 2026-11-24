@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { getServersCached, restartServerGracefully } from "@/lib/server-utils";
+import { dispatchNotification } from "@/lib/notifications";
+import { NOTIFICATION_EVENTS } from "@/data/game-data";
 
 interface MemoryRestartPayload {
   serverId: string;
@@ -26,7 +28,14 @@ export function MemoryRestartManager() {
     const server = servers.find((s) => s.id === serverId);
     if (!server || server.status !== "running") return;
 
-    toast.warning(`${server.name} is using ${(memMb / 1024).toFixed(1)} GB (limit ${(limitMb / 1024).toFixed(1)} GB) — restarting.`);
+    dispatchNotification({
+      eventType: NOTIFICATION_EVENTS.MEMORY_RESTART,
+      serverId: server.id,
+      serverName: server.name,
+      title: `${server.name} restarting (memory limit)`,
+      body: `Using ${(memMb / 1024).toFixed(1)} GB of RAM, over the ${(limitMb / 1024).toFixed(1)} GB limit.`,
+      severity: "warning",
+    });
     try {
       await restartServerGracefully(server, {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
