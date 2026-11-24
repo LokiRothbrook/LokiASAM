@@ -107,8 +107,10 @@ export function ModsTab({ server }: Props) {
   const stopVerifying    = useAppStore((s) => s.stopVerifying);
 
   // ── Load mods from SQLite ──────────────────────────────────────────────
+  // `loading` starts true and is only cleared here — the spinner is for the
+  // first load. Later reloads (after reorder/toggle/remove) refresh the list
+  // in place; swapping the list for the spinner reset its scroll position.
   const loadMods = useCallback(async () => {
-    setLoading(true);
     try {
       const rows = await getServerMods(server.id);
       setMods(rows);
@@ -249,23 +251,26 @@ export function ModsTab({ server }: Props) {
     }
   };
 
-  const handleMoveUp = async (index: number) => {
-    if (index === 0) return;
+  // Locked (map) mods always load first, so a mod can't move above them.
+  const lockedCount = mods.filter((m) => m.locked_by_map === 1).length;
+
+  const moveMod = async (from: number, to: number) => {
+    if (to < lockedCount || to >= mods.length || mods[from]?.locked_by_map === 1) return;
     const reordered = [...mods];
-    [reordered[index - 1], reordered[index]] = [reordered[index], reordered[index - 1]];
-    await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
-    await loadMods();
-    markChanged();
+    [reordered[from], reordered[to]] = [reordered[to], reordered[from]];
+    setMods(reordered); // instant feedback; reloaded from the DB below
+    try {
+      await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
+      markChanged();
+    } catch (e) {
+      toast.error("Failed to reorder mods", { description: String(e) });
+    } finally {
+      await loadMods();
+    }
   };
 
-  const handleMoveDown = async (index: number) => {
-    if (index === mods.length - 1) return;
-    const reordered = [...mods];
-    [reordered[index], reordered[index + 1]] = [reordered[index + 1], reordered[index]];
-    await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
-    await loadMods();
-    markChanged();
-  };
+  const handleMoveUp = (index: number) => moveMod(index, index - 1);
+  const handleMoveDown = (index: number) => moveMod(index, index + 1);
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
@@ -344,6 +349,7 @@ export function ModsTab({ server }: Props) {
                 mod={mod}
                 index={index}
                 total={mods.length}
+                canMoveUp={index > lockedCount}
                 onMoveUp={() => handleMoveUp(index)}
                 onMoveDown={() => handleMoveDown(index)}
                 onToggle={(enabled) => handleToggleMod(mod.mod_id, enabled)}
@@ -510,6 +516,8 @@ interface ModRowItemProps {
   mod: ModRow;
   index: number;
   total: number;
+  /** False for the top row and the row just below the locked map mods. */
+  canMoveUp: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onToggle: (enabled: boolean) => void;
@@ -520,6 +528,7 @@ function ModRowItem({
   mod,
   index,
   total,
+  canMoveUp,
   onMoveUp,
   onMoveDown,
   onToggle,
@@ -546,7 +555,7 @@ function ModRowItem({
 
       {/* Up / Down — disabled for locked mods */}
       <div className="flex flex-col gap-0.5 shrink-0">
-        <button type="button" onClick={onMoveUp} disabled={index === 0 || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move up">
+        <button type="button" onClick={onMoveUp} disabled={!canMoveUp || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move up">
           <ChevronUp className="w-3 h-3" />
         </button>
         <button type="button" onClick={onMoveDown} disabled={index === total - 1 || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move down">

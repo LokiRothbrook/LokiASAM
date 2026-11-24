@@ -1252,20 +1252,22 @@ export async function reorderServerMods(
   serverId: string,
   orderedModIds: string[]
 ): Promise<void> {
+  if (orderedModIds.length === 0) return;
   const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    for (let i = 0; i < orderedModIds.length; i++) {
-      await db.execute(
-        "UPDATE server_mods SET install_order = ? WHERE server_id = ? AND mod_id = ?",
-        [i, serverId, orderedModIds[i]]
-      );
-    }
-    await db.execute("COMMIT");
-  } catch (err) {
-    await db.execute("ROLLBACK").catch(() => {});
-    throw err;
-  }
+  // One statement, so SQLite applies it atomically. Explicit BEGIN/COMMIT
+  // doesn't work through the SQL plugin: each execute() can run on a
+  // different pooled connection, so the transaction and its UPDATEs landed
+  // on different connections — the reorder failed ("database is locked" /
+  // "no transaction is active") and could leave a write lock held.
+  const cases = orderedModIds.map(() => "WHEN ? THEN ?").join(" ");
+  const params: (string | number)[] = [];
+  orderedModIds.forEach((id, i) => params.push(id, i));
+  const placeholders = orderedModIds.map(() => "?").join(", ");
+  await db.execute(
+    `UPDATE server_mods SET install_order = CASE mod_id ${cases} END
+     WHERE server_id = ? AND mod_id IN (${placeholders})`,
+    [...params, serverId, ...orderedModIds]
+  );
 }
 
 /** Return the number of enabled mods attached to a server. */
