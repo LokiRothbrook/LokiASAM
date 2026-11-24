@@ -349,7 +349,7 @@ function ImportSavesCard({ server }: Props) {
 export function MaintenanceTab({ server }: Props) {
   return (
     <div className="flex flex-col gap-4 pr-6">
-      <VerifyFilesCard server={server} />
+      <div data-tour="maint-verify"><VerifyFilesCard server={server} /></div>
       <ReinstallCard server={server} />
       <WipeSaveDataCard server={server} />
       <ImportSavesCard server={server} />

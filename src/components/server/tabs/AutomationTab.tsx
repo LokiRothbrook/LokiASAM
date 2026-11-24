@@ -1250,13 +1250,13 @@ export function AutomationTab({ server, onNavigateToConfig }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
-          <AutoStartCard server={server} />
-          <UpdateAutomationCard server={server} onNavigateToConfig={onNavigateToConfig} />
-          <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
+          <div data-tour="auto-start"><AutoStartCard server={server} /></div>
+          <div data-tour="auto-update"><UpdateAutomationCard server={server} onNavigateToConfig={onNavigateToConfig} /></div>
+          <div data-tour="auto-backups"><BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} /></div>
           <BackupBroadcastCard server={server} />
           {CARD_DEFS.map((def) => (
+            <div key={def.type} data-tour={`auto-${def.type}`}>
             <ScheduleCard
-              key={def.type}
               server={server}
               serverId={server.id}
               type={def.type}
@@ -1267,6 +1267,7 @@ export function AutomationTab({ server, onNavigateToConfig }: Props) {
               onRefresh={loadSchedules}
               onNavigateToConfig={onNavigateToConfig}
             />
+            </div>
           ))}
         </div>
       )}

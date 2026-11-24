@@ -1011,6 +1011,7 @@ export function LogsTab({ server }: Props) {
     <div className="flex flex-col gap-3 h-full">
       {/* Sub-tab bar */}
       <div
+        data-tour="logs-views"
         className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
         style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
       >

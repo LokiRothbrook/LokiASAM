@@ -1104,6 +1104,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       )}
 
       {/* Server backups */}
+      <div data-tour="backups-server">
       <BackupSectionPanel
         icon={Archive} title="Server Backups" color="var(--neon-purple)"
         backups={serverBackups} loading={loading}
@@ -1113,6 +1114,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         restoreDisabled={isBusy}
         backupLabel="Backup Server Now"
       />
+      </div>
 
       {/* Player backups */}
       <PlayerBackupSection

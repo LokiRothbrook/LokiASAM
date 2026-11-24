@@ -323,6 +323,7 @@ export function ModsTab({ server }: Props) {
 
         {/* Mod list */}
         <div
+          data-tour="mods-list"
           className="glass-card flex-1 flex flex-col gap-1 rounded-xl p-2 overflow-y-auto min-h-0"
           style={{
             minHeight: 80,
@@ -362,6 +363,7 @@ export function ModsTab({ server }: Props) {
 
         {/* Add-by-ID form */}
         <div
+          data-tour="mods-add"
           className="glass-card flex flex-col gap-2 rounded-xl p-3 shrink-0"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}
         >
@@ -417,6 +419,7 @@ export function ModsTab({ server }: Props) {
       >
         {/* Open / Close browser card */}
         <div
+          data-tour="mods-browser"
           className="glass-card flex flex-col gap-3 p-4 rounded-xl"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
         >

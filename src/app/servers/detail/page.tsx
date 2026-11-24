@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Server, LayoutDashboard, Settings2, Terminal,
-  ScrollText, Package, Archive, CalendarClock, Wrench,
+  ScrollText, Package, Archive, CalendarClock, Wrench, HelpCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,6 +22,9 @@ import { formatServerVersion } from "@/lib/db";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import { useServers } from "@/hooks/useServers";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
+import { useAppStore } from "@/store/useAppStore";
+import { SERVER_TAB_TOURS } from "@/data/tours";
+import { hasSeenTour, runTour } from "@/lib/tour";
 
 const TABS = [
   { value: "overview",    label: "Overview",    icon: LayoutDashboard },
@@ -68,6 +71,21 @@ export default function ServerDetailPage() {
   useEffect(() => {
     if (!serverId) router.replace("/");
   }, [serverId, router]);
+
+  // Each tab's short tour runs the first time that tab is opened (once the
+  // tab has rendered, and never over the creation wizard). The ? at the end
+  // of the tab bar replays it.
+  const tabTour = SERVER_TAB_TOURS[activeTab];
+  const wizardOpen = useAppStore((s) => s.showNewServerWizard);
+  const serverLoaded = !!server;
+  useEffect(() => {
+    if (!tabTour || wizardOpen || !serverLoaded) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (!cancelled && !(await hasSeenTour(tabTour)) && !cancelled) runTour(tabTour);
+    }, 900);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [tabTour, wizardOpen, serverLoaded]);
 
   // ── Tab change: keep ?tab= in sync ──────────────────────────────────────
   const handleTabChange = (value: string) => {
@@ -161,6 +179,7 @@ export default function ServerDetailPage() {
 
       {/* ── Tab bar ── */}
       <div
+        data-tour="server-tabs"
         className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
         style={{
           background: "rgba(0,0,0,0.4)",
@@ -188,6 +207,18 @@ export default function ServerDetailPage() {
             </button>
           );
         })}
+        {tabTour && (
+          <button
+            type="button"
+            onClick={() => runTour(tabTour)}
+            title="Show this tab's tour"
+            aria-label="Show this tab's tour"
+            className="ml-auto flex items-center px-2 rounded-lg transition-colors hover:bg-[rgba(var(--neon-purple-rgb),0.08)] cursor-pointer"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* ── Tab content ── */}

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import "driver.js/dist/driver.css";
 import "./globals.css";
 import { AppShell } from "@/components/layout/AppShell";
 

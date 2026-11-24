@@ -1722,7 +1722,7 @@ export function ConfigTab({ server }: Props) {
         style={{ background: "var(--background)", borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
       >
         {/* Tab selectors */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1" data-tour="cfg-views">
           <button
             onClick={() => { if (activeTab === "raw") switchFromRaw(); setActiveTab("settings"); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
@@ -1760,6 +1760,7 @@ export function ConfigTab({ server }: Props) {
             <Code className="w-3.5 h-3.5" /> Raw INI
           </button>
           <button
+            data-tour="cfg-quick-setup"
             onClick={() => setShowQuickSetup(true)}
             disabled={!config}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
@@ -1777,7 +1778,7 @@ export function ConfigTab({ server }: Props) {
             </span>
           )}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+            <DropdownMenuTrigger asChild data-tour="cfg-menu">
               <Button size="sm" variant="ghost" disabled={!config} style={{ color: "var(--text-muted)" }}>
                 <Upload className="w-3.5 h-3.5 mr-1.5" />
                 Import
@@ -1815,6 +1816,7 @@ export function ConfigTab({ server }: Props) {
                 size="sm"
                 className={savedFlash ? "btn-neon-green" : "btn-neon-purple"}
                 onClick={() => handleSave()}
+                data-tour="cfg-save"
                 disabled={saving || !config || !isDirty}
               >
                 <Save className="w-3.5 h-3.5 mr-1.5" />

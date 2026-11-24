@@ -131,6 +131,7 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
         disabled={checking || !!asaCacheOpLabel}
         title={!checking && asaCacheOpLabel ? asaCacheOpLabel : undefined}
         onClick={handleCheck}
+        data-tour="dash-check-updates"
         className="gap-1.5"
         style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
       >
@@ -491,13 +492,20 @@ export default function DashboardPage() {
 
     const running = servers.filter((s) => s.status === "running" || s.status === "starting");
     if (running.length === 0) return;
+    // Pending only until every server shows "stopping" — the button then
+    // relabels to "Force Stop All", which must be clickable while the graceful
+    // stops (warning countdown + save, possibly minutes) run in the background.
     setGlobalActionPending(true);
-    const jobs = running.map((s) =>
-      stopServerGracefully(s, {
-        onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
-      }).catch((e) => toast.error(`Failed to stop ${s.name}: ${e}`))
-    );
-    Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
+    Promise.all(running.map((s) => updateServerStatus(s.id, "stopping", s.pid)))
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
+        setGlobalActionPending(false);
+        for (const s of running) {
+          stopServerGracefully(s, {
+            onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+          }).catch((e) => toast.error(`Failed to stop ${s.name}: ${e}`));
+        }
+      });
     toast.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, stoppingServers, queryClient]);
 
@@ -518,13 +526,16 @@ export default function DashboardPage() {
     const running = servers.filter((s) => s.status === "running");
     if (running.length === 0) return;
 
+    // restartServerGracefully marks each server "stopping" first, then (with
+    // warnings on) runs a countdown that can last minutes — pending must not
+    // span that, or "Restart All Now" stays unclickable for the whole wait.
     setGlobalActionPending(true);
-    const jobs = running.map((s) =>
+    for (const s of running) {
       restartServerGracefully(s, {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
-      }).catch((e) => toast.error(`Failed to restart ${s.name}: ${e}`))
-    );
-    Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
+      }).catch((e) => toast.error(`Failed to restart ${s.name}: ${e}`));
+    }
+    setTimeout(() => setGlobalActionPending(false), 1000);
     toast.info(`Queuing restart for ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, restartCountdownServers, queryClient]);
 
@@ -569,7 +580,7 @@ export default function DashboardPage() {
             Manage your Ark Survival Ascended dedicated servers.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap" data-tour="dash-actions">
           {servers.length > 0 && (
             <>
               <UpdateStatusChip
@@ -613,6 +624,7 @@ export default function DashboardPage() {
           <Button
             variant="outline"
             onClick={() => setShowImport(true)}
+            data-tour="dash-import"
             className="gap-2"
             style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >
@@ -622,6 +634,7 @@ export default function DashboardPage() {
           <Button
             variant="outline"
             onClick={() => setShowNewServerWizard(true)}
+            data-tour="dash-new-server"
             className="gap-2"
             style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
           >

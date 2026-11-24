@@ -130,6 +130,10 @@ export function ServerCard({ server }: Props) {
   const [nextRestart, setNextRestart] = useState<string | null>(null);
   const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
+  // Separate from actionPending: Stop holds actionPending for the whole
+  // graceful shutdown (warning countdown + save + exit wait), which is exactly
+  // when Force Stop must stay clickable.
+  const [forceStopping, setForceStopping] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
@@ -327,13 +331,13 @@ export function ServerCard({ server }: Props) {
   };
 
   const handleForceStop = async () => {
-    setActionPending(true);
+    setForceStopping(true);
     try {
       await tauriCmd.stopServer(server.id, false);
     } catch (err) {
       toast.error(`Force stop failed: ${err}`);
     } finally {
-      setActionPending(false);
+      setForceStopping(false);
     }
   };
 
@@ -684,14 +688,14 @@ export function ServerCard({ server }: Props) {
               {/* Primary status button — always flex-1 so width is consistent */}
               {server.status === "stopping" ? (
                 <Button
-                  size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
+                  size="sm" onClick={handleForceStop} disabled={forceStopping} className="gap-1.5 flex-1"
                   style={{ background: "rgba(var(--neon-orange-rgb),0.12)", borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
                 >
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
                 </Button>
               ) : isStarting ? (
                 <Button
-                  size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5 flex-1"
+                  size="sm" onClick={handleForceStop} disabled={forceStopping} className="gap-1.5 flex-1"
                   style={{ background: "rgba(var(--neon-yellow-rgb),0.12)", borderColor: "rgba(var(--neon-yellow-rgb),0.4)", color: "var(--neon-yellow)" }}
                 >
                   <X className="w-3.5 h-3.5" /> Cancel Startup

@@ -55,7 +55,7 @@ export function TopBar() {
         borderColor: "var(--border)",
       }}
     >
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-6" data-tour="topbar-stats">
         {stats.map((stat) => (
           <div key={stat.label} className="flex items-center gap-2">
             <stat.icon className="w-4 h-4" style={{ color: stat.color }} />
@@ -86,7 +86,7 @@ export function TopBar() {
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" data-tour="topbar-bell">
         <NotificationBell />
       </div>
     </header>

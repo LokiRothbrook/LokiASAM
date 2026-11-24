@@ -550,7 +550,7 @@ export function RconConsole({ server }: Props) {
           )}
 
           {/* Raw command input */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0" data-tour="rcon-input">
             <span className="font-mono text-sm shrink-0" style={{ color: "var(--neon-cyan)" }}>&gt;</span>
             <Input
               ref={cmdInputRef}

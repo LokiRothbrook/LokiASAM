@@ -3200,7 +3200,7 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
       {/* Action buttons */}
       <div className="flex gap-3 w-full">
         <Button
-          onClick={() => { setPendingTour(true); onComplete(); }}
+          onClick={onComplete}
           variant="outline"
           className="flex-1 gap-2"
           style={{
@@ -3209,11 +3209,10 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
             background: "rgba(var(--neon-purple-rgb),0.04)",
           }}
         >
-          <BookOpen className="w-4 h-4" />
-          Quick Start Guide
+          Skip — go to Dashboard
         </Button>
         <Button
-          onClick={onComplete}
+          onClick={() => { setPendingTour(true); onComplete(); }}
           className="flex-1 gap-2"
           style={{
             background: "rgba(var(--neon-purple-rgb),0.2)",
@@ -3222,7 +3221,8 @@ function CompleteStep({ onComplete }: { onComplete: () => void }) {
             boxShadow: "0 0 20px rgba(var(--neon-purple-rgb),0.2)",
           }}
         >
-          Go to Dashboard
+          <BookOpen className="w-4 h-4" />
+          Start the guided tour
           <ArrowRight className="w-4 h-4" />
         </Button>
       </div>

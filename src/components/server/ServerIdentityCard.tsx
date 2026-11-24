@@ -189,7 +189,7 @@ export function ServerIdentityCard({
   );
 
   return (
-    <div id="settings-identity" className="glass-card rounded-xl p-4 space-y-4" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+    <div id="settings-identity" data-tour="cfg-identity" className="glass-card rounded-xl p-4 space-y-4" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <IdCard className="w-4 h-4 shrink-0" style={{ color: "var(--neon-purple)" }} />

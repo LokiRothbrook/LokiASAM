@@ -505,7 +505,7 @@ function ActiveConfigPanel({
   ];
 
   return (
-    <div className="glass-card rounded-xl p-4 space-y-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+    <div className="glass-card rounded-xl p-4 space-y-4" data-tour="ov-active-config" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-2 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
           <Settings2 className="w-3.5 h-3.5" style={{ color: "var(--neon-purple)" }} />
@@ -580,6 +580,10 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const [nextRestart,   setNextRestart]   = useState<string | null>(null);
   const [backupEnabled, setBackupEnabled] = useState<boolean | null>(null);
   const [actionPending, setActionPending] = useState(false);
+  // Separate from actionPending: Stop holds actionPending for the whole
+  // graceful shutdown (warning countdown + save + exit wait), which is exactly
+  // when Force Stop must stay clickable.
+  const [forceStopping, setForceStopping] = useState(false);
   const [players, setPlayers]       = useState<ArkPlayer[] | null>(null);
   const [playersLoading, setPlayersLoading] = useState(false);
   const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
@@ -744,14 +748,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   };
 
   const handleForceStop = async () => {
-    setActionPending(true);
+    setForceStopping(true);
     try {
       await tauriCmd.stopServer(server.id, false);
     } catch (err) {
       toast.error(`Force stop failed: ${err}`);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      setActionPending(false);
+      setForceStopping(false);
     }
   };
 
@@ -829,6 +833,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       {/* Structured as two non-wrapping groups so the right-side buttons
           never shift position when the primary status button changes label. */}
       <div
+        data-tour="ov-controls"
         className="glass-card rounded-xl p-4 flex items-center gap-3 overflow-hidden"
         style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
       >
@@ -932,14 +937,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             </>
           ) : server.status === "stopping" ? (
             <Button
-              size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
+              size="sm" onClick={handleForceStop} disabled={forceStopping} className="gap-1.5"
               style={{ background: "rgba(var(--neon-orange-rgb),0.12)", borderColor: "rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Force Stop
             </Button>
           ) : server.status === "starting" ? (
             <Button
-              size="sm" onClick={handleForceStop} disabled={actionPending} className="gap-1.5"
+              size="sm" onClick={handleForceStop} disabled={forceStopping} className="gap-1.5"
               style={{ background: "rgba(var(--neon-yellow-rgb),0.12)", borderColor: "rgba(var(--neon-yellow-rgb),0.4)", color: "var(--neon-yellow)" }}
             >
               <X className="w-3.5 h-3.5" /> Cancel Startup
@@ -1017,7 +1022,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       </div>
 
       {/* ── Chart tiles (2-column) ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4" data-tour="ov-charts">
 
         {/* Uptime first — also surfaces map, mods, backup and schedule info */}
         <ChartStatTile
@@ -1120,7 +1125,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       />
 
       {/* ── Network / install info ── */}
-      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+      <div className="glass-card rounded-xl p-4" data-tour="ov-network" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Network</h3>
           <button onClick={() => navigateToConfig("settings-identity")} className="text-xs px-3 py-1 rounded-md shrink-0"
@@ -1156,7 +1161,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       </div>
 
       {/* ── Player list ── */}
-      <div className="glass-card rounded-xl p-4" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
+      <div className="glass-card rounded-xl p-4" data-tour="ov-players" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Online Players</h3>
           <Button size="sm" variant="ghost" onClick={refreshPlayers} disabled={!isRunning || playersLoading}>

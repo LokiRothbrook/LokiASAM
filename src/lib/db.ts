@@ -732,6 +732,14 @@ export interface ClusterRow {
 // App Settings
 // ---------------------------------------------------------------------------
 
+/** Delete every app setting whose key starts with `prefix`. */
+export async function deleteAppSettingsWithPrefix(prefix: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM app_settings WHERE key LIKE ? ESCAPE '\\'", [
+    prefix.replace(/[\\%_]/g, (c) => `\\${c}`) + "%",
+  ]);
+}
+
 /** Retrieve a global app setting value. Returns null if the key doesn't exist. */
 export async function getAppSetting(key: string): Promise<string | null> {
   const db = await getDb();

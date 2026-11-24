@@ -33,6 +33,7 @@ import {
 } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { useAutostart } from "@/hooks/useAutostart";
+import { resetAllTours } from "@/lib/tour";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
@@ -2442,6 +2443,7 @@ function AppImageIntegrationSection() {
 function CloseToTraySection() {
   const [closeToTray, setCloseToTrayState] = useState(true);
   const { enabled: autostartEnabled, loading: autostartLoading, toggle: toggleAutostart } = useAutostart();
+  const setPendingTour = useAppStore((s) => s.setPendingTour);
 
   useEffect(() => { getAppSetting("close_to_tray").then((v) => setCloseToTrayState(v !== "false")); }, []);
 
@@ -2493,6 +2495,26 @@ function CloseToTraySection() {
             ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
             : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
         </button>
+      </div>
+
+      <div className="flex items-start justify-between gap-6">
+        <div className="space-y-1.5 flex-1">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Guided Tours</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Show the app tour again now, and each server tab&apos;s tour the next time you open it.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={async () => {
+            await resetAllTours();
+            setPendingTour(true);
+          }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+        >
+          Restart tours
+        </Button>
       </div>
     </div>
   );
