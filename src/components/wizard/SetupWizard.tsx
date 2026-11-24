@@ -45,6 +45,7 @@ import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAutostart } from "@/hooks/useAutostart";
+import { useHiddenWindowSupport, HiddenWindowStatus } from "@/components/server/HiddenWindowCard";
 import { useOnMount } from "@/hooks/useOnMount";
 import { homeDir, tempDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
@@ -77,6 +78,7 @@ const STEPS_LINUX = [
   { label: "SteamCMD",      icon: Terminal },
   { label: "Proton-GE",     icon: Cpu },
   { label: "Mod API Cert",  icon: ShieldCheck },
+  { label: "Server Window", icon: EyeOff },
   { label: "Notifications", icon: Bell },
   { label: "System Tray",   icon: Layers },
   { label: "Updates",       icon: RefreshCw },
@@ -2448,6 +2450,44 @@ function CertStep() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Server Window step (Linux only) — optional Xvfb/gamescope setup so servers
+// can later be run with "Hide Server Window". Windows needs nothing.
+// ---------------------------------------------------------------------------
+
+function HiddenWindowSetupStep() {
+  const state = useHiddenWindowSupport();
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <EyeOff className="w-5 h-5 shrink-0" style={{ color: "var(--neon-purple)", filter: "drop-shadow(0 0 6px rgba(var(--neon-purple-rgb),0.8))" }} />
+          <h2 className="text-xl font-bold text-glow-purple" style={{ color: "var(--neon-purple)" }}>
+            Hidden Server Windows
+          </h2>
+        </div>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Each server normally opens a console window. Servers can instead run with no window at all
+          (the Hide Server Window option per server). On Linux that needs a small invisible-display
+          program: <strong style={{ color: "var(--text-primary)" }}>Xvfb</strong> (recommended, lightweight) or gamescope.
+        </p>
+        <p className="text-xs mt-2" style={{ color: "var(--text-subtle)" }}>
+          Optional — you can skip this and install it later from any server&apos;s Config → Advanced tab.
+        </p>
+      </div>
+      <div className="rounded-lg p-4" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+        {state.support
+          ? <HiddenWindowStatus state={state} hideRequested={false} />
+          : (
+            <div className="flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+              <Loader2 className="w-4 h-4 animate-spin" /> Checking what&apos;s installed…
+            </div>
+          )}
+      </div>
+    </div>
+  );
+}
+
 function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record<string, string[]>) => void }) {
   const {
     discordWebhook, setDiscordWebhook,
@@ -3442,6 +3482,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <SteamCmdStep key="steamcmd" />,
         <ProtonGEStep key="proton" />,
         <CertStep key="cert" />,
+        <HiddenWindowSetupStep key="hiddenwindow" />,
         <NotificationsStep key="notifications" onMatrixChange={(e) => { matrixEventsRef.current = e; }} />,
         <TrayStep key="tray" />,
         <AutoUpdateStep key="autoupdate" />,

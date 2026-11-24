@@ -130,6 +130,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     rconPassword: server.admin_password,
     extraArgs,
     modIds:       enabledModIds,
+    hideWindow:   server.hide_window === 1,
   };
 
   if (isLinux) {
@@ -236,7 +237,8 @@ export async function buildLaunchCommandPreview(
 
   const parts = [
     `${exe} ${mapPath}?listen?Port=${server.port}?QueryPort=${server.query_port}`,
-    "-server -log",
+    // Hidden servers also get -unattended (see server.rs — never wait on a dialog).
+    server.hide_window === 1 ? "-server -log -unattended" : "-server -log",
     modsArg,
     ...extraArgs,
   ].filter(Boolean);

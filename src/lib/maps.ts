@@ -13,7 +13,7 @@
  * `findMapById()`) resolve against the same up-to-date list.
  */
 
-import { ARK_MAPS, type ArkMap } from "@/data/game-data";
+import { ARK_MAPS, ARK_EVENT_MOD_IDS, type ArkMap } from "@/data/game-data";
 import { getCustomMaps, type CustomMapRow } from "@/lib/db";
 
 function toArkMap(r: CustomMapRow): ArkMap {
@@ -103,4 +103,18 @@ export function findMapById(id: string | null | undefined): ArkMap | undefined {
 export function subscribeMapsCache(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/**
+ * The mods worth copying from one server to another. A server's map mod
+ * belongs to its map, and event mods are added automatically for the active
+ * event, so neither is ever copied — the target server's own map/event
+ * supply theirs. (Copying them used to leave another map's mod on the target,
+ * sometimes locked so it couldn't even be removed.)
+ */
+export async function copyableMods<T extends { mod_id: string; locked_by_map?: number }>(mods: T[]): Promise<T[]> {
+  const maps = await ensureMapsCacheLoaded();
+  const excluded = new Set<string>(ARK_EVENT_MOD_IDS);
+  for (const m of maps) if (m.requiredModId) excluded.add(m.requiredModId);
+  return mods.filter((m) => m.locked_by_map !== 1 && !excluded.has(m.mod_id));
 }

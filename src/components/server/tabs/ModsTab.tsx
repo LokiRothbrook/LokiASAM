@@ -47,9 +47,10 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
     if (!selectedId) return;
     setCopying(true);
     try {
-      await copyServerMods(selectedId, serverId);
+      const count = await copyServerMods(selectedId, serverId);
       onCopied();
-      toast.success("Mods copied successfully");
+      toast.success(count > 0 ? `Copied ${count} mod${count === 1 ? "" : "s"}` : "No mods to copy",
+        { description: "Map and event mods aren't copied — this server's own map and event supply theirs." });
     } catch (e) {
       toast.error(`Failed to copy mods: ${e}`);
     } finally {

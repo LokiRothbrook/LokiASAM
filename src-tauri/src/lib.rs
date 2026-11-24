@@ -536,6 +536,8 @@ pub fn run() {
             commands::config::write_server_config,
             commands::config::import_ini_files,
             commands::config::read_ini_folder,
+            commands::virtual_display::get_hidden_window_support,
+            commands::virtual_display::install_xvfb,
             commands::config::patch_server_ini,
             commands::config::read_server_text_file,
             commands::config::write_server_text_file,

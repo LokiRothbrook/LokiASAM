@@ -38,6 +38,7 @@ import { type IniSections, mergeIniSections, carryOverIdentity, isIdentityKey } 
 import { ServerIdentityCard } from "@/components/server/ServerIdentityCard";
 import { ConfigHistoryDialog } from "@/components/server/ConfigHistoryDialog";
 import { AccessListsCard } from "@/components/server/AccessListsCard";
+import { HiddenWindowCard } from "@/components/server/HiddenWindowCard";
 import { loadEffectiveConfig, saveServerConfigFull } from "@/lib/server-config";
 import { checkConfigBeforeSave } from "@/lib/config-checks";
 import {
@@ -1349,6 +1350,9 @@ function AdvancedConfigTab({
           style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-orange-rgb),0.3)", color: "var(--text-primary)" }}
         />
       </div>
+
+      {/* Hide server window — saved immediately (server row), applies on next start */}
+      <HiddenWindowCard server={server} />
 
       {/* Memory limit */}
       <div className="glass-card rounded-xl p-4 space-y-3" style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>

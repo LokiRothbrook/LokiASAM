@@ -48,13 +48,15 @@ import {
   getAppSetting, setAppSetting, createServer, deleteServerRecord, saveServerConfig,
   createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
   addServerMod, getServers, getServerMods,
-  updateBackupBroadcastMessage, setServerActiveEvent, updateServerRestartSettings, setServerAutoStart,
+  updateBackupBroadcastMessage, setServerActiveEvent, updateServerRestartSettings, setServerAutoStart, setServerHideWindow,
   type ClusterRow, type ServerRow,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { createCluster } from "@/lib/cluster-utils";
 import { loadEffectiveConfig } from "@/lib/server-config";
 import { copyServerAutomation } from "@/lib/clone-utils";
+import { copyableMods } from "@/lib/maps";
+import { useHiddenWindowSupport, HiddenWindowStatus } from "@/components/server/HiddenWindowCard";
 import { type IniSections, getIni, isIniTrue } from "@/lib/ini-utils";
 import {
   type GuidedRates, DEFAULT_GUIDED_RATES,
@@ -129,6 +131,8 @@ interface WizardData {
   clusterId: string;
   // Automation — start with the app
   autoStart: boolean;
+  // Automation — run without a visible server window
+  hideWindow: boolean;
   // Automation — restart
   autoRestart: boolean;
   autoRestartCron: string;
@@ -194,6 +198,7 @@ const DEFAULT_DATA: WizardData = {
   rconPort: 27020,
   clusterId: "",
   autoStart: false,
+  hideWindow: false,
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
   autoRestartWarnPlayers: true,
@@ -802,12 +807,14 @@ async function loadCopySource(
   const detectedMode: "pve" | "pvp" =
     isIniTrue(getIni(gus, "ServerSettings", "ServerPVE")) || source.preset_id?.includes("pve") ? "pve" : "pvp";
 
+  // The source's map/event mods stay behind — the target map adds its own below.
+  const copyable = await copyableMods(mods);
   const modNames: Record<string, string> = { ...data.modNames };
-  for (const m of mods) modNames[m.mod_id] = m.mod_name;
+  for (const m of copyable) modNames[m.mod_id] = m.mod_name;
   // Merge into the existing mod list rather than replacing it — a wholesale
   // replace used to silently drop the selected map's required mod.
   const modIds = [...data.modIds];
-  for (const m of mods) if (!modIds.includes(m.mod_id)) modIds.push(m.mod_id);
+  for (const m of copyable) if (!modIds.includes(m.mod_id)) modIds.push(m.mod_id);
   let lockedModIds = data.lockedModIds;
   const map = allMaps.find((m) => m.id === mapId);
   if (map?.isMod && map.requiredModId) {
@@ -979,7 +986,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
             <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-purple)" }}>Also copy</p>
             <GameModeToggle
               label="Schedules & automation"
-              description="Restart/backup/dino-wipe schedules, shutdown/restart/update warnings, auto-update, auto-start, memory limit and backup retention. Replaces the Automation step."
+              description="Restart/backup/dino-wipe schedules, shutdown/restart/update warnings, auto-update, auto-start, hidden window, memory limit and backup retention. Replaces the Automation step."
               value={data.copyExtras}
               onChange={(v) => onChange({ copyExtras: v })}
             />
@@ -2325,6 +2332,40 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
 // Automation Step
 // ---------------------------------------------------------------------------
 
+/** Automation step: run the new server without a visible window (+ backend status / Xvfb install help). */
+function WizardHiddenWindowCard({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  const state = useHiddenWindowSupport();
+  return (
+    <div className="glass-card rounded-xl p-4 space-y-3"
+      style={{ border: `1px solid ${value ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: value ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          <EyeOff className="w-4 h-4" style={{ color: value ? "var(--neon-purple)" : "var(--text-muted)" }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Hide Server Window</p>
+            <button type="button" onClick={() => onChange(!value)}
+              // Can always be turned off; turning on needs a working backend.
+              disabled={!value && !state.available}
+              className="shrink-0 flex items-center focus:outline-none disabled:opacity-40"
+              aria-label={value ? "Show server window" : "Hide server window"}>
+              {value
+                ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />}
+            </button>
+          </div>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Run the server without its console window. Logs, RCON and stop/restart work as normal. Changeable later in Config → Advanced.
+          </p>
+        </div>
+      </div>
+      <HiddenWindowStatus state={state} hideRequested={value} />
+    </div>
+  );
+}
+
 function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const patchServerTier = (tier: WizTier, patch: { enabled?: boolean; keep?: number }) =>
     onChange({ serverBackupTiers: { ...data.serverBackupTiers, [tier]: { ...data.serverBackupTiers[tier], ...patch } } });
@@ -2336,6 +2377,8 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Configure automation schedules. All times are in your local timezone.
       </p>
+
+      <WizardHiddenWindowCard value={data.hideWindow} onChange={(v) => onChange({ hideWindow: v })} />
 
       {/* ── Auto-Start ─────────────────────────────────────────────── */}
       <div className="glass-card rounded-xl p-4"
@@ -2779,7 +2822,8 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
                       <button
                         key={s.id}
                         onClick={async () => {
-                          const srcMods = await getServerMods(s.id);
+                          // Never brings the source's map/event mods along.
+                          const srcMods = await copyableMods(await getServerMods(s.id));
                           const newIds = srcMods.map((m) => m.mod_id).filter((id) => !data.modIds.includes(id));
                           const newNames = { ...data.modNames };
                           for (const m of srcMods) newNames[m.mod_id] = m.mod_name;
@@ -2972,6 +3016,7 @@ function InstallStep({
     { label: "Max Players",  value: String(data.maxPlayers) },
     { label: "Ports",        value: `${data.port} / ${data.queryPort} / ${data.rconPort}` },
     { label: "Auto-Start",       value: data.copyFromServerId && data.copyExtras ? "Copied from source" : data.autoStart ? "On" : "Off" },
+    { label: "Server Window",    value: data.copyFromServerId && data.copyExtras ? "Copied from source" : data.hideWindow ? "Hidden" : "Visible" },
     { label: "Auto-Restart",     value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
     { label: "Server Backups",   value: WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.serverBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
     { label: "Player Backups",   value: WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.playerBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
@@ -3069,6 +3114,7 @@ function InstallStep({
           await copyServerAutomation(data.copyFromServerId, serverId);
         } else {
           if (data.autoStart) await setServerAutoStart(serverId, true);
+        if (data.hideWindow) await setServerHideWindow(serverId, true);
 
         // The restart warning is a per-server setting shared by scheduled
           // restarts and the manual Restart button (restart schedules carry no

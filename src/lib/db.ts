@@ -558,6 +558,11 @@ async function runMigrations(db: Database): Promise<void> {
      WHERE created_at NOT LIKE '%T%'`
   );
 
+  // ── Migration 026: per-server "hide server window" ───────────────────────
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN hide_window INTEGER NOT NULL DEFAULT 0");
+  } catch { /* already exists */ }
+
   // ── Migration 025: explicit notification event lists ─────────────────────
   // events_json "[]" used to mean "all events", so switching every event off
   // for a channel (which also saves "[]") silently switched them all ON. Rows
@@ -677,6 +682,7 @@ export interface ServerRow {
   active_event: string | null;       // ARK event id (e.g. "FearEvolved"); null = no active event
   memory_limit_gb: number | null;    // restart server if RAM exceeds this; null = disabled
   backup_broadcast_message: string;  // RCON broadcast sent before each scheduled backup
+  hide_window: number;               // 0 | 1 — start without a visible server window
   created_at: string;
   updated_at: string;
 }
@@ -1149,6 +1155,15 @@ export async function updateServerUpdateSettings(
   );
 }
 
+/** Set whether the server starts without a visible window (applies on next start). */
+export async function setServerHideWindow(id: string, hide: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET hide_window = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [hide ? 1 : 0, id]
+  );
+}
+
 /** Set the auto_start flag for a server. */
 export async function setServerAutoStart(id: string, autoStart: boolean): Promise<void> {
   const db = await getDb();
@@ -1244,14 +1259,15 @@ export async function removeServerMod(serverId: string, modId: string): Promise<
 }
 
 /** Copy all mods from sourceServerId to targetServerId. Skips duplicates. */
-export async function copyServerMods(sourceServerId: string, targetServerId: string): Promise<void> {
-  const sourceMods = await getServerMods(sourceServerId);
-  for (const mod of sourceMods) {
-    await addServerMod(targetServerId, mod.mod_id, mod.mod_name);
-    if (mod.locked_by_map) {
-      await setModMapLock(targetServerId, mod.mod_id, true);
-    }
+export async function copyServerMods(sourceServerId: string, targetServerId: string): Promise<number> {
+  // Map and event mods are never copied (see copyableMods) — the target's own
+  // map mod stays as it is. Dynamic import: maps.ts imports this module.
+  const { copyableMods } = await import("@/lib/maps");
+  const mods = await copyableMods(await getServerMods(sourceServerId));
+  for (const mod of mods) {
+    await addServerMod(targetServerId, mod.mod_id, mod.mod_name, mod.mod_thumbnail_url ?? null);
   }
+  return mods.length;
 }
 
 /** Copy the server config (INI + launch args) from sourceServerId to targetServerId. */
