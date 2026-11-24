@@ -30,7 +30,7 @@ import { useAppStore } from "@/store/useAppStore";
 import {
   updateServerStatus, getServerModCount,
   getLastBackupTime, getNextScheduledRestart, getHasBackupEnabled, getAppSetting, insertBackup,
-  pruneManualBackups, setServerAutoStart,
+  pruneManualBackups,
 } from "@/lib/db";
 import { buildLaunchCommandPreview, buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { runServerUpdateAction } from "@/lib/update-utils";
@@ -323,7 +323,6 @@ function ServerSummaryPanel({
   lastBackup,
   nextRestart,
   backupEnabled,
-  onAutoStartChange,
 }: {
   server: ServerRow;
   startTime: number | undefined;
@@ -331,7 +330,6 @@ function ServerSummaryPanel({
   lastBackup: string | null;
   nextRestart: string | null;
   backupEnabled: boolean | null;
-  onAutoStartChange: (v: boolean) => void;
 }) {
   const isRunning = server.status === "running" || server.status === "starting";
   const currentStartMs = startTime ?? (isRunning ? new Date(server.updated_at).getTime() : null);
@@ -386,25 +384,6 @@ function ServerSummaryPanel({
         ))}
       </div>
 
-      {/* Auto-start toggle */}
-      <div
-        className="flex items-center gap-3 pt-2"
-        style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}
-      >
-        <Switch
-          id={`auto-start-${server.id}`}
-          checked={server.auto_start === 1}
-          onCheckedChange={onAutoStartChange}
-        />
-        <div>
-          <Label htmlFor={`auto-start-${server.id}`} className="text-xs font-medium cursor-pointer" style={{ color: "var(--text-primary)" }}>
-            Auto-start on launch
-          </Label>
-          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-            Start this server automatically when the app opens
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1060,10 +1039,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             lastBackup={lastBackup}
             nextRestart={nextRestart}
             backupEnabled={backupEnabled}
-            onAutoStartChange={async (v) => {
-              await setServerAutoStart(server.id, v);
-              queryClient.invalidateQueries({ queryKey: ["servers"] });
-            }}
           />
         </ChartStatTile>
 

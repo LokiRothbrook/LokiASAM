@@ -26,7 +26,7 @@ import {
   Sword, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Terminal,
   Shield, Info, Heart, AlertTriangle, HelpCircle, Eye, EyeOff,
-  HardDrive, Skull, RotateCcw, MessageSquare,
+  HardDrive, Skull, RotateCcw, MessageSquare, Power,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,7 +48,7 @@ import {
   getAppSetting, setAppSetting, createServer, deleteServerRecord, saveServerConfig,
   createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
   addServerMod, getServers, getServerMods,
-  updateBackupBroadcastMessage, setServerActiveEvent, updateServerRestartSettings,
+  updateBackupBroadcastMessage, setServerActiveEvent, updateServerRestartSettings, setServerAutoStart,
   type ClusterRow, type ServerRow,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
@@ -127,6 +127,8 @@ interface WizardData {
   rconPort: number;
   // Cluster
   clusterId: string;
+  // Automation — start with the app
+  autoStart: boolean;
   // Automation — restart
   autoRestart: boolean;
   autoRestartCron: string;
@@ -191,6 +193,7 @@ const DEFAULT_DATA: WizardData = {
   queryPort: 27015,
   rconPort: 27020,
   clusterId: "",
+  autoStart: false,
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
   autoRestartWarnPlayers: true,
@@ -976,7 +979,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
             <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-purple)" }}>Also copy</p>
             <GameModeToggle
               label="Schedules & automation"
-              description="Restart/backup/dino-wipe schedules, shutdown/restart/update warnings, auto-update, memory limit and backup retention. Replaces the Automation step."
+              description="Restart/backup/dino-wipe schedules, shutdown/restart/update warnings, auto-update, auto-start, memory limit and backup retention. Replaces the Automation step."
               value={data.copyExtras}
               onChange={(v) => onChange({ copyExtras: v })}
             />
@@ -2334,6 +2337,32 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
         Configure automation schedules. All times are in your local timezone.
       </p>
 
+      {/* ── Auto-Start ─────────────────────────────────────────────── */}
+      <div className="glass-card rounded-xl p-4"
+        style={{ border: `1px solid ${data.autoStart ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: data.autoStart ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            <Power className="w-4 h-4" style={{ color: data.autoStart ? "var(--neon-purple)" : "var(--text-muted)" }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Start with LokiASAM</p>
+              <button type="button" onClick={() => onChange({ autoStart: !data.autoStart })}
+                className="shrink-0 flex items-center focus:outline-none"
+                aria-label={data.autoStart ? "Disable auto-start" : "Enable auto-start"}>
+                {data.autoStart
+                  ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />}
+              </button>
+            </div>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Start this server automatically whenever the app opens. Changeable later in the server&apos;s Automation tab.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* ── Backup Schedules ─────────────────────────────────────── */}
       <div className="glass-card rounded-xl p-4 space-y-5"
         style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
@@ -2942,6 +2971,7 @@ function InstallStep({
     { label: "Mode / Style", value: presetLabel },
     { label: "Max Players",  value: String(data.maxPlayers) },
     { label: "Ports",        value: `${data.port} / ${data.queryPort} / ${data.rconPort}` },
+    { label: "Auto-Start",       value: data.copyFromServerId && data.copyExtras ? "Copied from source" : data.autoStart ? "On" : "Off" },
     { label: "Auto-Restart",     value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
     { label: "Server Backups",   value: WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.serverBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
     { label: "Player Backups",   value: WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.playerBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
@@ -3038,7 +3068,9 @@ function InstallStep({
           // server (the Automation step was skipped).
           await copyServerAutomation(data.copyFromServerId, serverId);
         } else {
-          // The restart warning is a per-server setting shared by scheduled
+          if (data.autoStart) await setServerAutoStart(serverId, true);
+
+        // The restart warning is a per-server setting shared by scheduled
           // restarts and the manual Restart button (restart schedules carry no
           // warning config of their own — scheduler-sync.ts reads these fields).
           await updateServerRestartSettings(

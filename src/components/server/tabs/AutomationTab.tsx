@@ -6,7 +6,7 @@ import {
   CalendarClock, HardDrive, RefreshCw, RotateCcw, Megaphone,
   Info, CheckCircle2, Loader2, Plus, Trash2, ToggleLeft, ToggleRight,
   AlertTriangle,
-  ArrowUp, Clock, Zap, Skull, MessageSquare,
+  ArrowUp, Clock, Zap, Skull, MessageSquare, Power,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { useSavedFlash } from "@/hooks/useSavedFlash";
 import {
   getServerSchedules, createSchedule, deleteScheduleRecord,
   updateScheduleEnabled, updateScheduleConfig,
-  setServerUpdateAutomation, updateBackupBroadcastMessage,
+  setServerUpdateAutomation, updateBackupBroadcastMessage, setServerAutoStart,
   type ScheduleRow, type CreateScheduleInput,
   type UpdateAutomation,
 } from "@/lib/db";
@@ -1089,6 +1089,53 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
 // BackupBroadcastCard
 // ---------------------------------------------------------------------------
 
+/** Start this server automatically whenever LokiASAM opens (StartupRecoveryManager queues it). */
+function AutoStartCard({ server }: { server: ServerRow }) {
+  const queryClient = useQueryClient();
+  const [saving, setSaving] = useState(false);
+  const on = server.auto_start === 1;
+
+  const toggle = async () => {
+    setSaving(true);
+    try {
+      await setServerAutoStart(server.id, !on);
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    } catch (e) {
+      toast.error(`Failed to save: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="glass-card rounded-xl p-4" style={{ border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-start gap-2 min-w-0">
+          <Power className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
+          <div>
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Start with LokiASAM</h3>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Start this server automatically whenever the app opens. Pair with
+              {" "}<strong style={{ color: "var(--text-primary)" }}>Settings → Launch at Login</strong> to bring servers up after a reboot.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={saving}
+          className="shrink-0 flex items-center focus:outline-none"
+          aria-label={on ? "Disable auto-start" : "Enable auto-start"}
+        >
+          {on
+            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
+            : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function BackupBroadcastCard({ server }: { server: ServerRow }) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState(server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
@@ -1203,6 +1250,7 @@ export function AutomationTab({ server, onNavigateToConfig }: Props) {
         </div>
       ) : (
         <div className="space-y-3">
+          <AutoStartCard server={server} />
           <UpdateAutomationCard server={server} onNavigateToConfig={onNavigateToConfig} />
           <BackupScheduleSection serverId={server.id} schedules={schedules} onRefresh={loadSchedules} />
           <BackupBroadcastCard server={server} />

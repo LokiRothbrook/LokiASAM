@@ -6,14 +6,15 @@
 import {
   getServer, getServerSchedules, createSchedule, updateScheduleConfig,
   updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings,
-  setServerUpdateAutomation, updateServerMemoryLimit, updateBackupBroadcastMessage,
+  setServerUpdateAutomation, updateServerMemoryLimit, updateBackupBroadcastMessage, setServerAutoStart,
   getAppSetting, setAppSetting, type UpdateAutomation,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 
 /**
- * Copy schedules, warning settings, auto-update automation, memory limit,
- * backup broadcast message and backup retention from `sourceId` to `targetId`.
+ * Copy schedules, warning settings, auto-update automation, auto-start,
+ * memory limit, backup broadcast message and backup retention from
+ * `sourceId` to `targetId`.
  */
 export async function copyServerAutomation(sourceId: string, targetId: string): Promise<void> {
   const source = await getServer(sourceId);
@@ -54,6 +55,7 @@ export async function copyServerAutomation(sourceId: string, targetId: string): 
   } catch { /* malformed — leave the default */ }
 
   await updateServerMemoryLimit(targetId, source.memory_limit_gb);
+  if (source.auto_start === 1) await setServerAutoStart(targetId, true);
   if (source.backup_broadcast_message) await updateBackupBroadcastMessage(targetId, source.backup_broadcast_message);
 
   for (const key of ["login_backup_keep", "manual_backup_keep"]) {
