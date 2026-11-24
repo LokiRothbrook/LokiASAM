@@ -246,8 +246,8 @@ function NotificationsContent() {
           <DropdownMenuTrigger asChild>
             <Button
               variant="outline"
-              className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+              className="gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+              style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
             >
               <Trash2 className="w-4 h-4" />
               Delete…

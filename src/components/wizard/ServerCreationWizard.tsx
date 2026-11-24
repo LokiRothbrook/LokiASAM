@@ -18,6 +18,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import {
   Server, Network, GitBranch, Clock, Package,
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
@@ -25,7 +26,7 @@ import {
   Sword, Sliders, Settings2, Code2, Globe, Lock,
   ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Terminal,
   Shield, Info, Heart, AlertTriangle, HelpCircle, Eye, EyeOff,
-  HardDrive, Skull, RotateCcw, MessageSquare,
+  HardDrive, Skull, RotateCcw, MessageSquare, Power,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,11 +34,12 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { CommandOutputPanel } from "@/components/shared/CommandOutputPanel";
 import { NumberField } from "@/components/shared/NumberField";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import {
-  GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS, buildPresetConfig,
-  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS, ARK_EVENTS,
+  GAME_MODES, PRESET_STYLES, INI_FIELD_GROUPS,
+  LAUNCH_PARAMETERS, NOTIFICATION_EVENTS, ARK_EVENTS, ARK_EVENT_MOD_IDS, getSaveFolder,
   type ArkMap, type GameModeConfig, type PresetStyle, type LaunchParameter, type ArkEvent,
 } from "@/data/game-data";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,11 +47,21 @@ import { dispatchNotification } from "@/lib/notifications";
 import {
   getAppSetting, setAppSetting, createServer, deleteServerRecord, saveServerConfig,
   createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
-  addServerMod, getServers, getServerMods, createClusterRecord,
-  updateBackupBroadcastMessage, getServerConfig, setServerActiveEvent,
-  type ClusterRow,
+  addServerMod, getServers, getServerMods,
+  updateBackupBroadcastMessage, setServerActiveEvent, updateServerRestartSettings, setServerAutoStart, setServerHideWindow,
+  type ClusterRow, type ServerRow,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
+import { createCluster } from "@/lib/cluster-utils";
+import { loadEffectiveConfig } from "@/lib/server-config";
+import { copyServerAutomation } from "@/lib/clone-utils";
+import { copyableMods } from "@/lib/maps";
+import { useHiddenWindowSupport, HiddenWindowStatus } from "@/components/server/HiddenWindowCard";
+import { type IniSections, getIni, isIniTrue } from "@/lib/ini-utils";
+import {
+  type GuidedRates, DEFAULT_GUIDED_RATES,
+  buildGusSections, buildGameIniSections,
+} from "@/lib/preset-builder";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useOnMount } from "@/hooks/useOnMount";
 import { tauriCmd, type PortDef, type FirewallStatus } from "@/lib/tauri-commands";
@@ -61,50 +73,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 // ---------------------------------------------------------------------------
 // Wizard data model
 // ---------------------------------------------------------------------------
-
-interface GuidedRates {
-  // Core Rates (page 1)
-  xpMultiplier: number;
-  harvestMultiplier: number;
-  harvestHealthMultiplier: number;
-  tamingMultiplier: number;
-  wildDinoMaxLevel: number;
-  resourceRespawnMultiplier: number;
-  nightSpeedMultiplier: number;
-  // Breeding (page 2)
-  matureSpeedMultiplier: number;
-  hatchSpeedMultiplier: number;
-  foodConsumptionMultiplier: number;
-  matingIntervalMultiplier: number;
-  matingSpeedMultiplier: number;
-  cuddleIntervalMultiplier: number;
-  cuddleGraceMultiplier: number;
-  imprintAmountMultiplier: number;
-  // Combat (page 3)
-  playerDamageMultiplier: number;
-  playerResistanceMultiplier: number;
-  dinoDamageMultiplier: number;
-  dinoResistanceMultiplier: number;
-  tamedDinoDamageMultiplier: number;
-  tamedDinoResistanceMultiplier: number;
-  structureDamageMultiplier: number;
-  structureResistanceMultiplier: number;
-  enableRespawnPenalty: boolean;
-  enableTurretLimits: boolean;
-  // Server QoL (page 4)
-  allowFlyingStaminaRecovery: boolean;
-  allowSpeedLeveling: boolean;
-  allowFlyerSpeedLeveling: boolean;
-  allowUnlimitedRespecs: boolean;
-  enhanceSkillGains: boolean;
-  globalSpoilingTimeMultiplier: number;
-  globalItemDecompMultiplier: number;
-  globalCorpseDecompMultiplier: number;
-  enableORP: boolean;
-  orpInterval: number;
-  disableStructureDecay: boolean;
-  disableDinoDecay: boolean;
-}
 
 interface WizardData {
   // Step 0 — Basic Info
@@ -142,6 +110,10 @@ interface WizardData {
   preventOfflinePvPInterval: number;
   // Copy from server
   copyFromServerId: string;
+  /** When copying: also copy schedules, warning settings and automation (skips the Automation step). */
+  copyExtras: boolean;
+  /** When copying: copy the source server's save data for the selected map after install. */
+  copySaveData: boolean;
   // Step 2 — Style
   presetStyle: "official" | "casual" | "boosted" | "guided_custom" | "full_custom";
   // Step 2a — Guided Custom rates
@@ -157,6 +129,10 @@ interface WizardData {
   rconPort: number;
   // Cluster
   clusterId: string;
+  // Automation — start with the app
+  autoStart: boolean;
+  // Automation — run without a visible server window
+  hideWindow: boolean;
   // Automation — restart
   autoRestart: boolean;
   autoRestartCron: string;
@@ -182,50 +158,6 @@ interface WizardData {
   // a mod was added via the browser; manually-typed IDs default to "Unknown Mod".
   modNames: Record<string, string>;
 }
-
-const DEFAULT_GUIDED_RATES: GuidedRates = {
-  // Core Rates
-  xpMultiplier: 2.0,
-  harvestMultiplier: 2.0,
-  harvestHealthMultiplier: 2.0,
-  tamingMultiplier: 5.0,
-  wildDinoMaxLevel: 150,
-  resourceRespawnMultiplier: 0.5,
-  nightSpeedMultiplier: 2.0,
-  // Breeding
-  matureSpeedMultiplier: 10.0,
-  hatchSpeedMultiplier: 10.0,
-  foodConsumptionMultiplier: 5.0,
-  matingIntervalMultiplier: 0.25,
-  matingSpeedMultiplier: 2.0,
-  cuddleIntervalMultiplier: 0.3,
-  cuddleGraceMultiplier: 2.0,
-  imprintAmountMultiplier: 2.0,
-  // Combat
-  playerDamageMultiplier: 1.0,
-  playerResistanceMultiplier: 1.0,
-  dinoDamageMultiplier: 1.0,
-  dinoResistanceMultiplier: 1.0,
-  tamedDinoDamageMultiplier: 1.0,
-  tamedDinoResistanceMultiplier: 1.0,
-  structureDamageMultiplier: 1.0,
-  structureResistanceMultiplier: 1.0,
-  enableRespawnPenalty: true,
-  enableTurretLimits: true,
-  // QoL
-  allowFlyingStaminaRecovery: true,
-  allowSpeedLeveling: false,
-  allowFlyerSpeedLeveling: false,
-  allowUnlimitedRespecs: false,
-  enhanceSkillGains: false,
-  globalSpoilingTimeMultiplier: 2.0,
-  globalItemDecompMultiplier: 2.0,
-  globalCorpseDecompMultiplier: 2.0,
-  enableORP: true,
-  orpInterval: 900,
-  disableStructureDecay: true,
-  disableDinoDecay: true,
-};
 
 const DEFAULT_DATA: WizardData = {
   name: "",
@@ -254,6 +186,8 @@ const DEFAULT_DATA: WizardData = {
   preventOfflinePvP: false,
   preventOfflinePvPInterval: 900,
   copyFromServerId: "",
+  copyExtras: true,
+  copySaveData: false,
   presetStyle: "casual",
   guidedRates: DEFAULT_GUIDED_RATES,
   fullCustomGus: {},
@@ -263,11 +197,13 @@ const DEFAULT_DATA: WizardData = {
   queryPort: 27015,
   rconPort: 27020,
   clusterId: "",
+  autoStart: false,
+  hideWindow: false,
   autoRestart: true,
   autoRestartCron: "0 6 * * *",
   autoRestartWarnPlayers: true,
   autoRestartWarnMinutes: 15,
-  autoRestartMessage: "Server restarting in {minutes} minutes. Progress will be saved.",
+  autoRestartMessage: "Server restarting in {time}. Progress will be saved.",
   serverBackupTiers: {
     H: { enabled: false, keep: 24 },
     D: { enabled: true,  keep: 7  },
@@ -305,7 +241,11 @@ interface StepDef {
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
 }
 
-function computeSteps(presetStyle: WizardData["presetStyle"], copyFromServerId: WizardData["copyFromServerId"]): StepDef[] {
+function computeSteps(
+  presetStyle: WizardData["presetStyle"],
+  copyFromServerId: WizardData["copyFromServerId"],
+  copyExtras: WizardData["copyExtras"],
+): StepDef[] {
   const steps: StepDef[] = [
     { id: "basic",    label: "Basic Info",  icon: Server },
     { id: "gamemode", label: "Game Mode",   icon: Sword },
@@ -327,8 +267,11 @@ function computeSteps(presetStyle: WizardData["presetStyle"], copyFromServerId: 
   steps.push(
     { id: "network",    label: "Network",    icon: Network },
     { id: "cluster",    label: "Cluster",    icon: GitBranch },
-    { id: "automation", label: "Automation", icon: Clock },
   );
+  // Copying automation from the source server replaces this step.
+  if (!(copyFromServerId && copyExtras)) {
+    steps.push({ id: "automation", label: "Automation", icon: Clock });
+  }
 
   if (!copyFromServerId) {
     steps.push({ id: "launch", label: "Launch Args", icon: Terminal });
@@ -637,22 +580,12 @@ function BasicInfoStep({
             </Tooltip>
           </TooltipProvider>
         </div>
-        <select
+        <OptionSelect
           value={data.activeEventId}
-          onChange={(e) => onChange({ activeEventId: e.target.value })}
-          className="w-full text-sm rounded-lg px-3 py-2"
-          style={{
-            background: "var(--surface)",
-            border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
-            color: "var(--text-primary)",
-            outline: "none",
-          }}
-        >
-          <option value="">No active event</option>
-          {ARK_EVENTS.map((ev: ArkEvent) => (
-            <option key={ev.id} value={ev.id}>{ev.displayName}</option>
-          ))}
-        </select>
+          options={[{ value: "", label: "No active event" }, ...ARK_EVENTS.map((ev: ArkEvent) => ({ value: ev.id, label: ev.displayName }))]}
+          onChange={(v) => onChange({ activeEventId: v })}
+          className="text-sm"
+        />
         {data.activeEventId && (() => {
           const ev = ARK_EVENTS.find((e) => e.id === data.activeEventId);
           return ev ? (
@@ -683,7 +616,7 @@ function BasicInfoStep({
         const serverMismatch = !!data.serverPassword && data.serverPassword !== data.serverPasswordConfirm;
         const fieldStyle = (hasValue: boolean, mismatch: boolean) => ({
           background: "var(--surface)",
-          borderColor: mismatch ? "var(--neon-red)" : !hasValue ? "rgba(255,0,85,0.5)" : "rgba(var(--neon-purple-rgb),0.3)",
+          borderColor: mismatch ? "var(--neon-red)" : !hasValue ? "rgba(var(--neon-red-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.3)",
           color: "var(--text-primary)",
         });
         return (
@@ -788,28 +721,23 @@ function BasicInfoStep({
                     <TooltipTrigger asChild>
                       <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
                     </TooltipTrigger>
-                    <TooltipContent>Shown to players in a pop-up when they join. Leave blank to disable. Use \n for line breaks.</TooltipContent>
+                    <TooltipContent>Shown to players in a pop-up when they join. Leave blank to disable. Single line only — ASA does not support line breaks.</TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
               </div>
-              <textarea
-                value={data.motdMessage}
-                onChange={(e) => onChange({ motdMessage: e.target.value })}
-                placeholder={"Welcome to the server!\nUse \\n for line breaks."}
-                rows={3}
-                className="w-full text-sm rounded px-3 py-2 resize-none"
-                style={{
-                  background: "var(--surface)",
-                  border: "1px solid rgba(var(--neon-purple-rgb),0.3)",
-                  color: "var(--text-primary)",
-                  outline: "none",
-                  fontFamily: "inherit",
-                }}
-              />
-              {data.motdMessage.trim() && (
-                <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <Input
+                  type="text"
+                  value={data.motdMessage}
+                  // INI values can't span lines — strip any newlines from pasted text.
+                  onChange={(e) => onChange({ motdMessage: e.target.value.replace(/[\r\n]+/g, " ") })}
+                  placeholder="Welcome to the server!"
+                  className="flex-1 min-w-48"
+                  style={fieldStyle(true, false)}
+                />
+                <div className={cn("flex items-center gap-2 shrink-0", !data.motdMessage.trim() && "opacity-50 pointer-events-none")}>
                   <Label className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>Display for</Label>
-                  <div className="flex-1">
+                  <div className="w-28">
                     <NumberField
                       value={data.motdDuration}
                       onChange={(v) => onChange({ motdDuration: v })}
@@ -821,7 +749,7 @@ function BasicInfoStep({
                   </div>
                   <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>seconds</span>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         );
@@ -838,8 +766,8 @@ function GameModeToggle({ label, description, value, onChange: onChangeFn, warn 
   label: string; description: string; value: boolean;
   onChange: (v: boolean) => void; warn?: boolean;
 }) {
-  const color = warn ? "rgba(255,140,0,0.06)" : "rgba(var(--neon-purple-rgb),0.04)";
-  const border = warn ? "rgba(255,140,0,0.15)" : "rgba(var(--neon-purple-rgb),0.12)";
+  const color = warn ? "rgba(var(--neon-orange-rgb),0.06)" : "rgba(var(--neon-purple-rgb),0.04)";
+  const border = warn ? "rgba(var(--neon-orange-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.12)";
   const accent = warn ? "var(--neon-orange, #ff8c00)" : "var(--neon-purple)";
   return (
     <div className="flex items-center justify-between px-2 py-2 rounded-lg gap-3"
@@ -859,6 +787,58 @@ function GameModeToggle({ label, description, value, onChange: onChangeFn, warn 
   );
 }
 
+/**
+ * Wizard fields for copying an existing server: its INI config, launch args
+ * and mods (merged with the selected map's required mod). Shared by the Game
+ * Mode step's "Copy from Server" card and the Clone Server action.
+ */
+async function loadCopySource(
+  serverId: string,
+  data: WizardData,
+  allMaps: ArkMap[],
+  mapId: string = data.mapId,
+): Promise<{ patch: Partial<WizardData>; source: ServerRow; gus: IniSections }> {
+  const [allServers, mods] = await Promise.all([getServers(), getServerMods(serverId)]);
+  const source = allServers.find((s) => s.id === serverId);
+  if (!source) throw new Error("Source server not found");
+  // Effective config — falls back to the INI files for imported servers.
+  const { config } = await loadEffectiveConfig(source);
+  const gus = config.gameUserSettings;
+  const detectedMode: "pve" | "pvp" =
+    isIniTrue(getIni(gus, "ServerSettings", "ServerPVE")) || source.preset_id?.includes("pve") ? "pve" : "pvp";
+
+  // The source's map/event mods stay behind — the target map adds its own below.
+  const copyable = await copyableMods(mods);
+  const modNames: Record<string, string> = { ...data.modNames };
+  for (const m of copyable) modNames[m.mod_id] = m.mod_name;
+  // Merge into the existing mod list rather than replacing it — a wholesale
+  // replace used to silently drop the selected map's required mod.
+  const modIds = [...data.modIds];
+  for (const m of copyable) if (!modIds.includes(m.mod_id)) modIds.push(m.mod_id);
+  let lockedModIds = data.lockedModIds;
+  const map = allMaps.find((m) => m.id === mapId);
+  if (map?.isMod && map.requiredModId) {
+    if (!modIds.includes(map.requiredModId)) modIds.push(map.requiredModId);
+    lockedModIds = [map.requiredModId];
+  }
+
+  return {
+    source,
+    gus,
+    patch: {
+      copyFromServerId: serverId,
+      gameMode: detectedMode,
+      presetStyle: "full_custom",
+      fullCustomGus: gus,
+      fullCustomGameIni: config.gameIni,
+      launchArgs: Object.keys(config.launchArgs ?? {}).length > 0 ? config.launchArgs : { NoBattlEye: "true", servergamelog: "true" },
+      modIds,
+      modNames,
+      lockedModIds,
+    },
+  };
+}
+
 function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   // Shared ["servers"] cache — dedupes with other steps' getServers() reads
   // (and the rest of the app) within React Query's staleTime window instead
@@ -870,46 +850,10 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
   const handleCopyFrom = async (serverId: string) => {
     setLoadingCopy(true);
     try {
-      const [config, mods, allServers] = await Promise.all([
-        getServerConfig(serverId),
-        getServerMods(serverId),
-        getServers(),
-      ]);
-      const source = allServers.find((s) => s.id === serverId);
-      const gus = config && config.game_user_settings_json
-        ? (JSON.parse(config.game_user_settings_json) as Record<string, Record<string, string>>)
-        : {};
-      const serverPVE = gus?.ServerSettings?.ServerPVE?.toLowerCase();
-      const detectedMode: "pve" | "pvp" =
-        serverPVE === "true" || source?.preset_id?.includes("pve") ? "pve" : "pvp";
-      const newModNames: Record<string, string> = { ...data.modNames };
-      for (const m of mods) newModNames[m.mod_id] = m.mod_name;
-      // Merge into the existing mod list rather than replacing it — a
-      // wholesale replace here used to silently drop the currently selected
-      // map's required mod (added earlier on the Basic Info step).
-      const modIds = [...data.modIds];
-      for (const m of mods) {
-        if (!modIds.includes(m.mod_id)) modIds.push(m.mod_id);
-      }
-      let lockedModIds = data.lockedModIds;
-      const selectedMap = allMaps.find((m) => m.id === data.mapId);
-      if (selectedMap?.isMod && selectedMap.requiredModId) {
-        if (!modIds.includes(selectedMap.requiredModId)) modIds.push(selectedMap.requiredModId);
-        lockedModIds = [selectedMap.requiredModId];
-      }
-      onChange({
-        copyFromServerId: serverId,
-        gameMode: detectedMode,
-        presetStyle: "full_custom",
-        fullCustomGus: gus,
-        fullCustomGameIni: config?.game_ini_json ? JSON.parse(config.game_ini_json) : {},
-        launchArgs: config?.launch_args_json ? JSON.parse(config.launch_args_json) : { NoBattlEye: "true", servergamelog: "true" },
-        modIds,
-        modNames: newModNames,
-        lockedModIds,
-      });
+      const { patch } = await loadCopySource(serverId, data, allMaps);
+      onChange(patch);
     } catch (e) {
-      console.error("Copy from server failed:", e);
+      toast.error(`Copy from server failed: ${e}`);
     } finally {
       setLoadingCopy(false);
     }
@@ -985,6 +929,8 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
                     type="button"
                     onClick={() => onChange({
                       copyFromServerId: "",
+                      copyExtras: DEFAULT_DATA.copyExtras,
+                      copySaveData: DEFAULT_DATA.copySaveData,
                       presetStyle: "casual",
                       // Reset every field handleCopyFrom populated — Clear
                       // used to only reset the two above, silently leaving
@@ -1031,8 +977,26 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
             <p style={{ color: "var(--text-muted)" }}>
               Configuration copied from <strong style={{ color: "var(--text-primary)" }}>{copySource?.name}</strong>.
               INI config, launch args, and mods will mirror the source server.
-              Style and Rate steps are skipped — you can still adjust network, automation, and other settings.
+              Style and Rate steps are skipped — you can still adjust network, cluster, and other settings.
             </p>
+          </div>
+        )}
+        {isCopying && (
+          <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)" }}>
+            <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-purple)" }}>Also copy</p>
+            <GameModeToggle
+              label="Schedules & automation"
+              description="Restart/backup/dino-wipe schedules, shutdown/restart/update warnings, auto-update, auto-start, hidden window, memory limit and backup retention. Replaces the Automation step."
+              value={data.copyExtras}
+              onChange={(v) => onChange({ copyExtras: v })}
+            />
+            <GameModeToggle
+              label="Save data"
+              description="Copies the source's world and player saves for the selected map after install. Stop the source server first for a consistent copy."
+              value={data.copySaveData}
+              onChange={(v) => onChange({ copySaveData: v })}
+              warn
+            />
           </div>
         )}
 
@@ -1068,7 +1032,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
 
             {/* PvE options */}
             {data.gameMode === "pve" && (
-              <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(0,255,136,0.15)" }}>
+              <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-green-rgb),0.15)" }}>
                 <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-green)" }}>PvE Options</p>
                 <GameModeToggle label="Flyer Carry (PvE)" description="AllowFlyerCarryPvE — allows flyers to carry wild dinos and players. Off by default in vanilla PvE." value={data.flyerCarryPvE} onChange={(v) => onChange({ flyerCarryPvE: v })} />
                 <GameModeToggle label="Cave Building (PvE)" description="AllowCaveBuildingPvE — allows players to build structures inside caves. Off by default." value={data.allowCaveBuildingPvE} onChange={(v) => onChange({ allowCaveBuildingPvE: v })} />
@@ -1081,7 +1045,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
 
             {/* PvP options */}
             {data.gameMode === "pvp" && (
-              <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(255,0,85,0.2)" }}>
+              <div className="rounded-xl p-4 space-y-2" style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-red-rgb),0.2)" }}>
                 <p className="text-xs font-semibold mb-3" style={{ color: "var(--neon-red)" }}>PvP Options</p>
                 <GameModeToggle label="Friendly Fire" description="Allows tribe members to damage each other in combat. On by default for PvP." value={data.pvpFriendlyFire} onChange={(v) => onChange({ pvpFriendlyFire: v })} />
                 <GameModeToggle label="Offline Raid Protection (ORP)" description="PreventOfflinePvP — prevents structures and tames from taking damage when the owning tribe is offline." value={data.preventOfflinePvP} onChange={(v) => onChange({ preventOfflinePvP: v })} />
@@ -1099,7 +1063,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
                     <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>seconds</span>
                   </div>
                 )}
-                <div className="flex items-start gap-2 pt-2 border-t" style={{ borderColor: "rgba(255,0,85,0.15)" }}>
+                <div className="flex items-start gap-2 pt-2 border-t" style={{ borderColor: "rgba(var(--neon-red-rgb),0.15)" }}>
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--text-muted)" }} />
                   <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                     Cryo sickness cannot be disabled on PvP servers via INI — it is hardcoded to PvP mode by the game. A mod is required to remove it on PvP.
@@ -1164,9 +1128,9 @@ function StyleStep({ data, onChange }: { data: WizardData; onChange: (patch: Par
                     <span
                       className="text-[10px] px-1.5 py-0.5 rounded"
                       style={{
-                        background: data.gameMode === "pvp" ? "rgba(255,0,85,0.1)" : "rgba(0,255,136,0.1)",
+                        background: data.gameMode === "pvp" ? "rgba(var(--neon-red-rgb),0.1)" : "rgba(var(--neon-green-rgb),0.1)",
                         color: data.gameMode === "pvp" ? "var(--neon-red)" : "var(--neon-green)",
-                        border: `1px solid ${data.gameMode === "pvp" ? "rgba(255,0,85,0.3)" : "rgba(0,255,136,0.3)"}`,
+                        border: `1px solid ${data.gameMode === "pvp" ? "rgba(var(--neon-red-rgb),0.3)" : "rgba(var(--neon-green-rgb),0.3)"}`,
                       }}
                     >
                       {modeLabel}
@@ -1225,7 +1189,7 @@ function GuidedToggle({ label, description, value, onChange, warn }: {
   onChange: (v: boolean) => void; warn?: boolean;
 }) {
   const color = warn ? "var(--neon-red)" : "var(--neon-purple)";
-  const border = warn ? "rgba(255,0,85,0.2)" : "rgba(var(--neon-purple-rgb),0.12)";
+  const border = warn ? "rgba(var(--neon-red-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.12)";
   return (
     <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: "var(--surface)", border: `1px solid ${border}` }}>
       <div>
@@ -1283,7 +1247,7 @@ function GuidedBreedingStep({ data, onChange }: { data: WizardData; onChange: (p
         <RateSlider label="Baby Mature Speed" description="How fast babies grow to adults. 10× = maturation is 10× faster than vanilla." value={r.matureSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("matureSpeedMultiplier", v)} />
         <RateSlider label="Egg Hatch Speed" description="How fast eggs hatch. Can be set independently from mature speed." value={r.hatchSpeedMultiplier} min={1} max={100} step={1} onChange={(v) => set("hatchSpeedMultiplier", v)} />
 
-        <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "var(--surface)", border: `1px solid ${starvationRisk ? "rgba(255,0,85,0.4)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="space-y-1.5 p-3 rounded-lg" style={{ background: "var(--surface)", border: `1px solid ${starvationRisk ? "rgba(var(--neon-red-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold" style={{ color: starvationRisk ? "var(--neon-red)" : "var(--text-primary)" }}>
@@ -1394,12 +1358,6 @@ function GuidedBehaviorStep({ data, onChange }: { data: WizardData; onChange: (p
           value={r.allowUnlimitedRespecs}
           onChange={(v) => set("allowUnlimitedRespecs", v)}
         />
-        <GuidedToggle
-          label="Enhance Skill Gains"
-          description="Boosts per-level stat gains for players — more health, stamina, and damage points per level."
-          value={r.enhanceSkillGains}
-          onChange={(v) => set("enhanceSkillGains", v)}
-        />
         <RateSlider label="Global Spoiling Time" description="How long food stays fresh. 2× = food lasts twice as long as vanilla." value={r.globalSpoilingTimeMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("globalSpoilingTimeMultiplier", v)} />
         <RateSlider label="Item Decomposition Time" description="How long dropped bags and items last on the ground." value={r.globalItemDecompMultiplier} min={0.5} max={10} step={0.5} onChange={(v) => set("globalItemDecompMultiplier", v)} />
         {isPvE && (
@@ -1447,27 +1405,14 @@ function FullIniStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     });
   };
 
-  // Build an initial GUS from defaults + mode settings if not yet customized
+  // Seed from the shared preset builder (base defaults + the Game Mode step's
+  // choices) until the user customizes something — so the Game Mode step
+  // still applies on the Full Custom path. Identity keys are shown read-only
+  // and re-applied from Basic Info/Network at install time regardless.
   const gus = useMemo(() => {
     if (Object.keys(data.fullCustomGus).length > 0) return data.fullCustomGus;
-    const preset = buildPresetConfig(data.gameMode, "official");
-    const result: Record<string, Record<string, string>> = {
-      SessionSettings: {
-        SessionName: data.name || "My ASA Server",
-        ServerPassword: data.serverPassword,
-        RCONEnabled: "True",
-        RCONPort: String(data.rconPort),
-      },
-      ServerSettings: {},
-    };
-    const skip = new Set(["SessionName", "ServerPassword", "QueryPort", "Port", "RCONEnabled", "RCONPort", "MaxPlayers"]);
-    for (const [k, v] of Object.entries(preset)) {
-      if (!skip.has(k)) result.ServerSettings[k] = String(v);
-    }
-    result.ServerSettings.ServerAdminPassword = data.adminPassword || "changeme";
-    result["/Script/Engine.GameSession"] = { MaxPlayers: String(data.maxPlayers) };
-    return result;
-  }, [data.fullCustomGus, data.gameMode, data.name, data.serverPassword, data.rconPort, data.adminPassword, data.maxPlayers]);
+    return buildGusSections({ ...data, fullCustomGus: {}, presetStyle: "full_custom" });
+  }, [data]);
 
   // Snapshot the wizard-built config on first render (lazy state initializer,
   // runs once) — used as the reset baseline for boolean fields so the icon
@@ -1694,12 +1639,12 @@ function PortField({
         className="font-mono"
         style={{
           background: "var(--surface)",
-          borderColor: conflict ? "rgba(255,140,0,0.6)" : status === false ? "var(--neon-red)" : status === true ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
+          borderColor: conflict ? "rgba(var(--neon-orange-rgb),0.6)" : status === false ? "var(--neon-red)" : status === true ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)",
           color: "var(--text-primary)",
         }}
       />
       {conflict && (
-        <p className="text-[10px] flex items-center gap-1" style={{ color: "rgba(255,140,0,0.9)" }}>
+        <p className="text-[10px] flex items-center gap-1" style={{ color: "rgba(var(--neon-orange-rgb),0.9)" }}>
           <AlertTriangle className="w-3 h-3 shrink-0" />
           Shared with <strong>{conflict}</strong> — both servers cannot run at the same time.
         </p>
@@ -1823,20 +1768,22 @@ function NetworkStep({ data, onChange }: { data: WizardData; onChange: (patch: P
           <Loader2 className="w-3 h-3 animate-spin" /> Checking port availability…
         </p>
       )}
-      {/* All Platforms toggle */}
-      <div className="flex items-center justify-between px-1 py-2 rounded-lg"
+      {/* Server platform (crossplay) */}
+      <div className="space-y-1.5 px-1 py-2 rounded-lg"
         style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}>
-        <div>
-          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>All Platforms (Crossplay)</p>
-          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Allow PC, Xbox, PlayStation, and other platforms to join via <code>-crossplay</code>.</p>
+        <div className="px-2">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Server Platform</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Passes <code>-ServerPlatform=</code>. Choose All platforms for crossplay between PC, Xbox and PlayStation.
+          </p>
         </div>
-        <button type="button"
-          onClick={() => onChange({ launchArgs: { ...data.launchArgs, crossplay: data.launchArgs?.crossplay === "true" ? "false" : "true" } })}
-          className="shrink-0 flex items-center">
-          {data.launchArgs?.crossplay === "true"
-            ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
-            : <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
-        </button>
+        <div className="px-2">
+          <OptionSelect
+            value={data.launchArgs?.ServerPlatform ?? ""}
+            options={LAUNCH_PARAMETERS.find((p) => p.key === "ServerPlatform")?.options ?? []}
+            onChange={(v) => onChange({ launchArgs: { ...data.launchArgs, ServerPlatform: v } })}
+          />
+        </div>
       </div>
 
       <div
@@ -1938,7 +1885,7 @@ function FirewallStep({ data }: { data: WizardData }) {
 
       {status && !status.active && (phase === "done" || phase === "ready") && (
         <div className="flex items-center gap-2 rounded-lg px-3 py-2.5"
-          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.2)" }}>
+          style={{ background: "rgba(var(--neon-green-rgb),0.07)", border: "1px solid rgba(var(--neon-green-rgb),0.2)" }}>
           <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
           <p className="text-sm" style={{ color: "var(--neon-green)" }}>
             No active firewall detected — nothing to configure.
@@ -1968,7 +1915,7 @@ function FirewallStep({ data }: { data: WizardData }) {
 
       {phase === "done" && status?.active && status.ports.every((p) => p.covered) && (
         <div className="flex items-center gap-2 rounded-lg px-3 py-2.5"
-          style={{ background: "rgba(0,255,136,0.07)", border: "1px solid rgba(0,255,136,0.2)" }}>
+          style={{ background: "rgba(var(--neon-green-rgb),0.07)", border: "1px solid rgba(var(--neon-green-rgb),0.2)" }}>
           <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
           <p className="text-sm" style={{ color: "var(--neon-green)" }}>All ports are open.</p>
         </div>
@@ -2043,33 +1990,22 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
 
   const handleToggleJoin = (join: boolean) => {
     setJoinCluster(join);
-    if (!join) {
-      // Remove NoTransferFromFiltering when leaving cluster
-      const nextArgs = { ...data.launchArgs };
-      delete nextArgs["NoTransferFromFiltering"];
-      onChange({ clusterId: "", launchArgs: nextArgs });
-    }
+    if (!join) onChange({ clusterId: "" });
   };
 
-  const handleSelectCluster = (id: string) => {
-    // Auto-apply NoTransferFromFiltering when joining a cluster
-    const nextArgs = { ...data.launchArgs, NoTransferFromFiltering: "true" };
-    onChange({ clusterId: id, launchArgs: nextArgs });
-  };
+  const handleSelectCluster = (id: string) => onChange({ clusterId: id });
 
   const handleCreateCluster = async () => {
     const name = newClusterName.trim();
     if (!name) return;
     setCreating(true);
     try {
-      const id = generateUUID();
-      await createClusterRecord(id, name, null);
-      const updated = await getClusters();
-      setClusters(updated);
+      const id = await createCluster(name);
+      setClusters(await getClusters());
       setNewClusterName("");
       handleSelectCluster(id);
     } catch (e) {
-      console.error("Failed to create cluster:", e);
+      toast.error(`Failed to create cluster: ${e}`);
     } finally {
       setCreating(false);
     }
@@ -2139,7 +2075,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
             <div className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: "rgba(var(--neon-purple-rgb),0.06)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
               <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--neon-purple)" }} />
               <p style={{ color: "var(--text-muted)" }}>
-                <strong style={{ color: "var(--text-primary)" }}>NoTransferFromFiltering</strong> has been automatically enabled to isolate this cluster from other servers.
+                <strong style={{ color: "var(--text-primary)" }}>NoTransferFromFiltering</strong> is added automatically for cluster members, isolating the cluster from other servers.
               </p>
             </div>
           )}
@@ -2164,16 +2100,38 @@ const CRON_OPTIONS = [
 ];
 
 function CronSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const isPreset = CRON_OPTIONS.some((o) => o.value === value);
+  // Custom mode is sticky once chosen, even if the typed expression happens to
+  // match a preset — otherwise the input would vanish mid-edit.
+  const [custom, setCustom] = useState(!isPreset);
+  const next = getNextCronDate(value);
+  const valid = next !== null;
   return (
-    <select
-      value={CRON_OPTIONS.find((o) => o.value === value) ? value : "custom"}
-      onChange={(e) => onChange(e.target.value === "custom" ? value : e.target.value)}
-      className="w-full text-xs rounded px-2 py-1.5 font-mono"
-      style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)", outline: "none" }}
-    >
-      {CRON_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      <option value="custom">Custom…</option>
-    </select>
+    <div className="space-y-1.5">
+      <OptionSelect
+        value={custom ? "custom" : value}
+        options={[...CRON_OPTIONS, { value: "custom", label: "Custom…" }]}
+        onChange={(v) => {
+          if (v === "custom") { setCustom(true); return; }
+          setCustom(false);
+          onChange(v);
+        }}
+      />
+      {custom && (
+        <div className="space-y-1">
+          <Input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="m h dom mon dow — e.g. 30 4 * * *"
+            className="h-8 text-xs font-mono"
+            style={{ background: "var(--surface)", borderColor: valid ? "rgba(var(--neon-purple-rgb),0.3)" : "var(--neon-red)", color: "var(--text-primary)" }}
+          />
+          <p className="text-[10px]" style={{ color: valid ? "var(--text-muted)" : "var(--neon-red)" }}>
+            {next ? `Next run: ${next.toLocaleString()}` : "Not a valid cron expression (5 fields: minute hour day month weekday)."}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2242,7 +2200,7 @@ const LAUNCH_PARAM_CATEGORY_LABELS: Record<string, string> = {
   network:     "Network",
 };
 
-// Keys shown in guided paths (NoBattlEye + ForceAllowCaveFlyers are in Game Mode; crossplay in Network)
+// Keys shown in guided paths (NoBattlEye + ForceAllowCaveFlyers are in Game Mode; ServerPlatform in Network)
 const GUIDED_LAUNCH_KEYS = new Set([
   "DisableUndermeshChecking",
   "DisableUndermeshKilling",
@@ -2255,22 +2213,9 @@ const GUIDED_LAUNCH_KEYS = new Set([
   "DisableCustomCosmetics",
 ]);
 
-// NoBattlEye and ForceAllowCaveFlyers are always in Game Mode — hidden from Launch Args entirely
-const GAME_MODE_KEYS = new Set(["NoBattlEye", "ForceAllowCaveFlyers"]);
-
-const CULTURE_OPTIONS = [
-  { value: "",    label: "None (server default)" },
-  { value: "en",  label: "English (en)" },
-  { value: "de",  label: "German (de)" },
-  { value: "fr",  label: "French (fr)" },
-  { value: "es",  label: "Spanish (es)" },
-  { value: "it",  label: "Italian (it)" },
-  { value: "ja",  label: "Japanese (ja)" },
-  { value: "ko",  label: "Korean (ko)" },
-  { value: "pt",  label: "Portuguese (pt)" },
-  { value: "ru",  label: "Russian (ru)" },
-  { value: "zh",  label: "Chinese Simplified (zh)" },
-];
+// Edited on other steps (NoBattlEye + ForceAllowCaveFlyers in Game Mode,
+// ServerPlatform in Network) — hidden from Launch Args so each has one editor.
+const GAME_MODE_KEYS = new Set(["NoBattlEye", "ForceAllowCaveFlyers", "ServerPlatform"]);
 
 function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const args = data.launchArgs;
@@ -2308,8 +2253,7 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
                   {params.map((p: LaunchParameter) => {
                     const val = args[p.key] ?? String(p.defaultValue ?? "");
 
-                    // Culture: render as dropdown
-                    if (p.key === "culture") {
+                    if (p.options) {
                       return (
                         <div key={p.key} className="space-y-1">
                           <div className="flex items-center gap-1.5">
@@ -2321,14 +2265,7 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
                               <TooltipContent className="max-w-xs text-xs leading-snug">{p.description}</TooltipContent>
                             </Tooltip>
                           </div>
-                          <select
-                            value={val}
-                            onChange={(e) => setArg(p.key, e.target.value)}
-                            className="w-full text-xs rounded px-2 py-1.5"
-                            style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)", outline: "none" }}
-                          >
-                            {CULTURE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                          </select>
+                          <OptionSelect value={val} options={p.options} onChange={(v) => setArg(p.key, v)} size="sm" />
                         </div>
                       );
                     }
@@ -2395,6 +2332,40 @@ function LaunchParamsStep({ data, onChange }: { data: WizardData; onChange: (pat
 // Automation Step
 // ---------------------------------------------------------------------------
 
+/** Automation step: run the new server without a visible window (+ backend status / Xvfb install help). */
+function WizardHiddenWindowCard({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  const state = useHiddenWindowSupport();
+  return (
+    <div className="glass-card rounded-xl p-4 space-y-3"
+      style={{ border: `1px solid ${value ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: value ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+          <EyeOff className="w-4 h-4" style={{ color: value ? "var(--neon-purple)" : "var(--text-muted)" }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Hide Server Window</p>
+            <button type="button" onClick={() => onChange(!value)}
+              // Can always be turned off; turning on needs a working backend.
+              disabled={!value && !state.available}
+              className="shrink-0 flex items-center focus:outline-none disabled:opacity-40"
+              aria-label={value ? "Show server window" : "Hide server window"}>
+              {value
+                ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />}
+            </button>
+          </div>
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+            Run the server without its console window. Logs, RCON and stop/restart work as normal. Changeable later in Config → Advanced.
+          </p>
+        </div>
+      </div>
+      <HiddenWindowStatus state={state} hideRequested={value} />
+    </div>
+  );
+}
+
 function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const patchServerTier = (tier: WizTier, patch: { enabled?: boolean; keep?: number }) =>
     onChange({ serverBackupTiers: { ...data.serverBackupTiers, [tier]: { ...data.serverBackupTiers[tier], ...patch } } });
@@ -2406,6 +2377,34 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
       <p className="text-sm" style={{ color: "var(--text-muted)" }}>
         Configure automation schedules. All times are in your local timezone.
       </p>
+
+      <WizardHiddenWindowCard value={data.hideWindow} onChange={(v) => onChange({ hideWindow: v })} />
+
+      {/* ── Auto-Start ─────────────────────────────────────────────── */}
+      <div className="glass-card rounded-xl p-4"
+        style={{ border: `1px solid ${data.autoStart ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.12)"}` }}>
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: data.autoStart ? "rgba(var(--neon-purple-rgb),0.1)" : "rgba(255,255,255,0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>
+            <Power className="w-4 h-4" style={{ color: data.autoStart ? "var(--neon-purple)" : "var(--text-muted)" }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Auto-Start with LokiASAM</p>
+              <button type="button" onClick={() => onChange({ autoStart: !data.autoStart })}
+                className="shrink-0 flex items-center focus:outline-none"
+                aria-label={data.autoStart ? "Disable auto-start" : "Enable auto-start"}>
+                {data.autoStart
+                  ? <ToggleRight className="w-6 h-6" style={{ color: "var(--neon-purple)" }} />
+                  : <ToggleLeft  className="w-6 h-6" style={{ color: "var(--text-muted)" }} />}
+              </button>
+            </div>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Start this server automatically whenever the app opens. Changeable later in the server&apos;s Automation tab.
+            </p>
+          </div>
+        </div>
+      </div>
 
       {/* ── Backup Schedules ─────────────────────────────────────── */}
       <div className="glass-card rounded-xl p-4 space-y-5"
@@ -2605,12 +2604,12 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
                     <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warning Message</span>
                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
                       <HelpCircle className="w-3 h-3 cursor-help" style={{ color: "var(--neon-purple)" }} />
-                    </TooltipTrigger><TooltipContent className="max-w-xs text-xs">Use {"{minutes}"} as a placeholder for the countdown value in the message.</TooltipContent></Tooltip></TooltipProvider>
+                    </TooltipTrigger><TooltipContent className="max-w-xs text-xs">Use {"{time}"} where the remaining time should appear (e.g. &quot;15 minutes&quot;). Also used by the manual Restart button.</TooltipContent></Tooltip></TooltipProvider>
                   </div>
                   <Input
                     value={data.autoRestartMessage}
                     onChange={(e) => onChange({ autoRestartMessage: e.target.value })}
-                    placeholder="Server restarting in {minutes} minutes…"
+                    placeholder="Server restarting in {time}."
                     className="text-xs"
                     style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
                   />
@@ -2670,6 +2669,7 @@ function AutomationStep({ data, onChange }: { data: WizardData; onChange: (patch
 function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Partial<WizardData>) => void }) {
   const allMaps = useAllMaps();
   const [input, setInput] = useState("");
+  const [addError, setAddError] = useState("");
   // Shared ["servers"] cache — see GameModeStep for why this isn't its own effect.
   const { data: existingServers = [] } = useQuery({ queryKey: ["servers"], queryFn: getServers });
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
@@ -2690,6 +2690,18 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
   const setModBrowserParams = useAppStore((s) => s.setModBrowserParams);
   const modBrowserJustClosed    = useAppStore((s) => s.modBrowserJustClosed);
   const setModBrowserJustClosed = useAppStore((s) => s.setModBrowserJustClosed);
+  const verifying        = useAppStore((s) => s.verifying);
+  const verifyTotal      = useAppStore((s) => s.verifyTotal);
+  const verifyProgress   = useAppStore((s) => s.verifyProgress);
+  const startVerifying   = useAppStore((s) => s.startVerifying);
+  const stopVerifying    = useAppStore((s) => s.stopVerifying);
+
+  // Clear the add input when verification finishes
+  const prevVerifyingRef = useRef(false);
+  useEffect(() => {
+    if (prevVerifyingRef.current && !verifying) setInput("");
+    prevVerifyingRef.current = verifying;
+  }, [verifying]);
 
   // Listen for mod browser "add" events. ModBrowserEventHandler skips DB writes
   // for serverId="wizard-temp", so we handle wizard state directly here.
@@ -2734,11 +2746,43 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
     }
   };
 
-  const addMod = () => {
-    const id = input.trim();
-    if (!id || data.modIds.includes(id)) { setInput(""); return; }
-    onChange({ modIds: [...data.modIds, id] });
-    setInput("");
+  // Add mods by ID (comma-separated). Same flow as the server Mods tab: each ID
+  // is verified against CurseForge in the hidden window, which resolves its
+  // name and reports back via mod://add-to-server (handled above).
+  const addMod = async () => {
+    const raw = input.trim();
+    if (!raw) { setAddError("Enter at least one mod ID."); return; }
+
+    const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+    const invalid = ids.filter((id) => !/^\d+$/.test(id));
+    if (invalid.length > 0) {
+      setAddError(`Invalid ID${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")} — IDs must be numbers.`);
+      return;
+    }
+
+    // Event mods are handled by the Active Event selector on Basic Info.
+    const eventBlocked = ids.filter((id) => ARK_EVENT_MOD_IDS.has(id));
+    if (eventBlocked.length > 0) {
+      const names = eventBlocked.map((id) => ARK_EVENTS.find((e) => e.modId === id)?.displayName ?? id);
+      setAddError(`Event mods are managed by the Active Event setting on Basic Info: ${names.join(", ")}`);
+      return;
+    }
+
+    const toVerify = ids.filter((id) => !data.modIds.includes(id));
+    if (toVerify.length === 0) {
+      setAddError("All entered IDs are already in the mod list.");
+      return;
+    }
+
+    setAddError("");
+    startVerifying(toVerify.length);
+    try {
+      await tauriCmd.startModVerification(toVerify, "wizard-temp", data.modIds);
+    } catch (e) {
+      stopVerifying();
+      setAddError(String(e));
+    }
   };
 
   const removeMod = (id: string) => {
@@ -2778,7 +2822,8 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
                       <button
                         key={s.id}
                         onClick={async () => {
-                          const srcMods = await getServerMods(s.id);
+                          // Never brings the source's map/event mods along.
+                          const srcMods = await copyableMods(await getServerMods(s.id));
                           const newIds = srcMods.map((m) => m.mod_id).filter((id) => !data.modIds.includes(id));
                           const newNames = { ...data.modNames };
                           for (const m of srcMods) newNames[m.mod_id] = m.mod_name;
@@ -2823,22 +2868,35 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
       <div className="flex gap-2">
         <Input
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => { setInput(e.target.value); setAddError(""); }}
           onKeyDown={(e) => e.key === "Enter" && addMod()}
-          placeholder="CurseForge mod ID (e.g. 928793)"
+          placeholder="CurseForge mod IDs (e.g. 928793, 123456)"
           className="font-mono text-sm"
           style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
+          disabled={verifying}
         />
         <Button
           onClick={addMod}
+          disabled={verifying || !input.trim()}
           variant="outline"
           size="sm"
           className="gap-1 shrink-0"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)", background: "rgba(var(--neon-purple-rgb),0.05)" }}
         >
-          <Plus className="w-4 h-4" /> Add
+          {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+          {verifying
+            ? verifyTotal > 0
+              ? `Verifying ${verifyProgress} / ${verifyTotal}…`
+              : "Verifying…"
+            : "Add"}
         </Button>
       </div>
+      {addError && (
+        <p className="text-xs flex items-center gap-1 -mt-3" style={{ color: "var(--neon-red)" }}>
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          {addError}
+        </p>
+      )}
 
       {data.modIds.length === 0 ? (
         <div className="rounded-lg p-4 text-center" style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px dashed rgba(var(--neon-purple-rgb),0.2)" }}>
@@ -2849,20 +2907,28 @@ function ModsStep({ data, onChange }: { data: WizardData; onChange: (patch: Part
         <div className="space-y-1.5">
           {data.modIds.map((id, i) => {
             const locked = data.lockedModIds.includes(id);
+            // Same fallback the install step uses when writing the mod to the DB.
+            const name = data.modNames[id]
+              || (selectedMap?.requiredModId === id ? selectedMap.displayName : "Unknown Mod");
             return (
               <div
                 key={id}
                 className="flex items-center justify-between px-3 py-2 rounded-lg"
                 style={{
-                  background: locked ? "rgba(var(--neon-purple-rgb),0.05)" : "rgba(10,10,30,0.6)",
+                  background: locked ? "rgba(var(--neon-purple-rgb),0.05)" : "var(--surface)",
                   border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                 }}
               >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: "var(--text-subtle)" }}>#{i + 1}</span>
-                  {locked && <Lock className="w-3 h-3" style={{ color: "var(--neon-cyan)" }} />}
-                  <span className="text-sm font-mono" style={{ color: locked ? "var(--neon-cyan)" : "var(--text-primary)" }}>{id}</span>
-                  {locked && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>Map Mod</span>}
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-mono w-5 text-center shrink-0" style={{ color: "var(--text-subtle)" }}>{i + 1}</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {locked && <Lock className="w-3 h-3 shrink-0" style={{ color: "var(--neon-cyan)" }} />}
+                      <span className="text-sm font-medium truncate" style={{ color: locked ? "var(--neon-cyan)" : "var(--text-primary)" }}>{name}</span>
+                      {locked && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)" }}>Map Mod</span>}
+                    </div>
+                    <span className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>{id}</span>
+                  </div>
                 </div>
                 {!locked && (
                   <Button
@@ -2949,348 +3015,14 @@ function InstallStep({
     { label: "Mode / Style", value: presetLabel },
     { label: "Max Players",  value: String(data.maxPlayers) },
     { label: "Ports",        value: `${data.port} / ${data.queryPort} / ${data.rconPort}` },
+    { label: "Auto-Start",       value: data.copyFromServerId && data.copyExtras ? "Copied from source" : data.autoStart ? "On" : "Off" },
+    { label: "Server Window",    value: data.copyFromServerId && data.copyExtras ? "Copied from source" : data.hideWindow ? "Hidden" : "Visible" },
     { label: "Auto-Restart",     value: data.autoRestart ? humanCron(data.autoRestartCron) : "Disabled" },
     { label: "Server Backups",   value: WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.serverBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
     { label: "Player Backups",   value: WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled) ? WIZ_TIER_ORDER.filter((t) => data.playerBackupTiers[t].enabled).map((t) => WIZ_TIER_LABEL[t]).join(", ") : "Disabled" },
     { label: "Dino Wipe",        value: data.wipeDinosEnabled ? humanCron(data.wipeDinosCron) : "Disabled" },
     { label: "Mods",         value: data.modIds.length > 0 ? `${data.modIds.length} mod(s)` : "None" },
   ];
-
-  /** Build the full GameUserSettings INI sections from wizard data */
-  const buildGusJson = (): Record<string, Record<string, string>> => {
-    if (data.presetStyle === "full_custom" && Object.keys(data.fullCustomGus).length > 0) {
-      const result = { ...data.fullCustomGus };
-      if (!result.SessionSettings) result.SessionSettings = {};
-      result.SessionSettings.SessionName = data.name;
-      result.SessionSettings.ServerPassword = data.serverPassword;
-      if (!result.ServerSettings) result.ServerSettings = {};
-      result.ServerSettings.ServerAdminPassword = data.adminPassword;
-      result.ServerSettings.RCONEnabled = "True";
-      result.ServerSettings.RCONPort = String(data.rconPort);
-      // MaxPlayers lives in [/Script/Engine.GameSession] in ASA
-      if (!result["/Script/Engine.GameSession"]) result["/Script/Engine.GameSession"] = {};
-      result["/Script/Engine.GameSession"].MaxPlayers = String(data.maxPlayers);
-      if (data.motdMessage.trim()) {
-        result.MessageOfTheDay = { Message: data.motdMessage.trim(), Duration: String(data.motdDuration) };
-      } else {
-        delete result.MessageOfTheDay;
-      }
-      return result;
-    }
-
-    // Build config from mode + style (or guided custom)
-    let config = buildPresetConfig(data.gameMode, data.presetStyle);
-
-    if (data.presetStyle === "guided_custom") {
-      const r = data.guidedRates;
-      config = {
-        ...config,
-        XPMultiplier: r.xpMultiplier,
-        HarvestAmountMultiplier: r.harvestMultiplier,
-        TamingSpeedMultiplier: r.tamingMultiplier,
-        ResourcesRespawnPeriodMultiplier: r.resourceRespawnMultiplier,
-        PlayerDamageMultiplier: r.playerDamageMultiplier,
-        NightTimeSpeedScale: r.nightSpeedMultiplier,
-        OverrideOfficialDifficulty: r.wildDinoMaxLevel / 30,
-        DifficultyOffset: 1.0,
-      };
-    }
-
-    // PvE flag applied to preset config base
-    if (data.gameMode === "pve") {
-      config = { ...config, AllowFlyerCarryPvE: data.flyerCarryPvE };
-    }
-
-    // Keys that go in specific sections or are port/network (handled separately)
-    const skipKeys = new Set(["QueryPort", "Port", "MaxPlayers", "SessionName", "ServerPassword", "ServerAdminPassword", "RCONEnabled", "RCONPort"]);
-
-    const sessionSettings: Record<string, string> = {
-      SessionName: data.name,
-      ServerPassword: data.serverPassword,
-    };
-    const serverSettings: Record<string, string> = {
-      ServerAdminPassword: data.adminPassword,
-      RCONEnabled: "True",
-      RCONPort: String(data.rconPort),
-    };
-
-    for (const [k, v] of Object.entries(config)) {
-      if (skipKeys.has(k)) continue;
-      serverSettings[k] = String(v);
-    }
-
-    const isNamedPreset = !["guided_custom", "full_custom"].includes(data.presetStyle);
-
-    // ── Settings shared across all named presets ──────────────────────────────
-    if (isNamedPreset) {
-      serverSettings.DinoCountMultiplier = "1.0";
-      serverSettings.MaxTamedDinos = "5000";
-    }
-
-    // ── PvE mode additions ────────────────────────────────────────────────────
-    if (data.gameMode === "pve") {
-      serverSettings.ServerPVE = "True";
-    }
-
-    // ── Official preset ───────────────────────────────────────────────────────
-    if (data.presetStyle === "official") {
-      serverSettings.MaxPersonalTamedDinos = data.gameMode === "pvp" ? "300" : "500";
-      serverSettings.NPCNetworkStasisRangeScalePlayerCountStart = "24";
-      serverSettings.NPCNetworkStasisRangeScalePlayerCountEnd = "70";
-      serverSettings.NPCNetworkStasisRangeScalePercentEnd = "0.5";
-      serverSettings.BanListURL = "http://arkdedicated.com/banlist.txt";
-      if (data.gameMode === "pve") {
-        serverSettings.OnlyAutoDestroyCoreStructures = "True";
-        serverSettings.AutoDestroyDecayedDinos = "True";
-      }
-    }
-
-    // ── Casual preset ─────────────────────────────────────────────────────────
-    if (data.presetStyle === "casual") {
-      serverSettings.MaxPersonalTamedDinos = "500";
-      serverSettings.AllowFlyingStaminaRecovery = "True";
-      serverSettings.HarvestHealthMultiplier = "2.0";
-      if (data.gameMode === "pve") {
-        serverSettings.DisableStructureDecayPvE = "True";
-        serverSettings.DisableDinoDecayPvE = "True";
-        serverSettings.AutoDestroyDecayedDinos = "False";
-        serverSettings.GlobalSpoilingTimeMultiplier = "2.0"; // PvE wants 2.0; PvP stays at 1.5 from preset
-      }
-    }
-
-    // ── Boosted preset ────────────────────────────────────────────────────────
-    if (data.presetStyle === "boosted") {
-      // Taming rate differs by mode — PRESET_STYLES has a generic 10× which we override here
-      serverSettings.TamingSpeedMultiplier = data.gameMode === "pvp" ? "15.0" : "25.0";
-      serverSettings.MaxPersonalTamedDinos = "500";
-      serverSettings.AllowFlyingStaminaRecovery = "True";
-      serverSettings.HarvestHealthMultiplier = "2.0";
-      serverSettings.GlobalItemDecompositionTimeMultiplier = data.gameMode === "pve" ? "3.0" : "2.0";
-      if (data.gameMode === "pve") {
-        serverSettings.DisableStructureDecayPvE = "True";
-        serverSettings.DisableDinoDecayPvE = "True";
-        serverSettings.AutoDestroyDecayedDinos = "False";
-        serverSettings.GlobalSpoilingTimeMultiplier = "3.0"; // PvE wants 3.0; PvP stays at 2.0 from preset
-      }
-    }
-
-    // ── Guided custom — all settings applied directly to serverSettings ────────
-    if (data.presetStyle === "guided_custom") {
-      const r = data.guidedRates;
-      serverSettings.HarvestHealthMultiplier          = String(r.harvestHealthMultiplier);
-      serverSettings.PlayerResistanceMultiplier        = String(r.playerResistanceMultiplier);
-      serverSettings.DinoCountMultiplier               = "1.0";
-      serverSettings.DinoDamageMultiplier              = String(r.dinoDamageMultiplier);
-      serverSettings.DinoResistanceMultiplier          = String(r.dinoResistanceMultiplier);
-      serverSettings.TamedDinoDamageMultiplier         = String(r.tamedDinoDamageMultiplier);
-      serverSettings.TamedDinoResistanceMultiplier     = String(r.tamedDinoResistanceMultiplier);
-      serverSettings.StructureDamageMultiplier         = String(r.structureDamageMultiplier);
-      serverSettings.StructureResistanceMultiplier     = String(r.structureResistanceMultiplier);
-      serverSettings.MaxTamedDinos                     = "5000";
-      serverSettings.MaxPersonalTamedDinos             = "500";
-      serverSettings.GlobalSpoilingTimeMultiplier      = String(r.globalSpoilingTimeMultiplier);
-      serverSettings.GlobalItemDecompositionTimeMultiplier = String(r.globalItemDecompMultiplier);
-      serverSettings.AllowFlyingStaminaRecovery        = r.allowFlyingStaminaRecovery ? "True" : "False";
-      serverSettings.AutoSavePeriodMinutes             = "15.0";
-
-      if (data.gameMode === "pve") {
-        serverSettings.ServerPVE = "True";
-      }
-    }
-
-    // ── Game Mode general settings override (applied last for all non-full_custom presets) ──
-    serverSettings.AdminLogging                       = data.adminLogging ? "True" : "False";
-    serverSettings.ServerCrosshair                   = data.serverCrosshair ? "True" : "False";
-    serverSettings.ShowFloatingDamageText             = data.showDamageNumbers ? "True" : "False";
-    serverSettings.ShowMapPlayerLocation              = data.showPlayerLocation ? "True" : "False";
-    serverSettings.ForceAllStructureLocking           = data.forceAllStructureLocking ? "True" : "False";
-    serverSettings.AlwaysAllowStructurePickup         = data.alwaysAllowStructurePickup ? "True" : "False";
-    serverSettings.DisableStructurePlacementCollision = data.disableStructurePlacementCollision ? "True" : "False";
-
-    if (data.gameMode === "pve") {
-      serverSettings.AllowFlyerCarryPvE              = data.flyerCarryPvE ? "True" : "False";
-      serverSettings.AllowCaveBuildingPvE            = data.allowCaveBuildingPvE ? "True" : "False";
-      serverSettings.PvEAllowStructuresAtSupplyDrops = data.pveAllowStructuresAtSupplyDrops ? "True" : "False";
-      serverSettings.AllowCrateSpawnsOnTopOfStructures = data.allowCrateSpawnsOnTopOfStructures ? "True" : "False";
-      serverSettings.DisableStructureDecayPvE        = data.disableStructureDecayPvE ? "True" : "False";
-      serverSettings.DisableDinoDecayPvE             = data.disableDinoDecayPvE ? "True" : "False";
-      // Auto-destroy decayed dinos only makes sense when decay is enabled
-      serverSettings.AutoDestroyDecayedDinos         = data.disableStructureDecayPvE ? "False" : "True";
-    }
-
-    if (data.gameMode === "pvp") {
-      serverSettings.PreventOfflinePvP = data.preventOfflinePvP ? "True" : "False";
-      if (data.preventOfflinePvP) {
-        serverSettings.PreventOfflinePvPInterval = String(data.preventOfflinePvPInterval);
-      }
-    }
-
-    const result: Record<string, Record<string, string>> = {
-      SessionSettings: sessionSettings,
-      ServerSettings: serverSettings,
-      // ASA reads MaxPlayers from this UE section, not [ServerSettings]
-      "/Script/Engine.GameSession": { MaxPlayers: String(data.maxPlayers) },
-    };
-    if (data.motdMessage.trim()) {
-      result.MessageOfTheDay = { Message: data.motdMessage.trim(), Duration: String(data.motdDuration) };
-    }
-    return result;
-  };
-
-  /** Build the Game.ini section map from wizard data */
-  const buildGameIniJson = (): Record<string, Record<string, string>> => {
-    const shooterMode: Record<string, string> = {};
-    const isNamedPreset = !["guided_custom", "full_custom"].includes(data.presetStyle);
-
-    // ── Friendly fire ─────────────────────────────────────────────────────────
-    if (data.gameMode === "pve") {
-      shooterMode.bDisableFriendlyFire = "True";
-      shooterMode.bPvEDisableFriendlyFire = "True";
-    } else if (!data.pvpFriendlyFire) {
-      shooterMode.bDisableFriendlyFire = "True";
-    }
-
-    if (isNamedPreset) {
-      // ── PvP-specific ────────────────────────────────────────────────────────
-      if (data.gameMode === "pvp") {
-        // Repeat-kill respawn penalty (all PvP named presets)
-        shooterMode.bIncreasePvPRespawnInterval = "True";
-        shooterMode.IncreasePvPRespawnIntervalBaseAmount = "60.0";
-        shooterMode.IncreasePvPRespawnIntervalCheckPeriod = "300.0";
-        shooterMode.IncreasePvPRespawnIntervalMultiplier = "2.0";
-      }
-
-      // ── PvE-specific ────────────────────────────────────────────────────────
-      if (data.gameMode === "pve") {
-        shooterMode.bPvEAllowTribeWar = "True";
-      }
-
-      // ── Turret limits (all named presets) ───────────────────────────────────
-      shooterMode.bLimitTurretsInRange = "True";
-      shooterMode.bHardLimitTurretsInRange = "True";
-      shooterMode.LimitTurretsNum = "100";
-      shooterMode.LimitTurretsRange = "10000";
-
-      // ── Official: drop limits ───────────────────────────────────────────────
-      if (data.presetStyle === "official") {
-        shooterMode.LimitNonPlayerDroppedItemsCount = "600";
-        shooterMode.LimitNonPlayerDroppedItemsRange = "1600";
-      }
-
-      // ── Boosted: speed leveling + unlimited respecs ─────────────────────────
-      if (data.presetStyle === "boosted") {
-        shooterMode.bAllowFlyerSpeedLeveling = "True";
-        shooterMode.bAllowSpeedLeveling = "True";
-        shooterMode.bAllowUnlimitedRespecs = "True";
-      }
-
-      // ── PvE casual: unlimited respecs ──────────────────────────────────────
-      if (data.gameMode === "pve" && data.presetStyle === "casual") {
-        shooterMode.bAllowUnlimitedRespecs = "True";
-      }
-
-      // ── PvE boosted: extra quality-of-life ────────────────────────────────
-      if (data.gameMode === "pve" && data.presetStyle === "boosted") {
-        shooterMode.bAllowPlatformSaddleMultiFloors = "True";
-        shooterMode.LayEggIntervalMultiplier = "0.5";
-        shooterMode.FuelConsumptionIntervalMultiplier = "2.0";
-      }
-
-      // ── Breeding by preset + mode ──────────────────────────────────────────
-      const BREEDING: Record<string, Record<string, Record<string, string>>> = {
-        casual: {
-          pvp: {
-            BabyMatureSpeedMultiplier: "5.0",
-            EggHatchSpeedMultiplier: "5.0",
-            BabyFoodConsumptionSpeedMultiplier: "5.0",
-            BabyCuddleIntervalMultiplier: "0.5",
-            BabyCuddleGracePeriodMultiplier: "2.0",
-            MatingIntervalMultiplier: "0.5",
-          },
-          pve: {
-            BabyMatureSpeedMultiplier: "10.0",
-            EggHatchSpeedMultiplier: "10.0",
-            BabyFoodConsumptionSpeedMultiplier: "5.0",
-            BabyCuddleIntervalMultiplier: "0.3",
-            BabyCuddleGracePeriodMultiplier: "2.0",
-            BabyImprintAmountMultiplier: "2.0",
-            MatingIntervalMultiplier: "0.25",
-            MatingSpeedMultiplier: "2.0",
-            GlobalCorpseDecompositionTimeMultiplier: "2.0",
-          },
-        },
-        boosted: {
-          pvp: {
-            BabyMatureSpeedMultiplier: "30.0",
-            EggHatchSpeedMultiplier: "30.0",
-            BabyFoodConsumptionSpeedMultiplier: "1.0",
-            BabyCuddleIntervalMultiplier: "0.1",
-            BabyCuddleGracePeriodMultiplier: "2.0",
-            MatingIntervalMultiplier: "0.1",
-            MatingSpeedMultiplier: "2.0",
-          },
-          pve: {
-            BabyMatureSpeedMultiplier: "50.0",
-            EggHatchSpeedMultiplier: "50.0",
-            BabyFoodConsumptionSpeedMultiplier: "0.5",
-            BabyCuddleIntervalMultiplier: "0.1",
-            BabyCuddleGracePeriodMultiplier: "5.0",
-            BabyImprintAmountMultiplier: "4.0",
-            MatingIntervalMultiplier: "0.05",
-            MatingSpeedMultiplier: "2.0",
-            GlobalCorpseDecompositionTimeMultiplier: "3.0",
-          },
-        },
-      };
-      const breedingEntry = BREEDING[data.presetStyle]?.[data.gameMode];
-      if (breedingEntry) Object.assign(shooterMode, breedingEntry);
-
-    } else if (data.presetStyle === "guided_custom") {
-      const r = data.guidedRates;
-
-      // Friendly fire (already set above for all PvE; guided PvP uses the toggle from page 2)
-      // PvE tribe war
-      if (data.gameMode === "pve") {
-        shooterMode.bPvEAllowTribeWar = "True";
-        shooterMode.GlobalCorpseDecompositionTimeMultiplier = String(r.globalCorpseDecompMultiplier);
-      }
-
-      // Breeding — all written to Game.ini where ASA actually reads them
-      shooterMode.BabyMatureSpeedMultiplier            = String(r.matureSpeedMultiplier);
-      shooterMode.EggHatchSpeedMultiplier              = String(r.hatchSpeedMultiplier);
-      shooterMode.BabyFoodConsumptionSpeedMultiplier   = String(r.foodConsumptionMultiplier);
-      shooterMode.MatingIntervalMultiplier             = String(r.matingIntervalMultiplier);
-      shooterMode.MatingSpeedMultiplier                = String(r.matingSpeedMultiplier);
-      shooterMode.BabyCuddleIntervalMultiplier         = String(r.cuddleIntervalMultiplier);
-      shooterMode.BabyCuddleGracePeriodMultiplier      = String(r.cuddleGraceMultiplier);
-      if (r.imprintAmountMultiplier !== 1.0) {
-        shooterMode.BabyImprintAmountMultiplier = String(r.imprintAmountMultiplier);
-      }
-
-      // Speed leveling / respecs
-      if (r.allowSpeedLeveling)      shooterMode.bAllowSpeedLeveling      = "True";
-      if (r.allowFlyerSpeedLeveling) shooterMode.bAllowFlyerSpeedLeveling = "True";
-      if (r.allowUnlimitedRespecs)   shooterMode.bAllowUnlimitedRespecs   = "True";
-
-      // PvP respawn penalty
-      if (data.gameMode === "pvp" && r.enableRespawnPenalty) {
-        shooterMode.bIncreasePvPRespawnInterval              = "True";
-        shooterMode.IncreasePvPRespawnIntervalBaseAmount     = "60.0";
-        shooterMode.IncreasePvPRespawnIntervalCheckPeriod    = "300.0";
-        shooterMode.IncreasePvPRespawnIntervalMultiplier     = "2.0";
-      }
-
-      // Turret limits
-      if (r.enableTurretLimits) {
-        shooterMode.bLimitTurretsInRange   = "True";
-        shooterMode.bHardLimitTurretsInRange = "True";
-        shooterMode.LimitTurretsNum        = "100";
-        shooterMode.LimitTurretsRange      = "10000";
-      }
-    }
-
-    return { "/script/shootergame.shootergamemode": shooterMode };
-  };
 
   const startInstall = async () => {
     backgroundRef.current = false;
@@ -3376,64 +3108,79 @@ function InstallStep({
           await setServerActiveEvent(serverId, data.activeEventId);
         }
 
-        if (data.autoRestart) {
-          const id = generateUUID();
-          const restartCfg = JSON.stringify({
-            broadcastWarning: data.autoRestartWarnPlayers,
-            warningMinutes: data.autoRestartWarnMinutes,
-            message: data.autoRestartMessage,
-          });
-          await createSchedule({ id, serverId, scheduleType: "restart", cronExpression: data.autoRestartCron, enabled: true, configJson: restartCfg });
-          const nextIso = getNextCronDate(data.autoRestartCron)?.toISOString() ?? new Date().toISOString();
-          await updateScheduleConfig(id, data.autoRestartCron, restartCfg, nextIso);
-        }
+        if (data.copyFromServerId && data.copyExtras) {
+          // Clone: schedules, warnings and automation come from the source
+          // server (the Automation step was skipped).
+          await copyServerAutomation(data.copyFromServerId, serverId);
+        } else {
+          if (data.autoStart) await setServerAutoStart(serverId, true);
+        if (data.hideWindow) await setServerHideWindow(serverId, true);
 
-        const buildTierConfig = (tiers: WizardData["serverBackupTiers"]) =>
-          JSON.stringify({ hourly: tiers.H, daily: tiers.D, weekly: tiers.W, monthly: tiers.M });
+        // The restart warning is a per-server setting shared by scheduled
+          // restarts and the manual Restart button (restart schedules carry no
+          // warning config of their own — scheduler-sync.ts reads these fields).
+          await updateServerRestartSettings(
+            serverId,
+            data.autoRestartWarnPlayers,
+            data.autoRestartWarnMinutes,
+            data.autoRestartMessage.trim() || "Server restarting in {time}.",
+            "Restart has been canceled.",
+          );
 
-        const serverAny = WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled);
-        if (serverAny) {
-          const cron = wizBackupEffectiveCron(data.serverBackupTiers);
-          const cfg  = buildTierConfig(data.serverBackupTiers);
-          const id   = generateUUID();
-          await createSchedule({ id, serverId, scheduleType: "backup_server", cronExpression: cron, enabled: true, configJson: cfg });
-          const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
-          await updateScheduleConfig(id, cron, cfg, nextIso);
-        }
+          if (data.autoRestart) {
+            const id = generateUUID();
+            await createSchedule({ id, serverId, scheduleType: "restart", cronExpression: data.autoRestartCron, enabled: true, configJson: "{}" });
+            const nextIso = getNextCronDate(data.autoRestartCron)?.toISOString() ?? new Date().toISOString();
+            await updateScheduleConfig(id, data.autoRestartCron, "{}", nextIso);
+          }
 
-        const playerAny = WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled);
-        if (playerAny) {
-          const cron = wizBackupEffectiveCron(data.playerBackupTiers);
-          const cfg  = buildTierConfig(data.playerBackupTiers);
-          const id   = generateUUID();
-          await createSchedule({ id, serverId, scheduleType: "backup_player", cronExpression: cron, enabled: true, configJson: cfg });
-          const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
-          await updateScheduleConfig(id, cron, cfg, nextIso);
-        }
+          const buildTierConfig = (tiers: WizardData["serverBackupTiers"]) =>
+            JSON.stringify({ hourly: tiers.H, daily: tiers.D, weekly: tiers.W, monthly: tiers.M });
 
-        if (data.fullBackupEnabled) {
-          const cron = "0 3 1 * *";
-          const cfg  = JSON.stringify({ keep: data.fullBackupKeep });
-          const id   = generateUUID();
-          await createSchedule({ id, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson: cfg });
-          const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
-          await updateScheduleConfig(id, cron, cfg, nextIso);
-        }
+          const serverAny = WIZ_TIER_ORDER.some((t) => data.serverBackupTiers[t].enabled);
+          if (serverAny) {
+            const cron = wizBackupEffectiveCron(data.serverBackupTiers);
+            const cfg  = buildTierConfig(data.serverBackupTiers);
+            const id   = generateUUID();
+            await createSchedule({ id, serverId, scheduleType: "backup_server", cronExpression: cron, enabled: true, configJson: cfg });
+            const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+            await updateScheduleConfig(id, cron, cfg, nextIso);
+          }
 
-        if (data.loginBackupEnabled) {
-          await setAppSetting(`login_backup_keep_${serverId}`, String(data.loginBackupKeep));
-        }
-        await setAppSetting(`manual_backup_keep_${serverId}`, String(data.manualBackupKeep));
+          const playerAny = WIZ_TIER_ORDER.some((t) => data.playerBackupTiers[t].enabled);
+          if (playerAny) {
+            const cron = wizBackupEffectiveCron(data.playerBackupTiers);
+            const cfg  = buildTierConfig(data.playerBackupTiers);
+            const id   = generateUUID();
+            await createSchedule({ id, serverId, scheduleType: "backup_player", cronExpression: cron, enabled: true, configJson: cfg });
+            const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+            await updateScheduleConfig(id, cron, cfg, nextIso);
+          }
 
-        if (data.backupBroadcastMessage) {
-          await updateBackupBroadcastMessage(serverId, data.backupBroadcastMessage);
-        }
+          if (data.fullBackupEnabled) {
+            const cron = "0 3 1 * *";
+            const cfg  = JSON.stringify({ keep: data.fullBackupKeep });
+            const id   = generateUUID();
+            await createSchedule({ id, serverId, scheduleType: "backup_full", cronExpression: cron, enabled: true, configJson: cfg });
+            const nextIso = getNextCronDate(cron)?.toISOString() ?? new Date().toISOString();
+            await updateScheduleConfig(id, cron, cfg, nextIso);
+          }
 
-        if (data.wipeDinosEnabled) {
-          const id = generateUUID();
-          await createSchedule({ id, serverId, scheduleType: "wipe_dinos", cronExpression: data.wipeDinosCron, enabled: true, configJson: "{}" });
-          const nextIso = getNextCronDate(data.wipeDinosCron)?.toISOString() ?? new Date().toISOString();
-          await updateScheduleConfig(id, data.wipeDinosCron, "{}", nextIso);
+          if (data.loginBackupEnabled) {
+            await setAppSetting(`login_backup_keep_${serverId}`, String(data.loginBackupKeep));
+          }
+          await setAppSetting(`manual_backup_keep_${serverId}`, String(data.manualBackupKeep));
+
+          if (data.backupBroadcastMessage) {
+            await updateBackupBroadcastMessage(serverId, data.backupBroadcastMessage);
+          }
+
+          if (data.wipeDinosEnabled) {
+            const id = generateUUID();
+            await createSchedule({ id, serverId, scheduleType: "wipe_dinos", cronExpression: data.wipeDinosCron, enabled: true, configJson: "{}" });
+            const nextIso = getNextCronDate(data.wipeDinosCron)?.toISOString() ?? new Date().toISOString();
+            await updateScheduleConfig(id, data.wipeDinosCron, "{}", nextIso);
+          }
         }
 
         installPathRef.current = installPath;
@@ -3461,8 +3208,8 @@ function InstallStep({
       await tauriCmd.installServer(serverId, installPath, cacheDirRef.current, steamcmdPath);
 
       // Write comprehensive INI from wizard data
-      const gusJson = buildGusJson();
-      const gameIniJson = buildGameIniJson();
+      const gusJson = buildGusSections(data);
+      const gameIniJson = buildGameIniSections(data);
 
       await tauriCmd.writeServerConfig(installPath, {
         gameUserSettings: gusJson,
@@ -3485,6 +3232,20 @@ function InstallStep({
         await tauriCmd.createModsSavesLink(installPath, serverId, baseDirRef.current, mapPath).catch((e) => {
           console.warn("createModsSavesLink failed (non-fatal):", e);
         });
+
+        // Clone with save data: copy the source's saves for the selected map.
+        if (data.copyFromServerId && data.copySaveData) {
+          const source = (await getServers()).find((s) => s.id === data.copyFromServerId);
+          if (source && source.status !== "stopped") {
+            toast.warning(`Save data not copied — ${source.name} is running. Stop it, then use Maintenance → Import Saves.`);
+          } else if (source) {
+            const mapDef = findMapById(data.mapId);
+            const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
+            await tauriCmd.importServerSaves(source.id, serverId, baseDirRef.current, saveFolder)
+              .then(() => toast.success(`Save data copied from ${source.name}.`))
+              .catch((e) => toast.warning(`Save data copy failed: ${e}`));
+          }
+        }
       }
 
       queryClientRef.current.invalidateQueries({ queryKey: ["servers"] });
@@ -3573,7 +3334,7 @@ function InstallStep({
             <Button onClick={() => { backgroundRef.current = true; onGoToDashboard(); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs" style={{ color: "var(--neon-purple)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", background: "rgba(var(--neon-purple-rgb),0.08)" }}>
               <ArrowRight className="w-3 h-3" /> Continue in Background
             </Button>
-            <Button onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs hover:brightness-110" style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.5)", background: "rgba(255,0,85,0.12)" }}>
+            <Button onClick={async () => { await tauriCmd.abortOperation(`server_${serverId}`); }} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs hover:brightness-110" style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.5)", background: "rgba(var(--neon-red-rgb),0.12)" }}>
               <StopCircle className="w-3 h-3" /> Cancel Install
             </Button>
           </div>
@@ -3586,7 +3347,7 @@ function InstallStep({
             <CheckCircle2 className="w-5 h-5" />
             <span className="text-sm font-semibold">Server installed successfully!</span>
           </div>
-          <Button onClick={onInstallComplete} className="gap-2" style={{ background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.4)", color: "var(--neon-green)" }}>
+          <Button onClick={onInstallComplete} className="gap-2" style={{ background: "rgba(var(--neon-green-rgb),0.1)", border: "1px solid rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}>
             Go to Dashboard <ArrowRight className="w-4 h-4" />
           </Button>
         </div>
@@ -3616,21 +3377,71 @@ function InstallStep({
 
 interface ServerCreationWizardProps {
   onClose: () => void;
+  /** Open pre-filled as a clone of this server (Clone Server action). */
+  cloneFromServerId?: string | null;
 }
 
-export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
+export function ServerCreationWizard({ onClose, cloneFromServerId }: ServerCreationWizardProps) {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [serverId] = useState(() => generateUUID());
   const [nameValid, setNameValid] = useState(false);
+  const allMapsForClone = useAllMaps();
+  const [cloneLoading, setCloneLoading] = useState(!!cloneFromServerId);
+
+  // Clone: pre-fill everything from the source server — same copy path as the
+  // Game Mode step's "Copy from Server", plus its identity (with a new name;
+  // ports are auto-suggested by the Network step since they stay at defaults).
+  // Runs once: a re-run (e.g. when the map list finishes loading) would
+  // overwrite edits made since. The install step re-derives the map's
+  // required mod regardless.
+  const cloneLoadedRef = useRef(false);
+  const loadClone = useCallback(async () => {
+    if (!cloneFromServerId || cloneLoadedRef.current) return;
+    cloneLoadedRef.current = true;
+    try {
+      const all = await getServers();
+      const src = all.find((s) => s.id === cloneFromServerId);
+      if (!src) throw new Error("Source server not found");
+      const { patch, gus } = await loadCopySource(cloneFromServerId, DEFAULT_DATA, allMapsForClone, src.map_id);
+      const names = new Set(all.map((s) => s.name.toLowerCase()));
+      let name = `${src.name} (Copy)`;
+      for (let n = 2; names.has(name.toLowerCase()); n++) name = `${src.name} (Copy ${n})`;
+      const motd = getIni(gus, "MessageOfTheDay", "Message") ?? "";
+      const motdDuration = parseInt(getIni(gus, "MessageOfTheDay", "Duration") ?? "", 10);
+      setData({
+        ...DEFAULT_DATA,
+        ...patch,
+        name,
+        mapId: src.map_id,
+        maxPlayers: src.max_players || DEFAULT_DATA.maxPlayers,
+        serverPassword: src.server_password ?? "",
+        serverPasswordConfirm: src.server_password ?? "",
+        adminPassword: src.admin_password,
+        adminPasswordConfirm: src.admin_password,
+        motdMessage: motd,
+        motdDuration: isNaN(motdDuration) ? DEFAULT_DATA.motdDuration : motdDuration,
+        activeEventId: src.active_event ?? "",
+      });
+      setNameValid(true);
+    } catch (e) {
+      toast.error(`Couldn't load the server to clone: ${e}`);
+    } finally {
+      setCloneLoading(false);
+    }
+  }, [cloneFromServerId, allMapsForClone]);
+  useOnMount(loadClone);
   const [installStatus, setInstallStatus] = useState("idle");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackgroundConfirm, setShowBackgroundConfirm] = useState(false);
   const cleanupFnRef = useRef<(() => Promise<void>) | null>(null);
   const backgroundSignalRef = useRef<(() => void) | null>(null);
 
-  const steps = useMemo(() => computeSteps(data.presetStyle, data.copyFromServerId), [data.presetStyle, data.copyFromServerId]);
+  const steps = useMemo(
+    () => computeSteps(data.presetStyle, data.copyFromServerId, data.copyExtras),
+    [data.presetStyle, data.copyFromServerId, data.copyExtras],
+  );
 
   // Clamp step to the new step count if presetStyle/copyFromServerId changed
   // and shrank the steps array — adjusted during render (React's documented
@@ -3737,7 +3548,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b shrink-0" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)", background: "var(--surface-elevated)" }}>
         <div className="flex items-center gap-2">
           <LokiIcon size={16} style={{ filter: "drop-shadow(0 0 4px var(--neon-purple))" }} />
-          <span className="text-sm font-semibold text-glow-purple" style={{ color: "var(--neon-purple)" }}>New Server</span>
+          <span className="text-sm font-semibold text-glow-purple" style={{ color: "var(--neon-purple)" }}>{cloneFromServerId ? "Clone Server" : "New Server"}</span>
         </div>
         <Button variant="ghost" size="sm" onClick={handleClose} className="h-8 w-8 p-0" style={{ color: "var(--text-muted)" }} title="Close">
           <X className="w-4 h-4" />
@@ -3765,8 +3576,8 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
                   <div
                     className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
                     style={{
-                      background: done ? "rgba(0,255,136,0.15)" : active ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.05)",
-                      border: `1px solid ${done ? "rgba(0,255,136,0.4)" : active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
+                      background: done ? "rgba(var(--neon-green-rgb),0.15)" : active ? "rgba(var(--neon-purple-rgb),0.2)" : "rgba(var(--neon-purple-rgb),0.05)",
+                      border: `1px solid ${done ? "rgba(var(--neon-green-rgb),0.4)" : active ? "rgba(var(--neon-purple-rgb),0.5)" : "rgba(var(--neon-purple-rgb),0.15)"}`,
                       color: done ? "var(--neon-green)" : active ? "var(--neon-purple)" : "var(--text-subtle)",
                     }}
                   >
@@ -3806,7 +3617,11 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
                   exit="exit"
                   transition={{ duration: 0.2, ease: "easeInOut" }}
                 >
-                  {renderStep()}
+                  {cloneLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-16 text-sm" style={{ color: "var(--text-muted)" }}>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Loading server to clone…
+                    </div>
+                  ) : renderStep()}
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -3848,7 +3663,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
       {/* Cancel confirmation overlay */}
       {showCancelConfirm && (
         <div className="absolute inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)" }}>
-          <div className="rounded-xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4" style={{ background: "var(--popover)", border: "1px solid rgba(255,0,85,0.35)", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}>
+          <div className="rounded-xl p-6 max-w-sm w-full mx-4 flex flex-col gap-4" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-red-rgb),0.35)", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}>
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: "var(--neon-red)" }} />
               <div>
@@ -3857,7 +3672,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
               </div>
             </div>
             <div className="flex gap-3">
-              <Button onClick={handleConfirmCancel} className="flex-1 text-sm" style={{ background: "rgba(255,0,85,0.1)", border: "1px solid rgba(255,0,85,0.4)", color: "var(--neon-red)" }}>
+              <Button onClick={handleConfirmCancel} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-red-rgb),0.1)", border: "1px solid rgba(var(--neon-red-rgb),0.4)", color: "var(--neon-red)" }}>
                 Yes, Cancel
               </Button>
               <Button onClick={() => setShowCancelConfirm(false)} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-purple-rgb),0.08)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}>
@@ -3883,7 +3698,7 @@ export function ServerCreationWizard({ onClose }: ServerCreationWizardProps) {
               <Button onClick={handleContinueInBackground} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-purple-rgb),0.1)", border: "1px solid rgba(var(--neon-purple-rgb),0.4)", color: "var(--neon-purple)" }}>
                 Continue in Background
               </Button>
-              <Button onClick={handleCancelFromBackgroundPrompt} className="flex-1 text-sm" style={{ background: "rgba(255,0,85,0.08)", border: "1px solid rgba(255,0,85,0.35)", color: "var(--neon-red)" }}>
+              <Button onClick={handleCancelFromBackgroundPrompt} className="flex-1 text-sm" style={{ background: "rgba(var(--neon-red-rgb),0.08)", border: "1px solid rgba(var(--neon-red-rgb),0.35)", color: "var(--neon-red)" }}>
                 Cancel Install
               </Button>
             </div>

@@ -18,6 +18,7 @@ import { StartupQueueManager } from "@/components/layout/StartupQueueManager";
 import { StartupRecoveryManager } from "@/components/layout/StartupRecoveryManager";
 import { CfcoreRetryManager } from "@/components/layout/CfcoreRetryManager";
 import CountdownManager from "@/components/layout/CountdownManager";
+import { MemoryRestartManager } from "@/components/layout/MemoryRestartManager";
 import { ServerStatsRecorderProvider } from "@/providers/ServerStatsRecorderProvider";
 import { Toaster } from "sonner";
 
@@ -46,6 +47,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <StartupQueueManager />
         <StartupRecoveryManager />
         <CountdownManager />
+        <MemoryRestartManager />
         <ServerStatsRecorderProvider />
         <Toaster position="bottom-right" toastOptions={toasterOptions} />
         <div className="flex flex-col h-full">

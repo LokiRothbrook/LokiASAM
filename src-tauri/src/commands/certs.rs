@@ -75,7 +75,7 @@ pub async fn install_amazon_root_ca(
             .as_deref()
             .filter(|s| !s.is_empty())
             .ok_or("Wine prefix path is required on Linux")?;
-        install_linux(&cert_path, proton, prefix).await?;
+        install_linux(&cert_path, proton, prefix, None).await?;
     }
 
     // Suppress "unused variable" warnings on each platform.
@@ -101,8 +101,11 @@ async fn install_windows(cert_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `display`: run Wine on this X display instead of the user's session — used
+/// for the hidden-server prefix, whose first boot must happen on the
+/// invisible display it'll be tied to.
 #[cfg(target_os = "linux")]
-async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) -> Result<(), String> {
+async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str, display: Option<&str>) -> Result<(), String> {
     let proton_script = format!("{proton_path}/proton");
     // Wine 10 (GE-Proton 11+) unified wine64 into a single wine binary.
     // Fall back to wine if wine64 is absent.
@@ -126,14 +129,18 @@ async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) ->
             .await
             .map_err(|e| format!("Failed to create prefix directory: {e}"))?;
 
-        let status = Command::new(&proton_script)
-            .arg("run")
+        let mut boot = Command::new(&proton_script);
+        boot.arg("run")
             .arg("C:\\windows\\system32\\wineboot.exe")
             .env("STEAM_COMPAT_DATA_PATH", prefix_path)
             .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", "/")
             .env("WINEDLLOVERRIDES", "mscoree,mshtml=")
             .env("WINEDEBUG", "-all")
-            .env("PROTON_LOG", "0")
+            .env("PROTON_LOG", "0");
+        if let Some(d) = display {
+            crate::commands::server::apply_virtual_display_env(&mut boot, d);
+        }
+        let status = boot
             .status()
             .await
             .map_err(|e| format!("Failed to run proton wineboot: {e}"))?;
@@ -150,10 +157,15 @@ async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) ->
 
     // Install the certificate into Wine's CurrentUser\Root store.
     // At this point the prefix exists, so wine64 can run standalone.
-    let status = Command::new(&wine_bin)
+    let mut certutil = Command::new(&wine_bin);
+    certutil
         .args(["certutil", "-addstore", "Root", cert_path])
         .env("WINEPREFIX", &wine_pfx)
-        .env("WINEDEBUG", "-all")
+        .env("WINEDEBUG", "-all");
+    if let Some(d) = display {
+        crate::commands::server::apply_virtual_display_env(&mut certutil, d);
+    }
+    let status = certutil
         .status()
         .await
         .map_err(|e| format!("Failed to run wine certutil: {e}"))?;
@@ -176,6 +188,27 @@ async fn install_linux(cert_path: &str, proton_path: &str, prefix_path: &str) ->
     })?;
 
     Ok(())
+}
+
+/// Copy the Amazon Root CA (needed for mod downloads) into the hidden-server
+/// prefix, if the normal prefix has it and the hidden one doesn't yet. Runs on
+/// the invisible display so the prefix's first boot is tied to it. Failures
+/// are logged, not fatal: the server still runs; only mod downloads could be
+/// affected.
+#[cfg(target_os = "linux")]
+pub async fn ensure_hidden_prefix(proton_path: &str, main_prefix: &str, hidden_prefix: &str, display: &str) {
+    let has_cert = |p: &str| PathBuf::from(p).join(CERT_MARKER_FILENAME).exists();
+    if !has_cert(main_prefix) || has_cert(hidden_prefix) {
+        return;
+    }
+    let tmp = std::env::temp_dir().join("lokiasam-certs");
+    let result = async {
+        let cert = download_amazon_root_ca(tmp.to_string_lossy().into_owned()).await?;
+        install_linux(&cert, proton_path, hidden_prefix, Some(display)).await
+    }.await;
+    if let Err(e) = result {
+        eprintln!("[certs] hidden prefix certificate setup failed: {e}");
+    }
 }
 
 // ── Check ─────────────────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@
   --color-neon-green:       var(--neon-green);
   --color-neon-red:         var(--neon-red);
   --color-neon-orange:      var(--neon-orange);
+  --color-neon-yellow:      var(--neon-yellow);
 
   /* Text */
   --color-text-primary:     var(--text-primary);
@@ -39,8 +40,14 @@
   --color-primary-foreground: #050510;
   --color-input:              rgba(var(--neon-purple-rgb), 0.2);
   --color-ring:               var(--neon-purple);
-  --color-muted:              rgba(20, 20, 52, 0.85);
+  --color-muted:              var(--surface);
   --color-muted-foreground:   rgba(var(--neon-purple-rgb), 0.45);
+
+  /* Destructive — invalid inputs, destructive buttons/badges (shadcn) */
+  --color-destructive:        var(--neon-red);
+  --color-secondary:          var(--surface-elevated);
+  --color-card:               var(--glass-bg);
+  --color-card-foreground:    var(--text-primary);
 
   /* Fonts */
   --font-sans: var(--font-geist-sans);
@@ -60,6 +67,7 @@
   --surface:          rgba(18, 22, 35, 0.8);
   --surface-elevated: rgba(24, 28, 44, 0.9);
   --terminal-bg:      #000008;
+  --terminal-fg:      #e0e0ff;
 
   /* Accent RGB components — defaults match blue accent; updated by applyThemeAccent() */
   --neon-purple-rgb:  64, 128, 255;
@@ -68,12 +76,21 @@
   --border:           rgba(64, 128, 255, 0.15);
   --border-hover:     rgba(64, 128, 255, 0.4);
 
-  /* Neon colors — --neon-purple tracks the active accent */
+  /* Neon colors — --neon-purple tracks the active accent. The others are
+     fixed status colors: green = running/success, red = error/danger,
+     orange = warning, yellow = caution/notice, cyan = info/secondary. Use the -rgb variants for
+     tints: rgba(var(--neon-red-rgb), 0.1). */
   --neon-cyan:        #00ffff;
   --neon-purple:      #4080ff;
   --neon-green:       #00ff88;
   --neon-red:         #ff0055;
   --neon-orange:      #ff8800;
+  --neon-yellow:      #ffc800;
+  --neon-cyan-rgb:    0, 255, 255;
+  --neon-green-rgb:   0, 255, 136;
+  --neon-red-rgb:     255, 0, 85;
+  --neon-orange-rgb:  255, 136, 0;
+  --neon-yellow-rgb:  255, 200, 0;
 
   /* Text — defaults match storm preset */
   --foreground:       #dfe4f2;
@@ -263,3 +280,50 @@ body {
 .status-dot-stopped  { background: var(--text-muted);  }
 .status-dot-error    { background: var(--neon-red);    box-shadow: var(--glow-red); }
 .status-dot-updating { background: var(--neon-cyan);   box-shadow: var(--glow-cyan);   animation: pulse-glow 1.5s ease-in-out infinite; }
+
+/* ---------------------------------------------------------------------------
+   Guided tour (driver.js) — themed to the active preset + accent
+   --------------------------------------------------------------------------- */
+.driver-popover.lokiasam-tour {
+  background-color: var(--popover);
+  color:            var(--text-primary);
+  border:           1px solid rgba(var(--neon-purple-rgb), 0.45);
+  border-radius:    0.75rem;
+  box-shadow:       0 8px 32px rgba(0, 0, 0, 0.6), var(--glow-purple);
+  font-family:      var(--font-geist-sans), system-ui, sans-serif;
+  max-width:        340px;
+  padding:          16px;
+}
+.lokiasam-tour .driver-popover-title {
+  font-size:   15px;
+  color:       var(--neon-purple);
+  text-shadow: var(--glow-purple);
+}
+.lokiasam-tour .driver-popover-description {
+  font-size: 13px;
+  color:     var(--text-muted);
+}
+.lokiasam-tour .driver-popover-progress-text { color: var(--text-subtle); font-size: 12px; }
+.lokiasam-tour .driver-popover-close-btn       { color: var(--text-muted); }
+.lokiasam-tour .driver-popover-close-btn:hover { color: var(--text-primary); }
+.lokiasam-tour .driver-popover-footer-btn {
+  background-color: rgba(var(--neon-purple-rgb), 0.06);
+  color:            var(--text-primary);
+  border:           1px solid rgba(var(--neon-purple-rgb), 0.3);
+  border-radius:    0.5rem;
+  padding:          5px 12px;
+  text-shadow:      none;
+}
+.lokiasam-tour .driver-popover-footer-btn:hover,
+.lokiasam-tour .driver-popover-footer-btn:focus-visible {
+  background-color: rgba(var(--neon-purple-rgb), 0.15);
+}
+.lokiasam-tour .driver-popover-next-btn {
+  color:        var(--neon-purple);
+  border-color: rgba(var(--neon-purple-rgb), 0.6);
+}
+/* The arrow is drawn with borders; recolor the visible side for each placement. */
+.lokiasam-tour .driver-popover-arrow-side-left   { border-left-color:   var(--popover); }
+.lokiasam-tour .driver-popover-arrow-side-right  { border-right-color:  var(--popover); }
+.lokiasam-tour .driver-popover-arrow-side-top    { border-top-color:    var(--popover); }
+.lokiasam-tour .driver-popover-arrow-side-bottom { border-bottom-color: var(--popover); }

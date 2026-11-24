@@ -288,7 +288,7 @@ export default function ModMapsPage() {
                         <button
                           onClick={() => setDeleteTarget(m)}
                           className="p-1.5 rounded-lg transition-colors hover:bg-red-500/10"
-                          style={{ color: "rgba(255,0,85,0.6)" }}
+                          style={{ color: "rgba(var(--neon-red-rgb),0.6)" }}
                           title={`Remove ${m.display_name}`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -319,8 +319,8 @@ export default function ModMapsPage() {
             </Button>
             <Button
               onClick={() => deleteTarget && handleDelete(deleteTarget)}
-              className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+              className="gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+              style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
             >
               <Trash2 className="w-3.5 h-3.5" /> Remove
             </Button>

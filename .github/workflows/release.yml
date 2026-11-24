@@ -70,22 +70,47 @@ jobs:
 
             ### What's new in ${{ github.ref_name }}
 
-            This is a bug-fix release focused on custom/mod map handling and a couple of server-lifecycle edge cases.
+            A big polish release: new server-management features, a guided tour, and a long list of fixes from a full review of the app.
 
-            **Fix: Custom mod maps not working**
-            A server created (or switched) to a custom mod map now actually launches on that map. Previously the launch arguments silently fell back to The Island, the server details page showed a garbled internal ID instead of the map's name, and custom maps didn't appear in the Settings map dropdown at all — all four were symptoms of the same missing wiring between the custom maps table and the rest of the app, which is now fixed everywhere it was needed (launch args, backups, the scheduler, display labels, and the dropdown).
+            > **First launch after updating:** existing server configs are migrated automatically — settings that older versions wrote to the wrong place (join password, PvE mode, Game.ini-only settings, crossplay) are moved to where the game actually reads them. Your INI files are patched key by key; nothing else in them changes.
 
-            **Fix: Map's required mod not enforced on an existing server**
-            Changing a server's map in Settings now properly adds and locks the new map's required mod (so it can't be disabled or removed while that map is selected) and removes the previous map's mod — matching what already happened correctly during server creation.
+            **New: Hide Server Window**
+            Run servers with no console window. On Windows this uses the native no-console flag. On Linux servers run on an invisible display using Xvfb (recommended) or gamescope's headless mode — the app detects what's installed, prefers Xvfb, and can install it for you (Config → Advanced, the creation wizard, or the first-time setup). If a hidden server hits a startup error such as a failed mod download, it's closed automatically so the normal retry runs.
 
-            **Fix: Copying mods from another server could drop the current map's required mod**
-            The server creation wizard's "copy from server" step now merges the copied mod list instead of replacing it outright, so a mod map's required mod picked earlier in the wizard survives the copy.
+            **New: Guided tour**
+            An interactive tour of the app (offered at the end of setup, or from the **?** in the sidebar), plus a short tour for each server tab the first time you open it. Restart them any time from Settings.
 
-            **Fix: Map mod display name and ordering**
-            A map's required mod now shows the map's own name in the Mods tab instead of "Unknown Mod", and always sorts to the top of the installed mods list.
+            **New: Server Identity card** (Config tab)
+            Edit a server's name, join/admin passwords, ports and max players after creation. Changes go to both the app and the game's INI files together, with port-conflict checks and an offer to open new ports in the firewall.
 
-            **Fix: Servers stuck on "Updating…" after a stopped server's auto-update**
-            A scheduled or startup-triggered auto-update on a stopped server would apply successfully but leave the server's status stuck showing the update-in-progress spinner, requiring a manual Cancel + Reinstall to clear. The status now correctly resets once the update finishes.
+            **New: Clone Server, rebuilt**
+            Cloning now runs through the creation wizard: new name and ports suggested, fresh INI files with the clone's own identity, and optional copying of schedules, warning settings, auto-start, hidden window and save data.
+
+            **New: Config History**
+            A snapshot is taken before every config save. Browse snapshots, see exactly which settings each would change, and restore one (the current config is snapshotted first, so a restore can be undone).
+
+            **New: Admins & Whitelist editor** (Config → Advanced)
+            Edit the admin list, exclusive-join whitelist and join-bypass list from the app, with the `-exclusivejoin` switch alongside.
+
+            **New: Save checks**
+            Before saving config you're warned about anything that would break the server or the app: RCON disabled, a blank admin password, a clashing RCON port, a setting missing its required launch flag, or exclusive join with an empty whitelist.
+
+            **New: Auto-Start in the Automation tab and wizard**, **Server Platform selector** (`-ServerPlatform=`, replacing the old non-working crossplay toggles), **Message of the Day editor**, **Memory-Limit Restart** now warns players first, and **Scheduled Restart / Memory-Limit Restart notifications**.
+
+            **Fixes**
+            - Quick Setup, INI import and paste no longer wipe `[ServerSettings]` (admin password, RCON settings) — settings are merged key by key and server identity is never overwritten. Quick Setup now applies the same presets as the creation wizard.
+            - Imported servers no longer open a blank Config tab, and saving can no longer replace their real INI files.
+            - Breeding, spoiling, decomposition and other Game.ini-only sliders now actually take effect (they were written to GameUserSettings.ini). The PvE toggle now sets `ServerPVE`, and the join password is written to `[ServerSettings]`.
+            - Restart warnings chosen in the creation wizard now apply (they were silently ignored); `{time}` is the placeholder.
+            - Clusters: data no longer nests an extra `clusters/<id>` folder deep, and `-NoTransferFromFiltering` is applied automatically to every cluster member.
+            - Copying mods (wizard, clone, Mods tab) no longer brings another map's mod along — previously it could even be locked on the target.
+            - Mod reorder arrows now work, and reordering keeps your scroll position.
+            - Notifications: every toggle in Settings now works (backend events like "server online" ignored them), switching a column off no longer turns everything on, email now works for all events, and the bell shows the exact unread count.
+            - Force Stop / Force Stop All / Restart All Now are clickable immediately instead of only after navigating away.
+            - Proton-GE installs with the new `-x86_64` folder naming now complete, and update checks recognize them.
+            - Active events now load via their mod only (the obsolete `-ActiveEvent` flag is no longer passed).
+            - Server operations (backups, updates, restarts) queue behind each other instead of failing when one is already running.
+            - Theme: accent colors and theme presets now apply everywhere, and dropdowns use the app's styled menus instead of the system's.
 
             ### Installation
 

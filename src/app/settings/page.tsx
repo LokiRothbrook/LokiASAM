@@ -10,6 +10,7 @@ import {
   Server, Palette, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
+import { UPDATE_CHECK_SETTINGS_EVENT } from "@/components/layout/UpdateManager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +33,8 @@ import {
 } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { useAutostart } from "@/hooks/useAutostart";
+import { resetAllTours } from "@/lib/tour";
+import { syncSchedulesToRust } from "@/lib/scheduler-sync";
 import { runAsaCacheUpdate, runPerServerUpdateCheck, applyUpdateToAllServers, isAutoUpdateImmediate } from "@/lib/update-utils";
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
@@ -41,7 +44,7 @@ import { tauriCmd, type DirCheckResult, type ProtonUpdateInfo, type MigrateProgr
 import { getServerFirewallPorts } from "@/lib/firewall-utils";
 import { listen } from "@tauri-apps/api/event";
 import {
-  applyTheme, applyThemeAccent,
+  applyTheme, applyThemeAccent, ACCENT_HEX,
   ACCENT_OPTIONS, THEME_PRESETS,
   type ThemeAccent, type ThemePreset,
 } from "@/lib/theme";
@@ -275,11 +278,11 @@ function BaseDirMigrationSection() {
 
       {migrationDone && (
         <div className="rounded-lg p-3 flex items-center gap-2"
-          style={{ background: "rgba(0,255,136,0.08)", border: "1px solid rgba(0,255,136,0.3)" }}>
+          style={{ background: "rgba(var(--neon-green-rgb),0.08)", border: "1px solid rgba(var(--neon-green-rgb),0.3)" }}>
           <CheckCircle2 className="w-4 h-4" style={{ color: "var(--neon-green)" }} />
           <p className="text-xs" style={{ color: "var(--neon-green)" }}>Migration complete. Please reload the app.</p>
           <Button onClick={() => window.location.reload()} size="sm" className="ml-auto gap-1 h-7 text-xs"
-            style={{ background: "rgba(0,255,136,0.15)", border: "1px solid rgba(0,255,136,0.4)", color: "var(--neon-green)" }}>
+            style={{ background: "rgba(var(--neon-green-rgb),0.15)", border: "1px solid rgba(var(--neon-green-rgb),0.4)", color: "var(--neon-green)" }}>
             <RefreshCw className="w-3 h-3" /> Reload Now
           </Button>
         </div>
@@ -318,7 +321,7 @@ function BaseDirMigrationSection() {
             </button>
           </div>
 
-          <div className="rounded-lg p-3" style={{ background: "rgba(255,136,0,0.06)", border: "1px solid rgba(255,136,0,0.2)" }}>
+          <div className="rounded-lg p-3" style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
             <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
               All running servers must be stopped before migrating. The app will need to reload when complete.
             </p>
@@ -675,15 +678,7 @@ function ThemesSection() {
         <Label style={{ color: "var(--text-primary)" }}>Accent Color</Label>
         <div className="flex flex-wrap gap-2">
           {ACCENT_OPTIONS.map(({ value: a, label }) => {
-            // We need the hex for the swatch — import the private tokens indirectly
-            // via applyThemeAccent's source, but here we just use the accent value
-            // to look up from a local map.
-            const hexMap: Record<ThemeAccent, string> = {
-              purple: "#bf00ff", cyan: "#00ffff", green: "#00ff88",
-              pink: "#ff0080", orange: "#ff8800", red: "#ff0055",
-              blue: "#4080ff", teal: "#00ffc8", yellow: "#ffdc00",
-            };
-            const hex = hexMap[a];
+            const hex = ACCENT_HEX[a];
             const isActive = accent === a;
             return (
               <button key={a} onClick={() => handleAccent(a)}
@@ -843,8 +838,8 @@ function AboutSection() {
           className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all cursor-pointer"
           style={{
             color:      copied ? "var(--neon-green)" : "var(--text-muted)",
-            background: copied ? "rgba(0,255,136,0.08)" : "transparent",
-            border:     `1px solid ${copied ? "rgba(0,255,136,0.3)" : "rgba(255,255,255,0.08)"}`,
+            background: copied ? "rgba(var(--neon-green-rgb),0.08)" : "transparent",
+            border:     `1px solid ${copied ? "rgba(var(--neon-green-rgb),0.3)" : "rgba(255,255,255,0.08)"}`,
           }}
         >
           {copied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -994,6 +989,9 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
   const handleAutoCheckChange = async (value: string) => {
     setAutoCheck(value);
     await setAppSetting("asa_auto_check_hours", value);
+    // Apply immediately — otherwise the new mode only took effect after the
+    // next unrelated resync (or an app restart).
+    await syncSchedulesToRust();
   };
 
   return (
@@ -1068,7 +1066,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
           {applyAllInfo.running > 0 && (
             <div
               className="flex items-center gap-3 px-1 py-2 rounded-lg"
-              style={{ background: "rgba(255,165,0,0.05)", border: "1px solid rgba(255,165,0,0.15)" }}
+              style={{ background: "rgba(var(--neon-orange-rgb),0.05)", border: "1px solid rgba(var(--neon-orange-rgb),0.15)" }}
             >
               <Switch
                 id="settings-apply-all-restart-toggle"
@@ -1086,7 +1084,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
               No, skip
             </Button>
             <Button onClick={handleApplyAll} disabled={applyingAll}
-              style={{ background: "rgba(255,165,0,0.15)", borderColor: "rgba(255,165,0,0.5)", color: "#ffa500" }}>
+              style={{ background: "rgba(var(--neon-orange-rgb),0.15)", borderColor: "rgba(var(--neon-orange-rgb),0.5)", color: "var(--neon-orange)" }}>
               {applyingAll
                 ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
                 : <ArrowUp className="w-3.5 h-3.5 mr-1.5" />}
@@ -1127,6 +1125,7 @@ function AppUpdateSection() {
   const handleModeChange = async (value: string) => {
     setMode(value);
     await setAppSetting("app_update_check_mode", value);
+    window.dispatchEvent(new Event(UPDATE_CHECK_SETTINGS_EVENT));
   };
 
   const handleCheckNow = async () => {
@@ -1179,8 +1178,8 @@ function AppUpdateSection() {
         {updateResult?.available && installMethod !== "pkgbuild" && (
           <Button onClick={handleInstall} disabled={checking || installing || installDone} size="sm" className="gap-1.5"
             style={{
-              background: installDone ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border: `1px solid ${installDone ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
+              background: installDone ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${installDone ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: installDone ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {installing ? <Loader2 className="w-3 h-3 animate-spin" /> : installDone ? <CheckCircle2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
@@ -1192,8 +1191,8 @@ function AppUpdateSection() {
       {updateResult && (
         <div className="rounded-lg p-3 space-y-2"
           style={{
-            background: updateResult.available ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(0,255,136,0.06)",
-            border: `1px solid ${updateResult.available ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(0,255,136,0.25)"}`,
+            background: updateResult.available ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(var(--neon-green-rgb),0.06)",
+            border: `1px solid ${updateResult.available ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-green-rgb),0.25)"}`,
           }}>
           {currentVersion && (
             <div className="flex items-center gap-2 text-xs flex-wrap">
@@ -1397,15 +1396,15 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
         <div className="flex gap-2 shrink-0 flex-wrap">
           {busy && (
             <Button onClick={() => tauriCmd.abortOperation("check")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
-              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
               <StopCircle className="w-3 h-3" /> Abort
             </Button>
           )}
           {hasCache && (
             <Button onClick={() => runCacheOp("verify")} disabled={busy} size="sm" className="gap-1.5 h-7 text-xs"
               style={{
-                background: phase === "done" && operation === "verify" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
-                border: `1px solid ${phase === "done" && operation === "verify" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+                background: phase === "done" && operation === "verify" ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+                border: `1px solid ${phase === "done" && operation === "verify" ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
                 color: phase === "done" && operation === "verify" ? "var(--neon-green)" : "var(--neon-purple)",
               }}>
               {busy && operation === "verify" ? <Loader2 className="w-3 h-3 animate-spin" /> : phase === "done" && operation === "verify" ? <CheckCircle2 className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
@@ -1414,8 +1413,8 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
           )}
           <Button onClick={() => runCacheOp(hasCache ? "reinstall" : "install")} disabled={busy} size="sm" className="gap-1.5 h-7 text-xs"
             style={{
-              background: phase === "done" && operation !== "verify" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
-              border: `1px solid ${phase === "done" && operation !== "verify" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+              background: phase === "done" && operation !== "verify" ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+              border: `1px solid ${phase === "done" && operation !== "verify" ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
               color: phase === "done" && operation !== "verify" ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {busy && operation !== "verify"
@@ -1475,14 +1474,14 @@ function SteamcmdReinstallRow() {
       <div className="flex gap-2">
         {reinstalling && (
           <Button onClick={() => tauriCmd.abortOperation("steamcmd_install")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
-            style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+            style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
             <StopCircle className="w-3 h-3" /> Abort
           </Button>
         )}
         <Button onClick={handleReinstall} disabled={reinstalling} size="sm" className="gap-1.5 h-7 text-xs"
           style={{
-            background: done ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
-            border: `1px solid ${done ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            background: done ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${done ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
             color: done ? "var(--neon-green)" : "var(--neon-purple)",
           }}>
           {reinstalling ? <Loader2 className="w-3 h-3 animate-spin" /> : done ? <CheckCircle2 className="w-3 h-3" /> : <RefreshCw className="w-3 h-3" />}
@@ -1522,7 +1521,7 @@ function ProtonUnmanagedNotice({ extraText, alignRight, onManaged }: {
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
-        style={{ background: "rgba(255,136,0,0.07)", border: "1px solid rgba(255,136,0,0.2)" }}>
+        style={{ background: "rgba(var(--neon-orange-rgb),0.07)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>
         <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: "var(--neon-orange)" }} />
         <p className="text-xs" style={{ color: "var(--neon-orange)" }}>
           Proton-GE is in unmanaged mode — LokiASAM will not check for or update it.
@@ -1533,15 +1532,15 @@ function ProtonUnmanagedNotice({ extraText, alignRight, onManaged }: {
         <Button
           variant="outline"
           onClick={() => setShowConfirm(true)}
-          className="gap-2 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-          style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+          className="gap-2 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+          style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
         >
           <TriangleAlert className="w-4 h-4" />
           Allow LokiASAM to Manage This Proton Install
         </Button>
       </div>
       <Dialog open={showConfirm} onOpenChange={(v) => { if (!v) setShowConfirm(false); }}>
-        <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(255,136,0,0.35)" }}>
+        <DialogContent showCloseButton={false} className="max-w-lg" style={{ background: "var(--popover)", border: "1px solid rgba(var(--neon-orange-rgb),0.35)" }}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2" style={{ color: "var(--neon-orange)" }}>
               <AlertCircle className="w-5 h-5" /> Allow LokiASAM to Manage Proton-GE?
@@ -1560,8 +1559,8 @@ function ProtonUnmanagedNotice({ extraText, alignRight, onManaged }: {
           </DialogHeader>
           <DialogFooter className="flex-col gap-2 sm:flex-col">
             <Button variant="outline"
-              className="w-full gap-1.5 bg-[rgba(255,0,85,0.08)]! hover:bg-[rgba(255,0,85,0.2)]!"
-              style={{ borderColor: "rgba(255,0,85,0.3)", color: "var(--neon-red)" }}
+              className="w-full gap-1.5 bg-[rgba(var(--neon-red-rgb),0.08)]! hover:bg-[rgba(var(--neon-red-rgb),0.2)]!"
+              style={{ borderColor: "rgba(var(--neon-red-rgb),0.3)", color: "var(--neon-red)" }}
               onClick={handleConfirm}>
               Allow Management
             </Button>
@@ -1658,14 +1657,14 @@ function ProtonGeInstallRow() {
         <div className="flex gap-2 shrink-0">
           {busy && (
             <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1 h-7 text-xs"
-              style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+              style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
               <StopCircle className="w-3 h-3" /> Abort
             </Button>
           )}
           <Button onClick={() => handleRun(hasInstall)} disabled={busy} size="sm" className="gap-1.5 h-7 text-xs"
             style={{
-              background: phase === "done" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
-              border: `1px solid ${phase === "done" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+              background: phase === "done" ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+              border: `1px solid ${phase === "done" ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
               color: phase === "done" ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : phase === "done" ? <CheckCircle2 className="w-3 h-3" /> : hasInstall ? <RefreshCw className="w-3 h-3" /> : <Download className="w-3 h-3" />}
@@ -1746,8 +1745,8 @@ function CertInstallRow() {
           size="sm"
           className="gap-1.5 h-7 text-xs shrink-0 ml-4"
           style={{
-            background: phase === "done" ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
-            border: `1px solid ${phase === "done" ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            background: phase === "done" ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${phase === "done" ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
             color: phase === "done" ? "var(--neon-green)" : "var(--neon-purple)",
           }}
         >
@@ -1848,8 +1847,8 @@ function FirewallRepairRow() {
           size="sm"
           className="gap-1.5 h-7 text-xs shrink-0 ml-4"
           style={{
-            background: allGood ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
-            border: `1px solid ${allGood ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
+            background: allGood ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.08)",
+            border: `1px solid ${allGood ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.3)"}`,
             color: allGood ? "var(--neon-green)" : "var(--neon-purple)",
           }}
         >
@@ -2001,6 +2000,7 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
   const handleCheckModeChange = async (value: string) => {
     setCheckMode(value);
     await setAppSetting("proton_ge_check_mode", value);
+    window.dispatchEvent(new Event(UPDATE_CHECK_SETTINGS_EVENT));
   };
 
   // When navigated here via the update toast, auto-start the download once settings are loaded.
@@ -2024,12 +2024,12 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Installed:</span>
           <span className="font-mono text-xs px-2 py-0.5 rounded"
-            style={{ background: "rgba(0,255,136,0.1)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.3)" }}>
+            style={{ background: "rgba(var(--neon-green-rgb),0.1)", color: "var(--neon-green)", border: "1px solid rgba(var(--neon-green-rgb),0.3)" }}>
             {currentVersion}
           </span>
           {isManaged
-            ? <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "rgba(0,255,136,0.08)", color: "var(--neon-green)", border: "1px solid rgba(0,255,136,0.2)" }}>Managed</span>
-            : <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "rgba(255,136,0,0.08)", color: "var(--neon-orange)", border: "1px solid rgba(255,136,0,0.2)" }}>Unmanaged</span>
+            ? <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-green-rgb),0.08)", color: "var(--neon-green)", border: "1px solid rgba(var(--neon-green-rgb),0.2)" }}>Managed</span>
+            : <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-orange-rgb),0.08)", color: "var(--neon-orange)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)" }}>Unmanaged</span>
           }
         </div>
       )}
@@ -2046,8 +2046,8 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
       {updateInfo && !downloadDone && (
         <div className="rounded-lg p-3 space-y-2"
           style={{
-            background: updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(0,255,136,0.06)",
-            border: `1px solid ${updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(0,255,136,0.25)"}`,
+            background: updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.08)" : "rgba(var(--neon-green-rgb),0.06)",
+            border: `1px solid ${updateInfo.updateAvailable ? "rgba(var(--neon-purple-rgb),0.3)" : "rgba(var(--neon-green-rgb),0.25)"}`,
           }}>
           {updateInfo.currentVersion ? (
             <div className="flex items-center gap-2 text-xs flex-wrap">
@@ -2080,8 +2080,8 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
         {(updateInfo?.updateAvailable || (!protonPath && updateInfo)) && (isManaged || !looksExternal) && (
           <Button onClick={handleDownload} disabled={!!protonOpLabel || downloadDone} size="sm" className="gap-1.5"
             style={{
-              background: downloadDone ? "rgba(0,255,136,0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
-              border: `1px solid ${downloadDone ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
+              background: downloadDone ? "rgba(var(--neon-green-rgb),0.15)" : "rgba(var(--neon-purple-rgb),0.15)",
+              border: `1px solid ${downloadDone ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.4)"}`,
               color: downloadDone ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {downloading ? <Loader2 className="w-3 h-3 animate-spin" /> : downloadDone ? <CheckCircle2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
@@ -2091,7 +2091,7 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
 
         {protonOpLabel && (
           <Button onClick={() => tauriCmd.abortOperation("proton_download")} size="sm" variant="ghost" className="gap-1.5"
-            style={{ color: "var(--neon-red)", border: "1px solid rgba(255,0,85,0.3)" }}>
+            style={{ color: "var(--neon-red)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}>
             <StopCircle className="w-3 h-3" /> Abort
           </Button>
         )}
@@ -2153,6 +2153,9 @@ const GLOBAL_CHANNEL_DEFS = [
   },
 ];
 
+// A new channel row starts with every event ticked ("[]" means none).
+const ALL_EVENTS_JSON = JSON.stringify(Object.values(NOTIFICATION_EVENTS));
+
 function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?: () => void }) {
   const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
   const [saving, setSaving]   = useState<string | null>(null);
@@ -2169,7 +2172,7 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
     const existing = getConfig(channelId);
     await saveNotificationConfig({
       id: existing?.id ?? crypto.randomUUID(), serverId: null, channel: channelId,
-      enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? "[]",
+      enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? ALL_EVENTS_JSON,
     });
     await loadConfigs();
   }
@@ -2180,7 +2183,7 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
       const existing = getConfig(channelId);
       await saveNotificationConfig({
         id: existing?.id ?? crypto.randomUUID(), serverId: null, channel: channelId,
-        enabled: existing?.enabled === 1, configJson, eventsJson: existing?.events_json ?? "[]",
+        enabled: existing?.enabled === 1, configJson, eventsJson: existing?.events_json ?? ALL_EVENTS_JSON,
       });
       await loadConfigs();
       toast.success("Notification config saved.");
@@ -2308,8 +2311,8 @@ function GlobalChannelCard({ icon: Icon, label, desc, fields, enabled, cfg, savi
         <div className="flex gap-2">
           <Button size="sm" onClick={handleTestClick} disabled={testing || saving} className="h-7 text-xs gap-1"
             style={{
-              background: testPassed ? "rgba(0,255,136,0.1)" : "rgba(var(--neon-purple-rgb),0.12)",
-              border: `1px solid ${testPassed ? "rgba(0,255,136,0.4)" : "rgba(var(--neon-purple-rgb),0.35)"}`,
+              background: testPassed ? "rgba(var(--neon-green-rgb),0.1)" : "rgba(var(--neon-purple-rgb),0.12)",
+              border: `1px solid ${testPassed ? "rgba(var(--neon-green-rgb),0.4)" : "rgba(var(--neon-purple-rgb),0.35)"}`,
               color: testPassed ? "var(--neon-green)" : "var(--neon-purple)",
             }}>
             {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : testPassed ? <CheckCircle2 className="w-3 h-3" /> : <Send className="w-3 h-3" />}
@@ -2406,7 +2409,7 @@ function AppImageIntegrationSection() {
                 onClick={handleUninstall}
                 disabled={working}
                 className="gap-1.5"
-                style={{ borderColor: "rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+                style={{ borderColor: "rgba(var(--neon-red-rgb),0.4)", color: "var(--neon-red)" }}
               >
                 {working
                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2440,6 +2443,7 @@ function AppImageIntegrationSection() {
 function CloseToTraySection() {
   const [closeToTray, setCloseToTrayState] = useState(true);
   const { enabled: autostartEnabled, loading: autostartLoading, toggle: toggleAutostart } = useAutostart();
+  const setPendingTour = useAppStore((s) => s.setPendingTour);
 
   useEffect(() => { getAppSetting("close_to_tray").then((v) => setCloseToTrayState(v !== "false")); }, []);
 
@@ -2466,7 +2470,7 @@ function CloseToTraySection() {
             When enabled, clicking the close button hides LokiASAM to the system tray instead of exiting. Servers and schedules continue running in the background. Click the tray icon to restore the window.
           </p>
           {!closeToTray && (
-            <p className="text-xs mt-1" style={{ color: "#ffa500" }}>
+            <p className="text-xs mt-1" style={{ color: "var(--neon-orange)" }}>
               Closing the window will exit LokiASAM. Running servers will remain running but schedules and monitoring will stop.
             </p>
           )}
@@ -2491,6 +2495,26 @@ function CloseToTraySection() {
             ? <ToggleRight className="w-8 h-8" style={{ color: "var(--neon-purple)" }} />
             : <ToggleLeft  className="w-8 h-8" style={{ color: "var(--text-subtle)" }} />}
         </button>
+      </div>
+
+      <div className="flex items-start justify-between gap-6">
+        <div className="space-y-1.5 flex-1">
+          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Guided Tours</p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Show the app tour again now, and each server tab&apos;s tour the next time you open it.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={async () => {
+            await resetAllTours();
+            setPendingTour(true);
+          }}
+          style={{ borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--neon-purple)" }}
+        >
+          Restart tours
+        </Button>
       </div>
     </div>
   );
@@ -2530,7 +2554,7 @@ function StartupSection() {
             restart them, restart them automatically, or do nothing.
           </p>
           {pref === "never" && (
-            <p className="text-xs mt-1" style={{ color: "#ffa500" }}>
+            <p className="text-xs mt-1" style={{ color: "var(--neon-orange)" }}>
               The restart prompt is suppressed. Change this setting back to{" "}
               <strong>Ask each time</strong> to re-enable it.
             </p>

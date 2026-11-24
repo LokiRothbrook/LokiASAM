@@ -14,6 +14,7 @@ import {
   pruneManualBackups, getAppSetting, setAppSetting, getKnownPlayers,
   type BackupRow,
 } from "@/lib/db";
+import { restoreIniSnapshot } from "@/lib/server-config";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { stopServerGracefully } from "@/lib/server-utils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -21,6 +22,7 @@ import { getSaveFolder } from "@/data/game-data";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import type { ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,10 +52,10 @@ function formatHumanDate(iso: string): string {
 // ---------------------------------------------------------------------------
 
 const TIER_COLORS: Record<string, string> = {
-  H: "#00ffff",
-  D: "#bf00ff",
-  W: "#00ff88",
-  M: "#ffa500",
+  H: "var(--neon-cyan)",
+  D: "var(--neon-purple)",
+  W: "var(--neon-green)",
+  M: "var(--neon-orange)",
 };
 const TIER_NAMES: Record<string, string> = {
   H: "Hourly",
@@ -67,7 +69,7 @@ function TierTag({ tier }: { tier: string }) {
   return (
     <span
       className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-      style={{ background: `${color}18`, color, border: `1px solid ${color}35` }}
+      style={{ background: `color-mix(in srgb, ${color} 9%, transparent)`, color, border: `1px solid color-mix(in srgb, ${color} 21%, transparent)` }}
     >
       {TIER_NAMES[tier] ?? tier}
     </span>
@@ -78,7 +80,7 @@ function LoginTag() {
   return (
     <span
       className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-      style={{ background: "rgba(255,165,0,0.1)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.3)" }}
+      style={{ background: "rgba(var(--neon-orange-rgb),0.1)", color: "var(--neon-orange)", border: "1px solid rgba(var(--neon-orange-rgb),0.3)" }}
     >
       Login
     </span>
@@ -117,7 +119,7 @@ function RestoreConfirmDialog({
         <div className="flex items-center gap-3">
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "rgba(255,0,85,0.1)", border: "1px solid rgba(255,0,85,0.3)" }}
+            style={{ background: "rgba(var(--neon-red-rgb),0.1)", border: "1px solid rgba(var(--neon-red-rgb),0.3)" }}
           >
             <AlertCircle className="w-5 h-5" style={{ color: "var(--neon-red)" }} />
           </div>
@@ -136,7 +138,7 @@ function RestoreConfirmDialog({
             style={{ border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
             onClick={onCancel}>Cancel</Button>
           <Button className="flex-1 cursor-pointer"
-            style={{ background: "rgba(255,0,85,0.15)", border: "1px solid rgba(255,0,85,0.4)", color: "var(--neon-red)" }}
+            style={{ background: "rgba(var(--neon-red-rgb),0.15)", border: "1px solid rgba(var(--neon-red-rgb),0.4)", color: "var(--neon-red)" }}
             onClick={onConfirm}>Restore</Button>
         </div>
       </div>
@@ -160,14 +162,14 @@ function FullBackupWarningDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div
         className="glass-card rounded-2xl p-6 max-w-lg w-full mx-4 space-y-4"
-        style={{ border: "1px solid rgba(255,165,0,0.4)" }}
+        style={{ border: "1px solid rgba(var(--neon-orange-rgb),0.4)" }}
       >
         <div className="flex items-center gap-3">
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "rgba(255,165,0,0.1)", border: "1px solid rgba(255,165,0,0.3)" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.1)", border: "1px solid rgba(var(--neon-orange-rgb),0.3)" }}
           >
-            <HardDrive className="w-5 h-5" style={{ color: "#ffa500" }} />
+            <HardDrive className="w-5 h-5" style={{ color: "var(--neon-orange)" }} />
           </div>
           <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
             Full Backup Warning
@@ -180,7 +182,7 @@ function FullBackupWarningDialog({
         </p>
         <div
           className="rounded-lg p-3 text-xs space-y-1"
-          style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.2)", color: "var(--text-muted)" }}
+          style={{ background: "rgba(var(--neon-orange-rgb),0.06)", border: "1px solid rgba(var(--neon-orange-rgb),0.2)", color: "var(--text-muted)" }}
         >
           <p>Recommendations:</p>
           <ul className="list-disc pl-4 space-y-0.5">
@@ -197,7 +199,7 @@ function FullBackupWarningDialog({
             Never show again
           </button>
           <Button className="cursor-pointer"
-            style={{ background: "rgba(255,165,0,0.15)", border: "1px solid rgba(255,165,0,0.4)", color: "#ffa500" }}
+            style={{ background: "rgba(var(--neon-orange-rgb),0.15)", border: "1px solid rgba(var(--neon-orange-rgb),0.4)", color: "var(--neon-orange)" }}
             onClick={onConfirm}>Continue</Button>
         </div>
       </div>
@@ -452,22 +454,12 @@ function PlayerBackupSection({
       {/* Player filter dropdown */}
       {uniqueOptions.length > 0 && (
         <div className="px-3 py-2" style={{ borderBottom: "1px solid rgba(var(--neon-purple-rgb),0.08)" }}>
-          <select
+          <OptionSelect
             value={selectedEosId}
-            onChange={(e) => setSelectedEosId(e.target.value)}
-            className="h-7 text-xs px-2 rounded w-full"
-            style={{
-              background: "rgba(0,0,0,0.4)",
-              border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
-              color: "var(--text-primary)",
-              outline: "none",
-            }}
-          >
-            <option value="all">All Players</option>
-            {uniqueOptions.map((p) => (
-              <option key={p.eosId} value={p.eosId}>{p.name}</option>
-            ))}
-          </select>
+            options={[{ value: "all", label: "All Players" }, ...uniqueOptions.map((p) => ({ value: p.eosId, label: p.name }))]}
+            onChange={setSelectedEosId}
+            size="sm"
+          />
         </div>
       )}
 
@@ -527,15 +519,16 @@ function PlayerBackupSection({
 // ---------------------------------------------------------------------------
 
 function IniBackupSection({
-  serverId, backupDir, installPath, isBusy, onBusyChange, onEditSchedules,
+  server, backupDir, isBusy, onBusyChange, onEditSchedules,
 }: {
-  serverId: string;
+  server: ServerRow;
   backupDir: string;
-  installPath: string;
   isBusy: boolean;
   onBusyChange: (b: boolean) => void;
   onEditSchedules?: () => void;
 }) {
+  const serverId = server.id;
+  const queryClient = useQueryClient();
   const [snapshots, setSnapshots] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -554,8 +547,11 @@ function IniBackupSection({
   async function handleRestore(timestamp: string) {
     onBusyChange(true);
     try {
-      await tauriCmd.restoreIniBackup(serverId, `${backupDir}/${serverId}/ini/${timestamp}`, installPath);
-      toast.success(`Config restored from ${timestamp}.`);
+      const { warnings } = await restoreIniSnapshot(server, timestamp);
+      warnings.forEach((w) => toast.warning(w));
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      await load();
+      toast.success(`Config restored from ${timestamp === "current" ? "the latest snapshot" : timestamp}.`);
     } catch (e) {
       toast.error(`INI restore failed: ${e}`);
     } finally {
@@ -581,7 +577,7 @@ function IniBackupSection({
       >
         <div
           className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-          style={{ background: "rgba(0,255,136,0.1)", border: "1px solid rgba(0,255,136,0.25)" }}
+          style={{ background: "rgba(var(--neon-green-rgb),0.1)", border: "1px solid rgba(var(--neon-green-rgb),0.25)" }}
         >
           <FileText className="w-3.5 h-3.5" style={{ color: "var(--neon-green)" }} />
         </div>
@@ -613,12 +609,12 @@ function IniBackupSection({
             <div
               key={snap}
               className="glass-card rounded-xl px-4 py-2.5 flex items-center gap-3"
-              style={{ border: "1px solid rgba(0,255,136,0.1)" }}
+              style={{ border: "1px solid rgba(var(--neon-green-rgb),0.1)" }}
             >
               <FileText className="w-4 h-4 shrink-0" style={{ color: "var(--neon-green)" }} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium font-mono" style={{ color: "var(--text-primary)" }}>
-                  {snap}
+                  {snap === "current" ? "Latest snapshot" : snap}
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
@@ -1099,9 +1095,8 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       {/* INI backups */}
       {backupDir && (
         <IniBackupSection
-          serverId={server.id}
+          server={server}
           backupDir={backupDir}
-          installPath={server.install_path}
           isBusy={isBusy}
           onBusyChange={(b) => setProgress((p) => ({ ...p, active: b }))}
           onEditSchedules={editScheduleBtn}
@@ -1109,6 +1104,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       )}
 
       {/* Server backups */}
+      <div data-tour="backups-server">
       <BackupSectionPanel
         icon={Archive} title="Server Backups" color="var(--neon-purple)"
         backups={serverBackups} loading={loading}
@@ -1118,6 +1114,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         restoreDisabled={isBusy}
         backupLabel="Backup Server Now"
       />
+      </div>
 
       {/* Player backups */}
       <PlayerBackupSection
@@ -1131,7 +1128,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
 
       {/* Full backups */}
       <BackupSectionPanel
-        icon={HardDrive} title="Full Backups" color="#ffa500"
+        icon={HardDrive} title="Full Backups" color="var(--neon-orange)"
         backups={fullBackups} loading={loading}
         onRestore={setRestoreTarget} onDelete={handleDelete}
         onManualBackup={handleFullBackupClick}

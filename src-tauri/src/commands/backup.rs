@@ -865,6 +865,23 @@ pub async fn create_ini_backup(
         fs::rename(&current, &archive_folder).map_err(|e| e.to_string())?;
     }
 
+    // Keep the newest MAX_INI_SNAPSHOTS archived snapshots; a snapshot is
+    // taken on every config save, so without a cap this grows forever.
+    const MAX_INI_SNAPSHOTS: usize = 50;
+    if let Ok(rd) = fs::read_dir(&ini_base) {
+        let mut archived: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().map(|n| n != "current").unwrap_or(false))
+            .collect();
+        archived.sort();
+        if archived.len() > MAX_INI_SNAPSHOTS {
+            for old in &archived[..archived.len() - MAX_INI_SNAPSHOTS] {
+                let _ = fs::remove_dir_all(old);
+            }
+        }
+    }
+
     fs::create_dir_all(&current).map_err(|e| e.to_string())?;
 
     for src in &sources {
@@ -1171,6 +1188,11 @@ pub async fn list_ini_backups(
     // Timestamps sort lexicographically as newest last; reverse for newest first.
     folders.sort();
     folders.reverse();
+    // "current" is the most recent snapshot — list it first so it can be
+    // previewed/restored like any other.
+    if ini_base.join("current").is_dir() {
+        folders.insert(0, "current".to_string());
+    }
     Ok(folders)
 }
 

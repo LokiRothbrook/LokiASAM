@@ -183,7 +183,7 @@ export function CronBuilder({ value, onChange, label }: Props) {
             style={{
               background: "rgba(0,0,0,0.4)",
               border: customError
-                ? "1px solid rgba(255,0,85,0.5)"
+                ? "1px solid rgba(var(--neon-red-rgb),0.5)"
                 : "1px solid rgba(var(--neon-purple-rgb),0.2)",
               color: "var(--text-primary)",
             }}

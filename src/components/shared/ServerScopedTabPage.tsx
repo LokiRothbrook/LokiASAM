@@ -10,12 +10,13 @@
 
 import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { ChevronDown, Plus, type LucideIcon } from "lucide-react";
+import { Plus, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/store/useAppStore";
 import { useServers } from "@/hooks/useServers";
 import { ServerStatusBadge } from "@/components/server/ServerStatusBadge";
 import type { ServerRow } from "@/lib/db";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 
 interface ServerScopedTabPageProps {
   icon: LucideIcon;
@@ -92,26 +93,12 @@ export function ServerScopedTabPage({
             No servers configured
           </span>
         ) : (
-          <div className="relative flex-1 max-w-xs">
-            <select
+          <div className="flex-1 max-w-xs">
+            <OptionSelect
               value={selectedId}
-              onChange={(e) => handleSelect(e.target.value)}
-              className="w-full h-9 pl-3 pr-8 text-sm rounded-lg appearance-none cursor-pointer"
-              style={{
-                background: "rgba(0,0,0,0.4)",
-                border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
-                color: "var(--text-primary)",
-              }}
-            >
-              {servers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none"
-              style={{ color: "var(--text-muted)" }}
+              options={servers.map((s) => ({ value: s.id, label: s.name }))}
+              onChange={handleSelect}
+              className="h-9 text-sm"
             />
           </div>
         )}

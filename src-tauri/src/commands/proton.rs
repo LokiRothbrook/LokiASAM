@@ -30,6 +30,16 @@ fn is_valid_proton_dir(p: &Path) -> bool {
         && (p.join("files/bin/wine64").exists() || p.join("files/bin/wine").exists())
 }
 
+/// Strip the architecture suffix newer GE-Proton archives append to the
+/// extracted folder name (e.g. "GE-Proton11-14-x86_64" -> "GE-Proton11-14")
+/// so it can be compared against the release tag.
+fn strip_arch_suffix(name: &str) -> &str {
+    name.strip_suffix("-x86_64")
+        .or_else(|| name.strip_suffix("_x86_64"))
+        .or_else(|| name.strip_suffix("-x86-64"))
+        .unwrap_or(name)
+}
+
 fn emit_download_line(app: &AppHandle, msg: &str) {
     let _ = app.emit(
         "proton://output/download",
@@ -250,7 +260,7 @@ async fn download_proton_ge_inner(
     let target_clone = target.clone();
     let tag_clone = tag.clone();
     let abort_extract = std::sync::Arc::clone(abort);
-    tokio::task::spawn_blocking(move || {
+    let dir_name = tokio::task::spawn_blocking(move || {
         use flate2::read::GzDecoder;
         use tar::Archive;
 
@@ -258,6 +268,10 @@ async fn download_proton_ge_inner(
         // abort check — funnels through the same cleanup below instead of
         // leaving the downloaded archive (and any partially-extracted files)
         // behind on a genuine extraction error.
+        // Name of the archive's top-level directory. Older releases extract to
+        // "{tag}/", newer ones to "{tag}-x86_64/", so read it from the archive
+        // instead of assuming.
+        let mut top_dir: Option<String> = None;
         let result: Result<(), String> = (|| {
             let f = std::fs::File::open(&tar_path_clone)
                 .map_err(|e| format!("Failed to open archive: {e}"))?;
@@ -271,12 +285,23 @@ async fn download_proton_ge_inner(
                     return Err("Aborted".into());
                 }
                 let mut entry = entry.map_err(|e| format!("Archive entry error: {e}"))?;
+                if top_dir.is_none() {
+                    if let Ok(p) = entry.path() {
+                        if let Some(std::path::Component::Normal(first)) = p
+                            .components()
+                            .find(|c| !matches!(c, std::path::Component::CurDir))
+                        {
+                            top_dir = Some(first.to_string_lossy().into_owned());
+                        }
+                    }
+                }
                 entry
                     .unpack_in(&target_clone)
                     .map_err(|e| format!("Failed to extract entry: {e}"))?;
             }
             Ok(())
         })();
+        let dir_name = top_dir.unwrap_or_else(|| tag_clone.clone());
 
         match &result {
             Ok(()) => {
@@ -286,17 +311,17 @@ async fn download_proton_ge_inner(
                 // Covers both "Aborted" and a genuine extraction error —
                 // either way the archive and any partial extraction are junk.
                 let _ = std::fs::remove_file(&tar_path_clone);
-                let _ = std::fs::remove_dir_all(target_clone.join(&tag_clone));
+                let _ = std::fs::remove_dir_all(target_clone.join(&dir_name));
             }
         }
-        result
+        result.map(|()| dir_name)
     })
     .await
     .map_err(|e| format!("Extraction task error: {e}"))??;
 
-    let extracted_path = target.join(&tag);
+    let extracted_path = target.join(&dir_name);
 
-    if !extracted_path.exists() {
+    if !is_valid_proton_dir(&extracted_path) {
         return Err(format!(
             "Extraction finished but expected directory not found: {}",
             extracted_path.display()
@@ -362,7 +387,8 @@ pub async fn check_proton_ge_update(current_path: String) -> Result<ProtonUpdate
             .into_owned()
     };
 
-    let update_available = !current_version.is_empty() && current_version != latest_version;
+    let update_available = !current_version.is_empty()
+        && strip_arch_suffix(&current_version) != strip_arch_suffix(&latest_version);
 
     Ok(ProtonUpdateInfo {
         latest_version,

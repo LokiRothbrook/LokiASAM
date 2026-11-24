@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { check } from "@tauri-apps/plugin-updater";
 import { invoke } from "@tauri-apps/api/core";
@@ -9,6 +9,9 @@ import { getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
+
+/** Window event fired by Settings when an update-check mode changes. */
+export const UPDATE_CHECK_SETTINGS_EVENT = "lokiasam:update-check-settings-changed";
 
 export function UpdateManager() {
   const router           = useRouter();
@@ -114,9 +117,22 @@ export function UpdateManager() {
     }
   }, []);
 
+  // Bumped when the user changes a check mode in Settings, so the intervals
+  // below are rebuilt immediately instead of only on the next app launch.
+  const [settingsVersion, setSettingsVersion] = useState(0);
+  const startupCheckedRef = useRef(false);
+  useEffect(() => {
+    const bump = () => setSettingsVersion((v) => v + 1);
+    window.addEventListener(UPDATE_CHECK_SETTINGS_EVENT, bump);
+    return () => window.removeEventListener(UPDATE_CHECK_SETTINGS_EVENT, bump);
+  }, []);
+
   useEffect(() => {
     let appIntervalId:    ReturnType<typeof setInterval> | null = null;
     let protonIntervalId: ReturnType<typeof setInterval> | null = null;
+    // Check right away only on launch — a settings change just reschedules.
+    const checkNow = !startupCheckedRef.current;
+    startupCheckedRef.current = true;
 
     (async () => {
       const [mode, protonMode] = await Promise.all([
@@ -126,7 +142,7 @@ export function UpdateManager() {
 
       // LokiASAM app updates
       if (mode !== "off") {
-        checkForUpdate();
+        if (checkNow) checkForUpdate();
         if (mode === "periodic") {
           appIntervalId = setInterval(checkForUpdate, ONE_HOUR_MS);
         }
@@ -134,7 +150,7 @@ export function UpdateManager() {
 
       // Proton-GE updates (Linux only)
       if (isLinux && protonMode && protonMode !== "disabled") {
-        checkForProtonUpdate();
+        if (checkNow) checkForProtonUpdate();
         if (protonMode === "startup_hourly") {
           protonIntervalId = setInterval(checkForProtonUpdate, ONE_HOUR_MS);
         }
@@ -145,7 +161,7 @@ export function UpdateManager() {
       if (appIntervalId)    clearInterval(appIntervalId);
       if (protonIntervalId) clearInterval(protonIntervalId);
     };
-  }, [isLinux, checkForUpdate, checkForProtonUpdate]);
+  }, [isLinux, checkForUpdate, checkForProtonUpdate, settingsVersion]);
 
   return null;
 }

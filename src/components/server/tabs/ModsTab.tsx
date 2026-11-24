@@ -22,6 +22,7 @@ import { tauriCmd } from "@/lib/tauri-commands";
 import { useAppStore } from "@/store/useAppStore";
 import type { ServerRow } from "@/lib/db";
 import { ARK_EVENT_MOD_IDS, ARK_EVENTS } from "@/data/game-data";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 
 interface Props {
   server: ServerRow;
@@ -46,9 +47,10 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
     if (!selectedId) return;
     setCopying(true);
     try {
-      await copyServerMods(selectedId, serverId);
+      const count = await copyServerMods(selectedId, serverId);
       onCopied();
-      toast.success("Mods copied successfully");
+      toast.success(count > 0 ? `Copied ${count} mod${count === 1 ? "" : "s"}` : "No mods to copy",
+        { description: "Map and event mods aren't copied — this server's own map and event supply theirs." });
     } catch (e) {
       toast.error(`Failed to copy mods: ${e}`);
     } finally {
@@ -59,17 +61,12 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
   return (
     <div className="glass-card flex flex-col gap-3 p-4 rounded-xl" style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}>
       <p className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>Copy Mods from Server</p>
-      <select
+      <OptionSelect
         value={selectedId}
-        onChange={(e) => setSelectedId(e.target.value)}
-        className="w-full text-xs rounded-lg px-2 py-1.5"
-        style={{ background: "var(--surface)", border: "1px solid rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }}
-      >
-        <option value="">Select a server…</option>
-        {servers.map((s) => (
-          <option key={s.id} value={s.id}>{s.name}</option>
-        ))}
-      </select>
+        options={servers.map((s) => ({ value: s.id, label: s.name }))}
+        onChange={setSelectedId}
+        placeholder="Select a server…"
+      />
       <Button size="sm" disabled={!selectedId || copying} onClick={handleCopy} className="btn-neon-purple w-full">
         {copying ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
         Copy Mods
@@ -111,8 +108,10 @@ export function ModsTab({ server }: Props) {
   const stopVerifying    = useAppStore((s) => s.stopVerifying);
 
   // ── Load mods from SQLite ──────────────────────────────────────────────
+  // `loading` starts true and is only cleared here — the spinner is for the
+  // first load. Later reloads (after reorder/toggle/remove) refresh the list
+  // in place; swapping the list for the spinner reset its scroll position.
   const loadMods = useCallback(async () => {
-    setLoading(true);
     try {
       const rows = await getServerMods(server.id);
       setMods(rows);
@@ -253,23 +252,26 @@ export function ModsTab({ server }: Props) {
     }
   };
 
-  const handleMoveUp = async (index: number) => {
-    if (index === 0) return;
+  // Locked (map) mods always load first, so a mod can't move above them.
+  const lockedCount = mods.filter((m) => m.locked_by_map === 1).length;
+
+  const moveMod = async (from: number, to: number) => {
+    if (to < lockedCount || to >= mods.length || mods[from]?.locked_by_map === 1) return;
     const reordered = [...mods];
-    [reordered[index - 1], reordered[index]] = [reordered[index], reordered[index - 1]];
-    await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
-    await loadMods();
-    markChanged();
+    [reordered[from], reordered[to]] = [reordered[to], reordered[from]];
+    setMods(reordered); // instant feedback; reloaded from the DB below
+    try {
+      await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
+      markChanged();
+    } catch (e) {
+      toast.error("Failed to reorder mods", { description: String(e) });
+    } finally {
+      await loadMods();
+    }
   };
 
-  const handleMoveDown = async (index: number) => {
-    if (index === mods.length - 1) return;
-    const reordered = [...mods];
-    [reordered[index], reordered[index + 1]] = [reordered[index + 1], reordered[index]];
-    await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
-    await loadMods();
-    markChanged();
-  };
+  const handleMoveUp = (index: number) => moveMod(index, index - 1);
+  const handleMoveDown = (index: number) => moveMod(index, index + 1);
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
@@ -321,6 +323,7 @@ export function ModsTab({ server }: Props) {
 
         {/* Mod list */}
         <div
+          data-tour="mods-list"
           className="glass-card flex-1 flex flex-col gap-1 rounded-xl p-2 overflow-y-auto min-h-0"
           style={{
             minHeight: 80,
@@ -348,6 +351,7 @@ export function ModsTab({ server }: Props) {
                 mod={mod}
                 index={index}
                 total={mods.length}
+                canMoveUp={index > lockedCount}
                 onMoveUp={() => handleMoveUp(index)}
                 onMoveDown={() => handleMoveDown(index)}
                 onToggle={(enabled) => handleToggleMod(mod.mod_id, enabled)}
@@ -359,6 +363,7 @@ export function ModsTab({ server }: Props) {
 
         {/* Add-by-ID form */}
         <div
+          data-tour="mods-add"
           className="glass-card flex flex-col gap-2 rounded-xl p-3 shrink-0"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.12)" }}
         >
@@ -414,6 +419,7 @@ export function ModsTab({ server }: Props) {
       >
         {/* Open / Close browser card */}
         <div
+          data-tour="mods-browser"
           className="glass-card flex flex-col gap-3 p-4 rounded-xl"
           style={{ borderColor: "rgba(var(--neon-purple-rgb),0.15)" }}
         >
@@ -514,6 +520,8 @@ interface ModRowItemProps {
   mod: ModRow;
   index: number;
   total: number;
+  /** False for the top row and the row just below the locked map mods. */
+  canMoveUp: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onToggle: (enabled: boolean) => void;
@@ -524,6 +532,7 @@ function ModRowItem({
   mod,
   index,
   total,
+  canMoveUp,
   onMoveUp,
   onMoveDown,
   onToggle,
@@ -538,7 +547,7 @@ function ModRowItem({
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg group transition-all"
       style={{
-        background: locked ? "rgba(var(--neon-purple-rgb),0.04)" : "rgba(10,10,30,0.4)",
+        background: locked ? "rgba(var(--neon-purple-rgb),0.04)" : "var(--surface)",
         border: `1px solid ${locked ? "rgba(var(--neon-purple-rgb),0.18)" : "rgba(var(--neon-purple-rgb),0.08)"}`,
         opacity: enabled ? 1 : 0.55,
       }}
@@ -550,7 +559,7 @@ function ModRowItem({
 
       {/* Up / Down — disabled for locked mods */}
       <div className="flex flex-col gap-0.5 shrink-0">
-        <button type="button" onClick={onMoveUp} disabled={index === 0 || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move up">
+        <button type="button" onClick={onMoveUp} disabled={!canMoveUp || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move up">
           <ChevronUp className="w-3 h-3" />
         </button>
         <button type="button" onClick={onMoveDown} disabled={index === total - 1 || locked} className="p-0.5 rounded transition-colors disabled:opacity-20" style={{ color: "var(--text-muted)" }} title="Move down">
@@ -575,7 +584,7 @@ function ModRowItem({
             </span>
           )}
           {isEventMod && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,140,0,0.08)", color: "rgba(255,140,0,0.9)", border: "1px solid rgba(255,140,0,0.25)" }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(var(--neon-orange-rgb),0.08)", color: "rgba(var(--neon-orange-rgb),0.9)", border: "1px solid rgba(var(--neon-orange-rgb),0.25)" }}>
               Event — Manage in Config
             </span>
           )}

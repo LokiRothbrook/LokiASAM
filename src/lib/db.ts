@@ -557,6 +557,90 @@ async function runMigrations(db: Database): Promise<void> {
      SET created_at = REPLACE(created_at, ' ', 'T') || 'Z'
      WHERE created_at NOT LIKE '%T%'`
   );
+
+  // ── Migration 026: per-server "hide server window" ───────────────────────
+  try {
+    await db.execute("ALTER TABLE servers ADD COLUMN hide_window INTEGER NOT NULL DEFAULT 0");
+  } catch { /* already exists */ }
+
+  // ── Migration 025: explicit notification event lists ─────────────────────
+  // events_json "[]" used to mean "all events", so switching every event off
+  // for a channel (which also saves "[]") silently switched them all ON. Rows
+  // now always list their events and "[]" means none: rewrite legacy "[]"
+  // rows to the full list (their current behaviour), re-enable In-App/Bell
+  // rows (no UI can switch those channels off; an old matrix bug created
+  // In-App disabled), and tick the two new restart events for In-App/Bell.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_025_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const { NOTIFICATION_EVENTS } = await import("@/data/game-data");
+      const all = Object.values(NOTIFICATION_EVENTS) as string[];
+      const rows = await db.select<{ id: string; channel: string; events_json: string }[]>(
+        "SELECT id, channel, events_json FROM notification_configs"
+      );
+      for (const row of rows) {
+        let events: string[];
+        try { events = JSON.parse(row.events_json || "[]"); } catch { events = []; }
+        if (events.length === 0) events = [...all];
+        const visible = row.channel === "in_app" || row.channel === "bell";
+        if (visible) {
+          for (const e of ["scheduled_restart", "memory_restart"]) if (!events.includes(e)) events.push(e);
+        }
+        await db.execute(
+          `UPDATE notification_configs SET events_json = ?${visible ? ", enabled = 1" : ""} WHERE id = ?`,
+          [JSON.stringify(events), row.id]
+        );
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_025_done', 'true')"
+      );
+    }
+  }
+
+  // ── Migration 024: move INI keys older versions wrote to the wrong place ──
+  // ServerPassword → [ServerSettings], AllowPvP → ServerPVE, Game.ini-only
+  // settings out of GameUserSettings.ini, crossplay/AllPlatforms launch args
+  // → ServerPlatform, and the per-server NoTransferFromFiltering toggle (now
+  // automatic for cluster members). Applied to the DB copy, and to the INI
+  // files on disk with in-place patches so nothing else in them changes.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_024_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const { migrateIniKeys, migrateLaunchArgs } = await import("@/lib/config-migrations");
+      const { tauriCmd } = await import("@/lib/tauri-commands");
+      type Row = { server_id: string; game_user_settings_json: string; game_ini_json: string; launch_args_json: string; install_path: string };
+      const rows = await db.select<Row[]>(
+        `SELECT c.server_id, c.game_user_settings_json, c.game_ini_json, c.launch_args_json, s.install_path
+         FROM server_config c JOIN servers s ON s.id = c.server_id`
+      );
+      for (const row of rows) {
+        try {
+          const ini = migrateIniKeys(JSON.parse(row.game_user_settings_json || "{}"), JSON.parse(row.game_ini_json || "{}"));
+          const launch = migrateLaunchArgs(JSON.parse(row.launch_args_json || "{}"));
+          if (ini.ops.length > 0 || launch.changed) {
+            await db.execute(
+              "UPDATE server_config SET game_user_settings_json = ?, game_ini_json = ?, launch_args_json = ? WHERE server_id = ?",
+              [JSON.stringify(ini.gus), JSON.stringify(ini.game), JSON.stringify(launch.args), row.server_id]
+            );
+          }
+          // Disk: compute the ops from the files themselves (they may differ
+          // from the DB copy) and patch only those keys.
+          const disk = await tauriCmd.readServerConfig(row.install_path).catch(() => null);
+          if (disk) {
+            const { ops } = migrateIniKeys(disk.gameUserSettings, disk.gameIni);
+            if (ops.length > 0) await tauriCmd.patchServerIni(row.install_path, ops).catch(() => {});
+          }
+        } catch { /* skip malformed */ }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_024_done', 'true')"
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +682,7 @@ export interface ServerRow {
   active_event: string | null;       // ARK event id (e.g. "FearEvolved"); null = no active event
   memory_limit_gb: number | null;    // restart server if RAM exceeds this; null = disabled
   backup_broadcast_message: string;  // RCON broadcast sent before each scheduled backup
+  hide_window: number;               // 0 | 1 — start without a visible server window
   created_at: string;
   updated_at: string;
 }
@@ -646,6 +731,14 @@ export interface ClusterRow {
 // ---------------------------------------------------------------------------
 // App Settings
 // ---------------------------------------------------------------------------
+
+/** Delete every app setting whose key starts with `prefix`. */
+export async function deleteAppSettingsWithPrefix(prefix: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM app_settings WHERE key LIKE ? ESCAPE '\\'", [
+    prefix.replace(/[\\%_]/g, (c) => `\\${c}`) + "%",
+  ]);
+}
 
 /** Retrieve a global app setting value. Returns null if the key doesn't exist. */
 export async function getAppSetting(key: string): Promise<string | null> {
@@ -707,10 +800,13 @@ export interface CreateServerInput {
 export async function createServer(input: CreateServerInput): Promise<string> {
   const db = await getDb();
   await db.execute(
+    // restart/update warnings default ON for new servers, matching shutdown
+    // (the column defaults are 0 only for rows that predate those columns).
     `INSERT INTO servers
        (id, name, map_id, install_path, port, query_port, rcon_port,
-        max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?)`,
+        max_players, server_password, admin_password, cluster_id, preset_id, status, save_folder_name,
+        restart_warn_players, update_warn_players)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, 1, 1)`,
     [
       input.id,
       input.name,
@@ -740,6 +836,33 @@ export async function updateServerAdminPassword(id: string, adminPassword: strin
   await db.execute(
     "UPDATE servers SET admin_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     [adminPassword, id]
+  );
+}
+
+export interface ServerIdentity {
+  name: string;
+  port: number;
+  queryPort: number;
+  rconPort: number;
+  maxPlayers: number;
+  serverPassword: string | null;
+  adminPassword: string;
+}
+
+/**
+ * Update the identity columns of a server row. These mirror INI keys
+ * (SessionName, ServerPassword, …) and are kept in sync by
+ * `saveServerConfigFull` / the Server Identity card.
+ */
+export async function updateServerIdentity(id: string, identity: ServerIdentity): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE servers SET name = ?, port = ?, query_port = ?, rcon_port = ?, max_players = ?,
+       server_password = ?, admin_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [
+      identity.name, identity.port, identity.queryPort, identity.rconPort, identity.maxPlayers,
+      identity.serverPassword || null, identity.adminPassword, id,
+    ]
   );
 }
 
@@ -1040,6 +1163,15 @@ export async function updateServerUpdateSettings(
   );
 }
 
+/** Set whether the server starts without a visible window (applies on next start). */
+export async function setServerHideWindow(id: string, hide: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE servers SET hide_window = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [hide ? 1 : 0, id]
+  );
+}
+
 /** Set the auto_start flag for a server. */
 export async function setServerAutoStart(id: string, autoStart: boolean): Promise<void> {
   const db = await getDb();
@@ -1135,14 +1267,15 @@ export async function removeServerMod(serverId: string, modId: string): Promise<
 }
 
 /** Copy all mods from sourceServerId to targetServerId. Skips duplicates. */
-export async function copyServerMods(sourceServerId: string, targetServerId: string): Promise<void> {
-  const sourceMods = await getServerMods(sourceServerId);
-  for (const mod of sourceMods) {
-    await addServerMod(targetServerId, mod.mod_id, mod.mod_name);
-    if (mod.locked_by_map) {
-      await setModMapLock(targetServerId, mod.mod_id, true);
-    }
+export async function copyServerMods(sourceServerId: string, targetServerId: string): Promise<number> {
+  // Map and event mods are never copied (see copyableMods) — the target's own
+  // map mod stays as it is. Dynamic import: maps.ts imports this module.
+  const { copyableMods } = await import("@/lib/maps");
+  const mods = await copyableMods(await getServerMods(sourceServerId));
+  for (const mod of mods) {
+    await addServerMod(targetServerId, mod.mod_id, mod.mod_name, mod.mod_thumbnail_url ?? null);
   }
+  return mods.length;
 }
 
 /** Copy the server config (INI + launch args) from sourceServerId to targetServerId. */
@@ -1179,20 +1312,22 @@ export async function reorderServerMods(
   serverId: string,
   orderedModIds: string[]
 ): Promise<void> {
+  if (orderedModIds.length === 0) return;
   const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    for (let i = 0; i < orderedModIds.length; i++) {
-      await db.execute(
-        "UPDATE server_mods SET install_order = ? WHERE server_id = ? AND mod_id = ?",
-        [i, serverId, orderedModIds[i]]
-      );
-    }
-    await db.execute("COMMIT");
-  } catch (err) {
-    await db.execute("ROLLBACK").catch(() => {});
-    throw err;
-  }
+  // One statement, so SQLite applies it atomically. Explicit BEGIN/COMMIT
+  // doesn't work through the SQL plugin: each execute() can run on a
+  // different pooled connection, so the transaction and its UPDATEs landed
+  // on different connections — the reorder failed ("database is locked" /
+  // "no transaction is active") and could leave a write lock held.
+  const cases = orderedModIds.map(() => "WHEN ? THEN ?").join(" ");
+  const params: (string | number)[] = [];
+  orderedModIds.forEach((id, i) => params.push(id, i));
+  const placeholders = orderedModIds.map(() => "?").join(", ");
+  await db.execute(
+    `UPDATE server_mods SET install_order = CASE mod_id ${cases} END
+     WHERE server_id = ? AND mod_id IN (${placeholders})`,
+    [...params, serverId, ...orderedModIds]
+  );
 }
 
 /** Return the number of enabled mods attached to a server. */
@@ -1979,7 +2114,11 @@ export async function saveGlobalChannelEvents(
   events: string[]
 ): Promise<void> {
   const existing = await getGlobalChannelConfig(channel);
-  const defaultEnabled = channel === "bell" || channel === "desktop";
+  // In-App, Bell and Desktop have no channel-level switch — they're controlled
+  // per event — so a new row for them must be enabled. (In-App used to be
+  // created disabled here, silencing every toast on the first matrix edit.)
+  // Discord/Email stay off until their credentials are tested.
+  const defaultEnabled = channel === "in_app" || channel === "bell" || channel === "desktop";
   await saveNotificationConfig({
     id: existing?.id ?? crypto.randomUUID(),
     serverId: null,

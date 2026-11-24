@@ -88,6 +88,8 @@ export interface StartServerParams {
   protonPath?: string;
   /** Linux only: path to the Steam compatibility prefix (WINEPREFIX). */
   prefixPath?: string;
+  /** Run without a visible server window (Linux: headless Wine in a separate prefix). */
+  hideWindow?: boolean;
 }
 
 export interface ProtonEntry {
@@ -180,6 +182,27 @@ export interface ServerConfigJson {
   gameUserSettings: Record<string, Record<string, string>>;
   gameIni: Record<string, Record<string, string>>;
   launchArgs: Record<string, string>;
+}
+
+export interface IniPatchOp {
+  file: "gus" | "game";
+  section: string;
+  key: string;
+  /** null removes the key */
+  value: string | null;
+}
+
+export type AccessListId = "admins" | "exclusive_join" | "join_no_check";
+
+/** How "Hide server window" can work on this machine (see virtual_display.rs). */
+export interface HiddenWindowSupport {
+  /** "native" (Windows), "xvfb" / "gamescope" (Linux), or null if unavailable. */
+  backend: "native" | "xvfb" | "gamescope" | null;
+  distro: string | null;
+  /** e.g. "sudo pacman -S --needed --noconfirm xorg-server-xvfb" */
+  installCommand: string | null;
+  canAutoInstall: boolean;
+  installNote: string | null;
 }
 
 export interface BackupRecord {
@@ -520,6 +543,27 @@ export const tauriCmd = {
   /** Parse the user's existing INI files and return structured JSON. */
   importIniFiles: (gusPath: string, gameIniPath: string) =>
     invoke<ServerConfigJson>("import_ini_files", { gusPath, gameIniPath }),
+  /** Parse the GameUserSettings.ini / Game.ini pair inside a folder (INI snapshot preview). */
+  readIniFolder: (folderPath: string) =>
+    invoke<ServerConfigJson>("read_ini_folder", { folderPath }),
+  /**
+   * Set (`value` string) or remove (`value: null`) individual keys in the
+   * server's INI files in place — comments, ordering and repeated keys are kept.
+   */
+  patchServerIni: (installPath: string, ops: IniPatchOp[]) =>
+    invoke<void>("patch_server_ini", { installPath, ops }),
+  /** Which virtual-display backend "Hide server window" will use, plus install help. */
+  getHiddenWindowSupport: () =>
+    invoke<HiddenWindowSupport>("get_hidden_window_support"),
+  /** Install Xvfb via the system package manager (pkexec password prompt). */
+  installXvfb: () =>
+    invoke<void>("install_xvfb"),
+  /** Read a player access-list file (admins / exclusive join / join no-check). */
+  readAccessList: (installPath: string, list: AccessListId) =>
+    invoke<string>("read_server_text_file", { installPath, list }),
+  /** Overwrite a player access-list file. */
+  writeAccessList: (installPath: string, list: AccessListId, content: string) =>
+    invoke<void>("write_server_text_file", { installPath, list, content }),
 
   // Backups
   //

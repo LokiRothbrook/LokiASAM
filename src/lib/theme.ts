@@ -37,6 +37,11 @@ const ACCENT_TOKENS: Record<ThemeAccent, AccentTokens> = {
   yellow: { hex: "#ffdc00", r: 255, g: 220, b:   0 },
 };
 
+/** Swatch color for each accent (used by the accent pickers). */
+export const ACCENT_HEX: Record<ThemeAccent, string> = Object.fromEntries(
+  Object.entries(ACCENT_TOKENS).map(([k, t]) => [k, t.hex]),
+) as Record<ThemeAccent, string>;
+
 interface PresetTokens {
   label:       string;
   background:  string;

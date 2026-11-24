@@ -2,12 +2,12 @@
  * notifications.ts — shared notification dispatch helper.
  *
  * Call `dispatchNotification(...)` from anywhere to:
- *  1. Always fire an in-app toast (transient popup, severity-colored).
+ *  1. Fire an in-app toast (transient popup) if the In-App column is ticked.
  *  2. Log the event to `in_app_notifications` in SQLite.
- *     - If the `bell` channel config includes this event type, log as unread
- *       (bumps the badge and shows in the bell popup).
- *     - Otherwise, log as pre-read (silently archived — still visible on the
- *       notifications page but never clutters the bell).
+ *     - If the Bell column is ticked for this event, log as unread (bumps the
+ *       badge and shows in the bell popup).
+ *     - Otherwise, log as pre-read (archived — still visible on the
+ *       Notifications page but never clutters the bell).
  *  3. Fire OS desktop, Discord webhook, and/or email based on notification_configs.
  */
 
@@ -36,10 +36,18 @@ function severityColor(severity: DispatchNotificationParams["severity"]): number
   }
 }
 
-/** Returns true if the event is enabled for the given channel config row. */
+/**
+ * Returns true if the event is ticked for the given channel config row. The
+ * row lists exactly the events it's on for — an empty list means none
+ * (migration 025 rewrote legacy "[]" rows, which meant "all", into explicit
+ * lists). Unparseable JSON falls back to on rather than silencing.
+ */
 function eventEnabled(eventsJson: string, eventType: string): boolean {
-  const events: string[] = JSON.parse(eventsJson || "[]");
-  return events.length === 0 || events.includes(eventType);
+  try {
+    return (JSON.parse(eventsJson || "[]") as string[]).includes(eventType);
+  } catch {
+    return true;
+  }
 }
 
 export async function dispatchNotification(
@@ -60,7 +68,6 @@ export async function dispatchNotification(
   const seen = new Set<string>();
   // Defaults: show toast and bell if no config row exists yet.
   let inAppEnabled = true;
-  let desktopEnabled = false; // will be set by config loop
   let bellEnabled = true;
 
   for (const config of configs) {
@@ -74,8 +81,6 @@ export async function dispatchNotification(
     }
 
     if (channel === "bell") {
-      // Bell badge only bumps when bell is enabled AND in-app or desktop is on —
-      // if the user silenced both visible channels, treat it as already read.
       bellEnabled = config.enabled === 1 && eventEnabled(config.events_json, params.eventType);
       continue;
     }
@@ -86,7 +91,6 @@ export async function dispatchNotification(
     const cfg = JSON.parse(config.config_json || "{}") as Record<string, string | boolean | number>;
 
     if (channel === "desktop") {
-      desktopEnabled = true;
       tauriCmd
         .sendOsNotification(params.title, params.body)
         .catch((err) => { console.error("[notifications] OS notification failed:", err); });
@@ -136,12 +140,10 @@ export async function dispatchNotification(
   }
 
   // ── 3. Log to DB ────────────────────────────────────────────────────────────
-  // Bell shows as unread only when bell is enabled AND at least one visible
-  // channel (in_app or desktop) is also on. If the user silenced all visible
-  // channels the notification is still archived but marked already-read so the
-  // badge doesn't bump.
-  const visibleChannelActive = inAppEnabled || desktopEnabled;
-  const showUnread = bellEnabled && visibleChannelActive;
+  // Every notification is archived (Notifications page). It shows as unread in
+  // the bell exactly when the Bell column is ticked for this event —
+  // independent of the toast/desktop columns.
+  const showUnread = bellEnabled;
 
   const id = crypto.randomUUID();
   try {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { tauriCmd, type ArkPlayer } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useAppStore } from "@/store/useAppStore";
@@ -26,22 +26,15 @@ const EMPTY: never[] = [];
  * the tile values are always in sync with the live chart.
  *
  * Player count comes from rcon://players/{id} events (primary) and a 30 s
- * cache-read fallback.  MaxPlayers is read once from GameUserSettings.ini.
+ * cache-read fallback.  MaxPlayers is the server row's max_players — the value
+ * passed as -WinLiveMaxPlayers and kept in sync with GameUserSettings.ini.
  */
 export function useServerStats(server: ServerRow | null): ServerStats {
-  // playersOnline/maxPlayers are genuinely async-sourced (RCON events, a 30 s
-  // poll, and a one-time INI read) so they stay as state updated from effects.
+  // playersOnline is genuinely async-sourced (RCON events and a 30 s poll) so
+  // it stays as state updated from effects.
   // cpuPercent/memoryMb are pure derivations of the live buffer + status —
   // computed directly below instead of mirrored into state via an effect.
-  const [asyncStats, setAsyncStats] = useState<{
-    playersOnline: number | null;
-    maxPlayers: number | null;
-  }>({ playersOnline: null, maxPlayers: null });
-
-  const serverRef = useRef(server);
-  useEffect(() => {
-    serverRef.current = server;
-  });
+  const [playersOnline, setPlayersOnline] = useState<number | null>(null);
 
   // ── CPU / RAM — read latest live-buffer sample ────────────────────────────
   // The Rust recorder emits "stats://live" every 5 s; ServerStatsRecorderProvider
@@ -58,32 +51,10 @@ export function useServerStats(server: ServerRow | null): ServerStats {
   const cpuPercent = latestSample && isActiveForStats ? latestSample.cpu : null;
   const memoryMb   = latestSample && isActiveForStats ? latestSample.mem : null;
 
-  // ── MaxPlayers from INI ───────────────────────────────────────────────────
-  useEffect(() => {
-    if (!server?.install_path) return;
-    tauriCmd.readServerConfig(server.install_path).then((config) => {
-      const gus = config.gameUserSettings as Record<string, Record<string, string>>;
-      const raw =
-        gus["GameSession"]?.["MaxPlayers"] ??
-        gus["ServerSettings"]?.["MaxPlayers"];
-      if (raw) {
-        const n = parseInt(raw, 10);
-        if (!isNaN(n) && n > 0) {
-          setAsyncStats((prev) => ({ ...prev, maxPlayers: n }));
-        }
-      }
-    }).catch(() => null);
-  }, [server?.id, server?.install_path]);
-
   // ── Player count — reactive via Tauri events ──────────────────────────────
   useTauriEvent<ArkPlayer[]>(
     server ? `rcon://players/${server.id}` : "",
-    (players) => {
-      setAsyncStats((prev) => ({
-        playersOnline: players.length,
-        maxPlayers: prev.maxPlayers ?? serverRef.current?.max_players ?? null,
-      }));
-    },
+    (players) => setPlayersOnline(players.length),
   );
 
   // ── Player count — 30 s cache fallback poll ───────────────────────────────
@@ -95,10 +66,7 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     const poll = () => {
       tauriCmd.rconGetCachedPlayers(serverId).then((players) => {
         if (players === null) return;
-        setAsyncStats((prev) => ({
-          playersOnline: players.length,
-          maxPlayers: prev.maxPlayers ?? serverRef.current?.max_players ?? null,
-        }));
+        setPlayersOnline(players.length);
       }).catch(() => null);
     };
 
@@ -111,9 +79,9 @@ export function useServerStats(server: ServerRow | null): ServerStats {
     cpuPercent,
     memoryMb,
     // Masked to null while not running instead of being reset via an effect —
-    // the underlying async value is still cached in asyncStats for next time.
-    playersOnline: isRunning ? asyncStats.playersOnline : null,
-    maxPlayers: asyncStats.maxPlayers,
+    // the underlying async value is still cached in state for next time.
+    playersOnline: isRunning ? playersOnline : null,
+    maxPlayers: server && server.max_players > 0 ? server.max_players : null,
     version: null,
   };
 }

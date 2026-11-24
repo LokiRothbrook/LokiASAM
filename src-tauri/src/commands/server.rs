@@ -116,6 +116,34 @@ pub struct StartServerParams {
     pub proton_path: Option<String>,
     /// Linux only: WINEPREFIX path where Proton creates its fake C: drive.
     pub prefix_path: Option<String>,
+    /// Run without a visible server window. Windows: no console window.
+    /// Linux: on an invisible X display (Xvfb or headless gamescope — see
+    /// virtual_display.rs) in a separate "{prefix}-hidden" prefix. Either way
+    /// the server also gets -unattended, and a startup watchdog kills it if it
+    /// logs a fatal error but doesn't exit (nobody can click an error dialog
+    /// on an invisible display) so the normal retry/crash flow runs.
+#[serde(default)]
+    pub hide_window: bool,
+}
+
+/// Point a Proton/Wine command at the invisible X display (and away from the
+/// user's Wayland session, which Wine would otherwise prefer).
+pub fn apply_virtual_display_env(cmd: &mut tokio::process::Command, display: &str) {
+    cmd.env("DISPLAY", display);
+    cmd.env_remove("WAYLAND_DISPLAY");
+}
+
+/// The prefix a server runs in. Hidden servers use a sibling prefix: Wine
+/// ties a prefix to the display its first process used, so a shared prefix
+/// would show or hide every server depending on which started first.
+/// ("-hidden", not the earlier "-headless" prefix, which was configured for
+/// Wine's null graphics driver — that left ASA hung at startup.)
+pub fn effective_prefix(prefix: &str, hide_window: bool) -> String {
+    if hide_window && !prefix.is_empty() {
+        format!("{}-hidden", prefix.trim_end_matches('/'))
+    } else {
+        prefix.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +338,11 @@ async fn inner_start_server_with_state(
     // Passwords, RCON, MaxPlayers, and all gameplay settings are read by the
     // server from GameUserSettings.ini — they must NOT be duplicated on the CLI
     // or they will override INI values on every restart.
+    // Whether this start is actually hidden — on Linux it falls back to a
+    // visible window if no virtual display can be started.
+    #[allow(unused_mut)]
+    let mut hidden = params.hide_window;
+
     let query_string = format!(
         "{}?listen?Port={}?QueryPort={}",
         params.map_path,
@@ -322,10 +355,19 @@ async fn inner_start_server_with_state(
     // Linux:   run via Proton-GE (`{proton}/proton run {Win64 exe}`).
     //          The Win64 binary is the only shipping binary for ASA — there is no native Linux exe.
     #[cfg(target_os = "windows")]
-    let mut cmd = tokio::process::Command::new(format!(
-        "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
-        params.install_path
-    ));
+    let mut cmd = {
+        let mut c = tokio::process::Command::new(format!(
+            "{}\\ShooterGame\\Binaries\\Win64\\ArkAscendedServer.exe",
+            params.install_path
+        ));
+        if params.hide_window {
+            // CREATE_NO_WINDOW — no console window. Nothing is lost: the app
+            // reads ShooterGame.log, not the console.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            c.creation_flags(CREATE_NO_WINDOW);
+        }
+        c
+    };
 
     #[cfg(not(target_os = "windows"))]
     let mut cmd = {
@@ -337,9 +379,35 @@ async fn inner_start_server_with_state(
                 "proton_not_configured: Linux requires Proton-GE. Configure it in the setup wizard or Settings.".to_string()
             })?;
 
-        let prefix_path = params.prefix_path.clone().unwrap_or_default();
+        let main_prefix = params.prefix_path.clone().unwrap_or_default();
+        let virtual_display = if hidden {
+            let started = tokio::task::spawn_blocking(crate::commands::virtual_display::ensure_display)
+                .await
+                .unwrap_or_else(|e| Err(format!("virtual display task failed: {e}")));
+            match started {
+                Ok((_, display)) => Some(display),
+                Err(reason) => {
+                    // Start visibly rather than not at all.
+                    let _ = app_handle.emit("notification://toast", serde_json::json!({
+                        "severity": "warning",
+                        "title": format!("{} started with its window visible", params.server_name),
+                        "body": format!("Hide Server Window needs a virtual display: {reason}"),
+                    }));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        hidden = virtual_display.is_some();
+
+        let prefix_path = effective_prefix(&main_prefix, hidden);
         if !prefix_path.is_empty() {
             let _ = tokio::fs::create_dir_all(&prefix_path).await;
+        }
+        if let Some(display) = virtual_display.as_deref() {
+            // Copy the mod-download certificate into the hidden prefix (once).
+            crate::commands::certs::ensure_hidden_prefix(proton_path, &main_prefix, &prefix_path, display).await;
         }
 
         let exe_path = format!(
@@ -355,11 +423,19 @@ async fn inner_start_server_with_state(
             c.env("STEAM_COMPAT_DATA_PATH", &prefix_path);
         }
         c.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &params.install_path);
+        if let Some(display) = virtual_display.as_deref() {
+            apply_virtual_display_env(&mut c, display);
+        }
         c
     };
 
     cmd.arg(&query_string);
     cmd.args(["-server", "-log"]);
+    if hidden {
+        // Never wait on a dialog: with no visible window nobody can click it,
+        // so a fatal error (e.g. a failed mod download) must exit instead.
+        cmd.arg("-unattended");
+    }
     if !params.mod_ids.is_empty() {
         cmd.arg(format!("-mods={}", params.mod_ids.join(",")));
     }
@@ -678,6 +754,7 @@ async fn inner_start_server_with_state(
 
     let confirmed2  = Arc::clone(&confirmed_running);
     let cfcore2     = Arc::clone(&cfcore_unreachable);
+    let hidden2     = hidden;
     tauri::async_runtime::spawn(async move {
         use std::io::SeekFrom;
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
@@ -689,6 +766,27 @@ async fn inner_start_server_with_state(
         const TIMEOUT: Duration = Duration::from_secs(20 * 60); // 20 min absolute max
 
         let deadline = Instant::now() + TIMEOUT;
+        let started = Instant::now();
+
+        // ── Hidden-server watchdog ───────────────────────────────────────────
+        // A hidden server can't show an error dialog, so if it gets stuck it
+        // stays stuck. Kill it (hard, NOT marked as an intentional stop) so the
+        // exit watcher runs the usual flow: CurseForge failures retry silently
+        // via server://cfcore-error, anything else reports start-failed.
+        const NO_LOG_LIMIT: Duration = Duration::from_secs(3 * 60);
+        const FATAL_GRACE: Duration = Duration::from_secs(20);
+        let kill_stuck = |handle: &tauri::AppHandle, sid: &str, why: &str| {
+            let target = {
+                let state = handle.state::<AppState>();
+                let registry = state.running_servers.lock().unwrap();
+                registry.get(sid).map(|rs| (rs.pid, rs.install_path.clone()))
+            };
+            if let Some((pid, install_path)) = target {
+                eprintln!("[server] hidden server {sid} stuck ({why}) — killing so it can be retried");
+                kill_process_tree(pid, false, &install_path);
+            }
+        };
+        let mut fatal_seen_at: Option<Instant> = None;
 
         // Mark the server as confirmed-running, read its PID/uptime, and emit "running".
         // Sets confirmed_running = true so the crash monitor emits "crashed" (not
@@ -744,7 +842,13 @@ async fn inner_start_server_with_state(
 
             match tokio::fs::File::open(&log_path2).await {
                 Ok(f) => break f,
-                Err(_) => sleep(Duration::from_secs(1)).await,
+                Err(_) => {
+                    if hidden2 && started.elapsed() >= NO_LOG_LIMIT {
+                        kill_stuck(&handle2, &sid2, "no log file after 3 minutes");
+                        return;
+                    }
+                    sleep(Duration::from_secs(1)).await
+                }
             }
         };
 
@@ -765,6 +869,10 @@ async fn inner_start_server_with_state(
                         .unwrap()
                         .contains_key(&sid2);
                     if !still_tracked { return; }
+                    if hidden2 && fatal_seen_at.is_some_and(|t| t.elapsed() >= FATAL_GRACE) {
+                        kill_stuck(&handle2, &sid2, "fatal error logged but process didn't exit");
+                        return;
+                    }
                     sleep(Duration::from_millis(200)).await;
                 }
                 Ok(_) => {
@@ -778,6 +886,10 @@ async fn inner_start_server_with_state(
                     }
                     if buf.contains("Error querying server mods: ApiError: Failed (serverUnreachable)") {
                         cfcore2.store(true, Ordering::Relaxed);
+                        fatal_seen_at.get_or_insert_with(Instant::now);
+                    }
+                    if buf.contains("LowLevelFatalError") || buf.contains("Fatal error:") {
+                        fatal_seen_at.get_or_insert_with(Instant::now);
                     }
                     buf.clear();
                 }
@@ -1050,6 +1162,7 @@ pub async fn scan_running_servers(
                     mod_ids:      vec![],
                     proton_path:  None,
                     prefix_path:  None,
+                    hide_window:  false,
                 };
                 registry.insert(
                     entry.server_id.clone(),
@@ -1410,9 +1523,10 @@ pub async fn graceful_stop_server(
 
     // Held for the whole operation (including the player-warning countdown,
     // which can run for several minutes) so a scheduled backup can't start
-    // mid-shutdown and produce a truncated archive.
-    let _lock = state.try_lock_server(&server_id)
-        .ok_or_else(|| format!("An operation is already in progress for {server_id} — try again in a moment"))?;
+    // mid-shutdown and produce a truncated archive. Queues behind a backup
+    // that's already running rather than failing — the stop simply happens
+    // once the backup has finished reading the server's files.
+    let _lock = state.lock_server(&server_id).await;
 
     let (pid, install_path, server_name) = {
         let registry = state.running_servers.lock().unwrap();

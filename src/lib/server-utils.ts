@@ -56,6 +56,53 @@ export function launchArgsToExtraArgs(launchArgs: Record<string, string>): strin
   });
 }
 
+/**
+ * Launch args the app derives from server state rather than from the saved
+ * launch-arg settings: cluster membership and max players. (The active event
+ * is turned on by its mod in -mods — see launchModIds; ASA has no working
+ * -ActiveEvent flag.)
+ * Shared by the real start params and the launch-command preview so the two
+ * can't drift apart.
+ */
+async function derivedLaunchArgs(server: ServerRow): Promise<string[]> {
+  const args: string[] = [];
+
+  // Cluster members share a cluster dir/ID and are isolated from servers
+  // outside the cluster (NoTransferFromFiltering) — always both together.
+  if (server.cluster_id) {
+    const cluster = await getCluster(server.cluster_id).catch(() => null);
+    if (cluster) {
+      // ASA appends "clusters/<ClusterID>" to -ClusterDirOverride itself, so
+      // pass the cluster ROOT: the base dir (data lands in
+      // {base}/clusters/{id}, the folder create_cluster makes) or the user's
+      // custom dir. Passing {base}/clusters/{id} here nested the data one
+      // level deeper ({base}/clusters/{id}/clusters/{id}).
+      const baseDir = await getAppSetting("base_dir").catch(() => null);
+      const clusterRoot = cluster.cluster_dir_override?.trim() || baseDir;
+      args.push(`-ClusterDirOverride=${clusterRoot}`);
+      args.push(`-clusterid=${cluster.id}`);
+      args.push("-NoTransferFromFiltering");
+    }
+  }
+
+  // ASA's player cap comes from the command line; MaxPlayers in
+  // GameUserSettings.ini alone isn't reliably honored. Kept in sync with the
+  // INI value by the Server Identity card / config save.
+  if (server.max_players > 0) args.push(`-WinLiveMaxPlayers=${server.max_players}`);
+
+  return args;
+}
+
+/** Enabled mod IDs plus the active event's mod — loading that mod is what enables the event in ASA. */
+function launchModIds(server: ServerRow, mods: { mod_id: string; enabled: number }[]): string[] {
+  const ids = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
+  if (server.active_event) {
+    const evt = ARK_EVENTS.find((e) => e.id === server.active_event);
+    if (evt && !ids.includes(evt.modId)) ids.push(evt.modId);
+  }
+  return ids;
+}
+
 export async function buildStartParams(server: ServerRow): Promise<StartServerParams> {
   const [config, mods] = await Promise.all([
     getServerConfig(server.id),
@@ -67,32 +114,10 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     ? JSON.parse(config.launch_args_json)
     : {};
 
-  const extraArgs = launchArgsToExtraArgs(launchArgs);
+  const extraArgs = [...launchArgsToExtraArgs(launchArgs), ...await derivedLaunchArgs(server)];
 
   const map = findMapById(server.map_id);
-  const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
-
-  // Inject the active event flag and its mod ID
-  if (server.active_event) {
-    extraArgs.push(`-ActiveEvent=${server.active_event}`);
-    const evt = ARK_EVENTS.find((e) => e.id === server.active_event);
-    if (evt && !enabledModIds.includes(evt.modId)) {
-      enabledModIds.push(evt.modId);
-    }
-  }
-
-  // Inject cluster directory when this server belongs to a cluster
-  if (server.cluster_id) {
-    const cluster = await getCluster(server.cluster_id).catch(() => null);
-    if (cluster) {
-      const baseDir = await getAppSetting("base_dir").catch(() => null);
-      const sep = isLinux ? "/" : "\\";
-      const clusterDir = cluster.cluster_dir_override
-        ?? `${baseDir}${sep}clusters${sep}${cluster.id}`;
-      extraArgs.push(`-ClusterDirOverride=${clusterDir}`);
-      extraArgs.push(`-clusterid=${cluster.id}`);
-    }
-  }
+  const enabledModIds = launchModIds(server, mods);
 
   const params: StartServerParams = {
     serverId:     server.id,
@@ -105,6 +130,7 @@ export async function buildStartParams(server: ServerRow): Promise<StartServerPa
     rconPassword: server.admin_password,
     extraArgs,
     modIds:       enabledModIds,
+    hideWindow:   server.hide_window === 1,
   };
 
   if (isLinux) {
@@ -201,39 +227,20 @@ export async function buildLaunchCommandPreview(
   const map = findMapById(server.map_id);
   const mapPath = map?.mapPath ?? "TheIsland_WP";
 
-  const extraArgs: string[] = launchArgsToExtraArgs(launchArgs);
+  const extraArgs = [...launchArgsToExtraArgs(launchArgs), ...await derivedLaunchArgs(server)];
+  const enabledModIds = launchModIds(server, mods);
 
-
-  if (server.active_event) {
-    extraArgs.push(`-ActiveEvent=${server.active_event}`);
-  }
-
-  if (server.cluster_id) {
-    const cluster = await getCluster(server.cluster_id).catch(() => null);
-    if (cluster) {
-      const baseDir = await getAppSetting("base_dir").catch(() => null);
-      const sep = isLinux ? "/" : "\\";
-      const clusterDir = cluster.cluster_dir_override ?? `${baseDir}${sep}clusters${sep}${cluster.id}`;
-      extraArgs.push(`-ClusterDirOverride=${clusterDir}`);
-      extraArgs.push(`-clusterid=${cluster.id}`);
-    }
-  }
-
-  const enabledModIds = mods.filter((m) => m.enabled === 1).map((m) => m.mod_id);
-  if (server.active_event) {
-    const evt = ARK_EVENTS.find((e) => e.id === server.active_event);
-    if (evt && !enabledModIds.includes(evt.modId)) enabledModIds.push(evt.modId);
-  }
-
-  const exe = isLinux ? "./ShooterGameServer" : "ShooterGameServer.exe";
+  // Mirrors inner_start_server_with_state in server.rs (Linux runs the same
+  // Windows binary through Proton).
+  const exe = "ArkAscendedServer.exe";
   const modsArg = enabledModIds.length > 0 ? `-mods=${enabledModIds.join(",")}` : "";
-  const altSave = server.save_folder_name ? `?AltSaveDirectoryName=${server.save_folder_name}` : "";
 
   const parts = [
-    `${exe} ${mapPath}?listen?Port=${server.port}?QueryPort=${server.query_port}${altSave}`,
-    "-server -log",
-    ...extraArgs,
+    `${exe} ${mapPath}?listen?Port=${server.port}?QueryPort=${server.query_port}`,
+    // Hidden servers also get -unattended (see server.rs — never wait on a dialog).
+    server.hide_window === 1 ? "-server -log -unattended" : "-server -log",
     modsArg,
+    ...extraArgs,
   ].filter(Boolean);
 
   return parts.join(" \\\n  ");

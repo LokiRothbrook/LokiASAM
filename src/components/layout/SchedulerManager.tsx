@@ -18,10 +18,15 @@ import {
   updateScheduleRun, getScheduleById, setAppSetting, rollupOldStats,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
-import { syncSchedulesToRust } from "@/lib/scheduler-sync";
-import { runPerServerUpdateCheck } from "@/lib/update-utils";
+import { syncSchedulesToRust, noteAutoUpdateFailure } from "@/lib/scheduler-sync";
+import { runPerServerUpdateCheck, describeUpdatePlans } from "@/lib/update-utils";
 import { useAppStore } from "@/store/useAppStore";
 import type { SchedulerFiredPayload, UpdateCheckResult } from "@/lib/tauri-commands";
+
+/** Toast id for the background update check — one toast that goes from
+ *  "checking…" to the result, instead of a check that's only visible as a
+ *  small TopBar spinner. */
+const BG_CHECK_TOAST_ID = "asa-background-update-check";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -38,6 +43,13 @@ export function SchedulerManager() {
   // off it) reflect a check that's running in the background.
   useTauriEvent<{ running: boolean }>("asa://update-check/running", (payload) => {
     setAsaCacheOpLabel(payload.running ? "Checking ASA updates (background)…" : null);
+    if (payload.running) {
+      toast.loading("Checking for ASA server updates…", {
+        id: BG_CHECK_TOAST_ID,
+        description: "Automatic check — SteamCMD is updating the shared server cache.",
+        duration: Infinity,
+      });
+    }
   });
 
   // SteamCMD only actually pulls bytes for part of a "check" run — most of it
@@ -91,8 +103,26 @@ export function SchedulerManager() {
           setAppSetting("asa_latest_build_id", r.latestBuildId),
           setAppSetting("asa_last_checked", new Date().toISOString()),
         ]);
-        await runPerServerUpdateCheck(false);
+        const summary = await runPerServerUpdateCheck(false);
         queryClient.invalidateQueries({ queryKey: ["servers"] });
+
+        // Resolve the "checking…" toast with what was found and what will
+        // happen about it. Newly flagged servers also get a bell notification
+        // (from runPerServerUpdateCheck) carrying the same breakdown.
+        const n = summary.allWithUpdates.length;
+        if (n === 0) {
+          toast.success("ASA servers are up to date", {
+            id: BG_CHECK_TOAST_ID,
+            description: `Automatic check finished — build ${r.latestBuildId}.`,
+            duration: 6000,
+          });
+        } else {
+          toast.info(`${n} server${n === 1 ? " needs" : "s need"} an update`, {
+            id: BG_CHECK_TOAST_ID,
+            description: describeUpdatePlans(summary.allWithUpdates),
+            duration: 15000,
+          });
+        }
       }
     },
   );
@@ -108,7 +138,11 @@ export function SchedulerManager() {
       // ever emitting that event if the check itself errors out.
       if (!success) {
         await setAppSetting("asa_last_checked", new Date().toISOString());
-        toast.error(`Auto update check failed: ${error ?? "unknown error"}`);
+        toast.error("Automatic update check failed", {
+          id: BG_CHECK_TOAST_ID,
+          description: error ?? "unknown error",
+          duration: 10000,
+        });
       }
       syncSchedulesToRust();
       return;
@@ -121,13 +155,13 @@ export function SchedulerManager() {
       await updateScheduleRun(scheduleId, lastRun, nextDate?.toISOString() ?? null);
     } catch { /* non-fatal */ }
 
-    if (success) {
-      const labels: Record<string, string> = {
-        restart: "Scheduled restart completed",
-        update:  "Scheduled update completed",
-      };
-      if (labels[scheduleType]) {
-        toast.success(`[${serverName}] ${labels[scheduleType]}.`);
+    // Update results (start / success / failure) are reported by Rust as
+    // real notifications (toast + bell), so they're not repeated here.
+    if (scheduleType === "update") {
+      if (!success) noteAutoUpdateFailure(payload.serverId);
+    } else if (success) {
+      if (scheduleType === "restart") {
+        toast.success(`[${serverName}] Scheduled restart completed.`);
       }
     } else {
       toast.error(`[${serverName}] Scheduled ${scheduleType} failed: ${error ?? "unknown error"}`);

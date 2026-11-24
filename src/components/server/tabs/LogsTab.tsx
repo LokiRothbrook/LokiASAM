@@ -18,6 +18,7 @@ import {
   getKnownPlayers, getPlayerKnownIps, getPlayerConnectionHistory, getPossibleAlts,
   type PlayerConnectionRow,
 } from "@/lib/db";
+import { OptionSelect } from "@/components/shared/OptionSelect";
 
 interface Props {
   server: ServerRow;
@@ -36,15 +37,15 @@ let _id = 0;
 
 function levelColor(level: LogLine["level"]): string {
   switch (level) {
-    case "error":   return "#ff6688";
-    case "warning": return "#ffcc44";
+    case "error":   return "var(--neon-red)";
+    case "warning": return "var(--neon-yellow)";
     default:        return "#c0c0e8";
   }
 }
 
 function levelBg(level: LogLine["level"]): string {
   switch (level) {
-    case "error":   return "rgba(255,0,85,0.06)";
+    case "error":   return "rgba(var(--neon-red-rgb),0.06)";
     case "warning": return "rgba(255,204,68,0.06)";
     default:        return "transparent";
   }
@@ -87,8 +88,8 @@ function LevelFilterBar({
   const options: { value: LevelFilter; label: string; activeColor: string }[] = [
     { value: "all",     label: "All",   activeColor: "var(--neon-cyan)" },
     { value: "info",    label: "Info",  activeColor: "var(--neon-cyan)" },
-    { value: "warning", label: "Warn",  activeColor: "#ffcc44" },
-    { value: "error",   label: "Error", activeColor: "#ff6688" },
+    { value: "warning", label: "Warn",  activeColor: "var(--neon-yellow)" },
+    { value: "error",   label: "Error", activeColor: "var(--neon-red)" },
   ];
   return (
     <>
@@ -100,7 +101,7 @@ function LevelFilterBar({
           className="h-7 text-xs"
           style={{
             color: filter === value ? activeColor : "var(--text-muted)",
-            border: filter === value ? `1px solid ${activeColor}40` : "1px solid transparent",
+            border: filter === value ? `1px solid color-mix(in srgb, ${activeColor} 25%, transparent)` : "1px solid transparent",
           }}
           onClick={() => setFilter(value)}
         >
@@ -274,7 +275,7 @@ function LivePanel({ server }: { server: ServerRow }) {
 
   // Derive toolbar appearance from server state
   const toolbarBorder = isActive
-    ? (ready ? "rgba(0,255,136,0.3)" : "rgba(var(--neon-purple-rgb),0.15)")
+    ? (ready ? "rgba(var(--neon-green-rgb),0.3)" : "rgba(var(--neon-purple-rgb),0.15)")
     : "rgba(255,170,68,0.2)";
   const dotStyle = isActive
     ? (ready
@@ -345,7 +346,7 @@ function LivePanel({ server }: { server: ServerRow }) {
           ref={logRef}
           onScroll={handleScroll}
           className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3"
-          style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
+          style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}
         >
           {visibleLines.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-2">
@@ -472,7 +473,7 @@ function ArchivePanel({ server }: { server: ServerRow }) {
           {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /></button>}
         </div>
         <div className="relative flex-1 min-h-0">
-          <div className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3" style={{ background: "#000008", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
+          <div className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3" style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-purple-rgb),0.1)" }}>
             {loadingFile ? (
               <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
             ) : visibleLines.length === 0 ? (
@@ -512,9 +513,13 @@ function ArchivePanel({ server }: { server: ServerRow }) {
         </Button>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Delete older than</span>
-          <select value={cleanupDays} onChange={(e) => setCleanupDays(Number(e.target.value))} className="h-7 text-xs rounded px-2" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", color: "var(--text-primary)" }}>
-            {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
-          </select>
+          <OptionSelect
+            value={String(cleanupDays)}
+            options={[7, 14, 30, 60, 90].map((d) => ({ value: String(d), label: `${d} days` }))}
+            onChange={(v) => setCleanupDays(Number(v))}
+            size="sm"
+            className="w-auto"
+          />
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={doCleanup} disabled={cleanupPending} style={{ borderColor: "rgba(255,100,50,0.4)", color: "#ff8866" }}>
             {cleanupPending ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <Trash2 className="w-3 h-3 mr-1" />}
             Cleanup
@@ -629,7 +634,7 @@ function CrashesPanel({ server }: { server: ServerRow }) {
           <Button size="sm" variant="ghost" onClick={() => { setSelected(null); setReport(null); }} style={{ color: "var(--text-muted)" }}>
             <ChevronRight className="w-4 h-4 rotate-180" />
           </Button>
-          <span className="text-sm font-medium truncate" style={{ color: "#ff6688" }}>{selected.folderName}</span>
+          <span className="text-sm font-medium truncate" style={{ color: "var(--neon-red)" }}>{selected.folderName}</span>
           <div className="ml-auto flex items-center gap-1 shrink-0">
             <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(fileContent).catch(() => null)} title="Copy file content" style={{ color: "var(--text-muted)" }}>
               <Copy className="w-3.5 h-3.5" />
@@ -647,13 +652,13 @@ function CrashesPanel({ server }: { server: ServerRow }) {
           <div className="flex flex-col gap-2 flex-1 min-h-0">
             <div className="flex gap-1 flex-wrap shrink-0">
               {report.files.map((f) => (
-                <button key={f.name} onClick={() => setActiveFile(f.name)} className="px-2.5 py-1 text-xs rounded-lg transition-all" style={{ background: activeFile === f.name ? "rgba(255,100,136,0.15)" : "rgba(0,0,0,0.3)", border: activeFile === f.name ? "1px solid rgba(255,100,136,0.4)" : "1px solid rgba(255,255,255,0.06)", color: activeFile === f.name ? "#ff6688" : "var(--text-muted)" }}>
+                <button key={f.name} onClick={() => setActiveFile(f.name)} className="px-2.5 py-1 text-xs rounded-lg transition-all" style={{ background: activeFile === f.name ? "rgba(var(--neon-red-rgb),0.15)" : "rgba(0,0,0,0.3)", border: activeFile === f.name ? "1px solid rgba(var(--neon-red-rgb),0.4)" : "1px solid rgba(255,255,255,0.06)", color: activeFile === f.name ? "var(--neon-red)" : "var(--text-muted)" }}>
                   {f.name}
                 </button>
               ))}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto rounded-xl p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap" style={{ background: "#000008", border: "1px solid rgba(255,100,136,0.15)" }}>
-              <span style={{ color: "#c0c0e8" }}>{fileContent}</span>
+            <div className="flex-1 min-h-0 overflow-y-auto rounded-xl p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap" style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-red-rgb),0.15)" }}>
+              <span style={{ color: "var(--terminal-fg)" }}>{fileContent}</span>
             </div>
           </div>
         ) : (
@@ -688,13 +693,13 @@ function CrashesPanel({ server }: { server: ServerRow }) {
         ) : (
           <div className="flex flex-col gap-1">
             {crashes.map((c) => (
-              <div key={c.folderName} className="glass-card rounded-lg px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-[rgba(255,100,136,0.4)] transition-colors group" style={{ borderColor: "rgba(255,100,136,0.2)" }} onClick={() => openCrash(c)}>
-                <AlertTriangle className="w-4 h-4 shrink-0" style={{ color: "#ff6688" }} />
+              <div key={c.folderName} className="glass-card rounded-lg px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-[rgba(var(--neon-red-rgb),0.4)] transition-colors group" style={{ borderColor: "rgba(var(--neon-red-rgb),0.2)" }} onClick={() => openCrash(c)}>
+                <AlertTriangle className="w-4 h-4 shrink-0" style={{ color: "var(--neon-red)" }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-mono truncate" style={{ color: "var(--text-primary)" }}>{c.folderName}</p>
                   <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                     {c.timestamp}
-                    {c.hasCallStack && <span className="ml-2 text-[#ffcc44]">· has call stack</span>}
+                    {c.hasCallStack && <span className="ml-2 text-[var(--neon-yellow)]">· has call stack</span>}
                     · {c.files.length} file{c.files.length !== 1 ? "s" : ""}
                   </p>
                 </div>
@@ -802,7 +807,7 @@ function ChatPanel({ server }: { server: ServerRow }) {
             {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} /></button>}
           </div>
           <div className="relative flex-1 min-h-0">
-            <div className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3" style={{ background: "#000008", border: "1px solid rgba(0,255,136,0.1)" }}>
+            <div className="h-full overflow-y-auto font-mono text-xs leading-relaxed rounded-xl p-3" style={{ background: "var(--terminal-bg)", border: "1px solid rgba(var(--neon-green-rgb),0.1)" }}>
               {loadingFile ? (
                 <div className="flex items-center justify-center h-40"><RefreshCw className="w-5 h-5 animate-spin" style={{ color: "var(--text-muted)" }} /></div>
               ) : visibleLines.length === 0 ? (
@@ -894,22 +899,13 @@ function PlayersPanel({ server }: { server: ServerRow }) {
     <div className="flex flex-col gap-3 h-full overflow-auto">
       {/* Player selector */}
       <div>
-        <select
+        <OptionSelect
           value={selectedEosId}
-          onChange={(e) => setSelectedEosId(e.target.value)}
-          className="h-8 text-xs px-2 rounded w-full max-w-xs"
-          style={{
-            background: "rgba(0,0,0,0.4)",
-            border: "1px solid rgba(var(--neon-purple-rgb),0.25)",
-            color: "var(--text-primary)",
-            outline: "none",
-          }}
-        >
-          <option value="">— Select a player —</option>
-          {knownPlayers.map((p) => (
-            <option key={p.eosId} value={p.eosId}>{p.playerName}</option>
-          ))}
-        </select>
+          options={knownPlayers.map((p) => ({ value: p.eosId, label: p.playerName }))}
+          onChange={setSelectedEosId}
+          placeholder="— Select a player —"
+          className="max-w-xs"
+        />
       </div>
 
       {!selectedEosId ? (
@@ -1015,6 +1011,7 @@ export function LogsTab({ server }: Props) {
     <div className="flex flex-col gap-3 h-full">
       {/* Sub-tab bar */}
       <div
+        data-tour="logs-views"
         className="flex gap-1 p-1 rounded-xl flex-wrap shrink-0"
         style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(var(--neon-purple-rgb),0.12)" }}
       >

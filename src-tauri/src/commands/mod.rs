@@ -17,3 +17,4 @@ pub mod stats;
 pub mod steamcmd;
 pub mod system;
 pub mod utils;
+pub mod virtual_display;

@@ -24,9 +24,9 @@ interface StatusConfig {
 const STATUS_MAP: Record<ServerStatusValue, StatusConfig> = {
   running:        { label: "Running",         color: "var(--neon-green)",  pulse: true  },
   starting:       { label: "Starting",        color: "var(--neon-cyan)",   pulse: true  },
-  stopping:       { label: "Shutting Down",   color: "#ff6400",            pulse: true  },
-  updating:       { label: "Updating",        color: "#ffa500",            pulse: true  },
-  update_queued:  { label: "Update Queued",   color: "#ffa500",            pulse: false },
+  stopping:       { label: "Shutting Down",   color: "var(--neon-orange)", pulse: true  },
+  updating:       { label: "Updating",        color: "var(--neon-yellow)", pulse: true  },
+  update_queued:  { label: "Update Queued",   color: "var(--neon-yellow)", pulse: false },
   startup_queued: { label: "Startup Queued",  color: "var(--neon-cyan)",   pulse: false },
   stopped:        { label: "Stopped",         color: "var(--text-muted)",  pulse: false },
   error:          { label: "Error",           color: "var(--neon-red)",    pulse: false },
@@ -49,7 +49,7 @@ export function ServerStatusBadge({ status, large = false, countdownLabel }: Pro
   const cfg = STATUS_MAP[status as ServerStatusValue] ?? STATUS_MAP.stopped;
   const size = large ? "text-sm px-3 py-1" : "text-xs px-2 py-0.5";
 
-  const color = countdownLabel ? "#ff8c00" : cfg.color;
+  const color = countdownLabel ? "var(--neon-orange)" : cfg.color;
   const pulse = countdownLabel ? true : cfg.pulse;
   const label = countdownLabel ?? cfg.label;
 

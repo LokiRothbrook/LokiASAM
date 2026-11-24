@@ -1,10 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Network,
@@ -17,7 +16,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TourModal } from "@/components/shared/TourModal";
+import { MAIN_TOUR } from "@/data/tours";
+import { runTour } from "@/lib/tour";
 
 interface NavItem {
   href: string;
@@ -46,6 +46,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
       <TooltipTrigger asChild>
         <Link
           href={item.href}
+          data-tour={`nav-${item.href === "/" ? "dashboard" : item.href.slice(1)}`}
           className={cn(
             "flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150",
             active
@@ -72,15 +73,23 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const [localTourOpen, setLocalTourOpen] = useState(false);
-  const pendingTour   = useAppStore((s) => s.pendingTour);
+  const router = useRouter();
+  const pendingTour    = useAppStore((s) => s.pendingTour);
   const setPendingTour = useAppStore((s) => s.setPendingTour);
-  // Open whenever either the manual trigger or the store's pending-tour
-  // request is set — a pure derivation instead of mirroring the store flag
-  // into local state via an effect. Closing clears both, regardless of which
-  // one opened it.
-  const tourOpen = localTourOpen || pendingTour;
-  const closeTour = () => { setLocalTourOpen(false); setPendingTour(false); };
+
+  // The main tour points at Dashboard elements, so go there first and give
+  // the page a moment to render before starting.
+  const startMainTour = useCallback(() => {
+    if (pathname !== "/") router.push("/");
+    setTimeout(() => runTour(MAIN_TOUR), pathname === "/" ? 150 : 700);
+  }, [pathname, router]);
+
+  // Requested by the first-time setup wizard's "Start the guided tour".
+  useEffect(() => {
+    if (!pendingTour) return;
+    setPendingTour(false);
+    startMainTour();
+  }, [pendingTour, setPendingTour, startMainTour]);
 
   return (
     <>
@@ -103,20 +112,21 @@ export function Sidebar() {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Quick Start Guide help button */}
+      {/* Guided tour button */}
       <div className="w-full px-2">
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              onClick={() => setLocalTourOpen(true)}
+              onClick={startMainTour}
               className="flex items-center justify-center w-full h-10 rounded-lg transition-all duration-150 text-text-muted hover:bg-[rgba(var(--neon-purple-rgb),0.07)]"
               style={{ color: "var(--text-muted)" }}
-              aria-label="Quick Start Guide"
+              aria-label="Guided tour"
+              data-tour="nav-help"
             >
               <HelpCircle className="w-5 h-5" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right" className="text-xs">Quick Start Guide</TooltipContent>
+          <TooltipContent side="right" className="text-xs">Guided tour</TooltipContent>
         </Tooltip>
       </div>
 
@@ -129,10 +139,6 @@ export function Sidebar() {
 
     </aside>
 
-    {tourOpen && createPortal(
-      <TourModal onClose={closeTour} />,
-      document.body
-    )}
     </>
   );
 }
