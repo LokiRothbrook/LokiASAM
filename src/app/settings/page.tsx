@@ -10,6 +10,7 @@ import {
   Server, Palette, StopCircle, ToggleLeft, ToggleRight, Layers, Power, ShieldCheck, Settings, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { UPDATE_CHECK_SETTINGS_EVENT } from "@/components/layout/UpdateManager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,7 +51,7 @@ import {
 } from "@/lib/theme";
 import { open } from "@tauri-apps/plugin-dialog";
 import { dispatchNotification } from "@/lib/notifications";
-import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { NOTIFICATION_EVENTS, defaultChannelEvents } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
 import { useOnMount } from "@/hooks/useOnMount";
 
@@ -112,7 +113,7 @@ function BackupSettingsSection() {
     try {
       await setAppSetting("full_backup_warning_dismissed", String(next));
     } catch (e) {
-      toast.error(`Failed to save backup setting: ${e}`);
+      notify.error(`Failed to save backup setting: ${e}`);
       setDismissed(!next);
     }
   };
@@ -197,7 +198,7 @@ function BaseDirMigrationSection() {
   };
 
   const handleMigrate = async () => {
-    if (!newDir.trim()) { toast.error("Please enter a destination directory."); return; }
+    if (!newDir.trim()) { notify.error("Please enter a destination directory.", { event: "input_problem" }); return; }
 
     // The warning text below says servers should be stopped first, but
     // nothing actually enforced it — moving install files out from under a
@@ -206,7 +207,7 @@ function BaseDirMigrationSection() {
     const servers = await getServers();
     const active = servers.filter((s) => s.status === "running" || s.status === "starting" || s.status === "stopping");
     if (active.length > 0) {
-      toast.error(
+      notify.error(
         `Stop ${active.length === 1 ? "this server" : "these servers"} before migrating: ${active.map((s) => s.name).join(", ")}`
       );
       return;
@@ -244,9 +245,9 @@ function BaseDirMigrationSection() {
 
       setCurrentDir(newDir.trim());
       setMigrationDone(true);
-      toast.success("Migration complete! Reload the app to finish.", { duration: 8000 });
+      notify.success("Migration complete! Reload the app to finish.", { duration: 8000 });
     } catch (e) {
-      toast.error(`Migration failed: ${e}`);
+      notify.error(`Migration failed: ${e}`);
     } finally {
       unlisten();
       setMigrating(false);
@@ -396,8 +397,8 @@ function PathField({
 
   const handleSave = async () => {
     setSaving(true);
-    try { await setAppSetting(settingKey, value.trim()); setOriginal(value.trim()); toast.success(`${label} saved.`); }
-    catch { toast.error(`Failed to save ${label}.`); }
+    try { await setAppSetting(settingKey, value.trim()); setOriginal(value.trim()); notify.success(`${label} saved.`); }
+    catch { notify.error(`Failed to save ${label}.`); }
     finally { setSaving(false); }
   };
 
@@ -485,7 +486,7 @@ function ToolPathField({
   };
 
   const handleVerifyAndSave = async () => {
-    if (!value.trim()) { toast.error(`Enter a path for ${label}.`); return; }
+    if (!value.trim()) { notify.error(`Enter a path for ${label}.`, { event: "input_problem" }); return; }
     setVerifying(true); setValid(null);
     try {
       const ok = await validateFn(value.trim());
@@ -493,12 +494,12 @@ function ToolPathField({
       if (ok) {
         await setAppSetting(settingKey, value.trim());
         setOriginal(value.trim());
-        toast.success(`${label} saved.`);
+        notify.success(`${label} saved.`);
       } else if (onInstallOffer) {
         setInstallError(null);
         setShowInstallDialog(true);
       } else {
-        toast.error(invalidLabel);
+        notify.error(invalidLabel, { event: "input_problem" });
       }
     } catch (e) {
       // validateFn threw (permission error, transient IPC failure, malformed
@@ -507,7 +508,7 @@ function ToolPathField({
       // found" (the `ok === false` branch above); otherwise show what
       // actually went wrong instead of offering an install that won't fix it.
       setValid(false);
-      toast.error(`Verification failed: ${e}`);
+      notify.error(`Verification failed: ${e}`);
     } finally {
       setVerifying(false);
     }
@@ -524,7 +525,7 @@ function ToolPathField({
       setOriginal(newPath);
       setValid(true);
       setShowInstallDialog(false);
-      toast.success(`${label} installed successfully.`);
+      notify.success(`${label} installed successfully.`);
     } catch (e) {
       setInstallError(String(e));
     } finally {
@@ -634,14 +635,14 @@ function ThemesSection() {
       await setAppSetting("theme_preset", p);
       await setAppSetting("theme_accent", defaultAccent);
     } catch (err) {
-      toast.error("Failed to save theme", { description: String(err) });
+      notify.error("Failed to save theme", { description: err });
     }
   };
 
   const handleAccent = async (a: ThemeAccent) => {
     setAccentState(a);
     applyThemeAccent(a);
-    try { await setAppSetting("theme_accent", a); } catch (err) { toast.error("Failed to save theme accent", { description: String(err) }); }
+    try { await setAppSetting("theme_accent", a); } catch (err) { notify.error("Failed to save theme accent", { description: err }); }
   };
 
   return (
@@ -907,7 +908,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
     try {
       const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
       const newBuild = await runAsaCacheUpdate();
-      if (!newBuild) { toast.error("Base directory or SteamCMD not configured."); return; }
+      if (!newBuild) { notify.error("Base directory or SteamCMD not configured.", { event: "update_check_failed" }); return; }
 
       const cacheUpdated = newBuild !== oldBuild;
 
@@ -933,7 +934,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
         });
       } else {
         // "Already up to date" is purely informational — toast only, no bell.
-        toast.success(`Cache is up to date (build ${newBuild}).`);
+        notify.success(`Cache is up to date (build ${newBuild}).`);
       }
 
       // Servers with "When Found" automation apply themselves within seconds —
@@ -945,7 +946,7 @@ function ServerUpdatesSection({ onPreDownload }: { onPreDownload?: () => void })
         setApplyAllInfo({ total: manualOutdated.length, running });
         setShowApplyAll(true);
       } else if (outdated.length > 0) {
-        toast.info(`Update found — applying automatically to ${outdated.length} server${outdated.length === 1 ? "" : "s"}.`);
+        notify.info(`Update found — applying automatically to ${outdated.length} server${outdated.length === 1 ? "" : "s"}.`);
       }
     } catch (e) {
       await dispatchNotification({
@@ -1135,12 +1136,12 @@ function AppUpdateSection() {
       const update = await check();
       if (!update) {
         setUpdateResult({ version: currentVersion, available: false });
-        toast.success("LokiASAM is up to date.");
+        notify.success("LokiASAM is up to date.");
       } else {
         setUpdateResult({ version: update.version, body: update.body, available: true });
-        toast.info(`LokiASAM ${update.version} is available.`);
+        notify.info(`LokiASAM ${update.version} is available.`, { event: "update_available" });
       }
-    } catch (e) { toast.error(`Update check failed: ${e}`); }
+    } catch (e) { notify.error("LokiASAM update check failed", { description: e, event: "update_check_failed" }); }
     finally { setChecking(false); }
   };
 
@@ -1148,17 +1149,17 @@ function AppUpdateSection() {
     setChecking(true);
     try {
       const update = await check();
-      if (!update) { toast.info("No update available."); return; }
+      if (!update) { notify.info("No update available."); return; }
       setInstalling(true);
       const loadingId = toast.loading("Downloading update…");
       try {
         await update.downloadAndInstall();
         toast.dismiss(loadingId);
-        toast.success("Update installed. Restart LokiASAM to apply it.", { duration: Infinity });
+        notify.success("Update installed. Restart LokiASAM to apply it.", { duration: Infinity });
         setInstallDone(true);
-      } catch (e) { toast.dismiss(loadingId); toast.error(`Update failed: ${e}`); }
+      } catch (e) { toast.dismiss(loadingId); notify.error("LokiASAM update failed", { description: e, event: "update_failed" }); }
       finally { setInstalling(false); }
-    } catch (e) { toast.error(`Update check failed: ${e}`); }
+    } catch (e) { notify.error("LokiASAM update check failed", { description: e, event: "update_check_failed" }); }
     finally { setChecking(false); }
   };
 
@@ -1271,7 +1272,7 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
   }, []);
 
   const runCacheOp = useCallback(async (op: "install" | "reinstall" | "verify") => {
-    if (!baseDir) { toast.error("Base directory not configured."); return; }
+    if (!baseDir) { notify.error("Base directory not configured."); return; }
     reconnectedRef.current = false; // Direct mode: runCacheOp manages phase
     _asaCacheActiveOp = op;
     setOperation(op);
@@ -1283,7 +1284,7 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
         } catch (e) {
           // Old directory couldn't be cleared (e.g. a file still locked) —
           // don't silently proceed to install on top of stale leftovers.
-          toast.error(`Couldn't clear the existing cache directory: ${e}`);
+          notify.error(`Couldn't clear the existing cache directory: ${e}`);
           setPhase("error");
           return;
         }
@@ -1294,12 +1295,12 @@ function AsaServerCacheRow({ autoStart = false, onAutoStartConsumed }: { autoSta
         setCachedBuild(newBuild);
         setPhase("done");
         const label = op === "reinstall" ? "reinstalled" : op === "install" ? "installed" : "verified";
-        toast.success(`Server cache ${label} (build ${newBuild}).`);
+        notify.success(`Server cache ${label} (build ${newBuild}).`);
       } else {
         setPhase("error");
       }
     } catch (e) {
-      if (!String(e).includes("Aborted")) toast.error(`Cache ${op} failed: ${e}`);
+      if (!String(e).includes("Aborted")) notify.error(`Cache ${op} failed`, { description: e, event: "update_failed" });
       setPhase("error");
     }
   }, [baseDir, getCacheDir]);
@@ -1448,7 +1449,7 @@ function SteamcmdReinstallRow() {
 
   const handleReinstall = async () => {
     const currentPath = await getAppSetting("steamcmd_path");
-    if (!currentPath) { toast.error("SteamCMD path not configured."); return; }
+    if (!currentPath) { notify.error("SteamCMD path not configured."); return; }
     // Reinstall to the same directory the current executable lives in
     const targetDir = currentPath.replace(/[/\\][^/\\]+$/, "");
     setReinstalling(true); setDone(false);
@@ -1459,10 +1460,10 @@ function SteamcmdReinstallRow() {
       const newPath = `${targetDir}${sep}${exe}`;
       await setAppSetting("steamcmd_path", newPath);
       setDone(true);
-      toast.success("SteamCMD reinstalled successfully.");
+      notify.success("SteamCMD reinstalled successfully.");
     } catch (e) {
-      if (String(e).includes("Aborted")) toast.info("SteamCMD reinstall aborted.");
-      else toast.error(`SteamCMD reinstall failed: ${e}`);
+      if (String(e).includes("Aborted")) notify.info("SteamCMD reinstall aborted.");
+      else notify.error(`SteamCMD reinstall failed: ${e}`);
     } finally { setReinstalling(false); }
   };
 
@@ -1514,7 +1515,7 @@ function ProtonUnmanagedNotice({ extraText, alignRight, onManaged }: {
   const handleConfirm = async () => {
     await setAppSetting("proton_ge_managed", "true");
     setShowConfirm(false);
-    toast.success("LokiASAM will now manage Proton-GE updates.");
+    notify.success("LokiASAM will now manage Proton-GE updates.");
     onManaged();
   };
 
@@ -1607,7 +1608,7 @@ function ProtonGeInstallRow() {
 
   const handleRun = async (reinstall: boolean) => {
     const baseDir = await getAppSetting("base_dir");
-    if (!baseDir) { toast.error("Base directory not configured."); return; }
+    if (!baseDir) { notify.error("Base directory not configured."); return; }
     const sep = baseDir.includes("\\") ? "\\" : "/";
     // Reinstall: go back to the same parent directory we deleted from.
     // Fresh install: fall back to the managed default location.
@@ -1629,9 +1630,9 @@ function ProtonGeInstallRow() {
       setPhase("done");
       setProtonOpLabel(null);
       setProtonOpDone(true);
-      toast.success(`Proton-GE ${reinstall ? "reinstalled" : "installed"} successfully.`);
+      notify.success(`Proton-GE ${reinstall ? "reinstalled" : "installed"} successfully.`);
     } catch (e) {
-      if (!String(e).includes("Aborted")) toast.error(`Proton-GE ${reinstall ? "reinstall" : "install"} failed: ${e}`);
+      if (!String(e).includes("Aborted")) notify.error(`Proton-GE ${reinstall ? "reinstall" : "install"} failed: ${e}`);
       setPhase("error");
       setProtonOpLabel(null);
       setProtonOpDone(false);
@@ -1718,11 +1719,11 @@ function CertInstallRow() {
       await tauriCmd.installAmazonRootCa(certPath, protonPath, resolvedPrefix);
       setPhase("done");
       setIsInstalled(true);
-      toast.success("Amazon Root CA 1 installed successfully.");
+      notify.success("Amazon Root CA 1 installed successfully.");
     } catch (e) {
       setError(String(e));
       setPhase("error");
-      toast.error(`Certificate install failed: ${e}`);
+      notify.error(`Certificate install failed: ${e}`);
     }
   };
 
@@ -1817,12 +1818,12 @@ function FirewallRepairRow() {
         .map((p) => ({ port: p.port, protocol: p.protocol as "tcp" | "udp" }));
       const protonPath = IS_LINUX ? (await getAppSetting("proton_path")) ?? undefined : undefined;
       await tauriCmd.addFirewallRules(allPorts, protonPath);
-      toast.success("Firewall rules added.");
+      notify.success("Firewall rules added.");
       await runCheck();
     } catch (e) {
       setError(String(e));
       setPhase("error");
-      toast.error(`Failed to add firewall rules: ${e}`);
+      notify.error(`Failed to add firewall rules: ${e}`);
     } finally {
       setIsFixing(false);
     }
@@ -1964,16 +1965,16 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
       const info = await tauriCmd.checkProtonGeUpdate(protonPath);
       setUpdateInfo(info);
       if (info.updateAvailable) {
-        toast.info(`Proton-GE ${info.latestVersion} is available.`);
+        notify.info(`Proton-GE ${info.latestVersion} is available.`, { event: "update_available" });
       } else {
-        toast.success("Proton-GE is up to date.");
+        notify.success("Proton-GE is up to date.");
       }
-    } catch (e) { toast.error(`Failed to check for updates: ${e}`); }
+    } catch (e) { notify.error("Proton-GE update check failed", { description: e, event: "update_check_failed" }); }
     finally { setChecking(false); }
   };
 
   const handleDownload = useCallback(async () => {
-    if (!protonPath) { toast.error("Proton-GE path not configured."); return; }
+    if (!protonPath) { notify.error("Proton-GE path not configured."); return; }
     const targetDir = protonPath.replace(/[/\\][^/\\]+$/, "");
     setDownloading(true); setDownloadDone(false);
     setProtonOpLabel("Updating Proton-GE…");
@@ -1988,11 +1989,11 @@ function ProtonGeUpdateSection({ autoStart }: { autoStart?: boolean }) {
       setUpdateInfo(null);
       setProtonOpLabel(null);
       setProtonOpDone(true);
-      toast.success("Proton-GE updated successfully.");
+      notify.success("Proton-GE updated successfully.");
     } catch (e) {
       setProtonOpLabel(null);
       setProtonOpDone(false);
-      if (!String(e).includes("Aborted")) toast.error(`Proton-GE update failed: ${e}`);
+      if (!String(e).includes("Aborted")) notify.error("Proton-GE update failed", { description: e, event: "update_failed" });
     }
     finally { setDownloading(false); }
   }, [protonPath, setProtonOpLabel, setProtonOpDone]);
@@ -2153,15 +2154,15 @@ const GLOBAL_CHANNEL_DEFS = [
   },
 ];
 
-// A new channel row starts with every event ticked ("[]" means none).
-const ALL_EVENTS_JSON = JSON.stringify(Object.values(NOTIFICATION_EVENTS));
+// A new channel row starts with that channel's default events ("[]" means none).
+const defaultEventsJson = (channel: string) => JSON.stringify(defaultChannelEvents(channel));
 
 function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?: () => void }) {
   const [configs, setConfigs] = useState<NotificationConfigRow[]>([]);
   const [saving, setSaving]   = useState<string | null>(null);
 
   const loadConfigs = useCallback(async () => {
-    try { setConfigs(await getNotificationConfigs(null)); } catch (err) { toast.error("Failed to load notification configs", { description: String(err) }); }
+    try { setConfigs(await getNotificationConfigs(null)); } catch (err) { notify.error("Failed to load notification configs", { description: err }); }
   }, []);
 
   useOnMount(loadConfigs);
@@ -2172,7 +2173,7 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
     const existing = getConfig(channelId);
     await saveNotificationConfig({
       id: existing?.id ?? crypto.randomUUID(), serverId: null, channel: channelId,
-      enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? ALL_EVENTS_JSON,
+      enabled, configJson: existing?.config_json ?? "{}", eventsJson: existing?.events_json ?? defaultEventsJson(channelId),
     });
     await loadConfigs();
   }
@@ -2183,12 +2184,12 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
       const existing = getConfig(channelId);
       await saveNotificationConfig({
         id: existing?.id ?? crypto.randomUUID(), serverId: null, channel: channelId,
-        enabled: existing?.enabled === 1, configJson, eventsJson: existing?.events_json ?? ALL_EVENTS_JSON,
+        enabled: existing?.enabled === 1, configJson, eventsJson: existing?.events_json ?? defaultEventsJson(channelId),
       });
       await loadConfigs();
-      toast.success("Notification config saved.");
+      notify.success("Notification config saved.");
       onCredentialSaved?.();
-    } catch (e) { toast.error(`Failed to save: ${e}`); }
+    } catch (e) { notify.error(`Failed to save: ${e}`); }
     finally { setSaving(null); }
   }
 
@@ -2197,19 +2198,19 @@ function GlobalNotificationsSection({ onCredentialSaved }: { onCredentialSaved?:
     try {
       if (channelId === "discord") {
         const url = cfg.webhookUrl as string | undefined;
-        if (!url) { toast.error("Enter a webhook URL first."); return false; }
+        if (!url) { notify.error("Enter a webhook URL first.", { event: "input_problem" }); return false; }
         await tauriCmd.sendDiscordNotification(url, { title: "LokiASAM Test", description: "Discord notifications are working.", color: 0x00ff88, serverName: "Global", eventType: "test" });
       } else if (channelId === "email") {
         const to = cfg.toAddress as string | undefined;
-        if (!to) { toast.error("Enter a To address first."); return false; }
+        if (!to) { notify.error("Enter a To address first.", { event: "input_problem" }); return false; }
         await tauriCmd.sendEmailNotification(
           { host: (cfg.host as string) ?? "", port: Number(cfg.port ?? 587), username: (cfg.username as string) ?? "", password: (cfg.password as string) ?? "", fromAddress: (cfg.fromAddress as string) ?? "noreply@lokiasam", toAddress: to, useTls: Boolean(cfg.useTls ?? false) },
           { subject: "LokiASAM Test", body: "Email notifications are working." }
         );
       }
-      toast.success("Test notification sent.");
+      notify.success("Test notification sent.");
       return true;
-    } catch (e) { toast.error(`Test failed: ${e}`); return false; }
+    } catch (e) { notify.error(`Test failed: ${e}`); return false; }
   }
 
   return (
@@ -2280,7 +2281,7 @@ function GlobalChannelCard({ icon: Icon, label, desc, fields, enabled, cfg, savi
 
   const handleToggleAttempt = (v: boolean) => {
     if (v && !enabled && !testPassed) {
-      toast.info("Test the connection first to enable this channel.");
+      notify.info("Test the connection first to enable this channel.", { event: "input_problem" });
       return;
     }
     onToggle(v);
@@ -2359,12 +2360,12 @@ function AppImageIntegrationSection() {
     try {
       await tauriCmd.installAppimageIntegration();
       refresh();
-      toast.success("LokiASAM added to your application menu.", {
+      notify.success("LokiASAM added to your application menu.", {
         description: "If it doesn't appear right away, log out and back in.",
         duration: 6000,
       });
     } catch (e) {
-      toast.error("Installation failed", { description: String(e) });
+      notify.error("Installation failed", { description: e });
     } finally {
       setWorking(false);
     }
@@ -2375,9 +2376,9 @@ function AppImageIntegrationSection() {
     try {
       await tauriCmd.uninstallAppimageIntegration();
       refresh();
-      toast.success("Removed from application menu.");
+      notify.success("Removed from application menu.");
     } catch (e) {
-      toast.error("Removal failed", { description: String(e) });
+      notify.error("Removal failed", { description: e });
     } finally {
       setWorking(false);
     }
@@ -2457,7 +2458,7 @@ function CloseToTraySection() {
       // leaving the UI showing a state that diverges from actual behavior.
       setCloseToTrayState(!enabled);
       await setAppSetting("close_to_tray", String(!enabled));
-      toast.error(`Failed to update close-to-tray setting: ${e}`);
+      notify.error(`Failed to update close-to-tray setting: ${e}`);
     }
   };
 

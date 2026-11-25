@@ -7,7 +7,7 @@ import {
   AlertCircle, RefreshCw, ToggleLeft, ToggleRight, Info, HelpCircle, X,
   Loader2, XCircle, Lock,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify, serverNotify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -49,10 +49,10 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
     try {
       const count = await copyServerMods(selectedId, serverId);
       onCopied();
-      toast.success(count > 0 ? `Copied ${count} mod${count === 1 ? "" : "s"}` : "No mods to copy",
+      notify.success(count > 0 ? `Copied ${count} mod${count === 1 ? "" : "s"}` : "No mods to copy",
         { description: "Map and event mods aren't copied — this server's own map and event supply theirs." });
     } catch (e) {
-      toast.error(`Failed to copy mods: ${e}`);
+      notify.error(`Failed to copy mods: ${e}`);
     } finally {
       setCopying(false);
     }
@@ -80,6 +80,7 @@ function CopyModsCard({ serverId, onCopied }: { serverId: string; onCopied: () =
 // ---------------------------------------------------------------------------
 
 export function ModsTab({ server }: Props) {
+  const sn = serverNotify(server);
   const [mods, setMods]             = useState<ModRow[]>([]);
   const [loading, setLoading]       = useState(true);
   const [showRestartNote, setShowRestartNote] = useState(false);
@@ -116,11 +117,11 @@ export function ModsTab({ server }: Props) {
       const rows = await getServerMods(server.id);
       setMods(rows);
     } catch (e) {
-      toast.error("Failed to load mods", { description: String(e) });
+      sn.error("Failed to load mods", { description: e });
     } finally {
       setLoading(false);
     }
-  }, [server.id]);
+  }, [server.id, sn]);
 
   useOnMount(loadMods);
 
@@ -165,7 +166,7 @@ export function ModsTab({ server }: Props) {
         );
         setModBrowserOpen(true);
       } catch (e) {
-        toast.error("Failed to open mod browser", { description: String(e) });
+        sn.error("Failed to open mod browser", { description: e });
         setModBrowserParams(null);
       }
     }
@@ -201,7 +202,7 @@ export function ModsTab({ server }: Props) {
     }
 
     if (duplicates.length > 0) {
-      toast.warning(
+      sn.warning(
         `${duplicates.length} ID${duplicates.length > 1 ? "s were" : " was"} already in the list`,
         { description: duplicates.join(", "), duration: 5000 },
       );
@@ -228,7 +229,7 @@ export function ModsTab({ server }: Props) {
   // ── Mod CRUD ──────────────────────────────────────────────────────────
   const handleRemoveMod = async (mod: ModRow) => {
     if (mod.locked_by_map) {
-      toast.warning("Cannot remove map mod", {
+      sn.warning("Cannot remove map mod", {
         description: "This mod is required by the server's map. Change the map to remove it.",
       });
       return;
@@ -238,7 +239,7 @@ export function ModsTab({ server }: Props) {
       await loadMods();
       markChanged();
     } catch (e) {
-      toast.error("Failed to remove mod", { description: String(e) });
+      sn.error("Failed to remove mod", { description: e });
     }
   };
 
@@ -248,7 +249,7 @@ export function ModsTab({ server }: Props) {
       await loadMods();
       markChanged();
     } catch (e) {
-      toast.error("Failed to toggle mod", { description: String(e) });
+      sn.error("Failed to toggle mod", { description: e });
     }
   };
 
@@ -264,7 +265,7 @@ export function ModsTab({ server }: Props) {
       await reorderServerMods(server.id, reordered.map((m) => m.mod_id));
       markChanged();
     } catch (e) {
-      toast.error("Failed to reorder mods", { description: String(e) });
+      sn.error("Failed to reorder mods", { description: e });
     } finally {
       await loadMods();
     }

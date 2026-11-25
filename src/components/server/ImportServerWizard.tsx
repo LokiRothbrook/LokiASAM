@@ -5,7 +5,7 @@ import {
   FolderOpen, Server, CheckCircle2, AlertCircle, Loader2,
   ArrowRight, X, Info,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -136,12 +136,12 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
   const [saving, setSaving]       = useState(false);
 
   const handleImport = async () => {
-    if (!name.trim()) { toast.error("Server name is required."); return; }
-    if (await isServerNameTaken(name.trim())) { toast.error("A server with that name already exists."); return; }
+    if (!name.trim()) { notify.error("Server name is required.", { event: "input_problem" }); return; }
+    if (await isServerNameTaken(name.trim())) { notify.error("A server with that name already exists.", { event: "input_problem" }); return; }
     // adminPass is now the only password used for RCON auth too — it must match
     // whatever ServerAdminPassword the imported INI actually has, or RCON will
     // never authenticate.
-    if (!adminPass.trim()) { toast.error("Admin password is required — it's also used to connect via RCON."); return; }
+    if (!adminPass.trim()) { notify.error("Admin password is required — it's also used to connect via RCON.", { event: "input_problem" }); return; }
 
     setSaving(true);
     try {
@@ -171,10 +171,10 @@ function Step2({ installPath, detected, onBack, onImported }: Step2Props) {
         "{}",
       );
 
-      toast.success(`"${name}" imported successfully.`);
+      notify.success(`"${name}" imported successfully.`);
       onImported();
     } catch (e) {
-      toast.error(`Import failed: ${e}`);
+      notify.error(`Import of "${name}" failed`, { description: e });
     } finally {
       setSaving(false);
     }

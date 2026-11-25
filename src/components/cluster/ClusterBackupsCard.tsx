@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { Archive, Loader2, RotateCcw, Trash2, Save, HardDriveDownload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,10 +58,11 @@ export function ClusterBackupsCard({
   const running = members.filter((s) => s.status !== "stopped" && s.status !== "crashed" && s.status !== "start-failed");
 
   const clusterId = cluster.id;
+  const clusterName = cluster.name;
   const load = useCallback(async () => {
     try { setBackups(await getClusterBackups(clusterId)); }
-    catch (e) { toast.error(`Failed to load cluster backups: ${e}`); }
-  }, [clusterId]);
+    catch (e) { notify.error(`Failed to load backups for cluster ${clusterName}`, { description: e }); }
+  }, [clusterId, clusterName]);
   useOnMount(load);
 
   const saveTiers = async () => {
@@ -70,7 +71,7 @@ export function ClusterBackupsCard({
       await setClusterBackupTiers(cluster.id, tiers);
       triggerSaved();
       onSettingsSaved();
-    } catch (e) { toast.error(`Failed to save: ${e}`); }
+    } catch (e) { notify.error(`Failed to save backup settings for cluster ${cluster.name}`, { description: e }); }
     finally { setSaving(false); }
   };
 
@@ -78,9 +79,9 @@ export function ClusterBackupsCard({
     setBackingUp(true);
     try {
       await tauriCmd.createClusterBackup(cluster.id);
-      toast.success("Cluster backed up.");
+      notify.success(`Cluster ${cluster.name} backed up.`);
       await load();
-    } catch (e) { toast.error(String(e)); }
+    } catch (e) { notify.error(`Cluster ${cluster.name} backup failed`, { description: e, event: "backup_failed" }); }
     finally { setBackingUp(false); }
   };
 
@@ -89,10 +90,10 @@ export function ClusterBackupsCard({
     setRestoring(true);
     try {
       await tauriCmd.restoreClusterBackup(restoreTarget.id);
-      toast.success("Cluster data restored. The previous data was backed up first.");
+      notify.success(`Cluster ${cluster.name} data restored. The previous data was backed up first.`);
       setRestoreTarget(null);
       await load();
-    } catch (e) { toast.error(String(e)); }
+    } catch (e) { notify.error(`Cluster ${cluster.name} restore failed`, { description: e, event: "backup_failed" }); }
     finally { setRestoring(false); }
   };
 
@@ -100,7 +101,7 @@ export function ClusterBackupsCard({
     try {
       await tauriCmd.deleteClusterBackup(b.id);
       setBackups((list) => list?.filter((x) => x.id !== b.id) ?? null);
-    } catch (e) { toast.error(`Delete failed: ${e}`); }
+    } catch (e) { notify.error(`Couldn't delete a backup of cluster ${cluster.name}`, { description: e }); }
   };
 
   return (

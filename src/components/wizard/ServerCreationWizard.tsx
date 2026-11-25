@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import {
   Server, Network, GitBranch, Clock, Package,
   Download, ArrowRight, ArrowLeft, Loader2, AlertCircle,
@@ -854,7 +854,7 @@ function GameModeStep({ data, onChange }: { data: WizardData; onChange: (patch: 
       const { patch } = await loadCopySource(serverId, data, allMaps);
       onChange(patch);
     } catch (e) {
-      toast.error(`Copy from server failed: ${e}`);
+      notify.error(`Copy from server failed: ${e}`);
     } finally {
       setLoadingCopy(false);
     }
@@ -2007,7 +2007,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
       setNewClusterName("");
       handleSelectCluster(id);
     } catch (e) {
-      toast.error(`Failed to create cluster: ${e}`);
+      notify.error(`Failed to create cluster: ${e}`);
     } finally {
       setCreating(false);
     }
@@ -3247,13 +3247,13 @@ function InstallStep({
         if (data.copyFromServerId && data.copySaveData) {
           const source = (await getServers()).find((s) => s.id === data.copyFromServerId);
           if (source && source.status !== "stopped") {
-            toast.warning(`Save data not copied — ${source.name} is running. Stop it, then use Maintenance → Import Saves.`);
+            notify.warning(`Save data not copied — ${source.name} is running. Stop it, then use Maintenance → Import Saves.`, { server: { id: serverId, name: data.name } });
           } else if (source) {
             const mapDef = findMapById(data.mapId);
             const saveFolder = mapDef ? getSaveFolder(mapDef) : mapPath;
             await tauriCmd.importServerSaves(source.id, serverId, baseDirRef.current, saveFolder)
-              .then(() => toast.success(`Save data copied from ${source.name}.`))
-              .catch((e) => toast.warning(`Save data copy failed: ${e}`));
+              .then(() => notify.success(`Save data copied from ${source.name}.`, { server: { id: serverId, name: data.name } }))
+              .catch((e) => notify.warning("Save data copy failed", { description: e, server: { id: serverId, name: data.name } }));
           }
         }
       }
@@ -3436,7 +3436,7 @@ export function ServerCreationWizard({ onClose, cloneFromServerId }: ServerCreat
       });
       setNameValid(true);
     } catch (e) {
-      toast.error(`Couldn't load the server to clone: ${e}`);
+      notify.error(`Couldn't load the server to clone: ${e}`);
     } finally {
       setCloneLoading(false);
     }

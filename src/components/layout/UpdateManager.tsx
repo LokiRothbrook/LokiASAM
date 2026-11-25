@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { check } from "@tauri-apps/plugin-updater";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { notify, type NotifyOptions } from "@/lib/notify";
 import { getAppSetting } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { dispatchNotification } from "@/lib/notifications";
@@ -35,6 +36,20 @@ export function UpdateManager() {
   const protonCheckRef   = useRef(false);
   // Last failure per check, so a repeating error doesn't notify every hour.
   const lastFailureRef   = useRef<Record<string, { msg: string; at: number }>>({});
+  // Versions already announced this session. The hourly re-check reminds with
+  // a toast again, but only the first announcement is logged.
+  const announcedRef     = useRef<Set<string>>(new Set());
+  const announce = useCallback((title: string, opts: NotifyOptions & { id: string }) => {
+    if (announcedRef.current.has(opts.id)) {
+      const { description, ...rest } = opts;
+      delete rest.server;
+      delete rest.event;
+      toast.info(title, { ...rest, description: description === undefined ? undefined : String(description) });
+      return;
+    }
+    announcedRef.current.add(opts.id);
+    notify.info(title, { event: "update_available", ...opts });
+  }, []);
 
   const reportCheckFailure = useCallback((what: "LokiASAM" | "Proton-GE", err: unknown) => {
     const body = describeCheckError(what, err);
@@ -62,7 +77,7 @@ export function UpdateManager() {
       delete lastFailureRef.current["Proton-GE"]; // check worked — a future failure notifies again
       if (!info.updateAvailable) return;
       const toastId = `proton-update-${info.latestVersion}`;
-      toast.info(`Proton-GE ${info.latestVersion} is available`, {
+      announce(`Proton-GE ${info.latestVersion} is available`, {
         id: toastId,
         description: `Current: ${info.currentVersion || "unknown"}.`,
         duration: Infinity,
@@ -92,7 +107,7 @@ export function UpdateManager() {
     } finally {
       protonCheckRef.current = false;
     }
-  }, [router, reportCheckFailure]);
+  }, [router, reportCheckFailure, announce]);
 
   const checkForUpdate = useCallback(async () => {
     if (checkingRef.current) return;
@@ -112,7 +127,7 @@ export function UpdateManager() {
       if (installMethod === "pkgbuild") {
         // pkgbuild installs are not managed by the Tauri updater — pacman owns the binary.
         // Show the version notice but direct the user to rebuild manually.
-        toast.info(`LokiASAM ${update.version} is available`, {
+        announce(`LokiASAM ${update.version} is available`, {
           id: toastId,
           description: "To update: git pull in your LokiASAM folder, then re-run makepkg -si",
           duration: Infinity,
@@ -121,7 +136,7 @@ export function UpdateManager() {
         return;
       }
 
-      toast.info(`LokiASAM ${update.version} is available`, {
+      announce(`LokiASAM ${update.version} is available`, {
         id: toastId,
         description,
         duration: Infinity,
@@ -133,12 +148,12 @@ export function UpdateManager() {
             try {
               await update.downloadAndInstall();
               toast.dismiss(loadingId);
-              toast.success("Update installed. Restart LokiASAM to apply it.", {
+              notify.success("Update installed. Restart LokiASAM to apply it.", {
                 duration: Infinity,
               });
             } catch (e) {
               toast.dismiss(loadingId);
-              toast.error(`Update failed: ${e}`);
+              notify.error("LokiASAM update failed", { description: e, event: "update_failed" });
             }
           },
         },
@@ -152,7 +167,7 @@ export function UpdateManager() {
     } finally {
       checkingRef.current = false;
     }
-  }, [reportCheckFailure]);
+  }, [reportCheckFailure, announce]);
 
   // Bumped when the user changes a check mode in Settings, so the intervals
   // below are rebuilt immediately instead of only on the next app launch.

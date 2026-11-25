@@ -15,6 +15,7 @@ import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useAppStore } from "@/store/useAppStore";
 import { syncSchedulesToRust } from "@/lib/scheduler-sync";
+import { notify } from "@/lib/notify";
 import { toast } from "sonner";
 import { buildStartParams } from "@/lib/server-utils";
 
@@ -265,7 +266,18 @@ export async function applyUpdateToServer(
     getAppSetting("base_dir"),
     getAppSetting("steamcmd_path"),
   ]);
-  if (!cacheBase || !steamcmdPath) throw new Error("Base directory or SteamCMD not configured.");
+  if (!cacheBase || !steamcmdPath) {
+    const msg = "Base directory or SteamCMD not configured.";
+    await dispatchNotification({
+      eventType:  NOTIFICATION_EVENTS.UPDATE_FAILED,
+      serverId,
+      serverName,
+      title:      "Server Update Failed",
+      body:       `Failed to update ${serverName}: ${msg}`,
+      severity:   "error",
+    });
+    throw new Error(msg);
+  }
 
   const sep = cacheBase.includes("\\") ? "\\" : "/";
   const cacheDir = `${cacheBase.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
@@ -413,7 +425,7 @@ export async function applyUpdateToAllServers(
         continue;
       }
       failed += 1;
-      toast.error(`Failed to update ${server.name}`, { description: String(err) });
+      // applyUpdateToServer already sent the "Server Update Failed" notification.
       await updateServerStatus(server.id, "stopped", null).catch(() => {});
       opts.onInvalidate();
       continue;
@@ -424,7 +436,6 @@ export async function applyUpdateToAllServers(
   }
 
   if (succeeded > 0) {
-    toast.success(`Updated ${succeeded} server${succeeded === 1 ? "" : "s"} successfully.`);
     await dispatchNotification({
       eventType:  NOTIFICATION_EVENTS.SERVER_UPDATED,
       serverId:   null,
@@ -494,7 +505,7 @@ export async function runServerUpdateAction(
       // undo the optimistic "stopping" so the server doesn't look stuck.
       await updateServerStatus(server.id, server.status, server.pid);
       onInvalidate();
-      toast.error(`Update failed: ${err}`);
+      notify.error(`Update of ${server.name} couldn't start`, { description: err, server, event: "update_failed" });
     });
     return;
   }
@@ -518,7 +529,8 @@ export async function runServerUpdateAction(
           warnMinutes: server.update_warn_minutes ?? 5,
           warnMessage: server.update_message || "Server going down for update in {time}.",
         },
-        (msg) => toast.info(msg),
+        // Progress steps update one toast in place — not logged.
+        (msg) => toast.info(msg, { id: `update-${server.id}` }),
       );
     } catch (err) {
       if (err && typeof err === "object" && "restartNeeded" in err) {
@@ -528,10 +540,11 @@ export async function runServerUpdateAction(
       throw err;
     }
     onInvalidate();
-    toast.success(`${server.name} updated successfully.`);
-  } catch (e) {
-    toast.error(`Update failed: ${e}`);
+    // Success and failure were already notified by applyUpdateToServer.
+  } catch {
+    /* reported by applyUpdateToServer */
   } finally {
+    toast.dismiss(`update-${server.id}`);
     onPendingChange(false);
     onInvalidate();
   }

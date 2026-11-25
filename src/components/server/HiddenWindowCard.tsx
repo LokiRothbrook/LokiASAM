@@ -9,7 +9,7 @@
 
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { notify, serverNotify } from "@/lib/notify";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { ToggleLeft, ToggleRight, Copy, Download, RefreshCw, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,7 @@ export function useHiddenWindowSupport() {
   const check = useCallback(async () => {
     setChecking(true);
     try { setSupport(await tauriCmd.getHiddenWindowSupport()); }
-    catch (e) { toast.error(`Couldn't check hidden-window support: ${e}`); }
+    catch (e) { notify.error(`Couldn't check hidden-window support: ${e}`); }
     finally { setChecking(false); }
   }, []);
   useOnMount(check);
@@ -41,10 +41,10 @@ export function useHiddenWindowSupport() {
     setInstalling(true);
     try {
       await tauriCmd.installXvfb();
-      toast.success("Xvfb installed. Hidden servers use it from their next start once none are running on the current display.");
+      notify.success("Xvfb installed. Hidden servers use it from their next start once none are running on the current display.");
       await check();
     } catch (e) {
-      toast.error(String(e));
+      notify.error(String(e));
     } finally {
       setInstalling(false);
     }
@@ -71,8 +71,8 @@ export function HiddenWindowStatus({
 
   const copyCommand = async () => {
     if (!support.installCommand) return;
-    try { await writeText(support.installCommand); toast.success("Command copied."); }
-    catch { toast.error("Couldn't copy to the clipboard."); }
+    try { await writeText(support.installCommand); notify.success("Command copied."); }
+    catch { notify.error("Couldn't copy to the clipboard."); }
   };
 
   // Install help: always when nothing works; as an upgrade when on gamescope.
@@ -135,6 +135,7 @@ export function HiddenWindowStatus({
 }
 
 export function HiddenWindowCard({ server }: { server: ServerRow }) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const state = useHiddenWindowSupport();
   const [saving, setSaving] = useState(false);
@@ -145,7 +146,7 @@ export function HiddenWindowCard({ server }: { server: ServerRow }) {
     try {
       await setServerHideWindow(server.id, !on);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-    } catch (e) { toast.error(`Failed: ${e}`); }
+    } catch (e) { sn.error(`Failed: ${e}`); }
     finally { setSaving(false); }
   };
 

@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { getCustomMaps, insertCustomMap, updateCustomMap, deleteCustomMap, type CustomMapRow } from "@/lib/db";
 import { setCustomMapsCache } from "@/lib/maps";
 import { ARK_MAPS } from "@/data/game-data";
@@ -41,7 +41,7 @@ export default function ModMapsPage() {
       setCustomMaps(rows);
       setCustomMapsCache(rows);
     } catch (e) {
-      toast.error(`Failed to load custom maps: ${e}`);
+      notify.error(`Failed to load custom maps: ${e}`);
     } finally {
       setLoading(false);
     }
@@ -67,21 +67,21 @@ export default function ModMapsPage() {
     const name = displayName.trim();
     const id   = modId.trim();
     const path = mapPath.trim();
-    if (!name || !id || !path) { toast.error("All fields are required."); return; }
-    if (!/^\d+$/.test(id)) { toast.error("Mod ID must be numeric."); return; }
+    if (!name || !id || !path) { notify.error("All fields are required.", { event: "input_problem" }); return; }
+    if (!/^\d+$/.test(id)) { notify.error("Mod ID must be numeric.", { event: "input_problem" }); return; }
     setSaving(true);
     try {
       if (editTarget) {
         await updateCustomMap(editTarget.id, name, id, path);
-        toast.success(`"${name}" updated.`);
+        notify.success(`"${name}" updated.`);
       } else {
         await insertCustomMap(crypto.randomUUID(), name, id, path);
-        toast.success(`Custom map "${name}" added.`);
+        notify.success(`Custom map "${name}" added.`);
       }
       closeDialog();
       await load();
     } catch (e) {
-      toast.error(`Failed to ${editTarget ? "update" : "add"} map: ${e}`);
+      notify.error(`Failed to ${editTarget ? "update" : "add"} map: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -93,9 +93,9 @@ export default function ModMapsPage() {
     try {
       await deleteCustomMap(map.id);
       await load();
-      toast.success(`"${map.display_name}" removed.`);
+      notify.success(`"${map.display_name}" removed.`);
     } catch (e) {
-      toast.error(`Failed to delete map: ${e}`);
+      notify.error(`Failed to delete map: ${e}`);
     } finally {
       setDeleteTarget(null);
     }

@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { serverNotify } from "@/lib/notify";
 import { IdCard, Eye, EyeOff, Save, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +57,7 @@ export function ServerIdentityCard({
   /** Called with the saved identity so the Config editor can mirror it without losing unsaved edits. */
   onIdentitySaved: (applyToGus: (cfg: ServerConfigJson) => ServerConfigJson) => void;
 }) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const [form, setForm] = useState<ServerIdentity>(() => identityOf(server));
   const [showPw, setShowPw] = useState(false);
@@ -109,7 +110,7 @@ export function ServerIdentityCard({
 
   async function handleSave() {
     const problem = await validate();
-    if (problem) { toast.error(problem); return; }
+    if (problem) { sn.error(problem, { event: "input_problem" }); return; }
     setSaving(true);
     const next: ServerIdentity = { ...form, name: form.name.trim(), adminPassword: form.adminPassword.trim() };
     try {
@@ -135,11 +136,11 @@ export function ServerIdentityCard({
       onIdentitySaved((cfg) => ({ ...cfg, gameUserSettings: applyIdentityToGus(cfg.gameUserSettings, next) }));
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       triggerSaved();
-      toast.success(stopped ? "Server identity saved." : "Server identity saved — takes effect on the next restart.");
+      sn.success(stopped ? "Server identity saved." : "Server identity saved — takes effect on the next restart.");
 
       if (portsChanged) await offerFirewallUpdate({ ...server, port: next.port, query_port: next.queryPort, rcon_port: next.rconPort });
     } catch (e) {
-      toast.error(`Failed to save server identity: ${e}`);
+      sn.error(`Failed to save server identity: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -150,7 +151,7 @@ export function ServerIdentityCard({
     if (!status?.active) return;
     const missing = status.ports.filter((p) => !p.covered);
     if (missing.length === 0) return;
-    toast.warning(`New ports aren't open in the firewall: ${missing.map((p) => `${p.port}/${p.protocol.toUpperCase()}`).join(", ")}`, {
+    sn.warning(`New ports aren't open in the firewall: ${missing.map((p) => `${p.port}/${p.protocol.toUpperCase()}`).join(", ")}`, {
       duration: Infinity,
       action: {
         label: "Open ports",
@@ -163,9 +164,9 @@ export function ServerIdentityCard({
             }
             const protonPath = (await getAppSetting("proton_path")) ?? undefined;
             await tauriCmd.addFirewallRules([...all.values()], protonPath);
-            toast.success("Firewall rules updated.");
+            sn.success("Firewall rules updated.");
           } catch (e) {
-            toast.error(`Failed to update firewall: ${e}`);
+            sn.error(`Failed to update firewall: ${e}`);
           }
         },
       },

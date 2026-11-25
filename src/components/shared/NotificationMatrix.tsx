@@ -13,14 +13,14 @@
  */
 
 import { useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
-import { toast } from "sonner";
 import { Loader2, AppWindow, Bell, Monitor, MessageSquare, Mail } from "lucide-react";
 import {
   getNotificationConfigs,
   saveGlobalChannelEvents,
 } from "@/lib/db";
-import { NOTIFICATION_EVENTS, NOTIFICATION_EVENT_LABELS } from "@/data/game-data";
+import { NOTIFICATION_EVENTS, NOTIFICATION_EVENT_LABELS, defaultChannelEvents } from "@/data/game-data";
 import type { NotificationEventType } from "@/data/game-data";
+import { notify } from "@/lib/notify";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -47,11 +47,11 @@ const ALL_EVENTS = Object.values(NOTIFICATION_EVENTS) as NotificationEventType[]
 
 // Default events enabled per channel when no config row exists yet
 const CHANNEL_DEFAULTS: Record<ChannelId, NotificationEventType[]> = {
-  in_app:  ALL_EVENTS,
-  bell:    ALL_EVENTS,
-  desktop: [],
-  discord: ALL_EVENTS,
-  email:   ALL_EVENTS,
+  in_app:  defaultChannelEvents("in_app"),
+  bell:    defaultChannelEvents("bell"),
+  desktop: defaultChannelEvents("desktop"),
+  discord: defaultChannelEvents("discord"),
+  email:   defaultChannelEvents("email"),
 };
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
     } else {
       saveGlobalChannelEvents(channel, [...next])
         .then(() => onSaved?.())
-        .catch((err) => toast.error("Failed to save notification settings", { description: String(err) }));
+        .catch((err) => notify.error("Failed to save notification settings", { description: err }));
     }
   }, [channelEvents, onChange, onSaved]);
 
@@ -184,7 +184,7 @@ function NotificationMatrix({ onSaved, onChange, refreshKey }, ref) {
     } else {
       saveGlobalChannelEvents(channel, [...newSet])
         .then(() => onSaved?.())
-        .catch((err) => toast.error("Failed to save notification settings", { description: String(err) }));
+        .catch((err) => notify.error("Failed to save notification settings", { description: err }));
     }
   }, [channelEvents, onChange, onSaved]);
 

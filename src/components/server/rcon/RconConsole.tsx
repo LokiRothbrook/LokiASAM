@@ -11,6 +11,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { WipeWildDinosDialog } from "@/components/server/WipeWildDinosDialog";
+import { notify } from "@/lib/notify";
 import { tauriCmd, type RconLogLine, type ArkPlayer, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useOnMount } from "@/hooks/useOnMount";
@@ -237,8 +238,9 @@ export function RconConsole({ server }: Props) {
     } catch (e) {
       setError(String(e));
       setConnecting(false);
+      notify.error("Couldn't connect to RCON", { description: e, server, event: "rcon_error" });
     }
-  }, [server.id, server.rcon_port, server.admin_password]);
+  }, [server]);
 
   // Sync initial connected state from Rust on mount (covers the case where
   // RconManager already connected before this tab was opened).
@@ -712,7 +714,7 @@ export function RconConsole({ server }: Props) {
         </DialogContent>
       </Dialog>
 
-      <WipeWildDinosDialog serverId={server.id} open={wipeOpen} onOpenChange={setWipeOpen} />
+      <WipeWildDinosDialog server={server} open={wipeOpen} onOpenChange={setWipeOpen} />
     </div>
   );
 }

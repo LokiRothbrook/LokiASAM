@@ -12,6 +12,7 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
@@ -109,16 +110,17 @@ export function SchedulerManager() {
         // Resolve the "checking…" toast with what was found and what will
         // happen about it. Newly flagged servers also get a bell notification
         // (from runPerServerUpdateCheck) carrying the same breakdown.
+        // The result is a separate (logged) toast: if its In-App box is
+        // unticked, reusing the spinner's id would leave the spinner up forever.
+        toast.dismiss(BG_CHECK_TOAST_ID);
         const n = summary.allWithUpdates.length;
         if (n === 0) {
-          toast.success("ASA servers are up to date", {
-            id: BG_CHECK_TOAST_ID,
+          notify.success("ASA servers are up to date", {
             description: `Automatic check finished — build ${r.latestBuildId}.`,
             duration: 6000,
           });
         } else {
-          toast.info(`${n} server${n === 1 ? " needs" : "s need"} an update`, {
-            id: BG_CHECK_TOAST_ID,
+          notify.info(`${n} server${n === 1 ? " needs" : "s need"} an update`, {
             description: describeUpdatePlans(summary.allWithUpdates),
             duration: 15000,
           });
@@ -138,8 +140,9 @@ export function SchedulerManager() {
       // ever emitting that event if the check itself errors out.
       if (!success) {
         await setAppSetting("asa_last_checked", new Date().toISOString());
-        toast.error("Automatic update check failed", {
-          id: BG_CHECK_TOAST_ID,
+        toast.dismiss(BG_CHECK_TOAST_ID);
+        notify.error("Automatic ASA update check failed", {
+          event: "update_check_failed",
           description: error ?? "unknown error",
           duration: 10000,
         });
@@ -159,12 +162,18 @@ export function SchedulerManager() {
     // real notifications (toast + bell), so they're not repeated here.
     if (scheduleType === "update") {
       if (!success) noteAutoUpdateFailure(payload.serverId);
-    } else if (success) {
-      if (scheduleType === "restart") {
-        toast.success(`[${serverName}] Scheduled restart completed.`);
-      }
     } else {
-      toast.error(`[${serverName}] Scheduled ${scheduleType} failed: ${error ?? "unknown error"}`);
+      const server = payload.serverId ? { id: payload.serverId, name: serverName } : null;
+      if (success) {
+        if (scheduleType === "restart") notify.success(`[${serverName}] Scheduled restart completed.`, { server });
+      } else {
+        notify.error(`[${serverName}] Scheduled ${scheduleType} failed`, {
+          description: error ?? "unknown error",
+          server,
+          // Broadcasts and dino wipes are RCON commands; restarts are server actions.
+          event: scheduleType === "restart" ? "server_action_failed" : "rcon_error",
+        });
+      }
     }
 
     syncSchedulesToRust();

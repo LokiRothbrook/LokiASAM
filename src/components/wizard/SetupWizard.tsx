@@ -27,7 +27,7 @@ import {
   MonitorDown, ToggleLeft, ToggleRight, Layers, Send, StopCircle, Palette,
   BookOpen, ShieldCheck, Trash2, TriangleAlert, Eye, EyeOff, Shield,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { LokiIcon } from "@/components/shared/LokiIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,7 +41,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { tauriCmd, type DirCheckResult, type ProtonEntry, type FirewallStatus, type PortDef } from "@/lib/tauri-commands";
 import { applyTheme, ACCENT_OPTIONS, ACCENT_HEX, THEME_PRESETS, type ThemeAccent, type ThemePreset } from "@/lib/theme";
 import { setAppSetting, initDb, saveNotificationConfig, saveGlobalChannelEvents } from "@/lib/db";
-import { NOTIFICATION_EVENTS } from "@/data/game-data";
+import { defaultChannelEvents } from "@/data/game-data";
 import { NotificationMatrix } from "@/components/shared/NotificationMatrix";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAutostart } from "@/hooks/useAutostart";
@@ -177,11 +177,11 @@ function WipeLokiAsamDialog({ open, path, onClose, onWiped }: WipeLokiAsamDialog
     setWiping(true);
     try {
       await tauriCmd.wipeLokiAsamDir(path, fullWipe);
-      toast.success(fullWipe ? "Directory wiped — ready for a clean install." : "LokiASAM data removed — ready for a clean install.");
+      notify.success(fullWipe ? "Directory wiped — ready for a clean install." : "LokiASAM data removed — ready for a clean install.");
       onWiped();
       onClose();
     } catch (e) {
-      toast.error("Failed to delete files", { description: String(e) });
+      notify.error("Failed to delete files", { description: e });
     } finally {
       setWiping(false);
     }
@@ -521,7 +521,7 @@ function ImportVerifyPanel({
       setSteamcmdValidated(true);
       setSteamcmdDone(true);
     } catch (e) {
-      if (!String(e).includes("Aborted")) toast.error(`SteamCMD install failed: ${e}`);
+      if (!String(e).includes("Aborted")) notify.error(`SteamCMD install failed: ${e}`);
     } finally { setInstallingSteamcmd(false); setLoading(false); }
   };
 
@@ -547,7 +547,7 @@ function ImportVerifyPanel({
       setProtonValidated(true);
       setProtonDone(true);
     } catch (e) {
-      if (!String(e).includes("Aborted")) toast.error(`Proton-GE download failed: ${e}`);
+      if (!String(e).includes("Aborted")) notify.error(`Proton-GE download failed: ${e}`);
     } finally { setInstallingProton(false); setLoading(false); }
   };
 
@@ -2505,23 +2505,23 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
   const [testingEmail,   setTestingEmail]   = useState(false);
 
   const handleTestDiscord = async () => {
-    if (!discordWebhook.trim()) { toast.error("Enter a webhook URL first."); return; }
+    if (!discordWebhook.trim()) { notify.error("Enter a webhook URL first.", { event: "input_problem" }); return; }
     setTestingDiscord(true);
     try {
       await tauriCmd.sendDiscordNotification(discordWebhook.trim(), {
         title: "LokiASAM Test", description: "Discord notifications are working!",
         color: 0x00ff88, serverName: "Setup Wizard", eventType: "test",
       });
-      toast.success("Test notification sent to Discord.");
+      notify.success("Test notification sent to Discord.");
     } catch (e) {
-      toast.error(`Discord test failed: ${e}`);
+      notify.error(`Discord test failed: ${e}`);
     } finally {
       setTestingDiscord(false);
     }
   };
 
   const handleTestEmail = async () => {
-    if (!smtpHost.trim() || !smtpTo.trim()) { toast.error("Enter SMTP host and To address first."); return; }
+    if (!smtpHost.trim() || !smtpTo.trim()) { notify.error("Enter SMTP host and To address first.", { event: "input_problem" }); return; }
     setTestingEmail(true);
     try {
       await tauriCmd.sendEmailNotification(
@@ -2533,9 +2533,9 @@ function NotificationsStep({ onMatrixChange }: { onMatrixChange: (events: Record
         },
         { subject: "LokiASAM Test", body: "Email notifications are working!" }
       );
-      toast.success("Test email sent.");
+      notify.success("Test email sent.");
     } catch (e) {
-      toast.error(`Email test failed: ${e}`);
+      notify.error(`Email test failed: ${e}`);
     } finally {
       setTestingEmail(false);
     }
@@ -3050,9 +3050,9 @@ function AppImageIntegrationPanel() {
     try {
       await tauriCmd.installAppimageIntegration();
       setStatus({ ...status, isInstalled: true });
-      toast.success("LokiASAM added to your application menu.");
+      notify.success("LokiASAM added to your application menu.");
     } catch (e) {
-      toast.error("Failed to install", { description: String(e) });
+      notify.error("Failed to install", { description: e });
     } finally {
       setWorking(false);
     }
@@ -3063,9 +3063,9 @@ function AppImageIntegrationPanel() {
     try {
       await tauriCmd.uninstallAppimageIntegration();
       setStatus({ ...status, isInstalled: false });
-      toast.success("Removed from application menu.");
+      notify.success("Removed from application menu.");
     } catch (e) {
-      toast.error("Failed to uninstall", { description: String(e) });
+      notify.error("Failed to uninstall", { description: e });
     } finally {
       setWorking(false);
     }
@@ -3404,7 +3404,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             id: crypto.randomUUID(), serverId: null, channel: "discord",
             enabled: true,
             configJson: JSON.stringify({ webhookUrl: discordWebhook }),
-            eventsJson: JSON.stringify(Object.values(NOTIFICATION_EVENTS)),
+            eventsJson: JSON.stringify(defaultChannelEvents("discord")),
           });
         }
 
@@ -3419,7 +3419,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               fromAddress: smtpFrom, toAddress: smtpTo,
               useTls: smtpUseTls,
             }),
-            eventsJson: JSON.stringify(Object.values(NOTIFICATION_EVENTS)),
+            eventsJson: JSON.stringify(defaultChannelEvents("email")),
           });
         }
 

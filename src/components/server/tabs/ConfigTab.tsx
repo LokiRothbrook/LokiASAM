@@ -53,7 +53,7 @@ import {
 } from "@/data/game-data";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import { updateServerShutdownSettings, updateServerRestartSettings, updateServerUpdateSettings, getAppSetting, setServerActiveEvent, getServers, updateServerMemoryLimit, updateServerMap, addServerMod, removeServerMod, setModMapLock, type ServerRow } from "@/lib/db";
-import { toast } from "sonner";
+import { notify, serverNotify } from "@/lib/notify";
 import { NumberField } from "@/components/shared/NumberField";
 import { OptionSelect } from "@/components/shared/OptionSelect";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -919,7 +919,7 @@ function ActiveEventCard({ server }: { server: ServerRow }) {
       await setServerActiveEvent(server.id, newId);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (e) {
-      toast.error(`Failed to save event: ${e}`);
+      notify.error("Failed to save event", { description: e, server });
     } finally {
       setSaving(false);
     }
@@ -1049,8 +1049,9 @@ function MotdCard({
 function WarningSettingsCard({
   sectionId, title, description, warnLabel, messageLabel, messagePlaceholder,
   cancelMessagePlaceholder, initialWarnPlayers, initialWarnMinutes, initialMessage,
-  initialCancelMessage, errorLabel, onSave,
+  initialCancelMessage, errorLabel, onSave, server,
 }: {
+  server: ServerRow;
   sectionId?: string;
   title: string;
   description: string;
@@ -1079,7 +1080,7 @@ function WarningSettingsCard({
       await onSave({ warnPlayers, warnMinutes, message, cancelMessage });
       triggerSaved();
     } catch (e) {
-      toast.error(`Failed to save ${errorLabel}: ${e}`);
+      notify.error(`Failed to save ${errorLabel}`, { description: e, server });
     } finally {
       setSaving(false);
     }
@@ -1165,6 +1166,7 @@ function ShutdownSettingsCard({ server }: { server: ServerRow }) {
   const queryClient = useQueryClient();
   return (
     <WarningSettingsCard
+      server={server}
       title="Shutdown Warning"
       description="Used by the manual Stop button. There is no scheduled/automated shutdown."
       warnLabel="Warn online players before shutdown"
@@ -1186,6 +1188,7 @@ function RestartSettingsCard({ server }: { server: ServerRow }) {
   const queryClient = useQueryClient();
   return (
     <WarningSettingsCard
+      server={server}
       sectionId="restart-warning-section"
       title="Restart Warning"
       description="Shared by the manual Restart button and scheduled Auto-Restart (Automation tab) — one warning message either way."
@@ -1210,6 +1213,7 @@ function UpdateSettingsCard({ server }: { server: ServerRow }) {
   const queryClient = useQueryClient();
   return (
     <WarningSettingsCard
+      server={server}
       sectionId="update-warning-section"
       title="Update Warning"
       description="Shared by the manual Apply Update button and Auto-Update (Automation tab) — one warning message either way."
@@ -1275,8 +1279,8 @@ function AdvancedConfigTab({
     try {
       const n = parseFloat(memLimit);
       await updateServerMemoryLimit(server.id, isNaN(n) || n <= 0 ? null : n);
-      toast.success("Memory limit saved");
-    } catch (e) { toast.error(`Failed: ${e}`); }
+      notify.success("Memory limit saved", { server });
+    } catch (e) { notify.error("Failed to save memory limit", { description: e, server }); }
     finally { setSavingMem(false); }
   };
 
@@ -1390,6 +1394,7 @@ const SERVER_SPECIFIC_LAUNCH_ARGS = ["exclusivejoin", "ServerIP", "MultiHome", "
 
 export function ConfigTab({ server }: Props) {
   const queryClient = useQueryClient();
+  const sn = serverNotify(server);
   // Primitive deps for the loader — the server row object itself is replaced
   // on every status refresh, which must not reload (and discard) edits.
   const serverId = server.id;
@@ -1461,9 +1466,9 @@ export function ConfigTab({ server }: Props) {
       setIsDirty(true);
       setShowCopyFromServer(false);
       setCopyFromServerId("");
-      toast.success(`Config copied from ${source.name} — review and save to apply.`);
+      sn.success(`Config copied from ${source.name} — review and save to apply.`);
     } catch (e) {
-      toast.error(`Failed to copy config: ${e}`);
+      sn.error(`Failed to copy config: ${e}`);
     }
   };
 
@@ -1479,13 +1484,13 @@ export function ConfigTab({ server }: Props) {
       setRawGus(iniToText(cfg.gameUserSettings));
       setRawGame(iniToText(cfg.gameIni));
       setIsDirty(false);
-      if (fromDisk) toast.info("Loaded this server's existing INI files from disk.");
+      if (fromDisk) sn.info("Loaded this server's existing INI files from disk.");
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [serverId, installPath]);
+  }, [serverId, installPath, sn]);
 
   useOnMount(loadFromDb);
 
@@ -1501,13 +1506,13 @@ export function ConfigTab({ server }: Props) {
       setRawGus(iniToText(disk.gameUserSettings));
       setRawGame(iniToText(disk.gameIni));
       setIsDirty(true);
-      toast.success("Loaded from disk — Save to keep this version.");
+      sn.success("Loaded from disk — Save to keep this version.");
     } catch (e) {
       setError(String(e));
     } finally {
       setReadingIni(false);
     }
-  }, [server.install_path]);
+  }, [server.install_path, sn]);
 
   const handleFieldChange = (field: IniFieldDef, value: string) => {
     if (!config) return;
@@ -1564,16 +1569,16 @@ export function ConfigTab({ server }: Props) {
         }
       }
       mergeImported(gusSections, gameSections);
-      toast.success("INI file imported — review changes and save to apply.");
+      sn.success("INI file imported — review changes and save to apply.");
     } catch (e) {
-      toast.error(`Failed to import file: ${e}`);
+      sn.error(`Failed to import file: ${e}`);
     }
   };
 
   const handlePasteApply = (gus: IniSections, game: IniSections) => {
     if (!config) return;
     mergeImported(gus, game);
-    toast.success("INI text applied — review changes and save to apply.");
+    sn.success("INI text applied — review changes and save to apply.");
   };
 
   const handleQuickSetupApply = (gus: IniSections, game: IniSections, mode: "overlay" | "replace") => {
@@ -1598,7 +1603,7 @@ export function ConfigTab({ server }: Props) {
       });
     }
     setIsDirty(true);
-    toast.success(`Preset applied (${mode}). Review changes and save.`);
+    sn.success(`Preset applied (${mode}). Review changes and save.`);
   };
 
   // Identity was saved straight to disk + DB by the Identity card; mirror it
@@ -1640,7 +1645,7 @@ export function ConfigTab({ server }: Props) {
     try {
       setConfig(toSave);
       const { warnings } = await saveServerConfigFull(server, toSave);
-      warnings.forEach((w) => toast.warning(w));
+      warnings.forEach((w) => sn.warning(w));
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       setIsDirty(false);
       triggerSavedFlash();
@@ -1661,18 +1666,18 @@ export function ConfigTab({ server }: Props) {
 
   const handleMapChange = async (newMapId: string) => {
     if (server.status !== "stopped") {
-      toast.error("Server must be stopped to change maps");
+      sn.error("Server must be stopped to change maps", { event: "input_problem" });
       return;
     }
     try {
       const baseDir = await getAppSetting("base_dir");
       if (!baseDir) {
-        toast.error("Base directory not configured");
+        sn.error("Base directory not configured");
         return;
       }
       const newMapData = allMaps.find((m) => m.id === newMapId);
       if (!newMapData) {
-        toast.error("Map not found");
+        sn.error("Map not found");
         return;
       }
       const oldMapData = allMaps.find((m) => m.id === server.map_id);
@@ -1700,9 +1705,9 @@ export function ConfigTab({ server }: Props) {
       }
 
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.success(`Map changed to ${newMapData.displayName}`);
+      sn.success(`Map changed to ${newMapData.displayName}`);
     } catch (e) {
-      toast.error(`Failed to change map: ${e}`);
+      sn.error("Failed to change map", { description: e, event: "server_action_failed" });
     }
   };
 

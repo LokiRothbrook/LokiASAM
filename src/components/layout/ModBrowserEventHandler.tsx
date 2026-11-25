@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useAppStore } from "@/store/useAppStore";
 import { addServerMod } from "@/lib/db";
@@ -66,7 +66,7 @@ export function ModBrowserEventHandler() {
         incrementVerifyProgress();
       }
     } catch (e) {
-      toast.error("Failed to add mod to server", { description: String(e) });
+      notify.error("Failed to add mod to server", { description: e });
     }
   });
 
@@ -85,7 +85,7 @@ export function ModBrowserEventHandler() {
       verifyFailsRef.current.push({ modId: data.modId, error: data.error });
       incrementVerifyProgress();
     } catch (e) {
-      toast.error("Mod verification error", { description: String(e) });
+      notify.error("Mod verification error", { description: e });
     }
   });
 
@@ -97,7 +97,7 @@ export function ModBrowserEventHandler() {
       verifySkipsRef.current.push(data.modId);
       incrementVerifyProgress();
     } catch (e) {
-      toast.error("Mod verification error", { description: String(e) });
+      notify.error("Mod verification error", { description: e });
     }
   });
 
@@ -110,7 +110,7 @@ export function ModBrowserEventHandler() {
     verifySkipsRef.current = [];
 
     if (fails.length > 0) {
-      toast.error(
+      notify.error(
         `${fails.length} mod${fails.length > 1 ? "s" : ""} could not be verified`,
         {
           description: fails.map((f) => `${f.modId} — ${f.error}`).join("\n"),
@@ -120,7 +120,7 @@ export function ModBrowserEventHandler() {
     }
 
     if (skips.length > 0) {
-      toast.info(
+      notify.info(
         `${skips.length} mod${skips.length > 1 ? "s were" : " was"} already installed`,
         {
           description: skips.join(", "),

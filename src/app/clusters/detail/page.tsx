@@ -7,7 +7,7 @@ import {
   Network, Server, ArrowLeft, UserPlus, UserMinus,
   Folder, Copy,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -71,12 +71,12 @@ function AddServerDialog({ cluster, open, onClose, onAdded }: AddServerDialogPro
     try {
       await joinCluster(selectedId, cluster.id);
       const server = allServers.find((s) => s.id === selectedId);
-      toast.success(`${server?.name ?? selectedId} added to ${cluster.name}.`);
+      notify.success(`${server?.name ?? selectedId} added to ${cluster.name}.`);
       setSelectedId("");
       onAdded();
       onClose();
     } catch (e) {
-      toast.error(`Failed to add server: ${e}`);
+      notify.error(`Failed to add ${allServers.find((s) => s.id === selectedId)?.name ?? "server"} to ${cluster.name}`, { description: e });
     } finally {
       setBusy(false);
     }
@@ -252,10 +252,10 @@ function ClusterDetailContent() {
     setRemoving(true);
     try {
       await leaveCluster(server.id);
-      toast.success(`${server.name} removed from cluster.`);
+      notify.success(`${server.name} removed from cluster.`, { server });
       refresh();
     } catch (e) {
-      toast.error(`Failed to remove server: ${e}`);
+      notify.error("Failed to remove from cluster", { description: e, server });
     } finally {
       setRemoving(false);
       setRemoveTarget(null);
@@ -264,7 +264,7 @@ function ClusterDetailContent() {
 
   async function copyToClipboard(text: string) {
     await navigator.clipboard.writeText(text);
-    toast.success("Copied to clipboard.");
+    notify.success("Copied to clipboard.");
   }
 
   if (!id) {

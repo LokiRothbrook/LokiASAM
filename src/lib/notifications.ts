@@ -11,11 +11,11 @@
  *  3. Fire OS desktop, Discord webhook, and/or email based on notification_configs.
  */
 
-import { toast } from "sonner";
+import { toast, type ExternalToast } from "sonner";
 import { useAppStore } from "@/store/useAppStore";
 import { logNotification, getNotificationConfigs } from "@/lib/db";
 import { tauriCmd } from "@/lib/tauri-commands";
-import type { NotificationEventType } from "@/data/game-data";
+import { QUIET_NOTIFICATION_EVENTS, type NotificationEventType } from "@/data/game-data";
 
 export interface DispatchNotificationParams {
   eventType: NotificationEventType;
@@ -24,6 +24,35 @@ export interface DispatchNotificationParams {
   title: string;
   body: string;
   severity: "info" | "success" | "warning" | "error";
+  /** Extra sonner options for the toast (id, duration, action, …). */
+  toastOptions?: ExternalToast;
+}
+
+function showToast(
+  severity: DispatchNotificationParams["severity"],
+  title: string,
+  body: string,
+  extra?: ExternalToast,
+) {
+  const opts: ExternalToast = { ...extra, ...(body ? { description: body } : {}) };
+  switch (severity) {
+    case "success": toast.success(title, opts); break;
+    case "warning": toast.warning(title, opts); break;
+    case "error":   toast.error(title, opts); break;
+    default:        toast.info(title, opts); break;
+  }
+}
+
+/**
+ * Prefix the title with the server name when it's about a server and the
+ * name isn't already in the text — so a toast or log entry like "Failed to
+ * fetch player list" says which server it came from.
+ */
+function withServerName(params: DispatchNotificationParams): string {
+  const name = params.serverName.trim();
+  if (!params.serverId || !name) return params.title;
+  if (params.title.includes(name) || params.body.includes(name)) return params.title;
+  return `${name}: ${params.title}`;
 }
 
 /** Severity → Discord embed color integer. */
@@ -51,24 +80,27 @@ function eventEnabled(eventsJson: string, eventType: string): boolean {
 }
 
 export async function dispatchNotification(
-  params: DispatchNotificationParams
+  input: DispatchNotificationParams
 ): Promise<void> {
+  const params = { ...input, title: withServerName(input) };
   // ── 1. Load channel configs first so we can gate the toast ─────────────────
   let configs;
   try {
     configs = await getNotificationConfigs(params.serverId);
   } catch (err) {
     console.error("[notifications] Failed to load notification configs:", err);
-    // Fall back to firing the toast so failures are never silently swallowed.
-    toast.error(params.title, { description: params.body });
+    // Fall back to firing the toast so nothing is silently swallowed (the DB
+    // isn't open yet during first-run setup, so there's nowhere to log it).
+    showToast(params.severity, params.title, params.body, params.toastOptions);
     return;
   }
 
   // server-specific rows come first; per-server takes precedence over global
   const seen = new Set<string>();
-  // Defaults: show toast and bell if no config row exists yet.
+  // Defaults if no config row exists yet: toast always; bell for everything
+  // except routine confirmations / input hints.
   let inAppEnabled = true;
-  let bellEnabled = true;
+  let bellEnabled = !QUIET_NOTIFICATION_EVENTS.includes(params.eventType);
 
   for (const config of configs) {
     const channel = config.channel;
@@ -131,12 +163,7 @@ export async function dispatchNotification(
 
   // ── 2. Fire in-app toast if in_app channel is enabled ─────────────────────
   if (inAppEnabled) {
-    switch (params.severity) {
-      case "success": toast.success(params.title, { description: params.body }); break;
-      case "warning": toast.warning(params.title, { description: params.body }); break;
-      case "error":   toast.error(params.title,   { description: params.body }); break;
-      default:        toast.info(params.title,    { description: params.body }); break;
-    }
+    showToast(params.severity, params.title, params.body, params.toastOptions);
   }
 
   // ── 3. Log to DB ────────────────────────────────────────────────────────────

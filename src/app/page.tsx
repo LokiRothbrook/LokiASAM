@@ -27,6 +27,7 @@ import { NOTIFICATION_EVENTS } from "@/data/game-data";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
 import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { formatServerVersion } from "@/lib/db";
 import { getVersion } from "@tauri-apps/api/app";
@@ -59,7 +60,7 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
       const oldBuild = await getAppSetting("asa_cached_build_id") ?? "";
       const newBuild = await runAsaCacheUpdate();
       if (!newBuild) {
-        toast.error("Base directory or SteamCMD not configured.");
+        notify.error("Base directory or SteamCMD not configured.", { event: "update_check_failed" });
         return;
       }
       // Manual check: silent mode suppresses per-server toasts; we show dialog.
@@ -74,10 +75,10 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
           onUpdatesFound(summary.allWithUpdates);
         } else {
           const n = summary.allWithUpdates.length;
-          toast.info(`Update found — applying automatically to ${n} server${n === 1 ? "" : "s"}.`);
+          notify.info(`Update found — applying automatically to ${n} server${n === 1 ? "" : "s"}.`);
         }
       } else {
-        toast.success("All servers are up to date.");
+        notify.success("All servers are up to date.");
       }
 
       // Only notify Discord/email if the cache actually changed.
@@ -92,7 +93,7 @@ function UpdateStatusChip({ servers = [], onUpdateAllClick, onUpdatesFound }: Up
         });
       }
     } catch (e) {
-      toast.error("Update check failed", { description: String(e) });
+      notify.error("ASA update check failed", { description: e, event: "update_check_failed" });
     } finally {
       setChecking(false);
     }
@@ -460,7 +461,7 @@ export default function DashboardPage() {
       await Promise.all(stopped.map((s) => updateServerStatus(s.id, "startup_queued", null)));
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       enqueueStartup(stopped.map((s) => s.id));
-      toast.info(`Queued ${stopped.length} server${stopped.length === 1 ? "" : "s"} to start…`);
+      notify.info(`Queued ${stopped.length} server${stopped.length === 1 ? "" : "s"} to start…`);
     } finally { setGlobalActionPending(false); }
   }, [servers, queryClient, enqueueStartup]);
 
@@ -482,11 +483,11 @@ export default function DashboardPage() {
       setGlobalActionPending(true);
       const jobs = stoppingServers.map((s) =>
         tauriCmd.stopServer(s.id, false)
-          .catch((e) => toast.error(`Failed to force stop ${s.name}: ${e}`))
+          .catch((e) => notify.error(`Failed to force stop ${s.name}`, { description: e, server: s, event: "server_action_failed" }))
           .finally(() => queryClient.invalidateQueries({ queryKey: ["servers"] }))
       );
       Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
-      toast.info(`Force stopping ${stoppingServers.length} server${stoppingServers.length === 1 ? "" : "s"}…`);
+      notify.info(`Force stopping ${stoppingServers.length} server${stoppingServers.length === 1 ? "" : "s"}…`);
       return;
     }
 
@@ -503,10 +504,10 @@ export default function DashboardPage() {
         for (const s of running) {
           stopServerGracefully(s, {
             onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
-          }).catch((e) => toast.error(`Failed to stop ${s.name}: ${e}`));
+          }).catch((e) => notify.error(`Failed to stop ${s.name}`, { description: e, server: s, event: "server_action_failed" }));
         }
       });
-    toast.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
+    notify.info(`Stopping ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, stoppingServers, queryClient]);
 
   const handleRestartAll = useCallback(() => {
@@ -516,10 +517,10 @@ export default function DashboardPage() {
       // same as the per-server "Restart Now" button.
       setGlobalActionPending(true);
       const jobs = restartCountdownServers.map((s) =>
-        tauriCmd.proceedNow(s.id).catch((e) => toast.error(`Failed to skip wait for ${s.name}: ${e}`))
+        tauriCmd.proceedNow(s.id).catch((e) => notify.error(`Failed to skip wait for ${s.name}`, { description: e, server: s, event: "server_action_failed" }))
       );
       Promise.allSettled(jobs).finally(() => setGlobalActionPending(false));
-      toast.info(`Skipping wait for ${restartCountdownServers.length} server${restartCountdownServers.length === 1 ? "" : "s"}…`);
+      notify.info(`Skipping wait for ${restartCountdownServers.length} server${restartCountdownServers.length === 1 ? "" : "s"}…`);
       return;
     }
 
@@ -533,10 +534,10 @@ export default function DashboardPage() {
     for (const s of running) {
       restartServerGracefully(s, {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
-      }).catch((e) => toast.error(`Failed to restart ${s.name}: ${e}`));
+      }).catch((e) => notify.error(`Failed to restart ${s.name}`, { description: e, server: s, event: "server_action_failed" }));
     }
     setTimeout(() => setGlobalActionPending(false), 1000);
-    toast.info(`Queuing restart for ${running.length} server${running.length === 1 ? "" : "s"}…`);
+    notify.info(`Queuing restart for ${running.length} server${running.length === 1 ? "" : "s"}…`);
   }, [servers, restartCountdownServers, queryClient]);
 
   // ── Update All handler ────────────────────────────────────────────────────

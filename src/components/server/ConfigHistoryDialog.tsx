@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { toast } from "sonner";
+import { serverNotify } from "@/lib/notify";
 import { History, RotateCcw, Loader2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -39,6 +39,7 @@ export function ConfigHistoryDialog({
   onClose: () => void;
   onRestored: () => void;
 }) {
+  const sn = serverNotify(server);
   const [snapshots, setSnapshots] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState<IniDiffEntry[] | null>(null);
@@ -67,7 +68,7 @@ export function ConfigHistoryDialog({
         ...diffIniSections("game", currentConfig.gameIni, snap.gameIni),
       ]);
     } catch (e) {
-      toast.error(`Couldn't read snapshot: ${e}`);
+      sn.error(`Couldn't read snapshot: ${e}`);
     } finally {
       setLoadingDiff(false);
     }
@@ -78,12 +79,12 @@ export function ConfigHistoryDialog({
     setRestoring(true);
     try {
       const { warnings } = await restoreIniSnapshot(server, selected);
-      warnings.forEach((w) => toast.warning(w));
-      toast.success(`Config restored from ${snapshotLabel(selected)}. The previous config was snapshotted first.`);
+      warnings.forEach((w) => sn.warning(w));
+      sn.success(`Config restored from ${snapshotLabel(selected)}. The previous config was snapshotted first.`);
       onRestored();
       onClose();
     } catch (e) {
-      toast.error(`Restore failed: ${e}`);
+      sn.error(`Restore failed: ${e}`);
     } finally {
       setRestoring(false);
     }

@@ -10,7 +10,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { serverNotify } from "@/lib/notify";
 import { GitBranch, Loader2, RotateCcw, Plus, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ const NONE = "";
 const NEW = "__new__";
 
 export function ServerClusterCard({ server }: { server: ServerRow }) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   // Own key: ["clusters"] holds getClustersWithServerCount (Clusters page);
   // invalidating ["clusters"] still refreshes this by prefix.
@@ -55,9 +56,9 @@ export function ServerClusterCard({ server }: { server: ServerRow }) {
       else await joinCluster(server.id, target);
       invalidate();
       if (running) setChangedWhileRunning(true);
-      toast.success(target === NONE ? "Removed from cluster." : `Joined ${clusters.find((c) => c.id === target)?.name ?? "cluster"}.`);
+      sn.success(target === NONE ? "Removed from cluster." : `Joined ${clusters.find((c) => c.id === target)?.name ?? "cluster"}.`);
     } catch (e) {
-      toast.error(`Failed to change cluster: ${e}`);
+      sn.error(`Failed to change cluster: ${e}`);
     } finally {
       setBusy(false);
     }
@@ -80,12 +81,12 @@ export function ServerClusterCard({ server }: { server: ServerRow }) {
       await joinCluster(server.id, id);
       invalidate();
       if (running) setChangedWhileRunning(true);
-      toast.success(`Created ${newName.trim()} and joined it.`);
+      sn.success(`Created ${newName.trim()} and joined it.`);
       setCreating(false);
       setNewName("");
       setNewBackups(DEFAULT_BACKUP_TIERS);
     } catch (e) {
-      toast.error(`Failed to create cluster: ${e}`);
+      sn.error(`Failed to create cluster: ${e}`);
     } finally {
       setBusy(false);
     }
@@ -95,7 +96,7 @@ export function ServerClusterCard({ server }: { server: ServerRow }) {
     try {
       await restartServerGracefully(server, { onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }) });
       setChangedWhileRunning(false);
-    } catch (e) { toast.error(`Restart failed: ${e}`); }
+    } catch (e) { sn.error("Restart failed", { description: e, event: "server_action_failed" }); }
   };
 
   return (

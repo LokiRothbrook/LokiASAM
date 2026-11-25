@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { ToggleLeft, ToggleRight } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import {
@@ -55,7 +55,7 @@ export function StartupRecoveryManager() {
       );
       if (updateQueued.length > 0) {
         const count = updateQueued.length;
-        toast.info(
+        notify.info(
           count === 1
             ? `Resuming update for ${updateQueued[0].name}…`
             : `Resuming update queue for ${count} servers…`,

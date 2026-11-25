@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { serverNotify } from "@/lib/notify";
 import { Users, Plus, X, Save, Info, ToggleLeft, ToggleRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,7 @@ export function AccessListsCard({
   exclusiveJoin: boolean;
   onExclusiveJoinChange: (on: boolean) => void;
 }) {
+  const sn = serverNotify(server);
   const [active, setActive] = useState<AccessListId>("admins");
   const [lists, setLists] = useState<Record<AccessListId, string[]> | null>(null);
   const [saved, setSavedLists] = useState<Record<AccessListId, string[]> | null>(null);
@@ -81,7 +82,7 @@ export function AccessListsCard({
     if (ids.length === 0) return;
     const bad = ids.filter((id) => !EOS_ID.test(id));
     if (bad.length > 0) {
-      toast.error(`Not an EOS ID: ${bad.join(", ")}`, { description: "EOS IDs are 32 characters of 0-9 and a-f." });
+      sn.error(`Not an EOS ID: ${bad.join(", ")}`, { description: "EOS IDs are 32 characters of 0-9 and a-f.", event: "input_problem" });
       return;
     }
     const next = [...current];
@@ -104,9 +105,9 @@ export function AccessListsCard({
       setSavedLists(lists);
       triggerSaved();
       notifyAccessListsChanged(server.id);
-      toast.success(server.status === "stopped" ? "Player lists saved." : "Player lists saved — ASA reads them on the next restart.");
+      sn.success(server.status === "stopped" ? "Player lists saved." : "Player lists saved — ASA reads them on the next restart.");
     } catch (e) {
-      toast.error(`Failed to save player lists: ${e}`);
+      sn.error(`Failed to save player lists: ${e}`);
     } finally {
       setSaving(false);
     }

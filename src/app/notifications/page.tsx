@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Bell, Filter, Trash2, X } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -220,7 +220,7 @@ function NotificationsContent() {
     });
     refetch();
     queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    toast.success(`Deleted ${daysLabel} notifications${severityFilter !== "all" || eventTypeFilter !== "all" ? " matching current filter" : ""}.`);
+    notify.success(`Deleted ${daysLabel} notifications${severityFilter !== "all" || eventTypeFilter !== "all" ? " matching current filter" : ""}.`);
   }, [refetch, severityFilter, eventTypeFilter, queryClient]);
 
   return (

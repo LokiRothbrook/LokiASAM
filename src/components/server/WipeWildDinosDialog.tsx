@@ -7,7 +7,7 @@
  */
 
 import { useState } from "react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { Loader2, Skull } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,11 +18,11 @@ import { tauriCmd } from "@/lib/tauri-commands";
 const WARNING = "ServerChat Wild dinos are being wiped — expect some lag!";
 
 export function WipeWildDinosDialog({
-  serverId,
+  server,
   open,
   onOpenChange,
 }: {
-  serverId: string;
+  server: { id: string; name: string };
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -31,12 +31,12 @@ export function WipeWildDinosDialog({
   const wipe = async () => {
     setWiping(true);
     try {
-      await tauriCmd.rconSend(serverId, WARNING);
-      await tauriCmd.rconSend(serverId, "DestroyWildDinos");
-      toast.success("Wild dinos wiped — they'll respawn over the next few minutes.");
+      await tauriCmd.rconSend(server.id, WARNING);
+      await tauriCmd.rconSend(server.id, "DestroyWildDinos");
+      notify.success("Wild dinos wiped — they'll respawn over the next few minutes.", { server });
       onOpenChange(false);
     } catch (e) {
-      toast.error(`Wipe failed: ${e}`);
+      notify.error("Wild dino wipe failed", { description: e, server, event: "rcon_error" });
     } finally {
       setWiping(false);
     }

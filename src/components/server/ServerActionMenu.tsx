@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { toast } from "sonner";
+import { notify, serverNotify } from "@/lib/notify";
 import { tauriCmd } from "@/lib/tauri-commands";
 import { reinstallServer } from "@/lib/server-actions";
 import { getSaveFolder } from "@/data/game-data";
@@ -165,7 +165,7 @@ function DeleteDialog({
         // Pass remaining ports (complete desired state after deletion) so the
         // backend can rebuild from scratch rather than trying to diff a stale profile.
         await tauriCmd.removeFirewallRules(remainingPorts).catch((e) => {
-          toast.warning(`Firewall rules could not be removed: ${e}`);
+          notify.warning("Firewall rules could not be removed", { description: e, server });
         });
       }
       await tauriCmd.deleteServer(
@@ -187,7 +187,7 @@ function DeleteDialog({
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       onClose();
     } catch (err) {
-      toast.error(`Delete failed: ${err}`);
+      notify.error(`Couldn't delete ${server.name}`, { description: err, server, event: "server_action_failed" });
     } finally {
       setDeleting(false);
     }
@@ -274,6 +274,7 @@ function DeleteDialog({
 // ---------------------------------------------------------------------------
 
 export function ServerActionMenu({ server, onBackupComplete }: Props) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen]   = useState(false);
   const openCloneWizard = useAppStore((s) => s.openCloneWizard);
@@ -297,14 +298,14 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
         getAppSetting("steamcmd_path"),
         getAppSetting("base_dir"),
       ]);
-      if (!steamcmdPath) { toast.error("SteamCMD path not configured"); return; }
-      if (!baseDir) { toast.error("Base directory not configured"); return; }
+      if (!steamcmdPath) { sn.error("SteamCMD path not configured"); return; }
+      if (!baseDir) { sn.error("Base directory not configured"); return; }
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
       await tauriCmd.validateServerFiles(server.id, server.install_path, cacheDir, steamcmdPath);
-      toast.success(`Game files verified for "${server.name}".`);
+      sn.success(`Game files verified for "${server.name}".`);
     } catch (err) {
-      toast.error(`Verification failed: ${err}`);
+      sn.error("Game file verification failed", { description: err, event: "server_action_failed" });
     } finally {
       setVerifying(false);
     }
@@ -330,7 +331,7 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
     setBackingUp(true);
     try {
       const backupDir = await getAppSetting("backup_dir");
-      if (!backupDir) { toast.error("Backup directory not configured. Check Settings."); return; }
+      if (!backupDir) { sn.error("Backup directory not configured. Check Settings."); return; }
 
       await ensureMapsCacheLoaded().catch(() => {});
       const mapDef = findMapById(server.map_id);
@@ -363,10 +364,10 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
       });
       const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
       await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
-      toast.success(`Backup of "${server.name}" completed.`);
+      // Rust sends the "server backup complete" notification.
       onBackupComplete?.();
     } catch (err) {
-      toast.error(`Backup failed: ${err}`);
+      sn.error("Server backup failed", { description: err, event: "backup_failed" });
     } finally {
       setBackingUp(false);
     }
@@ -376,7 +377,7 @@ export function ServerActionMenu({ server, onBackupComplete }: Props) {
     try {
       await tauriCmd.openFolder(server.install_path);
     } catch (err) {
-      toast.error(`Could not open folder: ${err}`);
+      sn.error(`Could not open folder: ${err}`);
     }
   };
 

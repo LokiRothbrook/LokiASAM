@@ -7,11 +7,11 @@
  * Restart button, so the server's restart warning settings apply here too.
  */
 
-import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { getServersCached, restartServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
+import { notify } from "@/lib/notify";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
 
 interface MemoryRestartPayload {
@@ -41,7 +41,7 @@ export function MemoryRestartManager() {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
     } catch (e) {
-      toast.error(`Memory-limit restart of ${server.name} failed: ${e}`);
+      notify.error(`Memory-limit restart of ${server.name} failed`, { description: e, server, event: "server_action_failed" });
     }
   });
 

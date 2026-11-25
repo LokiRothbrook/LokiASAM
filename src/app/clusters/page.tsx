@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   Network, Plus, Trash2, ChevronRight, Server, Folder, ToggleLeft, ToggleRight,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,14 +53,14 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
     setBusy(true);
     try {
       await createCluster(name.trim(), customDir, backupTiers);
-      toast.success(`Cluster "${name.trim()}" created.`);
+      notify.success(`Cluster "${name.trim()}" created.`);
       setName("");
       setCustomDir("");
       setBackupTiers(DEFAULT_BACKUP_TIERS);
       onCreated();
       onClose();
     } catch (e) {
-      toast.error(`Failed to create cluster: ${e}`);
+      notify.error(`Failed to create cluster: ${e}`);
     } finally {
       setBusy(false);
     }
@@ -197,11 +197,11 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
         await setServerCluster(s.id, null);
       }
       await deleteClusterRecord(cluster.id);
-      toast.success(`Cluster "${cluster.name}" deleted.`);
+      notify.success(`Cluster "${cluster.name}" deleted.`);
       onDeleted();
       onClose();
     } catch (e) {
-      toast.error(`Failed to delete cluster: ${e}`);
+      notify.error(`Failed to delete cluster: ${e}`);
     } finally {
       setBusy(false);
     }

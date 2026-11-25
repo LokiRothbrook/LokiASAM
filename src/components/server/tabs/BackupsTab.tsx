@@ -8,7 +8,7 @@ import {
   Archive, Plus, Trash2, RotateCcw, HardDrive, User, FileText,
   AlertCircle, Loader2, RefreshCw, CalendarClock, Info,
 } from "lucide-react";
-import { toast } from "sonner";
+import { serverNotify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import {
   getServerBackupsByType, insertBackup, deleteBackupRecord,
@@ -549,6 +549,7 @@ function IniBackupSection({
   onEditSchedules?: () => void;
 }) {
   const serverId = server.id;
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const [snapshots, setSnapshots] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -569,12 +570,12 @@ function IniBackupSection({
     onBusyChange(true);
     try {
       const { warnings } = await restoreIniSnapshot(server, timestamp);
-      warnings.forEach((w) => toast.warning(w));
+      warnings.forEach((w) => sn.warning(w));
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       await load();
-      toast.success(`Config restored from ${timestamp === "current" ? "the latest snapshot" : timestamp}.`);
+      sn.success(`Config restored from ${timestamp === "current" ? "the latest snapshot" : timestamp}.`);
     } catch (e) {
-      toast.error(`INI restore failed: ${e}`);
+      sn.error("Config restore failed", { description: e, event: "backup_failed" });
     } finally {
       onBusyChange(false);
     }
@@ -584,9 +585,9 @@ function IniBackupSection({
     try {
       await tauriCmd.deleteBackup(`${backupDir}/${serverId}/ini/${timestamp}`);
       setSnapshots((s) => s.filter((x) => x !== timestamp));
-      toast.success("Config snapshot deleted.");
+      sn.success("Config snapshot deleted.");
     } catch (e) {
-      toast.error(`Delete failed: ${e}`);
+      sn.error(`Delete failed: ${e}`);
     }
   }
 
@@ -731,6 +732,7 @@ interface Props {
 
 export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   const queryClient = useQueryClient();
+  const sn = serverNotify(server);
   const allMaps = useAllMaps();
   const mapDef = allMaps.find((m) => m.id === server.map_id);
   const mapPath = mapDef?.mapPath ?? "TheIsland_WP";
@@ -768,11 +770,11 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       setBackupDir(bdir ?? "");
       setBaseDir(bsdir ?? "");
     } catch (e) {
-      toast.error(`Failed to load backups: ${e}`);
+      sn.error(`Failed to load backups: ${e}`);
     } finally {
       setLoading(false);
     }
-  }, [server.id]);
+  }, [server.id, sn]);
 
   useOnMount(loadAll);
 
@@ -796,7 +798,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
   // ── Manual backup helpers ────────────────────────────────────────────────
 
   async function handleServerBackup() {
-    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    if (!backupDir) { sn.error("Backup directory not configured."); return; }
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting server backup…" });
     try {
       const rec: BackupRecord = await tauriCmd.createServerBackup(
@@ -811,24 +813,24 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       });
       const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
       await pruneManualBackups(server.id, "server", isNaN(keep) ? 5 : keep);
-      toast.success("Server backup created.");
+      // Rust sends the "server backup complete" notification.
       await loadAll();
     } catch (e) {
-      toast.error(`Backup failed: ${e}`);
+      sn.error("Server backup failed", { description: e, event: "backup_failed" });
     } finally {
       setProgress((p) => ({ ...p, active: false }));
     }
   }
 
   async function handleAllPlayersBackup() {
-    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    if (!backupDir) { sn.error("Backup directory not configured."); return; }
     setProgress({ active: true, percent: 0, currentFile: "", label: "Starting player backups…" });
     try {
       const records = await tauriCmd.backupAllPlayers(
         server.id, server.name, server.install_path, saveFolder, server.map_id, backupDir, "manual"
       );
       if (records.length === 0) {
-        toast.info("No player profiles found to back up.");
+        sn.info("No player profiles found to back up.");
         return;
       }
       const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
@@ -846,17 +848,17 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
           await pruneManualBackups(server.id, "player", keepN);
         }
       }
-      toast.success(`Backed up ${records.length} player profile${records.length === 1 ? "" : "s"}.`);
+      // Rust sends the "player backups complete" notification.
       await loadAll();
     } catch (e) {
-      toast.error(`Player backup failed: ${e}`);
+      sn.error("Player backup failed", { description: e, event: "backup_failed" });
     } finally {
       setProgress((p) => ({ ...p, active: false }));
     }
   }
 
   async function handleFullBackupClick() {
-    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    if (!backupDir) { sn.error("Backup directory not configured."); return; }
     const dismissed = await getAppSetting("full_backup_warning_dismissed");
     if (dismissed === "true") {
       await runFullBackup();
@@ -882,10 +884,10 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       });
       const keep = parseInt(await getAppSetting(`manual_backup_keep_${server.id}`) ?? "5", 10);
       await pruneManualBackups(server.id, "full", isNaN(keep) ? 5 : keep);
-      toast.success("Full backup created.");
+      // Rust sends the "full backup complete" notification.
       await loadAll();
     } catch (e) {
-      toast.error(`Full backup failed: ${e}`);
+      sn.error("Full backup failed", { description: e, event: "backup_failed" });
     } finally {
       setProgress((p) => ({ ...p, active: false }));
     }
@@ -916,9 +918,9 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       } else if (target.backup_type === "full") {
         await tauriCmd.restoreFullBackup(server.id, target.file_path, server.install_path);
       }
-      toast.success("Restore complete. Start the server manually to apply.");
+      sn.success("Restore complete. Start the server manually to apply.");
     } catch (e) {
-      toast.error(`Restore failed: ${e}`);
+      sn.error("Restore failed", { description: e, event: "backup_failed" });
     } finally {
       setProgress((p) => ({ ...p, active: false }));
     }
@@ -931,16 +933,16 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       await tauriCmd.deleteBackup(backup.file_path);
       await deleteBackupRecord(backup.id);
       await loadAll();
-      toast.success("Backup deleted.");
+      sn.success("Backup deleted.");
     } catch (e) {
-      toast.error(`Delete failed: ${e}`);
+      sn.error(`Delete failed: ${e}`);
     }
   }
 
   // ── Sync from Disk ──────────────────────────────────────────────────────────
 
   async function handleSyncFromDisk() {
-    if (!backupDir) { toast.error("Backup directory not configured."); return; }
+    if (!backupDir) { sn.error("Backup directory not configured."); return; }
     setSyncing(true);
     try {
       const diskRecords = await tauriCmd.scanBackupDir(server.id, backupDir, server.map_id);
@@ -964,14 +966,14 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       const toImport = diskRecords.filter((r) => !dbPaths.has(r.filePath));
 
       if (toImport.length === 0 && toDelete.length === 0) {
-        toast.info("Backups are up to date.");
+        sn.info("Backups are up to date.");
         await loadAll();
         return;
       }
 
       setSyncPending({ toImport, toDelete });
     } catch (e) {
-      toast.error(`Scan failed: ${e}`);
+      sn.error(`Scan failed: ${e}`);
     } finally {
       setSyncing(false);
     }
@@ -987,7 +989,7 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
         await deleteBackupRecord(id).catch(() => {});
       }
       if (toImport.length === 0) {
-        toast.success(`Removed ${toDelete.length} record${toDelete.length !== 1 ? "s" : ""} not found on disk.`);
+        sn.success(`Removed ${toDelete.length} record${toDelete.length !== 1 ? "s" : ""} not found on disk.`);
         await loadAll();
         return;
       }
@@ -1045,10 +1047,10 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
       }
 
       const deletedNote = toDelete.length > 0 ? `, removed ${toDelete.length} not found on disk` : "";
-      toast.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}${deletedNote}.`);
+      sn.success(`Imported ${toImport.length} backup${toImport.length !== 1 ? "s" : ""}${deletedNote}.`);
       await loadAll();
     } catch (e) {
-      toast.error(`Import failed: ${e}`);
+      sn.error(`Import failed: ${e}`);
     } finally {
       setSyncing(false);
     }

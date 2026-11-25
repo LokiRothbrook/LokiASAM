@@ -8,7 +8,7 @@ import {
   AlertTriangle,
   ArrowUp, Clock, Zap, Skull, MessageSquare, Power,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify, serverNotify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
@@ -211,7 +211,7 @@ function ScheduleListRow({ row, type, onDelete, onToggle, onSave }: {
       await onSave(cron, configJson);
       setEditing(false);
     } catch (e) {
-      toast.error(`Save failed: ${e}`);
+      notify.error(`Save failed: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -319,6 +319,7 @@ function WarningSummary({ action, warn, minutes, onEdit }: {
 }
 
 function ScheduleCard({ server, serverId, type, icon: Icon, title, description, existing, onRefresh, onNavigateToConfig }: CardProps) {
+  const sn = serverNotify(server);
   const [addMode, setAddMode] = useState<AddMode>("daily");
   const [addNum,  setAddNum]  = useState(6);
   const [addTime, setAddTime] = useState("06:00");
@@ -344,11 +345,11 @@ function ScheduleCard({ server, serverId, type, icon: Icon, title, description, 
       await createSchedule(input);
       await updateScheduleConfig(newId, cron, configJson, nextIso);
       if (type === "broadcast") setAddMsg("");
-      toast.success("Schedule added.");
+      sn.success("Schedule added.");
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
-      toast.error(`Failed to add schedule: ${e}`);
+      sn.error(`Failed to add schedule: ${e}`);
     } finally {
       setAdding(false);
     }
@@ -581,7 +582,7 @@ function BackupTypeSection({
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
-      toast.error(`Failed to save ${title}: ${e}`);
+      notify.error(`Failed to save ${title}: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -682,7 +683,7 @@ function FullBackupScheduleSection({ serverId, schedules, onRefresh }: {
       onRefresh();
       syncSchedulesToRust();
     } catch (e) {
-      toast.error(`Failed to save full backup schedule: ${e}`);
+      notify.error(`Failed to save full backup schedule: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -754,7 +755,7 @@ function LoginBackupRow({ serverId }: { serverId: string }) {
       await setAppSetting(`login_backup_keep_${serverId}`, enabled ? String(keep) : "0");
       triggerSaved();
     } catch (e) {
-      toast.error(`Failed to save login backup config: ${e}`);
+      notify.error(`Failed to save login backup config: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -830,7 +831,7 @@ function ManualBackupRow({ serverId }: { serverId: string }) {
       await setAppSetting(`manual_backup_keep_${serverId}`, String(Math.max(1, keep)));
       triggerSaved();
     } catch (e) {
-      toast.error(`Failed to save manual backup config: ${e}`);
+      notify.error(`Failed to save manual backup config: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -929,6 +930,7 @@ const DEFAULT_UPDATE_AUTOMATION: UpdateAutomation = {
 };
 
 function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRow; onNavigateToConfig?: (anchor?: string) => void }) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const [automation, setAutomation] = useState<UpdateAutomation>(DEFAULT_UPDATE_AUTOMATION);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
@@ -965,7 +967,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
       // unsaved change as if it persisted, silently diverging from the DB
       // (and thus from what automation actually does) until remount.
       setAutomation(prev);
-      toast.error(`Failed to save update automation: ${e}`);
+      sn.error(`Failed to save update automation: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -1091,6 +1093,7 @@ function UpdateAutomationCard({ server, onNavigateToConfig }: { server: ServerRo
 
 /** Start this server automatically whenever LokiASAM opens (StartupRecoveryManager queues it). */
 function AutoStartCard({ server }: { server: ServerRow }) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const on = server.auto_start === 1;
@@ -1101,7 +1104,7 @@ function AutoStartCard({ server }: { server: ServerRow }) {
       await setServerAutoStart(server.id, !on);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     } catch (e) {
-      toast.error(`Failed to save: ${e}`);
+      sn.error(`Failed to save: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -1137,6 +1140,7 @@ function AutoStartCard({ server }: { server: ServerRow }) {
 }
 
 function BackupBroadcastCard({ server }: { server: ServerRow }) {
+  const sn = serverNotify(server);
   const queryClient = useQueryClient();
   const [message, setMessage] = useState(server.backup_broadcast_message ?? "Server backup in progress — lag may occur.");
   const [saving, setSaving] = useState(false);
@@ -1147,9 +1151,9 @@ function BackupBroadcastCard({ server }: { server: ServerRow }) {
     try {
       await updateBackupBroadcastMessage(server.id, message);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.success("Backup message saved");
+      sn.success("Backup message saved");
     } catch (e) {
-      toast.error(`Failed to save: ${e}`);
+      sn.error(`Failed to save: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -1202,15 +1206,16 @@ interface Props {
 }
 
 export function AutomationTab({ server, onNavigateToConfig }: Props) {
+  const sn = serverNotify(server);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadSchedules = useCallback(async () => {
     setLoading(true);
     try { setSchedules(await getServerSchedules(server.id)); }
-    catch (e) { toast.error(`Failed to load schedules: ${e}`); }
+    catch (e) { sn.error(`Failed to load schedules: ${e}`); }
     finally { setLoading(false); }
-  }, [server.id]);
+  }, [server.id, sn]);
 
   useOnMount(loadSchedules);
 

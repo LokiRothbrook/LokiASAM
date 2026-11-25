@@ -57,9 +57,9 @@ import { useAllMaps } from "@/hooks/useAllMaps";
 import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { buildStartParams, restartServerGracefully, stopServerGracefully } from "@/lib/server-utils";
 import { dispatchNotification } from "@/lib/notifications";
+import { notify } from "@/lib/notify";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/store/useAppStore";
-import { toast } from "sonner";
 import type { ServerRow } from "@/lib/db";
 import { formatServerVersion } from "@/lib/db";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
@@ -282,7 +282,6 @@ export function ServerCard({ server }: Props) {
 
       await updateServerStatus(server.id, "start-failed", null);
       queryClient.invalidateQueries({ queryKey: ["servers"] });
-      toast.error(`${server.name} failed to start`, { description: userMsg });
       dispatchNotification({
         eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
         serverId:   server.id,
@@ -311,7 +310,7 @@ export function ServerCard({ server }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       enqueueStartup([server.id]);
     } catch (err) {
-      toast.error(`Failed to queue ${server.name} to start`, { description: String(err) });
+      notify.error(`Failed to queue ${server.name} to start`, { description: err, server, event: "server_action_failed" });
     } finally {
       setActionPending(false);
     }
@@ -324,7 +323,7 @@ export function ServerCard({ server }: Props) {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
     } catch (err) {
-      toast.error(`Failed to stop ${server.name}`, { description: String(err) });
+      notify.error(`Failed to stop ${server.name}`, { description: err, server, event: "server_action_failed" });
     } finally {
       setActionPending(false);
     }
@@ -335,7 +334,7 @@ export function ServerCard({ server }: Props) {
     try {
       await tauriCmd.stopServer(server.id, false);
     } catch (err) {
-      toast.error(`Force stop failed: ${err}`);
+      notify.error("Force stop failed", { description: err, server, event: "server_action_failed" });
     } finally {
       setForceStopping(false);
     }
@@ -351,7 +350,7 @@ export function ServerCard({ server }: Props) {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
     } catch (err) {
-      toast.error(`Failed to restart ${server.name}`, { description: String(err) });
+      notify.error(`Failed to restart ${server.name}`, { description: err, server, event: "server_action_failed" });
     } finally {
       if (!isWarnRestart) setActionPending(false);
     }

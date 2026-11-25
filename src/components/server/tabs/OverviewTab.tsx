@@ -38,11 +38,11 @@ import { reinstallServer } from "@/lib/server-actions";
 import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
-import { toast } from "sonner";
 import { ARK_EVENTS, NOTIFICATION_EVENTS, getSaveFolder } from "@/data/game-data";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { dispatchNotification } from "@/lib/notifications";
+import { notify } from "@/lib/notify";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useOnMount } from "@/hooks/useOnMount";
@@ -700,7 +700,6 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       if (isExeMissing) setNoRetryServer(server.id);
 
       await updateServerStatus(server.id, "start-failed", null);
-      toast.error(`${server.name} failed to start — ${errMsg}`);
       await dispatchNotification({
         eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
         serverId:   server.id,
@@ -727,7 +726,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       enqueueStartup([server.id]);
     } catch (err) {
-      toast.error(`Failed to queue ${server.name} to start`, { description: String(err) });
+      notify.error(`Failed to queue ${server.name} to start`, { description: err, server, event: "server_action_failed" });
     } finally {
       setActionPending(false);
     }
@@ -740,7 +739,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
     } catch (err) {
-      toast.error(`Failed to stop ${server.name}`, { description: String(err) });
+      notify.error(`Failed to stop ${server.name}`, { description: err, server, event: "server_action_failed" });
       await updateServerStatus(server.id, "error", null);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
@@ -753,7 +752,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
     try {
       await tauriCmd.stopServer(server.id, false);
     } catch (err) {
-      toast.error(`Force stop failed: ${err}`);
+      notify.error("Force stop failed", { description: err, server, event: "server_action_failed" });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       setForceStopping(false);
@@ -770,7 +769,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
         onInvalidate: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
       });
     } catch (err) {
-      toast.error(`Failed to restart ${server.name}`, { description: String(err) });
+      notify.error(`Failed to restart ${server.name}`, { description: err, server, event: "server_action_failed" });
     } finally {
       if (!isWarnRestart) setActionPending(false);
     }
@@ -794,29 +793,39 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
     try {
       await reinstallServer(server);
     } catch (err) {
-      toast.error(`Reinstall failed for ${server.name}`, { description: String(err) });
+      notify.error(`Reinstall failed for ${server.name}`, { description: err, server, event: "server_action_failed" });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     }
   };
 
-  const refreshPlayers = useCallback(async () => {
+  // `auto` = opening the tab, not a Refresh click. RCON connects a little
+  // after the server reports running (and reconnects after a drop), so an
+  // automatic fetch shows the cached list and, when RCON isn't connected
+  // yet, waits for the manager's player event instead of reporting an error.
+  const loadPlayers = useCallback(async (auto: boolean) => {
     setPlayersLoading(true);
     try {
+      if (auto) {
+        const cached = await tauriCmd.rconGetCachedPlayers(server.id);
+        if (cached) { setPlayers(cached); return; }
+        if (!(await tauriCmd.rconIsConnected(server.id))) return;
+      }
       const list = await tauriCmd.rconGetPlayers(server.id);
       setPlayers(list);
     } catch (err) {
       setPlayers([]);
-      toast.error("Failed to fetch player list via RCON", { description: String(err) });
+      notify.error("Couldn't fetch the player list over RCON", { description: err, server, event: "rcon_error" });
     } finally {
       setPlayersLoading(false);
     }
-  }, [server.id]);
+  }, [server]);
+  const refreshPlayers = useCallback(() => loadPlayers(false), [loadPlayers]);
 
   // Fetch player list on mount/server-change if running.
   const syncPlayersIfRunning = useCallback(() => {
-    if (server.status === "running") refreshPlayers();
-  }, [server.status, refreshPlayers]);
+    if (server.status === "running") loadPlayers(true);
+  }, [server.status, loadPlayers]);
   useOnMount(syncPlayersIfRunning);
 
   // The per-server event emits the players array directly as payload.
@@ -1210,7 +1219,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             <Skull className="w-3.5 h-3.5" />
             Wipe Wild Dinos
           </button>
-          <WipeWildDinosDialog serverId={server.id} open={wipeDinosOpen} onOpenChange={setWipeDinosOpen} />
+          <WipeWildDinosDialog server={server} open={wipeDinosOpen} onOpenChange={setWipeDinosOpen} />
         </div>
       )}
 

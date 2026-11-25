@@ -1653,6 +1653,14 @@ export const NOTIFICATION_EVENTS = {
   BACKUP_FAILED: "backup_failed",
   SERVER_INSTALL_COMPLETE: "server_install_complete",
   SERVER_INSTALL_FAILED: "server_install_failed",
+  // App-level categories — every toast the app shows maps to one of these
+  // (via notify() in src/lib/notify.ts) so it's logged and configurable.
+  RCON_ERROR: "rcon_error",
+  SERVER_ACTION_FAILED: "server_action_failed",
+  APP_ERROR: "app_error",
+  APP_WARNING: "app_warning",
+  ACTION_COMPLETED: "action_completed",
+  INPUT_PROBLEM: "input_problem",
 } as const;
 
 export type NotificationEventType =
@@ -1671,10 +1679,51 @@ export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = 
   update_failed:           "Update Failed",
   update_check_failed:     "Update Check Failed (App / Proton-GE)",
   backup_completed:        "Backup Completed",
-  backup_failed:           "Backup Failed",
+  backup_failed:           "Backup / Restore Failed",
   server_install_complete: "Server Install Complete",
   server_install_failed:   "Server Install Failed",
+  rcon_error:              "RCON Error",
+  server_action_failed:    "Server Action Failed (Start/Stop/Restart/Verify…)",
+  app_error:               "Other Errors (Save, Load, Install…)",
+  app_warning:             "Warnings",
+  action_completed:        "Confirmations & Info",
+  input_problem:           "Missing / Invalid Input",
 };
+
+/**
+ * Events that default to OFF for the bell, Discord and SMTP: routine
+ * confirmations and form-input hints. They still toast and are still archived
+ * on the Notifications page; ticking them in the matrix turns them on.
+ */
+export const QUIET_NOTIFICATION_EVENTS: readonly NotificationEventType[] = [
+  "action_completed",
+  "input_problem",
+];
+
+/** App-level categories added in migration 029 — off for Discord/SMTP by default. */
+export const APP_NOTIFICATION_EVENTS: readonly NotificationEventType[] = [
+  "rcon_error",
+  "server_action_failed",
+  "app_error",
+  "app_warning",
+  "action_completed",
+  "input_problem",
+];
+
+/**
+ * Events ticked for a channel row that doesn't exist yet: every event for the
+ * toast, all but the quiet ones for the bell, nothing for desktop, and the
+ * server/backup/update events (not the app-level categories) for Discord/SMTP.
+ */
+export function defaultChannelEvents(channel: string): NotificationEventType[] {
+  const all = Object.values(NOTIFICATION_EVENTS) as NotificationEventType[];
+  switch (channel) {
+    case "in_app":  return all;
+    case "bell":    return all.filter((e) => !QUIET_NOTIFICATION_EVENTS.includes(e));
+    case "desktop": return [];
+    default:        return all.filter((e) => !APP_NOTIFICATION_EVENTS.includes(e));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Server Status

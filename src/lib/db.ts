@@ -558,6 +558,36 @@ async function runMigrations(db: Database): Promise<void> {
      WHERE created_at NOT LIKE '%T%'`
   );
 
+  // ── Migration 029: app-level notification categories ────────────────────
+  // Every toast now goes through notify() and is logged under one of six new
+  // events. Event lists are explicit, so tick them where they belong:
+  // all six for the toast (otherwise toasts would vanish), and the
+  // errors/warnings for the bell. Discord/SMTP/desktop stay opt-in.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_029_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const { APP_NOTIFICATION_EVENTS, QUIET_NOTIFICATION_EVENTS } = await import("@/data/game-data");
+      const rows = await db.select<{ id: string; channel: string; events_json: string }[]>(
+        "SELECT id, channel, events_json FROM notification_configs WHERE channel IN ('in_app', 'bell')"
+      );
+      for (const row of rows) {
+        let events: string[];
+        try { events = JSON.parse(row.events_json || "[]"); } catch { continue; }
+        const add = APP_NOTIFICATION_EVENTS.filter(
+          (e) => !events.includes(e) && (row.channel === "in_app" || !QUIET_NOTIFICATION_EVENTS.includes(e))
+        );
+        if (add.length > 0) {
+          await db.execute("UPDATE notification_configs SET events_json = ? WHERE id = ?", [JSON.stringify([...events, ...add]), row.id]);
+        }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_029_done', 'true')"
+      );
+    }
+  }
+
   // ── Migration 028: "Update Check Failed" notification ────────────────────
   // Event lists are explicit, so a new event is off for existing rows unless
   // added — tick it for the toast and bell, where it belongs by default.

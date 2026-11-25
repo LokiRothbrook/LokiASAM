@@ -31,7 +31,6 @@ import { warnIfFirewallMissing } from "@/lib/firewall-utils";
 import { ensureMapsCacheLoaded, findMapById } from "@/lib/maps";
 import { dispatchNotification } from "@/lib/notifications";
 import { NOTIFICATION_EVENTS } from "@/data/game-data";
-import { toast } from "sonner";
 
 export function StartupQueueManager() {
   const queryClient   = useQueryClient();
@@ -134,7 +133,6 @@ export function StartupQueueManager() {
         await updateServerStatus(nextId, "start-failed", null);
         queryClient.invalidateQueries({ queryKey: ["servers"] });
 
-        toast.error(`${serverName} failed to start`, { description: userMsg });
         dispatchNotification({
           eventType:  NOTIFICATION_EVENTS.SERVER_START_FAILED,
           serverId:   nextId,

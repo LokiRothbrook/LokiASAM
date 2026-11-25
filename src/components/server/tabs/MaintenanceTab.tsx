@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { serverNotify } from "@/lib/notify";
 import {
   ShieldCheck, RotateCcw, X, Save, Loader2, FolderOpen,
 } from "lucide-react";
@@ -32,6 +32,7 @@ interface Props {
 // ---------------------------------------------------------------------------
 
 function VerifyFilesCard({ server }: Props) {
+  const sn = serverNotify(server);
   const [validating, setValidating] = useState(false);
   const isRunning = server.status === "running";
 
@@ -42,14 +43,14 @@ function VerifyFilesCard({ server }: Props) {
         getAppSetting("steamcmd_path"),
         getAppSetting("base_dir"),
       ]);
-      if (!steamcmdPath) { toast.error("SteamCMD path not configured"); return; }
-      if (!baseDir) { toast.error("Base directory not configured"); return; }
+      if (!steamcmdPath) { sn.error("SteamCMD path not configured"); return; }
+      if (!baseDir) { sn.error("Base directory not configured"); return; }
       const sep = baseDir.includes("\\") ? "\\" : "/";
       const cacheDir = `${baseDir.replace(/[/\\]$/, "")}${sep}lokiasam${sep}cache${sep}asa-server`;
       await tauriCmd.validateServerFiles(server.id, server.install_path, cacheDir, steamcmdPath);
-      toast.success("Game files verified");
+      sn.success("Game files verified");
     } catch (e) {
-      toast.error(`Validation failed: ${e}`);
+      sn.error("Game file verification failed", { description: e, event: "server_action_failed" });
     } finally {
       setValidating(false);
     }
@@ -162,6 +163,7 @@ function ReinstallCard({ server }: Props) {
 // ---------------------------------------------------------------------------
 
 function WipeSaveDataCard({ server }: Props) {
+  const sn = serverNotify(server);
   const allMaps = useAllMaps();
   const [wipeConfirm, setWipeConfirm] = useState<"map" | "players" | "full" | null>(null);
   const [wiping, setWiping] = useState(false);
@@ -174,9 +176,9 @@ function WipeSaveDataCard({ server }: Props) {
     try {
       await tauriCmd.wipeServerSaves(server.id, server.install_path, saveFolder, tier);
       setWipeConfirm(null);
-      toast.success(`Save wipe complete (${tier})`);
+      sn.success(`Save wipe complete (${tier})`);
     } catch (e) {
-      toast.error(`Save wipe failed: ${e}`);
+      sn.error("Save wipe failed", { description: e, event: "server_action_failed" });
     } finally {
       setWiping(false);
     }
@@ -247,6 +249,7 @@ function WipeSaveDataCard({ server }: Props) {
 // ---------------------------------------------------------------------------
 
 function ImportSavesCard({ server }: Props) {
+  const sn = serverNotify(server);
   const allMaps = useAllMaps();
   const [showImport, setShowImport] = useState(false);
   const [importSourceId, setImportSourceId] = useState("");
@@ -271,9 +274,9 @@ function ImportSavesCard({ server }: Props) {
       const saveFolder = mapDef ? getSaveFolder(mapDef) : server.map_id;
       await tauriCmd.importServerSaves(importSourceId, server.id, baseDir, saveFolder);
       setShowImport(false);
-      toast.success("Save data imported successfully");
+      sn.success("Save data imported successfully");
     } catch (e) {
-      toast.error(`Import failed: ${e}`);
+      sn.error("Save import failed", { description: e, event: "server_action_failed" });
     } finally {
       setImporting(false);
     }
