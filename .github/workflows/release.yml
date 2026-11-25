@@ -129,7 +129,24 @@ jobs:
             ### Notes
             - This is a public beta — bugs are expected. Please report them on the [Issues](https://github.com/LokiRothbrook/LokiASAM/issues) page.
             - Linux requires a working Proton-GE installation. The setup wizard will guide you through this.
-          releaseDraft: false
+          # Built as a draft and published by the `publish` job below once every
+          # platform has uploaded. A published release becomes "latest" right
+          # away, and until latest.json was uploaded the in-app updater's
+          # releases/latest/download/latest.json link 404'd for every user.
+          releaseDraft: true
           prerelease: false
           updaterJsonKeepUniversal: false
           updaterJsonPreferNsis: true
+
+  publish:
+    # Runs only if every platform build succeeded — a failed build leaves the
+    # draft unpublished, so a half-uploaded release never becomes "latest".
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false --latest

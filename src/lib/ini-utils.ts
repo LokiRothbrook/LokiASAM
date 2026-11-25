@@ -5,6 +5,50 @@
 
 export type IniSections = Record<string, Record<string, string>>;
 
+/**
+ * Repeated keys: Game.ini relies on keys that appear on several lines
+ * (OverridePlayerLevelEngramPoints, OverrideNamedEngramEntries,
+ * ConfigOverrideItemMaxQuantity, …). The app keeps them as ONE value with
+ * the lines joined by "\n" — a real INI value can't contain a newline — and
+ * writes them back out as one line each. The Rust side (config.rs) uses the
+ * same encoding.
+ */
+export const REPEAT_SEP = "\n";
+
+/** Parse INI text into sections; repeated keys are joined with REPEAT_SEP. */
+export function parseIniText(text: string): IniSections {
+  const result: IniSections = {};
+  let current = "";
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+    if (line.startsWith("[") && line.endsWith("]")) {
+      current = line.slice(1, -1);
+      result[current] = result[current] ?? {};
+    } else if (current && line.includes("=")) {
+      const eq = line.indexOf("=");
+      const key = line.slice(0, eq).trim();
+      const value = line.slice(eq + 1);
+      if (!key) continue;
+      const prev = result[current][key];
+      result[current][key] = prev === undefined ? value : `${prev}${REPEAT_SEP}${value}`;
+    }
+  }
+  return result;
+}
+
+/** Turn sections back into INI text, one line per repeated value. */
+export function iniToText(sections: IniSections): string {
+  return Object.entries(sections)
+    .map(([section, kvs]) => {
+      const lines = Object.entries(kvs).flatMap(([k, v]) =>
+        String(v).split(REPEAT_SEP).map((part) => `${k}=${part}`),
+      );
+      return `[${section}]\n${lines.join("\n")}`;
+    })
+    .join("\n\n");
+}
+
 /** The Game.ini section every gameplay setting lives in. */
 export const GAME_MODE_SECTION = "/script/shootergame.shootergamemode";
 /** ASA reads MaxPlayers from this UE section of GameUserSettings.ini. */
@@ -16,7 +60,8 @@ export function findSectionKey(sections: IniSections, name: string): string | un
   return Object.keys(sections).find((k) => k.toLowerCase() === lower);
 }
 
-/** Read one value, matching the section name case-insensitively. */
+/** Read one value, matching the section name case-insensitively. A repeated
+ *  key returns all its lines joined with REPEAT_SEP. */
 export function getIni(sections: IniSections | undefined | null, section: string, key: string): string | undefined {
   if (!sections) return undefined;
   const sec = findSectionKey(sections, section);

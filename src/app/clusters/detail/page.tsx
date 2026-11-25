@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { joinCluster, leaveCluster } from "@/lib/cluster-utils";
+import { joinCluster, leaveCluster, clusterDataDir } from "@/lib/cluster-utils";
 import { tauriCmd } from "@/lib/tauri-commands";
 import {
   getCluster,
@@ -36,6 +36,7 @@ import {
   type ServerRow,
 } from "@/lib/db";
 import { useAllMaps } from "@/hooks/useAllMaps";
+import { ClusterBackupsCard } from "@/components/cluster/ClusterBackupsCard";
 import { ServerStatusBadge } from "@/components/server/ServerStatusBadge";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -244,7 +245,7 @@ function ClusterDetailContent() {
   }, []);
 
   const resolvedClusterDir = cluster
-    ? (cluster.cluster_dir_override?.trim() || `${baseDir}/clusters/${cluster.id}`)
+    ? clusterDataDir(cluster, baseDir)
     : "";
 
   async function handleRemove(server: ServerRow) {
@@ -409,9 +410,10 @@ function ClusterDetailContent() {
           </div>
         </div>
         <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          This Cluster ID is passed as{" "}
-          <code className="font-mono">-ClusterID={cluster.id}</code> to each member server&apos;s
-          launch arguments so they can share player and tribe data.
+          Member servers start with{" "}
+          <code className="font-mono">-clusterid={cluster.id}</code> and{" "}
+          <code className="font-mono">-NoTransferFromFiltering</code> so players can transfer between them
+          (and not to servers outside the cluster). Changes apply on each server&apos;s next start.
         </p>
       </div>
 
@@ -458,6 +460,9 @@ function ClusterDetailContent() {
           </div>
         )}
       </div>
+
+      {/* Cluster backups */}
+      <ClusterBackupsCard cluster={cluster} members={members} onSettingsSaved={refresh} />
 
       {/* Add Server Dialog */}
       <AddServerDialog

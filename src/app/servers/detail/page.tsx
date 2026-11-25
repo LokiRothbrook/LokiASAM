@@ -18,7 +18,8 @@ import { ModsTab } from "@/components/server/tabs/ModsTab";
 import { BackupsTab } from "@/components/server/tabs/BackupsTab";
 import { AutomationTab } from "@/components/server/tabs/AutomationTab";
 import { MaintenanceTab } from "@/components/server/tabs/MaintenanceTab";
-import { formatServerVersion } from "@/lib/db";
+import { formatServerVersion, getCluster } from "@/lib/db";
+import { useQuery } from "@tanstack/react-query";
 import { useAllMaps } from "@/hooks/useAllMaps";
 import { useServers } from "@/hooks/useServers";
 import { useBuildVersionCache } from "@/hooks/useBuildVersionCache";
@@ -67,6 +68,12 @@ export default function ServerDetailPage() {
   const { data: servers = [], isLoading } = useServers();
   const server = servers.find((s) => s.id === serverId) ?? null;
   const notFound = !isLoading && !server;
+  const clusterId = server?.cluster_id ?? null;
+  const { data: cluster } = useQuery({
+    queryKey: ["cluster", clusterId],
+    queryFn: () => getCluster(clusterId!),
+    enabled: !!clusterId,
+  });
 
   useEffect(() => {
     if (!serverId) router.replace("/");
@@ -170,6 +177,14 @@ export default function ServerDetailPage() {
               <>
                 {" "}·{" "}
                 <span className="font-mono">{formatServerVersion(server.installed_build_id, versionCache)}</span>
+              </>
+            )}
+            {cluster && (
+              <>
+                {" "}· Cluster{" "}
+                <Link href={`/clusters/detail?id=${cluster.id}`} className="hover:underline" style={{ color: "var(--neon-purple)" }}>
+                  {cluster.name}
+                </Link>
               </>
             )}
             {" "}· ID <span className="font-mono">{server.id.slice(0, 8)}</span>

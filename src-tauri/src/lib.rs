@@ -606,6 +606,9 @@ pub fn run() {
             commands::cluster::delete_cluster,
             commands::cluster::add_server_to_cluster,
             commands::cluster::remove_server_from_cluster,
+            commands::cluster_backup::create_cluster_backup,
+            commands::cluster_backup::restore_cluster_backup,
+            commands::cluster_backup::delete_cluster_backup,
             // Scheduler
             commands::scheduler::sync_schedules,
         ])

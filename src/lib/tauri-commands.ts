@@ -764,6 +764,11 @@ export const tauriCmd = {
   deleteCluster:          (clusterDir: string, baseDir: string, deleteFiles: boolean) => invoke<void>("delete_cluster", { clusterDir, baseDir, deleteFiles }),
   addServerToCluster:     (serverId: string, clusterId: string) =>
     invoke<void>("add_server_to_cluster", { serverId, clusterId }),
+  /** Archive a cluster's shared data now ("Back up now"). */
+  createClusterBackup:    (clusterId: string) => invoke<void>("create_cluster_backup", { clusterId }),
+  /** Restore a cluster backup — every member server must be stopped. */
+  restoreClusterBackup:   (backupId: string) => invoke<void>("restore_cluster_backup", { backupId }),
+  deleteClusterBackup:    (backupId: string) => invoke<void>("delete_cluster_backup", { backupId }),
   removeServerFromCluster: (serverId: string) =>
     invoke<void>("remove_server_from_cluster", { serverId }),
 

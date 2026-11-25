@@ -5,6 +5,7 @@ pub mod countdown;
 pub mod certs;
 pub mod firewall;
 pub mod cluster;
+pub mod cluster_backup;
 pub mod config;
 pub mod logs;
 pub mod mods;

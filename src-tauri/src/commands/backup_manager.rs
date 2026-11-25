@@ -92,14 +92,14 @@ const TIER_DEFAULT_KEEP: [(char, u32); 4] = [
 ];
 
 #[derive(Debug, Default, Clone, Copy)]
-struct TierCfg {
+pub(crate) struct TierCfg {
     enabled: bool,
     keep:    u32,
 }
 
-type TierConfig = HashMap<char, TierCfg>;
+pub(crate) type TierConfig = HashMap<char, TierCfg>;
 
-fn parse_tier_config(config_json: &str) -> TierConfig {
+pub(crate) fn parse_tier_config(config_json: &str) -> TierConfig {
     let mut cfg = TierConfig::new();
     let v: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
 
@@ -135,7 +135,7 @@ fn parse_tier_config(config_json: &str) -> TierConfig {
     cfg
 }
 
-fn tier_config_any_enabled(cfg: &TierConfig) -> bool {
+pub(crate) fn tier_config_any_enabled(cfg: &TierConfig) -> bool {
     cfg.values().any(|c| c.enabled)
 }
 
@@ -146,7 +146,7 @@ fn tier_config_any_enabled(cfg: &TierConfig) -> bool {
 /// Rename a backup file path to embed the new tier suffix.
 /// "server-2024-01-15_10-00-00.7z"        → "server-2024-01-15_10-00-00-DH.7z"
 /// "server-2024-01-15_10-00-00-H.7z" + "D,H" → "server-2024-01-15_10-00-00-DH.7z"
-fn compute_renamed_path(file_path: &str, new_tiers: &str) -> String {
+pub(crate) fn compute_renamed_path(file_path: &str, new_tiers: &str) -> String {
     let sep = if file_path.contains('\\') { '\\' } else { '/' };
     let last_sep = file_path.rfind(sep).map(|i| i + 1).unwrap_or(0);
     let dir  = &file_path[..last_sep];
@@ -175,12 +175,56 @@ fn compute_renamed_path(file_path: &str, new_tiers: &str) -> String {
 }
 
 /// Remove a single tier letter from a comma-separated tiers string.
-fn remove_tier(tiers: &str, tier: char) -> String {
+pub(crate) fn remove_tier(tiers: &str, tier: char) -> String {
     tiers
         .split(',')
         .filter(|t| !t.trim().is_empty() && t.trim() != &tier.to_string())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// Which enabled tiers are due now, given existing archives as (tiers,
+/// created_at) pairs. Hourly is due on every tick; the others when their
+/// interval has passed since the newest archive carrying that tier. Shared by
+/// server/player backups and cluster backups.
+pub(crate) fn compute_due_tiers(existing: &[(&str, &str)], cfg: &TierConfig) -> Vec<char> {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut due = Vec::new();
+    for (tier_char, _, threshold_secs) in &TIERS {
+        if !cfg.get(tier_char).is_some_and(|c| c.enabled) { continue; }
+        if *threshold_secs == 0 {
+            due.push(*tier_char);
+            continue;
+        }
+        let last_secs = existing.iter()
+            .filter(|(tiers, _)| tiers.split(',').any(|t| t.trim() == tier_char.to_string()))
+            .map(|(_, created)| db::iso_to_unix_secs(created))
+            .max()
+            .unwrap_or(0);
+        if now_secs.saturating_sub(last_secs) >= *threshold_secs {
+            due.push(*tier_char);
+        }
+    }
+    due
+}
+
+/// Canonical tier string in M,W,D,H priority order.
+pub(crate) fn tiers_string(due: &[char]) -> String {
+    ['M', 'W', 'D', 'H'].iter()
+        .filter(|c| due.contains(c))
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Keep count for a tier (configured, else the tier default).
+pub(crate) fn tier_keep(cfg: &TierConfig, tier: char) -> u32 {
+    cfg.get(&tier)
+        .map(|c| c.keep)
+        .unwrap_or_else(|| TIER_DEFAULT_KEEP.iter().find(|(c, _)| *c == tier).map(|(_, k)| *k).unwrap_or(24))
 }
 
 // ---------------------------------------------------------------------------
@@ -196,44 +240,15 @@ fn handle_backup_record(
     backup_type: &str,
     eos_id: Option<&str>,
 ) {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
     let all_backups = db::get_server_backups_by_type(conn, &rec.server_id, backup_type);
 
     // For player backups, only consider backups for this specific player.
-    let relevant: Vec<&db::BackupRow> = all_backups.iter()
+    let relevant: Vec<(&str, &str)> = all_backups.iter()
         .filter(|b| eos_id.map_or(true, |id| b.player_eosid.as_deref() == Some(id)))
+        .map(|b| (b.tiers.as_str(), b.created_at.as_str()))
         .collect();
 
-    let mut due_tiers: Vec<char> = Vec::new();
-
-    for (tier_char, _, threshold_secs) in &TIERS {
-        let t_cfg = match cfg.get(tier_char) {
-            Some(c) if c.enabled => *c,
-            _ => continue,
-        };
-        let _ = t_cfg; // keep alive
-
-        if *threshold_secs == 0 {
-            // Hourly: always due when the tick fires.
-            due_tiers.push(*tier_char);
-            continue;
-        }
-
-        // Find the most recent backup with this tier.
-        let last_secs = relevant.iter()
-            .filter(|b| b.tiers.split(',').any(|t| t.trim() == tier_char.to_string()))
-            .map(|b| db::iso_to_unix_secs(&b.created_at))
-            .max()
-            .unwrap_or(0);
-
-        if now_secs.saturating_sub(last_secs) >= *threshold_secs {
-            due_tiers.push(*tier_char);
-        }
-    }
+    let due_tiers = compute_due_tiers(&relevant, cfg);
 
     if due_tiers.is_empty() {
         // No tier is due — discard the archive.
@@ -241,13 +256,7 @@ fn handle_backup_record(
         return;
     }
 
-    // Build canonical tier string (M,W,D,H priority order).
-    let const_order = ['M', 'W', 'D', 'H'];
-    let tiers_string: String = const_order.iter()
-        .filter(|c| due_tiers.contains(c))
-        .map(|c| c.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let tiers_string = tiers_string(&due_tiers);
 
     // Rename file to include tier suffix.
     let renamed_path = compute_renamed_path(&rec.file_path, &tiers_string);
@@ -272,13 +281,7 @@ fn handle_backup_record(
 
     // Prune each due tier.
     for tier_char in &due_tiers {
-        let keep = cfg.get(tier_char)
-            .map(|c| c.keep)
-            .unwrap_or_else(|| TIER_DEFAULT_KEEP.iter()
-                .find(|(c, _)| c == tier_char)
-                .map(|(_, k)| *k)
-                .unwrap_or(24));
-        prune_by_tier(conn, &rec.server_id, backup_type, *tier_char, keep, eos_id);
+        prune_by_tier(conn, &rec.server_id, backup_type, *tier_char, tier_keep(cfg, *tier_char), eos_id);
     }
 }
 
@@ -700,4 +703,7 @@ pub async fn execute_tick(app: &AppHandle) {
             );
         }
     }
+
+    // ── Cluster backups (shared transfer data) ─────────────────────────────
+    crate::commands::cluster_backup::backup_clusters_tick(app, &db_path, &base_dir, &backup_dir, &running_ids).await;
 }

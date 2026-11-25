@@ -49,10 +49,11 @@ import {
   createSchedule, updateScheduleConfig, getClusters, isServerNameTaken, updateServerStatus,
   addServerMod, getServers, getServerMods,
   updateBackupBroadcastMessage, setServerActiveEvent, updateServerRestartSettings, setServerAutoStart, setServerHideWindow,
-  type ClusterRow, type ServerRow,
+  type ClusterRow, type ServerRow, type BackupTierSettings, DEFAULT_BACKUP_TIERS,
 } from "@/lib/db";
 import { getNextCronDate } from "@/components/shared/CronBuilder";
 import { createCluster } from "@/lib/cluster-utils";
+import { BackupTiersEditor } from "@/components/shared/BackupTiersEditor";
 import { loadEffectiveConfig } from "@/lib/server-config";
 import { copyServerAutomation } from "@/lib/clone-utils";
 import { copyableMods } from "@/lib/maps";
@@ -1984,6 +1985,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
   const [clusters, setClusters] = useState<ClusterRow[]>([]);
   const [joinCluster, setJoinCluster] = useState(!!data.clusterId);
   const [newClusterName, setNewClusterName] = useState("");
+  const [newClusterBackups, setNewClusterBackups] = useState<BackupTierSettings>(DEFAULT_BACKUP_TIERS);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => { getClusters().then(setClusters).catch(() => {}); }, []);
@@ -2000,7 +2002,7 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
     if (!name) return;
     setCreating(true);
     try {
-      const id = await createCluster(name);
+      const id = await createCluster(name, null, newClusterBackups);
       setClusters(await getClusters());
       setNewClusterName("");
       handleSelectCluster(id);
@@ -2069,6 +2071,14 @@ function ClusterStep({ data, onChange }: { data: WizardData; onChange: (patch: P
                 {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Create"}
               </Button>
             </div>
+            {newClusterName.trim() && (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Cluster backups — players&apos; uploaded characters, dinos and items (changeable later on the cluster&apos;s page):
+                </p>
+                <BackupTiersEditor value={newClusterBackups} onChange={setNewClusterBackups} compact />
+              </div>
+            )}
           </div>
 
           {data.clusterId && (

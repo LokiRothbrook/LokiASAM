@@ -75,6 +75,7 @@ export const SERVER_TAB_TOURS: Record<string, TourDef> = {
     steps: [
       { target: "cfg-views", side: "bottom", title: "Ways to edit", body: "Settings (organized fields), Mod Settings (custom INI sections for mods), Advanced (launch flags, platform, hidden window, admin lists) and Raw INI." },
       { target: "cfg-identity", side: "bottom", title: "Server identity", body: "Name, passwords, ports and max players. Saved separately — straight to the game's files and the app — so they always stay in sync." },
+      { target: "cfg-cluster", side: "bottom", title: "Cluster", body: "Join a cluster (or create one) so players can transfer between servers. Cluster backups live on the cluster's own page." },
       { target: "cfg-quick-setup", side: "bottom", title: "Quick Setup", body: "Re-apply a preset (PvE/PvP × Official/Casual/Boosted) — the same presets the creation wizard uses. Overlay keeps your other settings." },
       { target: "cfg-menu", side: "bottom", title: "Import & history", body: "Import an INI file or pasted text, copy another server's config, reload from disk — or open Config History to roll back to an earlier save." },
       { target: "cfg-save", side: "bottom", title: "Save", body: "Writes the INI files. A snapshot is taken first (see Config History), and you'll get a heads-up about anything that would break the server." },

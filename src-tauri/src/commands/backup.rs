@@ -50,7 +50,7 @@ pub struct BackupProgress {
 
 /// Build a human-readable timestamp string for file/folder names.
 /// Format: YYYY-MM-DD_HH-MM-SS
-fn now_timestamp() -> (String, String) {
+pub(crate) fn now_timestamp() -> (String, String) {
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -86,7 +86,7 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
-fn sanitize_name(name: &str) -> String {
+pub(crate) fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
@@ -152,7 +152,7 @@ fn is_timestamp(b: &[u8]) -> bool {
 }
 
 /// Recursively collect all file paths under `dir`.
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+pub(crate) fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
@@ -224,7 +224,7 @@ pub async fn rcon_broadcast(pool: &RconPool, server_id: &str, message: &str) {
 /// Returns Ok(skipped_count) on success.  A non-zero skipped_count means some
 /// files disappeared between enumeration and compression — the caller should
 /// consider retrying with a fresh file list.
-fn compress_to_7z(
+pub(crate) fn compress_to_7z(
     app: &AppHandle,
     server_id: &str,
     files: &[PathBuf],

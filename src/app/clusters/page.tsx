@@ -18,7 +18,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { createCluster } from "@/lib/cluster-utils";
+import { createCluster, clusterDataDir } from "@/lib/cluster-utils";
+import { BackupTiersEditor } from "@/components/shared/BackupTiersEditor";
 import { tauriCmd } from "@/lib/tauri-commands";
 import {
   getClustersWithServerCount,
@@ -27,6 +28,8 @@ import {
   setServerCluster,
   getAppSetting,
   type ClusterRow,
+  DEFAULT_BACKUP_TIERS,
+  type BackupTierSettings,
 } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
@@ -42,16 +45,18 @@ interface NewClusterDialogProps {
 function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
   const [name, setName] = useState("");
   const [customDir, setCustomDir] = useState("");
+  const [backupTiers, setBackupTiers] = useState<BackupTierSettings>(DEFAULT_BACKUP_TIERS);
   const [busy, setBusy] = useState(false);
 
   async function handleCreate() {
     if (!name.trim()) return;
     setBusy(true);
     try {
-      await createCluster(name.trim(), customDir);
+      await createCluster(name.trim(), customDir, backupTiers);
       toast.success(`Cluster "${name.trim()}" created.`);
       setName("");
       setCustomDir("");
+      setBackupTiers(DEFAULT_BACKUP_TIERS);
       onCreated();
       onClose();
     } catch (e) {
@@ -101,9 +106,17 @@ function NewClusterDialog({ open, onClose, onCreated }: NewClusterDialogProps) {
               style={{ background: "var(--surface)", borderColor: "var(--border)" }}
             />
             <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-              If left blank, the cluster directory will be created inside your
-              base install directory at <code>clusters/&#123;id&#125;/</code>.
+              Cluster data is stored in <code>clusters/&#123;id&#125;/</code> inside this folder — or inside
+              your base install directory if left blank.
             </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label style={{ color: "var(--text-primary)" }}>Cluster Backups</Label>
+            <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+              Backs up players&apos; uploaded characters, dinos and items while any server in the cluster is running.
+              Each tier keeps its own rotation. You can change this later on the cluster&apos;s page.
+            </p>
+            <BackupTiersEditor value={backupTiers} onChange={setBackupTiers} compact />
           </div>
         </div>
 
@@ -158,9 +171,7 @@ function DeleteDialog({ cluster, onClose, onDeleted }: DeleteDialogProps) {
     let cancelled = false;
     getAppSetting("base_dir").then((baseDir) => {
       if (cancelled) return;
-      const dir = cluster.cluster_dir_override?.trim()
-        ? cluster.cluster_dir_override
-        : `${(baseDir ?? "").replace(/[/\\]$/, "")}/clusters/${cluster.id}`;
+      const dir = clusterDataDir(cluster, baseDir ?? "");
       setClusterDir(dir);
 
       return tauriCmd.getDirSize(dir)

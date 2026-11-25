@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useOnMount } from "@/hooks/useOnMount";
 import {
   Archive, Plus, Trash2, RotateCcw, HardDrive, User, FileText,
-  AlertCircle, Loader2, RefreshCw, CalendarClock,
+  AlertCircle, Loader2, RefreshCw, CalendarClock, Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import { stopServerGracefully } from "@/lib/server-utils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { getSaveFolder } from "@/data/game-data";
 import { useAllMaps } from "@/hooks/useAllMaps";
-import type { ServerRow } from "@/lib/db";
+import { getCluster, type ServerRow } from "@/lib/db";
 import type { BackupRecord } from "@/lib/tauri-commands";
 import { OptionSelect } from "@/components/shared/OptionSelect";
 
@@ -510,6 +511,26 @@ function PlayerBackupSection({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ClusterBackupNote — points cluster members at the cluster's own backups
+// ---------------------------------------------------------------------------
+
+function ClusterBackupNote({ clusterId }: { clusterId: string }) {
+  const { data: cluster } = useQuery({ queryKey: ["cluster", clusterId], queryFn: () => getCluster(clusterId) });
+  if (!cluster) return null;
+  return (
+    <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs"
+      style={{ background: "rgba(var(--neon-purple-rgb),0.04)", border: "1px solid rgba(var(--neon-purple-rgb),0.15)", color: "var(--text-muted)" }}>
+      <Info className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--neon-purple)" }} />
+      <span>
+        This server is in the <strong style={{ color: "var(--text-primary)" }}>{cluster.name}</strong> cluster. Players&apos; uploaded
+        characters, dinos and items are backed up from{" "}
+        <Link href={`/clusters/detail?id=${cluster.id}`} className="hover:underline" style={{ color: "var(--neon-purple)" }}>the cluster&apos;s page →</Link>
+      </span>
     </div>
   );
 }
@@ -1091,6 +1112,9 @@ export function BackupsTab({ server, onNavigateToAutomation }: Props) {
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
       </div>
+
+      {/* Cluster data is backed up from the cluster's page — one place for its settings */}
+      {server.cluster_id && <ClusterBackupNote clusterId={server.cluster_id} />}
 
       {/* INI backups */}
       {backupDir && (

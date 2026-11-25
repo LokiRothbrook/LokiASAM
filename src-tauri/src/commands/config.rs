@@ -27,9 +27,14 @@ fn config_dir(install_path: &Path) -> PathBuf {
         .join("WindowsServer")
 }
 
+/// Repeated keys (Game.ini's OverridePlayerLevelEngramPoints,
+/// OverrideNamedEngramEntries, ConfigOverrideItemMaxQuantity, …) are kept as
+/// one value with the lines joined by this separator — a real INI value can't
+/// contain a newline — and written back as one line each. ini-utils.ts uses
+/// the same encoding.
+const REPEAT_SEP: char = '\n';
+
 /// Parse an INI file at `path` into a JSON object of section → { key → value }.
-/// Uses a hand-rolled parser to preserve exact case of section names and keys,
-/// which is required for ASA INI files.
 fn parse_ini_file(path: &Path) -> Result<Value, String> {
     if !path.exists() {
         return Ok(Value::Object(Map::new()));
@@ -37,7 +42,12 @@ fn parse_ini_file(path: &Path) -> Result<Value, String> {
 
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    Ok(parse_ini_text(&content))
+}
 
+/// Parse INI text. Hand-rolled to preserve the exact case of section names
+/// and keys (required for ASA); repeated keys are joined with REPEAT_SEP.
+fn parse_ini_text(content: &str) -> Value {
     let mut sections: Map<String, Value> = Map::new();
     let mut current_section = String::new();
 
@@ -60,13 +70,27 @@ fn parse_ini_file(path: &Path) -> Result<Value, String> {
 
             if !current_section.is_empty() && !key.is_empty() {
                 if let Some(Value::Object(section_map)) = sections.get_mut(&current_section) {
-                    section_map.insert(key, Value::String(value));
+                    match section_map.get_mut(&key) {
+                        Some(Value::String(prev)) => {
+                            prev.push(REPEAT_SEP);
+                            prev.push_str(&value);
+                        }
+                        _ => { section_map.insert(key, Value::String(value)); }
+                    }
                 }
             }
         }
     }
 
-    Ok(Value::Object(sections))
+    Value::Object(sections)
+}
+
+/// A JSON INI value as text (strings as-is, anything else stringified).
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// Serialize a JSON section map back to INI file content.
@@ -82,14 +106,12 @@ fn serialize_ini(data: &Value) -> String {
 
             if let Some(kv_map) = keys.as_object() {
                 for (key, value) in kv_map {
-                    let v = match value {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    output.push_str(key);
-                    output.push('=');
-                    output.push_str(&v);
-                    output.push('\n');
+                    for part in value_text(value).split(REPEAT_SEP) {
+                        output.push_str(key);
+                        output.push('=');
+                        output.push_str(part);
+                        output.push('\n');
+                    }
                 }
             }
             output.push('\n');
@@ -128,17 +150,54 @@ pub async fn write_server_config(
         .await
         .map_err(|e| format!("Failed to create config directory: {e}"))?;
 
-    let gus_content = serialize_ini(&config.game_user_settings);
-    tokio::fs::write(base.join("GameUserSettings.ini"), gus_content)
-        .await
-        .map_err(|e| format!("Failed to write GameUserSettings.ini: {e}"))?;
-
-    let game_ini_content = serialize_ini(&config.game_ini);
-    tokio::fs::write(base.join("Game.ini"), game_ini_content)
-        .await
-        .map_err(|e| format!("Failed to write Game.ini: {e}"))?;
-
+    for (file_name, data) in [("GameUserSettings.ini", &config.game_user_settings), ("Game.ini", &config.game_ini)] {
+        let path = base.join(file_name);
+        let existing = tokio::fs::read_to_string(&path).await.ok().filter(|c| !c.trim().is_empty());
+        let content = match existing {
+            Some(current) => update_ini_text(&current, data),
+            None => serialize_ini(data),
+        };
+        if tokio::fs::read_to_string(&path).await.ok().as_deref() != Some(content.as_str()) {
+            tokio::fs::write(&path, content)
+                .await
+                .map_err(|e| format!("Failed to write {file_name}: {e}"))?;
+        }
+    }
     Ok(())
+}
+
+/// Bring existing INI text in line with `target` by editing only the keys
+/// that differ, so comments, ordering and untouched lines survive a save.
+fn update_ini_text(current: &str, target: &Value) -> String {
+    let empty = Map::new();
+    let before = parse_ini_text(current);
+    let before = before.as_object().unwrap_or(&empty);
+    let after = target.as_object().unwrap_or(&empty);
+    let section_map = |v: Option<&Value>| v.and_then(|s| s.as_object()).cloned().unwrap_or_default();
+
+    let mut removals = Vec::new();
+    let mut sets = Vec::new();
+    for (section, keys) in before {
+        let new_keys = section_map(after.get(section));
+        for key in keys.as_object().map(|m| m.keys()).into_iter().flatten() {
+            if !new_keys.contains_key(key) {
+                removals.push(IniPatchOp { file: String::new(), section: section.clone(), key: key.clone(), value: None });
+            }
+        }
+    }
+    for (section, keys) in after {
+        let old_keys = section_map(before.get(section));
+        for (key, value) in keys.as_object().into_iter().flatten() {
+            let v = value_text(value);
+            if old_keys.get(key).map(value_text).as_deref() != Some(v.as_str()) {
+                sets.push(IniPatchOp { file: String::new(), section: section.clone(), key: key.clone(), value: Some(v) });
+            }
+        }
+    }
+    // Removals first: a key whose case changed is removed (case-insensitive
+    // match) and then written with its new spelling.
+    let ops: Vec<&IniPatchOp> = removals.iter().chain(sets.iter()).collect();
+    if ops.is_empty() { current.to_string() } else { patch_ini_text(current, &ops) }
 }
 
 /// Parse the `GameUserSettings.ini` / `Game.ini` pair stored in an arbitrary
@@ -209,20 +268,21 @@ fn patch_ini_text(content: &str, ops: &[&IniPatchOp]) -> String {
 
         match &op.value {
             Some(v) => {
-                let new_line = format!("{}={}", op.key, v);
+                // One line per value (a repeated key carries several).
+                let new_lines: Vec<String> = v.split(REPEAT_SEP).map(|part| format!("{}={}", op.key, part)).collect();
                 if let Some(&first) = hits.first() {
-                    lines[first] = new_line;
-                    // Single-valued key: drop any later duplicates in the section.
-                    for &i in hits.iter().skip(1).rev() { lines.remove(i); }
+                    // Replace the key's lines where the first one was.
+                    for &i in hits.iter().rev() { lines.remove(i); }
+                    for (n, l) in new_lines.into_iter().enumerate() { lines.insert(first + n, l); }
                 } else if let Some(header) = section_header {
                     let at = section_end.unwrap_or(header) + 1;
-                    lines.insert(at, new_line);
+                    for (n, l) in new_lines.into_iter().enumerate() { lines.insert(at + n, l); }
                 } else {
                     if lines.last().map(|l| !l.trim().is_empty()).unwrap_or(false) {
                         lines.push(String::new());
                     }
                     lines.push(format!("[{}]", op.section));
-                    lines.push(new_line);
+                    lines.extend(new_lines);
                 }
             }
             None => {
@@ -351,6 +411,38 @@ mod tests {
         let o = op("gus", "SessionSettings", "ServerPassword", None);
         let out = patch_ini_text(src, &[&o]);
         assert_eq!(out, "[SessionSettings]\nSessionName=X\n[ServerSettings]\nServerPassword=p\n");
+    }
+
+    const GM: &str = "/script/shootergame.shootergamemode";
+
+    #[test]
+    fn parse_joins_repeated_keys_and_serialize_splits_them() {
+        let src = "[/script/shootergame.shootergamemode]\nOverridePlayerLevelEngramPoints=5\nOverridePlayerLevelEngramPoints=6\nXP=1\n";
+        let v = parse_ini_text(src);
+        assert_eq!(v[GM]["OverridePlayerLevelEngramPoints"], "5\n6");
+        assert_eq!(serialize_ini(&v), format!("{src}\n"));
+    }
+
+    #[test]
+    fn full_save_keeps_comments_and_repeated_keys() {
+        let src = "; my notes\n[/script/shootergame.shootergamemode]\nOverridePlayerLevelEngramPoints=5\nOverridePlayerLevelEngramPoints=6\nBabyMatureSpeedMultiplier=1.0\nOld=x\n";
+        let mut target = parse_ini_text(src);
+        let sec = target[GM].as_object_mut().unwrap();
+        sec.insert("BabyMatureSpeedMultiplier".into(), "5.0".into());
+        sec.remove("Old");
+        sec.insert("New".into(), "y".into());
+        let out = update_ini_text(src, &target);
+        assert_eq!(out, "; my notes\n[/script/shootergame.shootergamemode]\nOverridePlayerLevelEngramPoints=5\nOverridePlayerLevelEngramPoints=6\nBabyMatureSpeedMultiplier=5.0\nNew=y\n");
+        // Unchanged config leaves the file byte-for-byte alone.
+        assert_eq!(update_ini_text(src, &parse_ini_text(src)), src);
+    }
+
+    #[test]
+    fn editing_a_repeated_key_rewrites_its_lines_in_place() {
+        let src = "[S]\nA=1\nR=a\nR=b\nZ=2\n";
+        let mut target = parse_ini_text(src);
+        target["S"].as_object_mut().unwrap().insert("R".into(), "a\nb\nc".into());
+        assert_eq!(update_ini_text(src, &target), "[S]\nA=1\nR=a\nR=b\nR=c\nZ=2\n");
     }
 
     #[test]

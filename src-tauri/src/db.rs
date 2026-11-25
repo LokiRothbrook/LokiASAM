@@ -504,3 +504,113 @@ pub fn set_server_installed_build(conn: &Connection, server_id: &str, build_id: 
     .map_err(|e| format!("set_server_installed_build failed: {e}"))?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Clusters + cluster backups
+// ---------------------------------------------------------------------------
+
+/// A cluster as the backup code needs it.
+pub struct ClusterInfo {
+    pub id: String,
+    pub name: String,
+    pub dir_override: Option<String>,
+    pub settings_json: String,
+    pub member_ids: Vec<String>,
+}
+
+pub fn get_clusters(conn: &Connection) -> Vec<ClusterInfo> {
+    let mut stmt = match conn.prepare("SELECT id, name, cluster_dir_override, settings_json FROM clusters") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[db] get_clusters prepare failed: {e}");
+            return vec![];
+        }
+    };
+    let mut clusters: Vec<ClusterInfo> = stmt
+        .query_map([], |row| {
+            Ok(ClusterInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                dir_override: row.get(2)?,
+                settings_json: row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "{}".into()),
+                member_ids: vec![],
+            })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default();
+    for c in &mut clusters {
+        c.member_ids = conn
+            .prepare("SELECT id FROM servers WHERE cluster_id = ?1")
+            .and_then(|mut s| {
+                s.query_map([&c.id], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            })
+            .unwrap_or_default();
+    }
+    clusters
+}
+
+pub struct ClusterBackupRow {
+    pub id: String,
+    pub file_path: String,
+    pub tiers: String,
+    pub created_at: String,
+}
+
+/// A cluster's backups, oldest first.
+pub fn get_cluster_backups(conn: &Connection, cluster_id: &str) -> Vec<ClusterBackupRow> {
+    conn.prepare(
+        "SELECT id, file_path, tiers, created_at FROM cluster_backups \
+         WHERE cluster_id = ?1 ORDER BY created_at ASC",
+    )
+    .and_then(|mut s| {
+        s.query_map([cluster_id], |r| {
+            Ok(ClusterBackupRow { id: r.get(0)?, file_path: r.get(1)?, tiers: r.get(2)?, created_at: r.get(3)? })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+    })
+    .unwrap_or_default()
+}
+
+pub fn get_cluster_backup(conn: &Connection, id: &str) -> Option<(String, String)> {
+    conn.query_row(
+        "SELECT cluster_id, file_path FROM cluster_backups WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .ok()
+}
+
+pub fn insert_cluster_backup(
+    conn: &Connection,
+    id: &str,
+    cluster_id: &str,
+    file_path: &str,
+    file_size_bytes: u64,
+    triggered_by: &str,
+    created_at: &str,
+    tiers: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO cluster_backups (id, cluster_id, file_path, file_size_bytes, triggered_by, created_at, tiers) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![id, cluster_id, file_path, file_size_bytes as i64, triggered_by, created_at, tiers],
+    )
+    .map_err(|e| format!("insert_cluster_backup failed: {e}"))?;
+    Ok(())
+}
+
+pub fn update_cluster_backup(conn: &Connection, id: &str, file_path: &str, tiers: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE cluster_backups SET file_path = ?1, tiers = ?2 WHERE id = ?3",
+        [file_path, tiers, id],
+    )
+    .map_err(|e| format!("update_cluster_backup failed: {e}"))?;
+    Ok(())
+}
+
+pub fn delete_cluster_backup_record(conn: &Connection, id: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM cluster_backups WHERE id = ?1", [id])
+        .map_err(|e| format!("delete_cluster_backup_record failed: {e}"))?;
+    Ok(())
+}

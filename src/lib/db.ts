@@ -558,6 +558,46 @@ async function runMigrations(db: Database): Promise<void> {
      WHERE created_at NOT LIKE '%T%'`
   );
 
+  // ── Migration 028: "Update Check Failed" notification ────────────────────
+  // Event lists are explicit, so a new event is off for existing rows unless
+  // added — tick it for the toast and bell, where it belongs by default.
+  {
+    const done = await db.select<{ value: string }[]>(
+      "SELECT value FROM app_settings WHERE key = 'migration_028_done'"
+    );
+    if (!done.length || done[0]?.value !== "true") {
+      const rows = await db.select<{ id: string; events_json: string }[]>(
+        "SELECT id, events_json FROM notification_configs WHERE channel IN ('in_app', 'bell')"
+      );
+      for (const row of rows) {
+        let events: string[];
+        try { events = JSON.parse(row.events_json || "[]"); } catch { continue; }
+        if (!events.includes("update_check_failed")) {
+          events.push("update_check_failed");
+          await db.execute("UPDATE notification_configs SET events_json = ? WHERE id = ?", [JSON.stringify(events), row.id]);
+        }
+      }
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('migration_028_done', 'true')"
+      );
+    }
+  }
+
+  // ── Migration 027: cluster backups ───────────────────────────────────────
+  // Archives of a cluster's shared transfer data (written by Rust —
+  // cluster_backup.rs). Separate from `backups`, whose server_id must be a
+  // server. Schedule tiers live in clusters.settings_json.backup.
+  await db.execute(`CREATE TABLE IF NOT EXISTS cluster_backups (
+    id              TEXT PRIMARY KEY,
+    cluster_id      TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+    file_path       TEXT NOT NULL,
+    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+    triggered_by    TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    tiers           TEXT NOT NULL DEFAULT ''
+  )`);
+  await db.execute("CREATE INDEX IF NOT EXISTS idx_cluster_backups_cluster ON cluster_backups(cluster_id)");
+
   // ── Migration 026: per-server "hide server window" ───────────────────────
   try {
     await db.execute("ALTER TABLE servers ADD COLUMN hide_window INTEGER NOT NULL DEFAULT 0");
@@ -979,14 +1019,68 @@ export async function getCluster(id: string): Promise<ClusterRow | null> {
 export async function createClusterRecord(
   id: string,
   name: string,
-  clusterDirOverride: string | null
+  clusterDirOverride: string | null,
+  backupTiers?: BackupTierSettings,
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
     `INSERT INTO clusters (id, name, cluster_dir_override, settings_json)
-     VALUES (?, ?, ?, '{}')`,
-    [id, name, clusterDirOverride ?? null]
+     VALUES (?, ?, ?, ?)`,
+    [id, name, clusterDirOverride ?? null, JSON.stringify(backupTiers ? { backup: backupTiers } : {})]
   );
+}
+
+/** Tiered backup schedule, same shape server backup schedules use. */
+export type BackupTierSettings = Record<"hourly" | "daily" | "weekly" | "monthly", { enabled: boolean; keep: number }>;
+
+export const DEFAULT_BACKUP_TIERS: BackupTierSettings = {
+  hourly:  { enabled: false, keep: 24 },
+  daily:   { enabled: false, keep: 7 },
+  weekly:  { enabled: false, keep: 4 },
+  monthly: { enabled: false, keep: 3 },
+};
+
+/** A cluster's backup schedule (all tiers off when never configured). */
+export function getClusterBackupTiers(cluster: Pick<ClusterRow, "settings_json">): BackupTierSettings {
+  try {
+    const saved = (JSON.parse(cluster.settings_json || "{}") as { backup?: Partial<BackupTierSettings> }).backup ?? {};
+    return {
+      hourly:  { ...DEFAULT_BACKUP_TIERS.hourly,  ...saved.hourly },
+      daily:   { ...DEFAULT_BACKUP_TIERS.daily,   ...saved.daily },
+      weekly:  { ...DEFAULT_BACKUP_TIERS.weekly,  ...saved.weekly },
+      monthly: { ...DEFAULT_BACKUP_TIERS.monthly, ...saved.monthly },
+    };
+  } catch {
+    return DEFAULT_BACKUP_TIERS;
+  }
+}
+
+/** Save a cluster's backup schedule, keeping any other settings_json keys. */
+export async function setClusterBackupTiers(clusterId: string, tiers: BackupTierSettings): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<{ settings_json: string }[]>("SELECT settings_json FROM clusters WHERE id = ?", [clusterId]);
+  let settings: Record<string, unknown> = {};
+  try { settings = JSON.parse(rows[0]?.settings_json || "{}"); } catch { /* reset malformed */ }
+  settings.backup = tiers;
+  await db.execute("UPDATE clusters SET settings_json = ? WHERE id = ?", [JSON.stringify(settings), clusterId]);
+}
+
+export interface ClusterBackupRow {
+  id: string;
+  cluster_id: string;
+  file_path: string;
+  file_size_bytes: number;
+  triggered_by: string; // "schedule" | "manual" | "pre-restore"
+  created_at: string;
+  tiers: string;        // e.g. "D,H"; "" for manual / pre-restore
+}
+
+/** A cluster's backups, newest first (all clusters when clusterId is omitted). */
+export async function getClusterBackups(clusterId?: string): Promise<ClusterBackupRow[]> {
+  const db = await getDb();
+  return clusterId
+    ? db.select<ClusterBackupRow[]>("SELECT * FROM cluster_backups WHERE cluster_id = ? ORDER BY created_at DESC", [clusterId])
+    : db.select<ClusterBackupRow[]>("SELECT * FROM cluster_backups ORDER BY created_at DESC");
 }
 
 /** Delete a cluster record. Servers in the cluster should have cluster_id cleared first. */

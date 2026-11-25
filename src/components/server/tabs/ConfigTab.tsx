@@ -34,8 +34,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
-import { type IniSections, mergeIniSections, carryOverIdentity, isIdentityKey } from "@/lib/ini-utils";
+import { type IniSections, mergeIniSections, carryOverIdentity, isIdentityKey, parseIniText, iniToText } from "@/lib/ini-utils";
 import { ServerIdentityCard } from "@/components/server/ServerIdentityCard";
+import { ServerClusterCard } from "@/components/server/ServerClusterCard";
 import { ConfigHistoryDialog } from "@/components/server/ConfigHistoryDialog";
 import { AccessListsCard } from "@/components/server/AccessListsCard";
 import { HiddenWindowCard } from "@/components/server/HiddenWindowCard";
@@ -87,32 +88,6 @@ function setIniValue(
   src[iniSection] = { ...(src[iniSection] ?? {}), [key]: value };
   if (section === "gus") return { ...config, gameUserSettings: src };
   return { ...config, gameIni: src };
-}
-
-function configToRawText(obj: Record<string, Record<string, string>>): string {
-  return Object.entries(obj)
-    .map(([section, kvs]) => {
-      const lines = Object.entries(kvs).map(([k, v]) => `${k}=${v}`);
-      return `[${section}]\n${lines.join("\n")}`;
-    })
-    .join("\n\n");
-}
-
-function rawTextToSections(text: string): Record<string, Record<string, string>> {
-  const result: Record<string, Record<string, string>> = {};
-  let current = "";
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
-    if (line.startsWith("[") && line.endsWith("]")) {
-      current = line.slice(1, -1);
-      result[current] = result[current] ?? {};
-    } else if (current && line.includes("=")) {
-      const eq = line.indexOf("=");
-      result[current][line.slice(0, eq).trim()] = line.slice(eq + 1);
-    }
-  }
-  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +351,7 @@ function PasteIniModal({
   const [gameText, setGameText] = useState("");
 
   const handleApply = () => {
-    onApply(rawTextToSections(gusText), rawTextToSections(gameText));
+    onApply(parseIniText(gusText), parseIniText(gameText));
     onClose();
   };
 
@@ -1467,8 +1442,8 @@ export function ConfigTab({ server }: Props) {
     try {
       const { config: cfg, fromDisk } = await loadEffectiveConfig({ id: serverId, install_path: installPath });
       setConfig(cfg);
-      setRawGus(configToRawText(cfg.gameUserSettings));
-      setRawGame(configToRawText(cfg.gameIni));
+      setRawGus(iniToText(cfg.gameUserSettings));
+      setRawGame(iniToText(cfg.gameIni));
       setIsDirty(false);
       if (fromDisk) toast.info("Loaded this server's existing INI files from disk.");
     } catch (e) {
@@ -1489,8 +1464,8 @@ export function ConfigTab({ server }: Props) {
     try {
       const disk = await tauriCmd.readServerConfig(server.install_path);
       setConfig((prev) => ({ ...disk, launchArgs: prev?.launchArgs ?? {} }));
-      setRawGus(configToRawText(disk.gameUserSettings));
-      setRawGame(configToRawText(disk.gameIni));
+      setRawGus(iniToText(disk.gameUserSettings));
+      setRawGame(iniToText(disk.gameIni));
       setIsDirty(true);
       toast.success("Loaded from disk — Save to keep this version.");
     } catch (e) {
@@ -1538,7 +1513,7 @@ export function ConfigTab({ server }: Props) {
       });
       if (!selected || typeof selected !== "string") return;
       const text = await readTextFile(selected);
-      const sections = rawTextToSections(text);
+      const sections = parseIniText(text);
       if (!config) return;
       // Route each section to its file individually — an imported file
       // containing sections that belong to both files (a combined export,
@@ -1598,7 +1573,7 @@ export function ConfigTab({ server }: Props) {
     setConfig((prev) => {
       if (!prev) return prev;
       const next = apply(prev);
-      setRawGus(configToRawText(next.gameUserSettings));
+      setRawGus(iniToText(next.gameUserSettings));
       return next;
     });
   };
@@ -1607,7 +1582,7 @@ export function ConfigTab({ server }: Props) {
   const pendingConfig = (): ServerConfigJson | null => {
     if (!config) return null;
     if (activeTab !== "raw") return config;
-    return { ...config, gameUserSettings: rawTextToSections(rawGus), gameIni: rawTextToSections(rawGame) };
+    return { ...config, gameUserSettings: parseIniText(rawGus), gameIni: parseIniText(rawGame) };
   };
 
   const [saveIssues, setSaveIssues] = useState<{ cfg: ServerConfigJson; issues: string[] } | null>(null);
@@ -1644,8 +1619,8 @@ export function ConfigTab({ server }: Props) {
 
   const switchToRaw = () => {
     if (config) {
-      setRawGus(configToRawText(config.gameUserSettings as Record<string, Record<string, string>>));
-      setRawGame(configToRawText(config.gameIni as Record<string, Record<string, string>>));
+      setRawGus(iniToText(config.gameUserSettings as Record<string, Record<string, string>>));
+      setRawGame(iniToText(config.gameIni as Record<string, Record<string, string>>));
     }
     setActiveTab("raw");
   };
@@ -1698,8 +1673,8 @@ export function ConfigTab({ server }: Props) {
   };
 
   const switchFromRaw = () => {
-    const gus = rawTextToSections(rawGus);
-    const game = rawTextToSections(rawGame);
+    const gus = parseIniText(rawGus);
+    const game = parseIniText(rawGame);
     if (config) setConfig({ ...config, gameUserSettings: gus, gameIni: game });
   };
 
@@ -1875,6 +1850,7 @@ export function ConfigTab({ server }: Props) {
           <ServerIdentityCard server={server} onIdentitySaved={handleIdentitySaved} />
           <ActiveEventCard server={server} />
           <MotdCard config={config} onChange={(updated) => { setConfig(updated); setIsDirty(true); }} />
+          <ServerClusterCard server={server} />
           {INI_FIELD_GROUPS.map((g, idx) => {
             const fields = g.fields.filter((f) => !isIdentityKey(f.iniSection, f.key));
             if (fields.length === 0) return null;
