@@ -34,7 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { tauriCmd, type ServerConfigJson } from "@/lib/tauri-commands";
-import { type IniSections, mergeIniSections, carryOverIdentity, isIdentityKey, parseIniText, iniToText } from "@/lib/ini-utils";
+import { type IniSections, mergeIniSections, carryOverIdentity, isIdentityKey, parseIniText, iniToText, getIni, setIni, GAME_SESSION_SECTION } from "@/lib/ini-utils";
 import { ServerIdentityCard } from "@/components/server/ServerIdentityCard";
 import { ServerClusterCard } from "@/components/server/ServerClusterCard";
 import { ConfigHistoryDialog } from "@/components/server/ConfigHistoryDialog";
@@ -1381,6 +1381,13 @@ function AdvancedConfigTab({
   );
 }
 
+/**
+ * Launch options that describe this particular server rather than gameplay —
+ * kept when copying another server's config. (exclusivejoin especially: the
+ * whitelist files aren't copied, so copying the flag could lock everyone out.)
+ */
+const SERVER_SPECIFIC_LAUNCH_ARGS = ["exclusivejoin", "ServerIP", "MultiHome", "MULTIHOME", "UDPSocketPort"];
+
 export function ConfigTab({ server }: Props) {
   const queryClient = useQueryClient();
   // Primitive deps for the loader — the server row object itself is replaced
@@ -1409,20 +1416,47 @@ export function ConfigTab({ server }: Props) {
     getServers().then((all) => setOtherServers(all.filter((s) => s.id !== server.id))).catch(() => {});
   }, [server.id]);
 
+  /**
+   * This server's identity as INI keys: what the editor holds, with any
+   * missing required key filled from the servers row. Passed to
+   * carryOverIdentity, which removes identity keys this lacks — so a missing
+   * key here must mean "this server has none" (e.g. no join password).
+   */
+  const ownIdentity = useCallback((gus: IniSections): IniSections => {
+    let out = gus;
+    const fill = (section: string, key: string, value: string) => {
+      if (getIni(out, section, key) === undefined) out = setIni(out, section, key, value);
+    };
+    fill("SessionSettings", "SessionName", server.name);
+    fill("ServerSettings", "ServerAdminPassword", server.admin_password);
+    fill("ServerSettings", "RCONEnabled", "True");
+    fill("ServerSettings", "RCONPort", String(server.rcon_port));
+    fill(GAME_SESSION_SECTION, "MaxPlayers", String(server.max_players));
+    if (server.server_password) fill("ServerSettings", "ServerPassword", server.server_password);
+    return out;
+  }, [server.name, server.admin_password, server.rcon_port, server.max_players, server.server_password]);
+
   // Bring another server's gameplay config into the editor. Its identity
-  // keys (name, passwords, RCON port, max players, MOTD) are NOT copied — they
-  // describe that other server, and copying them used to point this server's
-  // RCON at the wrong port. Review + Save applies it like any other edit.
+  // keys (name, passwords, RCON port, max players), MOTD, and server-specific
+  // launch options (network binding, whitelist-only mode) are NOT copied —
+  // they describe that other server. Ports aren't in the config at all (they
+  // come from the server's own record). Review + Save applies it.
   const handleCopyFromServer = async () => {
     if (!copyFromServerId || !config) return;
     try {
       const source = otherServers.find((s) => s.id === copyFromServerId);
       if (!source) return;
       const { config: src } = await loadEffectiveConfig(source);
+      const launchArgs: Record<string, string> = { ...(src.launchArgs ?? {}) };
+      const ownArgs = (config.launchArgs ?? {}) as Record<string, string>;
+      for (const key of SERVER_SPECIFIC_LAUNCH_ARGS) {
+        if (key in ownArgs) launchArgs[key] = ownArgs[key];
+        else delete launchArgs[key];
+      }
       setConfig({
-        gameUserSettings: carryOverIdentity(config.gameUserSettings, src.gameUserSettings),
+        gameUserSettings: carryOverIdentity(ownIdentity(config.gameUserSettings), src.gameUserSettings),
         gameIni: src.gameIni,
-        launchArgs: src.launchArgs,
+        launchArgs,
       });
       setIsDirty(true);
       setShowCopyFromServer(false);
@@ -1497,7 +1531,7 @@ export function ConfigTab({ server }: Props) {
       if (!prev) return prev;
       return {
         ...prev,
-        gameUserSettings: carryOverIdentity(prev.gameUserSettings, mergeIniSections(prev.gameUserSettings, gus)),
+        gameUserSettings: carryOverIdentity(ownIdentity(prev.gameUserSettings), mergeIniSections(prev.gameUserSettings, gus)),
         gameIni: mergeIniSections(prev.gameIni, game),
       };
     });
@@ -1548,7 +1582,7 @@ export function ConfigTab({ server }: Props) {
       // Preset values win key by key; every other setting is kept.
       setConfig({
         ...config,
-        gameUserSettings: mergeIniSections(config.gameUserSettings, gus),
+        gameUserSettings: carryOverIdentity(ownIdentity(config.gameUserSettings), mergeIniSections(config.gameUserSettings, gus)),
         gameIni: mergeIniSections(config.gameIni, game),
       });
     } else {
@@ -1559,7 +1593,7 @@ export function ConfigTab({ server }: Props) {
       );
       setConfig({
         ...config,
-        gameUserSettings: carryOverIdentity(config.gameUserSettings, mergeIniSections(modSections, gus)),
+        gameUserSettings: carryOverIdentity(ownIdentity(config.gameUserSettings), mergeIniSections(modSections, gus)),
         gameIni: game,
       });
     }

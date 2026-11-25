@@ -2,7 +2,6 @@ use crate::state::{scheduler::SchedulerState, AppState};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,58 +63,28 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Open a one-shot RCON connection, send one command, then drop the connection.
-/// Silently swallows all errors — broadcast failures must never block a schedule.
-async fn transient_rcon_send(port: u16, password: &str, command: &str) {
-    use crate::state::rcon_pool::{RconConn, RCON_AUTH, RCON_AUTH_RESPONSE, RCON_EXECCOMMAND};
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
-
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let stream = match timeout(Duration::from_secs(5), TcpStream::connect(addr)).await {
-        Ok(Ok(s)) => s,
-        _ => return,
-    };
-    let _ = stream.set_nodelay(true);
-    let mut conn = RconConn { stream, next_id: 1 };
-
-    if conn.send_packet(1, RCON_AUTH, password).await.is_err() {
-        return;
-    }
-    // Wait for auth response (up to 3 packets).
-    for _ in 0..3 {
-        match timeout(Duration::from_secs(5), conn.recv_packet()).await {
-            Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
-            Ok(Err(_)) | Err(_) => return,
-            _ => {}
-        }
-    }
-
-    let _ = timeout(
-        Duration::from_secs(5),
-        conn.send_packet(2, RCON_EXECCOMMAND, command),
-    )
-    .await;
-    // Don't wait for a response — fire-and-forget.
+/// Send one scheduled RCON command. Errors (server not up, wrong admin
+/// password) are returned so the schedule's run is recorded as failed
+/// instead of silently reporting success.
+async fn scheduled_rcon(entry: &crate::state::scheduler::ScheduleEntry, command: &str) -> Result<(), String> {
+    super::rcon::transient_rcon_command(entry.rcon_port, &entry.rcon_password, command)
+        .await
+        .map(|_| ())
 }
 
-async fn fire_broadcast(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
+async fn fire_broadcast(_app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
     let cfg: serde_json::Value =
         serde_json::from_str(&entry.config_json).unwrap_or_default();
     let message = cfg["message"]
         .as_str()
         .unwrap_or("Server broadcast.")
         .to_string();
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, &format!("ServerChat {message}")).await;
-    let _ = app; // no app events needed for chat
-    Ok(())
+    scheduled_rcon(entry, &format!("ServerChat {message}")).await
 }
 
-async fn fire_wipe_dinos(app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
-    let _ = app;
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "ServerChat Wild dinos are being wiped — expect brief lag.").await;
-    transient_rcon_send(entry.rcon_port, &entry.rcon_password, "destroywilddinos").await;
-    Ok(())
+async fn fire_wipe_dinos(_app: &AppHandle, entry: &crate::state::scheduler::ScheduleEntry) -> Result<(), String> {
+    scheduled_rcon(entry, "ServerChat Wild dinos are being wiped — expect brief lag.").await?;
+    scheduled_rcon(entry, "DestroyWildDinos").await
 }
 
 /// Wait for this server's operation lock, queueing behind whatever backup /

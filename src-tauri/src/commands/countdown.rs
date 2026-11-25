@@ -28,7 +28,9 @@ const COUNTDOWN_EVENT: &str = "server://countdown";
 // ---------------------------------------------------------------------------
 
 async fn rcon_send(rcon_port: u16, rcon_password: &str, cmd: &str) {
-    let _ = super::rcon::transient_rcon_command(rcon_port, rcon_password, cmd).await;
+    if let Err(e) = super::rcon::transient_rcon_command(rcon_port, rcon_password, cmd).await {
+        eprintln!("[countdown] RCON \"{cmd}\" failed: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------

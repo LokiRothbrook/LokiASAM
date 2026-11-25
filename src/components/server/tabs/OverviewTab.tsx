@@ -46,6 +46,7 @@ import { dispatchNotification } from "@/lib/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useOnMount } from "@/hooks/useOnMount";
+import { WipeWildDinosDialog } from "@/components/server/WipeWildDinosDialog";
 
 interface Props {
   server: ServerRow;
@@ -591,7 +592,7 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [restartAfterUpdate, setRestartAfterUpdate] = useState(true);
   const [launchCommand, setLaunchCommand] = useState("");
-  const [wipingDinos, setWipingDinos] = useState(false);
+  const [wipeDinosOpen, setWipeDinosOpen] = useState(false);
   const activeEventId = server.active_event ?? null;
 
   // Per-tile timeframe selectors
@@ -1202,22 +1203,14 @@ export function OverviewTab({ server, onNavigateToConfig }: Props) {
             Broadcasts a warning in chat then destroys all wild dinos. Expect lag for a few seconds.
           </p>
           <button
-            onClick={async () => {
-              setWipingDinos(true);
-              try {
-                await tauriCmd.rconSend(server.id, "ServerChat Wild dinos are being wiped — expect some lag!");
-                await tauriCmd.rconSend(server.id, "destroywilddinos");
-                toast.success("Wild dinos wiped");
-              } catch (e) { toast.error(`Wipe failed: ${e}`); }
-              finally { setWipingDinos(false); }
-            }}
-            disabled={wipingDinos}
+            onClick={() => setWipeDinosOpen(true)}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
             style={{ background: "rgba(var(--neon-cyan-rgb),0.08)", border: "1px solid rgba(var(--neon-cyan-rgb),0.3)", color: "var(--neon-cyan)" }}
           >
-            {wipingDinos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Skull className="w-3.5 h-3.5" />}
+            <Skull className="w-3.5 h-3.5" />
             Wipe Wild Dinos
           </button>
+          <WipeWildDinosDialog serverId={server.id} open={wipeDinosOpen} onOpenChange={setWipeDinosOpen} />
         </div>
       )}
 

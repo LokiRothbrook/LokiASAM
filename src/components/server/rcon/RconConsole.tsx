@@ -3,14 +3,19 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Terminal, Send, RefreshCw, Trash2, Copy, AlertCircle,
-  Users, ShieldX, Shield, ChevronDown, ChevronUp, Clock,
+  Users, ShieldX, Shield, ChevronDown, ChevronUp, Clock, Skull,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { WipeWildDinosDialog } from "@/components/server/WipeWildDinosDialog";
 import { tauriCmd, type RconLogLine, type ArkPlayer, type RconStatusPayload } from "@/lib/tauri-commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useOnMount } from "@/hooks/useOnMount";
-import type { ServerRow } from "@/lib/db";
+import { getPlayerNameMap, type ServerRow } from "@/lib/db";
+import { ACCESS_LISTS_CHANGED_EVENT, notifyAccessListsChanged } from "@/lib/access-lists";
 
 interface Props {
   server: ServerRow;
@@ -46,20 +51,37 @@ function fmtTs(ms: number): string {
 }
 
 // ── Player context-menu actions ───────────────────────────────────────────────
+// Only commands that work over RCON. RCON has no in-game character, so
+// self-targeted cheats (MakeTribeAdmin, MakeTribeFounder, …) do nothing, and
+// commands that need the numeric in-game player ID (KillPlayer,
+// GiveItemToPlayer, …) can't be driven from ListPlayers' EOS IDs.
+type PlayerActionId = "kick" | "ban" | "whitelist" | "message";
+
 interface PlayerAction {
+  id: PlayerActionId;
   label: string;
-  cmd: (p: ArkPlayer) => string;
   danger?: boolean;
 }
 
 const PLAYER_ACTIONS: PlayerAction[] = [
-  { label: "Kick",               cmd: (p) => `kickplayer ${p.playerId}`,            danger: true },
-  { label: "Ban",                cmd: (p) => `banplayer ${p.playerId}`,             danger: true },
-  { label: "Whitelist",          cmd: (p) => `allowplayertojoinnocheck ${p.playerId}` },
-  { label: "Make Tribe Admin",   cmd: (p) => `maketribeadmin ${p.playerId}` },
-  { label: "Make Tribe Founder", cmd: (p) => `maketribefounders ${p.playerId}` },
-  { label: "Remove Tribe Admin", cmd: (p) => `removetribeadmin ${p.playerId}`,      danger: true },
+  { id: "message",   label: "Message player…" },
+  { id: "whitelist", label: "Add to whitelist" },
+  { id: "kick",      label: "Kick…", danger: true },
+  { id: "ban",       label: "Ban…",  danger: true },
 ];
+
+const CONFIRM_COPY: Record<"kick" | "ban", { title: string; body: string; button: string }> = {
+  kick: {
+    title: "Kick",
+    body: "Disconnects them from the server. They can rejoin straight away.",
+    button: "Kick player",
+  },
+  ban: {
+    title: "Ban",
+    body: "Disconnects them and adds them to the server's ban list, so they can't rejoin until unbanned. Their character and tribe stay in the save.",
+    button: "Ban player",
+  },
+};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export function RconConsole({ server }: Props) {
@@ -90,6 +112,12 @@ export function RconConsole({ server }: Props) {
   const [showTimeMenu, setShowTimeMenu] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState<ArkPlayer | null>(null);
   const [playerMenuPos, setPlayerMenuPos]   = useState({ x: 0, y: 0 });
+  const [confirmTarget, setConfirmTarget]   = useState<{ kind: "kick" | "ban"; player: ArkPlayer } | null>(null);
+  const [messageTarget, setMessageTarget]   = useState<ArkPlayer | null>(null);
+  const [privateMsg, setPrivateMsg]         = useState("");
+  const [wipeOpen, setWipeOpen]             = useState(false);
+  // EOS ID → last known name, so the ban/whitelist panels show who's who.
+  const [names, setNames]                   = useState<Record<string, string>>({});
 
   const logRef      = useRef<HTMLDivElement>(null);
   const cmdInputRef = useRef<HTMLInputElement>(null);
@@ -160,14 +188,25 @@ export function RconConsole({ server }: Props) {
 
   const refreshLists = useCallback(async () => {
     try {
-      const [bans, wl] = await Promise.all([
+      const [bans, wl, nameMap] = await Promise.all([
         tauriCmd.rconReadBanList(server.install_path),
         tauriCmd.rconReadWhitelist(server.install_path),
+        getPlayerNameMap(server.id).catch(() => ({} as Record<string, string>)),
       ]);
       setBanList(bans);
       setWhitelist(wl);
+      setNames(nameMap);
     } catch { /* ignore */ }
-  }, [server.install_path]);
+  }, [server.install_path, server.id]);
+
+  // The Config tab's Admins & Whitelist card edits the same files.
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === server.id) refreshLists();
+    };
+    window.addEventListener(ACCESS_LISTS_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(ACCESS_LISTS_CHANGED_EVENT, onChange);
+  }, [server.id, refreshLists]);
 
   // Ban/whitelist/unban/unwhitelist all schedule a delayed refreshLists() so
   // the RCON server has time to apply the change first. Tracked here so they
@@ -178,9 +217,10 @@ export function RconConsole({ server }: Props) {
     const id = setTimeout(() => {
       refreshTimeoutsRef.current.delete(id);
       refreshLists();
+      notifyAccessListsChanged(server.id);
     }, 500);
     refreshTimeoutsRef.current.add(id);
-  }, [refreshLists]);
+  }, [refreshLists, server.id]);
   useEffect(() => () => {
     refreshTimeoutsRef.current.forEach(clearTimeout);
     refreshTimeoutsRef.current.clear();
@@ -269,14 +309,43 @@ export function RconConsole({ server }: Props) {
   };
 
   const handlePlayerAction = async (action: PlayerAction) => {
-    if (!selectedPlayer) return;
-    const cmd = action.cmd(selectedPlayer);
+    const player = selectedPlayer;
+    if (!player) return;
     setSelectedPlayer(null);
-    await sendCommand(cmd);
-    if (action.label === "Ban" || action.label === "Whitelist") {
-      scheduleRefreshLists();
+    switch (action.id) {
+      case "kick":
+      case "ban":
+        setConfirmTarget({ kind: action.id, player });
+        break;
+      case "message":
+        setPrivateMsg("");
+        setMessageTarget(player);
+        break;
+      case "whitelist":
+        await sendCommand(`AllowPlayerToJoinNoCheck ${player.playerId}`);
+        scheduleRefreshLists();
+        break;
     }
   };
+
+  const runConfirmed = async () => {
+    if (!confirmTarget) return;
+    const { kind, player } = confirmTarget;
+    setConfirmTarget(null);
+    await sendCommand(`${kind === "kick" ? "KickPlayer" : "BanPlayer"} ${player.playerId}`);
+    if (kind === "ban") scheduleRefreshLists();
+  };
+
+  const sendPrivateMessage = async () => {
+    const text = privateMsg.trim();
+    if (!messageTarget || !text) return;
+    const target = messageTarget;
+    setMessageTarget(null);
+    await sendCommand(`ServerChatTo "${target.playerId}" ${text}`);
+  };
+
+  /** Name for an EOS ID: online list first, then the remembered names. */
+  const nameFor = (id: string) => players.find((p) => p.playerId === id)?.name ?? names[id];
 
   const copyLog = () => {
     const text = lines.map((l) => `[${fmtTs(l.timestampMs)}] ${l.text}`).join("\n");
@@ -302,12 +371,12 @@ export function RconConsole({ server }: Props) {
   const toggleWl  = () => { setWlOpen((v) => !v);  if (!wlOpen)  setBanOpen(false); };
 
   const unban = async (id: string) => {
-    await sendCommand(`unbanplayer ${id}`);
+    await sendCommand(`UnbanPlayer ${id}`);
     scheduleRefreshLists();
   };
 
   const unwhitelist = async (id: string) => {
-    await sendCommand(`disallowplayertojoinnocheck ${id}`);
+    await sendCommand(`DisallowPlayerToJoinNoCheck ${id}`);
     scheduleRefreshLists();
   };
 
@@ -409,8 +478,8 @@ export function RconConsole({ server }: Props) {
                 {banList.length === 0 ? (
                   <p className="text-xs py-1.5 text-center" style={{ color: "var(--text-muted)" }}>No banned players</p>
                 ) : banList.map((id) => (
-                  <div key={id} className="flex items-center gap-1 py-1">
-                    <span className="text-xs font-mono flex-1 truncate" style={{ color: "var(--text-muted)", fontSize: "10px" }}>{id}</span>
+                  <div key={id} className="flex items-center gap-1 py-1" title={id}>
+                    <ListEntryLabel id={id} name={nameFor(id)} />
                     <button
                       type="button"
                       className="text-xs shrink-0 hover:text-green-400 transition-colors"
@@ -446,8 +515,8 @@ export function RconConsole({ server }: Props) {
                 {whitelist.length === 0 ? (
                   <p className="text-xs py-1.5 text-center" style={{ color: "var(--text-muted)" }}>Whitelist is empty</p>
                 ) : whitelist.map((id) => (
-                  <div key={id} className="flex items-center gap-1 py-1">
-                    <span className="text-xs font-mono flex-1 truncate" style={{ color: "var(--text-muted)", fontSize: "10px" }}>{id}</span>
+                  <div key={id} className="flex items-center gap-1 py-1" title={id}>
+                    <ListEntryLabel id={id} name={nameFor(id)} />
                     <button
                       type="button"
                       className="text-xs shrink-0 transition-colors"
@@ -492,13 +561,13 @@ export function RconConsole({ server }: Props) {
             <div className="flex items-center gap-1.5 flex-wrap shrink-0">
               <Button size="sm" variant="ghost" className="text-xs h-7"
                 style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", background: "rgba(var(--neon-purple-rgb),0.04)" }}
-                onClick={() => sendCommand("saveworld")} disabled={sending}>
+                onClick={() => sendCommand("SaveWorld")} disabled={sending}>
                 Save World
               </Button>
               <Button size="sm" variant="ghost" className="text-xs h-7"
                 style={{ color: "var(--neon-cyan)", border: "1px solid rgba(var(--neon-purple-rgb),0.2)", background: "rgba(var(--neon-purple-rgb),0.04)" }}
-                onClick={() => sendCommand("destroywilddinos")} disabled={sending}>
-                Wild Dinos
+                onClick={() => setWipeOpen(true)} disabled={sending}>
+                <Skull className="w-3 h-3 mr-1" /> Wipe Wild Dinos
               </Button>
 
               {/* SetTimeOfDay dropdown */}
@@ -517,7 +586,7 @@ export function RconConsole({ server }: Props) {
                       <button key={p.label} type="button"
                         className="w-full text-left text-xs px-3 py-1.5 hover:bg-white/5 transition-colors"
                         style={{ color: "var(--text-primary)" }}
-                        onClick={() => { sendCommand(`settimeofday ${p.time}`); setShowTimeMenu(false); }}>
+                        onClick={() => { sendCommand(`SetTimeOfDay ${p.time}`); setShowTimeMenu(false); }}>
                         {p.label}
                       </button>
                     ))}
@@ -601,6 +670,58 @@ export function RconConsole({ server }: Props) {
           ))}
         </div>
       )}
+
+      {/* ── Kick / ban confirmation ── */}
+      <Dialog open={!!confirmTarget} onOpenChange={(v) => { if (!v) setConfirmTarget(null); }}>
+        <DialogContent className="max-w-md">
+          {confirmTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{CONFIRM_COPY[confirmTarget.kind].title} {confirmTarget.player.name}?</DialogTitle>
+                <DialogDescription>{CONFIRM_COPY[confirmTarget.kind].body}</DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" size="sm" onClick={() => setConfirmTarget(null)}>Cancel</Button>
+                <Button size="sm" onClick={runConfirmed}
+                  style={{ background: "rgba(var(--neon-red-rgb),0.15)", border: "1px solid rgba(var(--neon-red-rgb),0.4)", color: "var(--neon-red)" }}>
+                  {CONFIRM_COPY[confirmTarget.kind].button}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Private message ── */}
+      <Dialog open={!!messageTarget} onOpenChange={(v) => { if (!v) setMessageTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Message {messageTarget?.name}</DialogTitle>
+            <DialogDescription>Only this player sees it, in their chat.</DialogDescription>
+          </DialogHeader>
+          <Input autoFocus value={privateMsg} onChange={(e) => setPrivateMsg(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendPrivateMessage()}
+            placeholder="Message…"
+            style={{ background: "var(--surface)", borderColor: "rgba(var(--neon-purple-rgb),0.3)", color: "var(--text-primary)" }} />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setMessageTarget(null)}>Cancel</Button>
+            <Button size="sm" className="btn-neon-purple" onClick={sendPrivateMessage} disabled={!privateMsg.trim()}>
+              <Send className="w-3.5 h-3.5 mr-1.5" /> Send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <WipeWildDinosDialog serverId={server.id} open={wipeOpen} onOpenChange={setWipeOpen} />
     </div>
+  );
+}
+
+/** A ban/whitelist entry: the player's name when known, else the raw EOS ID. */
+function ListEntryLabel({ id, name }: { id: string; name: string | undefined }) {
+  return name ? (
+    <span className="text-xs flex-1 truncate" style={{ color: "var(--text-primary)" }}>{name}</span>
+  ) : (
+    <span className="text-xs font-mono flex-1 truncate" style={{ color: "var(--text-muted)", fontSize: "10px" }}>{id}</span>
   );
 }

@@ -163,14 +163,26 @@ async fn run_rcon_manager(
                         match exec_cmd(&mut conn, &command, 15_000).await {
                             Ok(raw) => {
                                 if !suppress_resp {
+                                    let mut printed = false;
                                     for line in raw.trim().lines() {
                                         let t = line.trim();
                                         if t.is_empty() { continue; }
                                         if t.to_lowercase() == "server received, but no response!!" { continue; }
+                                        printed = true;
                                         emit_log(&app, &server_id, RconLogLine {
                                             timestamp_ms: now_ms(),
                                             text: t.to_string(),
                                             kind: "response".into(),
+                                        }).await;
+                                    }
+                                    // ASA answers most admin commands (kick, ban,
+                                    // save, …) with only "Server received, But no
+                                    // response!!" — say so instead of showing nothing.
+                                    if !printed {
+                                        emit_log(&app, &server_id, RconLogLine {
+                                            timestamp_ms: now_ms(),
+                                            text: "✓ Accepted by the server (no output)".into(),
+                                            kind: "system".into(),
                                         }).await;
                                     }
                                 }
@@ -324,7 +336,10 @@ async fn run_rcon_manager(
 // ---------------------------------------------------------------------------
 
 /// Open a fresh authenticated connection, run one command, return the response.
-/// Used for fire-and-forget operations that must not block the pool connection.
+/// The one helper for every one-off command (scheduled broadcasts and wipes,
+/// countdown warnings, graceful shutdown) — it never touches the pool's
+/// connection, and a rejected password comes back as an error instead of the
+/// command silently going nowhere.
 pub async fn transient_rcon_command(port: u16, password: &str, command: &str) -> Result<String, String> {
     use tokio::net::TcpStream;
 
@@ -337,13 +352,20 @@ pub async fn transient_rcon_command(port: u16, password: &str, command: &str) ->
     let mut conn = RconConn { stream, next_id: 1 };
 
     conn.send_packet(1, RCON_AUTH, password).await?;
+    let mut authenticated = false;
     for _ in 0..3 {
         match timeout(Duration::from_secs(5), conn.recv_packet()).await {
-            Ok(Ok((_, t, _))) if t == RCON_AUTH_RESPONSE => break,
+            Ok(Ok((-1, t, _))) if t == RCON_AUTH_RESPONSE => {
+                return Err("RCON authentication failed — wrong admin password".into());
+            }
+            Ok(Ok((1, t, _))) if t == RCON_AUTH_RESPONSE => { authenticated = true; break; }
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err("RCON auth timed out".into()),
-            _ => {}
         }
+    }
+    if !authenticated {
+        return Err("RCON authentication failed — unexpected response sequence".into());
     }
 
     conn.send_packet(2, RCON_EXECCOMMAND, command).await?;

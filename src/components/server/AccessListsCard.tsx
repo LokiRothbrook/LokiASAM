@@ -6,7 +6,7 @@
  * Files are written immediately on Save (separate from the INI config save).
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Users, Plus, X, Save, Info, ToggleLeft, ToggleRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { useOnMount } from "@/hooks/useOnMount";
 import { useSavedFlash } from "@/hooks/useSavedFlash";
 import { tauriCmd, type AccessListId } from "@/lib/tauri-commands";
 import type { ServerRow } from "@/lib/db";
+import { ACCESS_LISTS_CHANGED_EVENT, notifyAccessListsChanged } from "@/lib/access-lists";
 
 const LISTS: { id: AccessListId; title: string; description: string }[] = [
   { id: "admins",         title: "Admins",         description: "Players who are admins automatically, without entering the admin password (AllowedCheaterAccountIDs.txt)." },
@@ -55,6 +56,21 @@ export function AccessListsCard({
   }, [installPath]);
   useOnMount(load);
 
+  // The RCON console's ban/whitelist panels edit the same files — reload when
+  // they change something, unless there are unsaved edits here to protect.
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    dirtyRef.current = !!lists && !!saved && JSON.stringify(lists) !== JSON.stringify(saved);
+  }, [lists, saved]);
+  const serverId = server.id;
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === serverId && !dirtyRef.current) load();
+    };
+    window.addEventListener(ACCESS_LISTS_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(ACCESS_LISTS_CHANGED_EVENT, onChange);
+  }, [serverId, load]);
+
   if (!lists || !saved) return null;
   const current = lists[active];
   const dirty = JSON.stringify(lists) !== JSON.stringify(saved);
@@ -87,6 +103,7 @@ export function AccessListsCard({
       }
       setSavedLists(lists);
       triggerSaved();
+      notifyAccessListsChanged(server.id);
       toast.success(server.status === "stopped" ? "Player lists saved." : "Player lists saved — ASA reads them on the next restart.");
     } catch (e) {
       toast.error(`Failed to save player lists: ${e}`);

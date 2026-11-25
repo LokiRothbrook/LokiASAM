@@ -127,22 +127,27 @@ export function isIdentityKey(section: string, key: string): boolean {
 }
 
 /**
- * Copy the identity keys (and the MOTD section) that exist in `from` into
- * `to`, overriding whatever `to` has for them.
+ * Make `to`'s identity keys and MOTD exactly `from`'s: keys `from` has are
+ * copied over, and keys `from` lacks are REMOVED from `to` — otherwise a
+ * server with no join password or no MOTD would pick up the other config's.
+ * Callers should pass a `from` with the required keys filled in (see
+ * ConfigTab's ownIdentity), so nothing essential is dropped.
  */
 export function carryOverIdentity(from: IniSections, to: IniSections): IniSections {
   let out = to;
   for (const { section, key } of IDENTITY_FIELDS) {
     const v = getIni(from, section, key);
-    if (v !== undefined) out = setIni(out, section, key, v);
+    out = v !== undefined ? setIni(out, section, key, v) : deleteIni(out, section, key);
+  }
+  // Legacy copy of the join password in the wrong section.
+  out = deleteIni(out, "SessionSettings", "ServerPassword");
+  const existing = findSectionKey(out, "MessageOfTheDay");
+  if (existing) {
+    out = { ...out };
+    delete out[existing];
   }
   const motdKey = findSectionKey(from, "MessageOfTheDay");
-  if (motdKey) {
-    const existing = findSectionKey(out, "MessageOfTheDay");
-    out = { ...out };
-    if (existing) delete out[existing];
-    out[motdKey] = { ...from[motdKey] };
-  }
+  if (motdKey) out = { ...out, [motdKey]: { ...from[motdKey] } };
   return out;
 }
 
